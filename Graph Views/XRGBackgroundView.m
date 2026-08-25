@@ -237,15 +237,28 @@
 
 - (void)minimizeWindow {
     if ([parentWindow minimized]) return;
-    
+
     int i;
     NSRect windowFrame;
-    
+    CGFloat minimizedDim = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
+
     // Figure out what the new rect should be and save the old rect.
     if ([moduleManager graphOrientationVertical]) {
         windowFrame = [parentWindow frame];
         unminimizedRect = windowFrame;
-        
+        // Never capture an already-minimized frame as the restore rect (happens
+        // when minimizing at launch from an autosaved collapsed frame). Restore
+        // the persisted expanded rect instead, or synthesize a sane height.
+        if (unminimizedRect.size.height < 300) {
+            NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
+            if (savedFrame != nil && NSRectFromString(savedFrame).size.height >= 300) {
+                unminimizedRect.size = NSRectFromString(savedFrame).size;
+            }
+            else {
+                unminimizedRect.size.height = 600;
+            }
+        }
+
         if ([appSettings minimizeUpDown] == 0) { // minimize up
             windowFrame.origin.y = windowFrame.origin.y + windowFrame.size.height - ((2 * [parentWindow borderWidth]) + [appSettings textRectHeight]);
             windowFrame.size.height = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
@@ -260,7 +273,17 @@
     else {
         windowFrame = [parentWindow frame];
         unminimizedRect = windowFrame;
-        
+        // Same guard as the vertical branch, for width.
+        if (unminimizedRect.size.width < 300) {
+            NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
+            if (savedFrame != nil && NSRectFromString(savedFrame).size.width >= 300) {
+                unminimizedRect.size = NSRectFromString(savedFrame).size;
+            }
+            else {
+                unminimizedRect.size.width = 600;
+            }
+        }
+
         if ([appSettings minimizeUpDown] == 0) { // minimize left
             windowFrame.size.width = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
         }
@@ -300,8 +323,10 @@
         }
     }
 	
-	// Save in the preferences.
+	// Save in the preferences, including the expanded frame so a relaunch
+	// in the minimized state can always restore to real dimensions.
 	[[NSUserDefaults standardUserDefaults] setBool:YES forKey:XRG_windowIsMinimized];
+	[[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect(unminimizedRect) forKey:XRG_unminimizedFrame];
 }
 
 - (void)expandWindow {

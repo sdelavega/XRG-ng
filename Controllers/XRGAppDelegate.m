@@ -103,6 +103,19 @@
 	[self.xrgGraphWindow initializeAITokenView];
 
 	if ([[NSUserDefaults standardUserDefaults] boolForKey:XRG_windowIsMinimized]) {
+		// Restore the persisted expanded frame FIRST, so minimizeWindow captures
+		// real dimensions as the restore rect. Without this, a launch in the
+		// minimized state captures the autosaved collapsed frame and the window
+		// can never expand again (the 21px-strip trap).
+		NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
+		if (savedFrame != nil) {
+			NSRect saved = NSRectFromString(savedFrame);
+			if (saved.size.height >= 300 || saved.size.width >= 300) {
+				NSRect f = self.xrgGraphWindow.frame;
+				f.size = saved.size;
+				[self.xrgGraphWindow setFrame:f display:NO];
+			}
+		}
 		// minimize the window.
 		[self.xrgGraphWindow.backgroundView minimizeWindow];
 		[self.xrgGraphWindow.backgroundView setClickedMinimized:YES];
