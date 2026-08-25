@@ -240,56 +240,63 @@
 
     int i;
     NSRect windowFrame;
+    // The collapsed strip is exactly this tall (or, horizontally, this wide).
+    // A captured frame is "already minimized" when it IS that strip, give or
+    // take a pixel of autosave rounding, not merely when it is small: a user
+    // who runs a 200px graph must get their 200px back, not a synthesized 600.
     CGFloat minimizedDim = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
+    CGFloat collapsedLimit = minimizedDim + 1;
 
     // Figure out what the new rect should be and save the old rect.
-    if ([moduleManager graphOrientationVertical]) {
-        windowFrame = [parentWindow frame];
-        unminimizedRect = windowFrame;
-        // Never capture an already-minimized frame as the restore rect (happens
-        // when minimizing at launch from an autosaved collapsed frame). Restore
-        // the persisted expanded rect instead, or synthesize a sane height.
-        if (unminimizedRect.size.height < 300) {
-            NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
-            if (savedFrame != nil && NSRectFromString(savedFrame).size.height >= 300) {
-                unminimizedRect.size = NSRectFromString(savedFrame).size;
-            }
-            else {
-                unminimizedRect.size.height = 600;
-            }
+    // Never capture an already-minimized frame as the restore rect (happens
+    // when minimizing at launch from an autosaved collapsed frame). Both
+    // dimensions are checked regardless of orientation: a frame collapsed in
+    // the OTHER axis (a vertical-layout strip inherited by a horizontal
+    // layout, or vice versa) is just as useless as a restore rect, and
+    // measured on a horizontal layout it was persisted as an 809x21
+    // "expanded" frame. Prefer the persisted expanded rect when it is sane
+    // in that axis; otherwise synthesize 600.
+    // By the time this runs at launch, windowChangedToSize/checkWindowSize has
+    // usually already regrown the autosaved strip to the module-minimum size
+    // (measured: 21 -> 107 tall on a vertical layout, 21 -> 809 wide on a
+    // horizontal one), so "is it the bare strip?" alone misses the trap. A
+    // frame at or below the module minimum in an axis is not a restore rect
+    // either: nobody chose it, the regrowth did.
+    windowFrame = [parentWindow frame];
+    unminimizedRect = windowFrame;
+    {
+        NSSize minSize = [moduleManager getMinSize];
+        CGFloat trapHeight = MAX(collapsedLimit, minSize.height);
+        CGFloat trapWidth  = MAX(collapsedLimit, minSize.width);
+        NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
+        NSRect saved = savedFrame ? NSRectFromString(savedFrame) : NSZeroRect;
+        if (unminimizedRect.size.height <= trapHeight) {
+            unminimizedRect.size.height = (saved.size.height > trapHeight) ? saved.size.height : MAX(600, trapHeight);
         }
+        if (unminimizedRect.size.width <= trapWidth) {
+            unminimizedRect.size.width = (saved.size.width > trapWidth) ? saved.size.width : MAX(600, trapWidth);
+        }
+    }
 
+    if ([moduleManager graphOrientationVertical]) {
         if ([appSettings minimizeUpDown] == 0) { // minimize up
-            windowFrame.origin.y = windowFrame.origin.y + windowFrame.size.height - ((2 * [parentWindow borderWidth]) + [appSettings textRectHeight]);
-            windowFrame.size.height = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
+            windowFrame.origin.y = windowFrame.origin.y + windowFrame.size.height - minimizedDim;
+            windowFrame.size.height = minimizedDim;
         }
         else { // minimize down
-            windowFrame.size.height = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
+            windowFrame.size.height = minimizedDim;
         }
-        
+
         [parentWindow setMinimized:YES];
         [parentWindow setMinSize:[moduleManager getMinSize]];
     }
     else {
-        windowFrame = [parentWindow frame];
-        unminimizedRect = windowFrame;
-        // Same guard as the vertical branch, for width.
-        if (unminimizedRect.size.width < 300) {
-            NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
-            if (savedFrame != nil && NSRectFromString(savedFrame).size.width >= 300) {
-                unminimizedRect.size = NSRectFromString(savedFrame).size;
-            }
-            else {
-                unminimizedRect.size.width = 600;
-            }
-        }
-
         if ([appSettings minimizeUpDown] == 0) { // minimize left
-            windowFrame.size.width = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
+            windowFrame.size.width = minimizedDim;
         }
         else { // minimize right
-            windowFrame.origin.x = windowFrame.origin.x + windowFrame.size.width - ((2 * [parentWindow borderWidth]) + [appSettings textRectHeight]);
-            windowFrame.size.width = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight];
+            windowFrame.origin.x = windowFrame.origin.x + windowFrame.size.width - minimizedDim;
+            windowFrame.size.width = minimizedDim;
         }
         
         [parentWindow setMinimized:YES];
@@ -335,7 +342,11 @@
     int i;
     NSRect windowFrame;
     
-    // Figure out what our new rect should be.
+    // Figure out what our new rect should be. The cross axis is restored too
+    // whenever it is collapsed: a frame inherited from the other layout (or a
+    // module-minimum regrowth) leaves the window a strip in the axis this
+    // orientation never touches, and nothing else would ever fix it.
+    CGFloat collapsedLimit = (2 * [parentWindow borderWidth]) + [appSettings textRectHeight] + 1;
     if ([moduleManager graphOrientationVertical]) {
         windowFrame = [parentWindow frame];
 		if ([appSettings minimizeUpDown] == 0) { // maximize down
@@ -345,6 +356,9 @@
 			// windowFrame.origin.y is fine as-is
 		}
         windowFrame.size.height = unminimizedRect.size.height;
+        if (windowFrame.size.width <= collapsedLimit && unminimizedRect.size.width > collapsedLimit) {
+            windowFrame.size.width = unminimizedRect.size.width;
+        }
         [parentWindow setMinimized:NO];
         [parentWindow setMinSize:[moduleManager getMinSize]];
     }
@@ -357,6 +371,9 @@
 			windowFrame.origin.x -= unminimizedRect.size.width - windowFrame.size.width;
 		}
         windowFrame.size.width = unminimizedRect.size.width;
+        if (windowFrame.size.height <= collapsedLimit && unminimizedRect.size.height > collapsedLimit) {
+            windowFrame.size.height = unminimizedRect.size.height;
+        }
         [parentWindow setMinimized:NO];
         [parentWindow setMinSize:[moduleManager getMinSize]];
     }

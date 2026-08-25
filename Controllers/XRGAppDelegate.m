@@ -107,10 +107,13 @@
 		// real dimensions as the restore rect. Without this, a launch in the
 		// minimized state captures the autosaved collapsed frame and the window
 		// can never expand again (the 21px-strip trap).
+		// "Expanded" means larger than the collapsed strip itself, not larger
+		// than an arbitrary 300px: small windows are legitimate and must survive.
+		CGFloat collapsedLimit = (2 * [self.xrgGraphWindow borderWidth]) + [self.xrgGraphWindow.appSettings textRectHeight] + 1;
 		NSString *savedFrame = [[NSUserDefaults standardUserDefaults] stringForKey:XRG_unminimizedFrame];
 		if (savedFrame != nil) {
 			NSRect saved = NSRectFromString(savedFrame);
-			if (saved.size.height >= 300 || saved.size.width >= 300) {
+			if (saved.size.height > collapsedLimit && saved.size.width > collapsedLimit) {
 				NSRect f = self.xrgGraphWindow.frame;
 				f.size = saved.size;
 				[self.xrgGraphWindow setFrame:f display:NO];
