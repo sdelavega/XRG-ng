@@ -99,7 +99,12 @@ static XRGModelPricing getClaudeModelPricing(NSString *modelName) {
     return pricing;
 }
 
-// Get pricing for an OpenAI/Codex model by name
+// Get pricing for an OpenAI/Codex model by name.
+// Not yet wired: the Codex path uses kCodexDefaultInputPrice/OutputPrice today
+// (see the "model name parsing TODO" at the Codex/Gemini cost site). Kept and
+// marked unused rather than deleted, so per-model Codex pricing is a lookup
+// swap away when session records start carrying the model name.
+__attribute__((unused))
 static XRGModelPricing getCodexModelPricing(NSString *modelName) {
     XRGModelPricing pricing = {2.50, 10.0}; // Default to GPT-4o pricing
 
@@ -308,9 +313,11 @@ static const double kGeminiDefaultOutputPrice = 0.40;
         // DON'T call getLatestTokenInfo during init - it could block!
         // Instead, start with zeros and let the first graphUpdate call handle it
 
-        // Trigger immediate background cache build for all providers
+        // Trigger immediate background cache build for all providers.
+        // self-> is explicit: this one-shot startup block accesses an ivar and
+        // the miner outlives the block, so the retain is intended, not a cycle.
         dispatch_async(jsonlParsingQueue, ^{
-            if (activeStrategy == XRGAIDataStrategyJSONL) {
+            if (self->activeStrategy == XRGAIDataStrategyJSONL) {
                 [self updateJSONLCacheInBackground];
             }
             [self updateCodexCacheInBackground];

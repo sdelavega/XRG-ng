@@ -323,9 +323,17 @@ void sleepNotification(void *refcon, io_service_t service, natural_t messageType
     systemJustWokeUp = yesNo;
 }
 
+// This fork's update channel. The upstream endpoint (download.gauchosoft.com)
+// answers for mikepj/XRG: the day upstream ships a newer version, every fork
+// user would be told to download upstream over this fork's features. Same
+// text protocol (a bare version string), served from the fork's own tree so
+// a release is "bump latest_version.txt on main".
+#define XRG_UPDATE_CHECK_URL @"https://raw.githubusercontent.com/marc-shade/XRG/main/latest_version.txt"
+#define XRG_UPDATE_INFO_URL  @"https://github.com/marc-shade/XRG/releases"
+
 - (void)checkServerForUpdates {
     self.xrgCheckURL = [[XRGURL alloc] init];
-    [self.xrgCheckURL setURLString:@"https://download.gauchosoft.com/xrg/latest_version.txt"];
+    [self.xrgCheckURL setURLString:XRG_UPDATE_CHECK_URL];
     [self.xrgCheckURL loadURLInBackground];
 }
 
@@ -356,7 +364,7 @@ void sleepNotification(void *refcon, io_service_t service, natural_t messageType
             
             if (response == NSAlertFirstButtonReturn) {
                 // More Info
-                [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.gauchosoft.com/xrg/"]];
+                [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:XRG_UPDATE_INFO_URL]];
             }
             else if (response == NSAlertSecondButtonReturn) {
                 // Disable Checking
