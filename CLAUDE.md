@@ -86,10 +86,23 @@ classes with fixture collectors. A UUID bundle identifier isolates standard
 preferences; the second process verifies saved state before the runner removes
 that domain. Reports and offscreen PNGs are in `Smoke/`. Run the standalone check
 with `python3 Tools/smoke-macos.py --configuration Debug` (or Release).
-This composition harness does not load the packaged MainMenu nib or exercise the
-shipping entry point, LaunchServices, interactive dialogs or physical hardware.
+This composition harness uses assembled classes; the separate packaged check below
+loads MainMenu through the shipping entry point. LaunchServices and interactive
+dialogs still need separate validation.
 Its sensor nib is generated from `Resources/Sensors.xib` with only automatic
 presentation/frame autosave suppressed; source parity is checked before running.
+`Tools/packaged-smoke-macos.py --app /absolute/path/XRG-ng.app` tests a disposable
+copy of the actual app. Only its bundle identifier/signature changes; executable
+text sections, LC_MAIN and original MainMenu hashes must match. A test-only dylib
+uses runtime interfaces without linking the static XRGCore again. It suppresses
+activation/window ordering and observes the original nib connections, scheduled
+timers, saved collapsed geometry in both orientations and AppKit termination.
+Preflight must prove injection, prohibited activation, private preference access,
+denied home-data reads and denied networking before XRG-ng may run. The sandbox
+permits only the disposable preference file plus necessary parent metadata for
+home-directory reads. External-provider graphs/update checks stay disabled. Native
+read-only system collectors run, but their readings and screenshots are not
+included in reports. Reports/logs are in `PackagedSmoke/`; binaries are not uploaded.
 Do not replace these checks with a build alone or claim Intel runtime coverage
 from an arm64 host's universal build.
 

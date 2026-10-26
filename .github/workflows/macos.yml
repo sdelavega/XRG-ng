@@ -42,5 +42,7 @@ jobs:
             ${{ steps.verify.outputs.results }}/Smoke/*.log
             ${{ steps.verify.outputs.results }}/Smoke/*.json
             ${{ steps.verify.outputs.results }}/Smoke/*.png
+            ${{ steps.verify.outputs.results }}/PackagedSmoke/*.log
+            ${{ steps.verify.outputs.results }}/PackagedSmoke/*.json
           retention-days: 7
           if-no-files-found: warn

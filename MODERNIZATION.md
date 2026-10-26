@@ -830,3 +830,56 @@ The shipping main.swift/NSApplicationMain path, original MainMenu nib loading,
 LaunchServices, interactive dialogs/VoiceOver, physical sleep/wake, live providers,
 physical sensor/fan changes and Intel runtime still need separate validation.
 The existing APSL/GPL combined-distribution issue remains unchanged.
+
+## Packaged entry point and original nib validation (2026-10-26)
+
+The composition-harness commit b450f30 passed hosted Debug and Release CI
+(40388453747). A separate packaged check now executes the actual shipping
+main.swift/NSApplicationMain path in a disposable copy of the built app. Only
+the copy's bundle identifier and ad-hoc signature change. Every executable
+__TEXT section, the LC_MAIN entry command and the original MainMenu nib must
+retain their hashes before and after execution; the original build is also
+checked again. No production sources or resources change in this step.
+
+The injected Swift observer uses Objective-C runtime interfaces, without linking
+XRGCore a second time: that framework contains static classes already present in
+the app. Small Objective-C files under Tools/PackagedSmoke provide test-only
+presentation hooks and a preflight executable; they have no production target
+membership. The two remaining production Objective-C hardware bridges are
+unchanged.
+
+Before any packaged-app launch, preflight requires a matching private UUID bundle
+identifier, an executable inside the disposable output root, matching plain
+ad-hoc signature flags, working injection and prohibited activation. Restricted
+or privileged executables are refused. A sandbox denies networking and reads of
+home-directory data except the disposable preferences, with parent-directory
+metadata allowances for preference lookup. A task-owned cache sentinel verifies
+the read denial. External-provider graphs and update checks are disabled. Native
+read-only system collectors run, but reports contain no sensor readings, hostnames
+or screenshots. Activation and window ordering are suppressed before main starts.
+
+Four distinct app processes seed and restore collapsed state in vertical and
+horizontal orientations. They verify the original MainMenu delegate/window/module
+connections, all ten panels and their production executable images, the original
+Preferences and Sensors nib outlets, scheduled graph-timer advancement, shipping
+process priority and hidden windows. NSApp.terminate invokes the original delegate
+termination callback before the observer checks all four timers are invalidated;
+AppKit then exits normally. Each process has a sixty-second limit.
+
+Cleanup removes the logical preference domain and verifies removal of UUID-owned
+preference files, caches, saved state and HTTP storage. Physical cleanup covers
+the residual plist observed after defaults deletion. Negative checks reject
+production/invalid cleanup namespaces, detect changed text/entry commands, refuse
+missing injection before AppKit startup, and remove private artifacts after a
+synthetic preflight failure, including when logical defaults deletion also fails.
+
+Both complete local CI configurations pass universal app builds, metadata/runtime
+checks, 843 cases across 443 test functions, the two-process composition harness
+and the four-process packaged check. Both packaged configurations were rerun
+successfully after adding physical cleanup. CI now runs the packaged check and
+uploads its logs and JSON only, without temporary apps or injected binaries.
+
+This closes shipping-entry-point and original-nib coverage on the local ARM host.
+LaunchServices, notarized/hardened-runtime launch, interactive UI and VoiceOver,
+physical sleep/wake, live external providers, sensor/fan changes and Intel runtime
+remain separate validation work.

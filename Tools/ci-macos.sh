@@ -120,4 +120,6 @@ PY
 phase "Isolated AppKit launch and restore smoke check"
 python3 Tools/smoke-macos.py --configuration "$configuration" \
     --products "$output/DerivedData/Build/Products/$configuration" --results "$output/Smoke"
+phase "Packaged entry point and original nib check"
+python3 Tools/packaged-smoke-macos.py --app "$app" --results "$output/PackagedSmoke"
 phase "Validation complete"
