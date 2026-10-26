@@ -734,3 +734,23 @@ build checks and twenty-minute limit are unchanged. The 26.3 app-build result
 remains useful evidence separately from the pending 26.6 test run.
 
 Runner image: https://github.com/actions/runner-images/blob/main/images/macos/macos-26-Readme.md
+
+### CI stall diagnostics
+
+The CI script now records timestamped phases and, only on GitHub Actions, starts
+an optional read-only sampler. Every five minutes it records selected compiler/
+test process statistics and two-second samples of one ibtool, ibtoold and xctest
+process owned by the runner, if present. Process arguments and environments are
+not recorded. The existing artifact upload includes these .log files. No system
+services are disabled, no third-party diagnostic package is installed, and no
+fixture or validation assertion changes.
+
+An EXIT trap stops and reaps the sampler while retaining the original build/test
+exit status; INT/TERM retain their conventional failure status. Isolated checks
+verified phase/process capture, termination during an active sample, termination
+while waiting between samples, invalid-interval rejection, preservation of a
+synthetic build failure's exit code 73, and absence of leftover background
+processes. The updated Debug script completed locally with both app slices,
+metadata/runtime checks and 837 cases across 439 functions, with zero failures.
+Release source and validation assertions are unchanged from the previous pass.
+The remote Xcode 26.6 retry is tracked separately from these local checks.

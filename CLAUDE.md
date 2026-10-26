@@ -75,6 +75,11 @@ The script builds both architectures, verifies product metadata, bundled notices
 minimum OS and required runtime symbols, then runs XRGTests on the host architecture.
 It prints a unique directory containing build logs, an xcresult bundle and JSON
 summary. Tests use injected transports, fixture archives and private defaults.
+On GitHub Actions, a background sampler records the current phase, selected process
+statistics and brief ibtool/ibtoold/xctest stack samples every five minutes. These
+diagnostic logs are uploaded with the results; they omit process arguments and
+environments. Local runs do not start the sampler. The build/test exit status and
+all validation checks still determine success.
 Do not replace these checks with a build alone or claim Intel runtime coverage
 from an arm64 host's universal build.
 

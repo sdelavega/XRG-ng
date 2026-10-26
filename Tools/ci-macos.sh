@@ -15,6 +15,28 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "results=$output" >> "$GITHUB_OUTPUT"
 fi
 
+diagnostics_pid=""
+finish_ci() {
+    ci_status=$?
+    trap - EXIT
+    if [[ -n "$diagnostics_pid" ]]; then
+        kill "$diagnostics_pid" 2>/dev/null || true
+        wait "$diagnostics_pid" 2>/dev/null || true
+    fi
+    exit "$ci_status"
+}
+trap finish_ci EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+phase() {
+    echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" | tee "$output/phase.log"
+}
+phase "Universal $configuration app build"
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    bash Tools/ci-macos-diagnostics.sh "$output" &
+    diagnostics_pid=$!
+fi
+
 xcodebuild -version
 xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng \
     -configuration "$configuration" -destination 'generic/platform=macOS' \
@@ -22,6 +44,7 @@ xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng \
     CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO 'ARCHS=arm64 x86_64' \
     build 2>&1 | tee "$output/build.log"
 
+phase "Product architectures, deployment target and notices"
 # Verify the shipped executable retains both supported architectures and floor.
 app="$output/DerivedData/Build/Products/$configuration/XRG-ng.app"
 architectures=$(xcrun lipo -archs "$app/Contents/MacOS/XRG-ng")
@@ -52,6 +75,7 @@ for name in ("COPYRIGHT", "THIRD_PARTY_NOTICES.md", "APSL.txt", "Credits.html"):
 print("Verified XRG-ng metadata, copyright and bundled license notices")
 PYMETADATA
 
+phase "Required runtime classes in both architectures"
 # Nib-only and dynamically discovered classes must survive archive extraction.
 python3 - "$app/Contents/MacOS/XRG-ng" <<'PYCLASSES'
 import subprocess
@@ -71,12 +95,14 @@ for architecture in ("arm64", "x86_64"):
 print("Verified required runtime classes in arm64 and x86_64")
 PYCLASSES
 
+phase "$configuration test build and execution"
 xcodebuild -project XRG-ng.xcodeproj -scheme XRGTests \
     -configuration "$configuration" -destination 'platform=macOS' \
     -derivedDataPath "$output/DerivedData" -resultBundlePath "$output/Tests.xcresult" \
     CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES \
     test 2>&1 | tee "$output/tests.log"
 
+phase "Test result validation"
 # A scheme that accidentally loses its tests must not produce a green CI run.
 xcrun xcresulttool get test-results summary --path "$output/Tests.xcresult" > "$output/summary.json"
 python3 - "$output/summary.json" <<'PY'
@@ -91,3 +117,4 @@ if passed < 1 or failed != 0:
     raise SystemExit(f"Expected passing tests; passed={passed}, failed={failed}")
 print(f"Verified {passed} passing tests, {failed} failures")
 PY
+phase "Validation complete"
