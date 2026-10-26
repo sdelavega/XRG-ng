@@ -681,3 +681,39 @@ files (283 lines including notices). Unbuilt AI prototypes and historical interf
 resources remain separate cleanup work. Linux is unchanged. APSL-derived Swift and
 native code retain APSL; the existing combined-distribution compatibility issue
 remains unresolved.
+
+## Retired Objective-C prototypes and development guide (2026-10-26)
+
+Removed the unbuilt plural XRGAITokensView prototype and the obsolete
+XRGAppDelegate+AIWindowIntegration and XRGGraphWindow+AITokens categories, including
+their headers. Their only source references were to one another, they were absent
+from the Xcode build, and no nib, xib, plist or historical fixture archive refers
+to their runtime identities. The active singular XRGAITokenView, window actions,
+notifications and AI preferences flow remain implemented in Swift.
+
+Removed four unused headers: definitions.h, XRGAISettingsKeys.h, XRGPlugin.h and
+ppp_msg.h. The old settings macros and network structs had no remaining source
+consumers after the Swift ports. Removed the corresponding compatibility imports
+and project references. THIRD_PARTY_NOTICES.md no longer lists the deleted APSL
+1.1 PPP header; all notices for the retained APSL 2.0 sources remain intact.
+The existing combined-distribution licensing issue is unchanged.
+
+CLAUDE.md now describes the Swift framework and app shell, NSView panel composition,
+main-actor/lifecycle contracts, the actual 0.125-second fast timer, macOS 26.0,
+Debug/Release universal validation, injected test fixtures and the two remaining
+native exception boundaries. It replaces instructions to add Objective-C classes
+or edit deleted macro headers. Linux implementation and troubleshooting guidance
+are retained; no Linux source is changed.
+
+The first fork CI run never reached checkout: GitHub reported hosted-runner
+allocation failures and macOS arm64 capacity constraints. The workflow now selects
+the standard macos-26-intel runner. The official runner image lists the existing
+Xcode_26.3.app path, so the toolchain pin, 26.0 deployment floor, both executable
+architectures and all test checks remain unchanged. Local arm64 validation and
+remote Intel runtime validation must still be reported separately.
+
+Local Debug and Release validation both passed: universal arm64/x86_64 app builds,
+metadata/notices/runtime-class checks, and 837 cases across 439 test functions per
+configuration, with zero failures. Tests executed on arm64 with local Xcode 27.2;
+this does not establish Intel runtime or Xcode 26.3 compatibility. Project syntax
+and whitespace checks passed, and retained archives were not modified.

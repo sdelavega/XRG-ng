@@ -28,12 +28,6 @@ to resolve that existing issue.
 
 Reference: https://www.gnu.org/licenses/license-list.en.html#apsl2
 
-## Legacy Apple header
-
-`Other Sources/ppp_msg.h` retains its Apple Computer, Inc., 2000 notice
-under APSL 1.1. Its original license reference is preserved in the file.
-It is a legacy source header, separate from the APSL 2.0 sensor implementation.
-
 ## Other contributors
 
 Other authors' source notices and Git authorship remain part of the project

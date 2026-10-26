@@ -22,6 +22,3 @@
  */
 
 #import <XRGCore/XRGCore-Swift.h>
-
-// Remaining Objective-C consumers still obtain these constants through this header.
-#import "definitions.h"

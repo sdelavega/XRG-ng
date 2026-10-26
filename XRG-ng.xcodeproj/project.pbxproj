@@ -78,11 +78,8 @@
 		273ECEAE15740EAF00E65D82 /* XRGStockView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGStockView.h; sourceTree = "<group>"; };
 		273ECEB015740EAF00E65D82 /* XRGTemperatureView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGTemperatureView.h; sourceTree = "<group>"; };
 		273ECEB215740EAF00E65D82 /* XRGWeatherView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGWeatherView.h; sourceTree = "<group>"; };
-		273ECEB515740EAF00E65D82 /* definitions.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = definitions.h; sourceTree = "<group>"; };
 		273ECEB615740EAF00E65D82 /* main.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		273ECEB715740EAF00E65D82 /* ppp_msg.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ppp_msg.h; sourceTree = "<group>"; };
 		273ECEB815740EAF00E65D82 /* XRG-Prefix.pch */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "XRG-Prefix.pch"; sourceTree = "<group>"; };
-		273ECEB915740EAF00E65D82 /* XRGPlugin.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGPlugin.h; sourceTree = "<group>"; };
 		273ECED915740EAF00E65D82 /* Preferences-Appearance.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Appearance.tiff"; sourceTree = "<group>"; };
 		273ECEDA15740EAF00E65D82 /* Preferences-CPU.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-CPU.tiff"; sourceTree = "<group>"; };
 		273ECEDB15740EAF00E65D82 /* Preferences-Disk.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Disk.tiff"; sourceTree = "<group>"; };
@@ -294,11 +291,8 @@
 		273ECEB415740EAF00E65D82 /* Other Sources */ = {
 			isa = PBXGroup;
 			children = (
-				273ECEB515740EAF00E65D82 /* definitions.h */,
 				273ECEB615740EAF00E65D82 /* main.swift */,
-				273ECEB715740EAF00E65D82 /* ppp_msg.h */,
 				273ECEB815740EAF00E65D82 /* XRG-Prefix.pch */,
-				273ECEB915740EAF00E65D82 /* XRGPlugin.h */,
 			);
 			path = "Other Sources";
 			sourceTree = SOURCE_ROOT;

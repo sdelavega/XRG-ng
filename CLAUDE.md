@@ -4,15 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-XRG-ng is a **cross-platform** system resource monitoring application with native implementations for **macOS** (Swift/Objective-C AppKit) and **Linux** (C/GTK3). It displays real-time graphs for CPU, memory, network, disk, GPU, battery, temperature, weather, stocks, and AI token usage.
+XRG-ng is a **cross-platform** system resource monitoring application with native implementations for **macOS** (Swift AppKit with small Objective-C hardware boundaries) and **Linux** (C/GTK3). It displays real-time graphs for CPU, memory, network, disk, GPU, battery, temperature, weather, stocks, and AI token usage.
 
 **Key Points:**
-- Both platforms share identical three-layer architecture (Data Collector → Graph View → Module Manager)
+- Both platforms follow a collector → graph → module-manager architecture.
 - AI token monitoring works on both platforms (parses `~/.claude/projects/*/sessionid.jsonl`)
-- macOS: `Controllers/`, `Data Miners/`, `Graph Views/`, `Utility/`
+- macOS: `XRGCore/` holds Swift models, miners, panels and window/preferences controllers; `Controllers/XRGAppDelegate.swift` and `Other Sources/main.swift` form the app shell. Remaining `.h` files mostly preserve Objective-C import compatibility.
 - Linux: `xrg-linux/src/collectors/`, `xrg-linux/src/widgets/`, `xrg-linux/src/core/`
 
-**Current Module Display Order** (must be sequential, no gaps):
+**Default Module Display Order:**
+
 | Order | Module | macOS View | Linux Widget |
 |-------|--------|------------|--------------|
 | 0 | CPU | `XRGCPUView` | `cpu_widget` |
@@ -55,12 +56,27 @@ xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng \
     CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO build
 ```
 
-**Target Information:**
-- **Single Target**: XRG-ng
-- **Schemes**: XRG-ng
-- **Minimum OS**: macOS 10.13
-- **Build Configurations**: Debug, Release
-- **Required Frameworks**: Cocoa, IOKit, Accelerate
+**Targets and validation:**
+- **App**: XRG-ng; internal Swift module name `XRG`, generated header `XRG-Swift.h`.
+- **Framework**: XRGCore; Swift runtime classes keep explicit legacy Objective-C names.
+- **Tests**: XRGTests, including Swift tests and Objective-C compatibility/transport fixtures.
+- **Minimum OS**: macOS 26.0 for app, framework and tests.
+- **Architectures**: arm64 and x86_64, Debug and Release.
+- **CI**: standard `macos-26-intel` runner, Xcode 26.3.
+
+Run the same checks as CI from the repository root:
+
+```bash
+bash Tools/ci-macos.sh Debug
+bash Tools/ci-macos.sh Release
+```
+
+The script builds both architectures, verifies product metadata, bundled notices,
+minimum OS and required runtime symbols, then runs XRGTests on the host architecture.
+It prints a unique directory containing build logs, an xcresult bundle and JSON
+summary. Tests use injected transports, fixture archives and private defaults.
+Do not replace these checks with a build alone or claim Intel runtime coverage
+from an arm64 host's universal build.
 
 ### Linux Build Commands
 
@@ -119,105 +135,52 @@ sudo apt install libgtk-3-dev libcairo2-dev libglib2.0-dev libjson-glib-dev \
 
 ## Architecture
 
-XRG-ng maintains a consistent three-layer architecture across **both macOS and Linux** implementations, with platform-specific data collection and rendering layers.
+### macOS Swift implementation
 
-### Three-Layer Module Pattern
+1. **Miners** (`XRGCore/*Miner.swift`) collect system metrics or provider records.
+   Histories use Swift-owned `XRGDataSet` buffers; parsers and readers expose fixture
+   seams so tests do not need production hardware or user logs.
+2. **Panels** (`XRGCore/*View.swift`) are main-actor `NSView` subclasses conforming
+   to `XRGModuleView`. They compose `XRGGraphRenderer` and `XRGGraphLabels`.
+   The Swift `XRGGenericView` remains a compatibility base; active leaf panels
+   inherit directly from NSView.
+3. **Modules and window** (`XRGModule`, `XRGModuleManager`, `XRGGraphWindow`) own
+   registration, layout, visibility and timer dispatch. Panel registration must
+   remain idempotent; detach/rebind removes only the panel's own module. Panels
+   keep host, manager and module references weak where needed to avoid cycles.
+4. **Preferences** (`XRGSettings`, `XRGWindowPreferences`, `XRGPrefController`)
+   retain existing defaults keys, bindings, settings formats and nib selectors.
+   `XRGAppDelegate` handles application lifecycle and routes AI preferences to the
+   existing AI panel. The executable entry point is Swift.
 
-Both platforms use this consistent architecture across all monitoring modules:
+Graph updates use the saved positive finite refresh interval, falling back to one
+second. Fast updates run every 0.125 seconds; slow timers run every 300 and 1800
+seconds. Modules opt in with `doesGraphUpdate`, `doesFastUpdate`, `doesMin5Update`,
+`doesMin30Update` and `alwaysDoesGraphUpdate`.
 
-**macOS Implementation:**
+### Remaining native hardware boundary
 
-1. **Data Miner Layer** (`Data Miners/`)
-   - Inherits from `NSObject`
-   - Collects system metrics via IOKit, sysctl, or log file parsing
-   - Stores time-series data in `XRGDataSet` ring buffers
-   - Updates on timer callbacks: `graphUpdate:`, `fastUpdate:`, `min5Update:`, `min30Update:`
-   - Examples: `XRGCPUMiner`, `XRGMemoryMiner`, `XRGNetMiner`, `XRGAITokenMiner`
+Only two Objective-C implementation files are compiled into the app:
 
-2. **View Layer** (`Graph Views/`)
-   - Inherits from `XRGGenericView` → `NSView`
-   - Owns its corresponding miner instance
-   - Implements `drawRect:` to render graphs using Quartz
-   - Responds to timer events by querying the miner and calling `setNeedsDisplay:`
-   - Supports both full and "mini" display modes
-   - Examples: `XRGCPUView`, `XRGMemoryView`, `XRGNetView`, `XRGAITokenView`
+- `Data Miners/APSL/SMCInterface.m`: legacy failable-init facade forwarding to
+  `XRGSMCInterface`, plus IOKit packet calls, cleanup and exception containment.
+- `Data Miners/XRGTemperatureHardwareReader.m`: SMC/HID adapters with private C
+  ABI calls, Core Foundation ownership and Objective-C exception containment.
 
-3. **Module Registration** (via `XRGModule`)
-   - Created in view's `awakeFromNib`
-   - Registered with `XRGModuleManager` in `XRGGraphWindow`
-   - Manages visibility (`isDisplayed`), display order, size constraints
-   - Controls which timer events the module receives
+Packet construction, metadata caching, decoding, SMC sensor selection and HID
+sample collection are Swift. Do not move `@try` boundaries into Swift: Objective-C
+exceptions must be caught before returning to Swift. Keep the native SMC command
+allowlist read-only and preserve packet ABI assertions for both architectures.
+The test target compiles the same native bodies with injected C calls/runtime
+names, covering errors and cleanup without accessing real hardware.
 
-**Linux Implementation:**
+### Linux implementation
 
-1. **Data Collector Layer** (`xrg-linux/src/collectors/`)
-   - Plain C structs with function pointers
-   - Collects system metrics via `/proc`, `/sys`, lm-sensors
-   - Stores time-series data in `XRGDataSet` ring buffers (same as macOS)
-   - Updates on GLib timer callbacks: `update_callback()`
-   - Examples: `cpu_collector.c`, `memory_collector.c`, `network_collector.c`, `aitoken_collector.c`
-
-2. **Widget Layer** (`xrg-linux/src/widgets/`)
-   - Custom GTK widgets using `GtkDrawingArea`
-   - Owns its corresponding collector instance
-   - Implements `draw` signal handler to render graphs using Cairo
-   - Responds to timer events by querying the collector and calling `gtk_widget_queue_draw()`
-   - Includes activity bar showing real-time stats
-   - Examples: `cpu_widget.c`, `memory_widget.c`, `network_widget.c`, `aitoken_widget.c`
-
-3. **Module Manager** (`xrg-linux/src/core/module_manager.c`)
-   - Manages module lifecycle and layout
-   - Tracks visibility, display order, size constraints
-   - Dispatches timer events to modules
-   - Same conceptual design as macOS `XRGModuleManager`
-
-### Core Components
-
-- **`XRGAppDelegate`**: Application lifecycle, preferences, window management
-- **`XRGGraphWindow`**: Main floating window, hosts all graph views, owns module manager
-- **`XRGModuleManager`**: Orchestrates modules, handles layout, dispatches timer events
-- **`XRGSettings`**: User preferences wrapper around `NSUserDefaults`
-- **`XRGDataSet`**: Ring buffer for time-series data storage
-- **`XRGGenericView`**: Base class providing common graphing methods
-- **`XRGModule`**: Metadata container (name, size, visibility, update flags)
-
-### Timer-Based Updates
-
-The app uses multiple timers with different frequencies:
-
-- **`graphTimer`** (1 second): Main update loop for most graphs
-- **`fastTimer`** (0.1 seconds): High-frequency updates (CPU, network)
-- **`min5Timer`** (5 minutes): Weather, stock updates
-- **`min30Timer`** (30 minutes): Extended polling intervals
-
-Modules opt-in to timer events via flags:
-```objc
-m.doesGraphUpdate = YES;      // Receives 1-second updates
-m.doesFastUpdate = YES;       // Receives 0.1-second updates
-m.doesMin5Update = YES;       // Receives 5-minute updates
-m.alwaysDoesGraphUpdate = YES; // Updates even when window minimized
-```
-
-### Hardware Access Patterns
-
-**Apple Silicon Sensors** (`Data Miners/APSL/`):
-- Uses `IOHIDEventSystemClientCreate` to access HID sensors
-- `XRGAppleSiliconSensorMiner` bridges to older `XRGTemperatureMiner`
-- `SMCSensors` and `SMCSensorGroup` abstract sensor reading
-- Sensor names mapped via `Resources/SMCSensorNames.plist`
-
-**Intel SMC Access**:
-- Uses `SMCInterface.m` to read System Management Controller
-- Provides temperature, fan speed, and power metrics
-
-**Network Stats**:
-- Direct `ioctl` calls with `SIOCGIFDATA` for interface stats
-- Ignores `lo0` (loopback) to avoid phantom VPN traffic
-- Tracks `bytes_delta` for rate calculations
-
-**GPU Monitoring**:
-- Uses `IOAccelerator` and `IOGraphics` APIs
-- Tracks GPU utilization and memory usage
+The C/GTK3 port remains in `xrg-linux/` and is independent of the macOS migration.
+Collectors in `src/collectors/` feed widgets in `src/widgets/`; the module manager
+in `src/core/module_manager.c` handles layout and GLib timer dispatch. Widgets use
+GtkDrawingArea and Cairo. Linux build instructions and hardware troubleshooting
+below still apply.
 
 ### Platform-Specific Data Sources
 
@@ -243,28 +206,27 @@ m.alwaysDoesGraphUpdate = YES; // Updates even when window minimized
 
 ## Adding a New Module
 
-**Reference Implementation**: Use `XRGAITokenMiner.m` / `XRGAITokenView.m` (macOS) or `aitoken_collector.c` / `aitoken_widget.c` (Linux) as templates.
+**Reference implementations:** `XRGCore/XRGCPUView.swift` and
+`XRGCore/XRGCPUMiner.swift` on macOS; `aitoken_collector.c` and
+`aitoken_widget.c` on Linux.
 
 ### macOS Module Checklist
 
-1. **Data Miner** (`Data Miners/XRGYourModuleMiner.{h,m}`)
-   - Inherit from `NSObject`, store data in `XRGDataSet` ring buffers
-   - Implement `graphUpdate:`, `setDataSize:` methods
-
-2. **Graph View** (`Graph Views/XRGYourModuleView.{h,m}`)
-   - Inherit from `XRGGenericView`, own the miner instance
-   - In `awakeFromNib`: create miner, register `XRGModule` with **next sequential displayOrder**
-   - Implement `drawRect:` using miner data
-
-3. **Configuration** (`Other Sources/definitions.h`)
-   - Add `XRG_showYourModuleGraph` and `XRG_YourModuleOrder` keys
-
-4. **Window Controller** (`Controllers/XRGGraphWindow.{h,m}`)
-   - Add property and `setShowYourModuleGraph:` action
-
-5. **Xcode Project**: Add files to `Data Miners` and `Graph Views` groups
-
-6. **NIB Files**: Add view to `MainMenu.nib`, checkbox to `Preferences.nib`
+1. Add a Swift miner in `XRGCore/`, using injected data sources and `XRGDataSet`
+   histories where appropriate.
+2. Add a main-actor Swift NSView conforming to `XRGModuleView`; compose the shared
+   renderer/labels and implement the update callbacks required by the protocol.
+3. Define the host protocol and register the module once after nib awakening and
+   window attachment. Set its default order, visibility and size, and handle
+   detachment, host replacement and manager replacement.
+4. Add settings to `XRGSettings.swift`, register defaults in the existing
+   preferences flow, and wire the window action and preference control. Preserve
+   existing keys; use Swift string keys rather than resurrecting macro headers.
+5. Add the Swift files to the framework target in the Xcode project. Preserve any
+   explicit `@objc` names/selectors needed by Interface Builder or native callers.
+6. Add focused fixture tests for collection, rendering inputs and lifecycle.
+   Use the existing nib extraction tools when an archive contract changes; keep
+   historical test fixtures intact.
 
 ### Linux Module Checklist
 
@@ -287,22 +249,10 @@ m.alwaysDoesGraphUpdate = YES; // Updates even when window minimized
 
 **macOS:**
 
-1. Define key in `definitions.h`:
-   ```objc
-   #define XRG_myNewSetting    @"myNewSetting"
-   ```
-
-2. Access in code:
-   ```objc
-   BOOL value = [[NSUserDefaults standardUserDefaults] boolForKey:XRG_myNewSetting];
-   [[NSUserDefaults standardUserDefaults] setObject:value forKey:XRG_myNewSetting];
-   ```
-
-3. Wrap in `XRGSettings.h` for easier access:
-   ```objc
-   - (BOOL)myNewSetting;
-   - (void)setMyNewSetting:(BOOL)value;
-   ```
+Add the Swift accessor to `XRGCore/XRGSettings.swift` and register its default in
+the existing settings flow. Use the same persisted string key in bindings and
+consumers. For tests, inject a private `UserDefaults` suite; never rewrite the
+user's running application's preferences to validate a change.
 
 **Linux:**
 
@@ -326,215 +276,49 @@ gboolean preferences_get_bool(const char *key, gboolean default_value) {
 }
 ```
 
-### Debugging with XRG_DEBUG
+### Rendering, settings and compatibility
 
-Enable debug logging:
-```objc
-// In definitions.h, change:
-#undef XRG_DEBUG
-// To:
-#define XRG_DEBUG 1
-```
-
-Then add logging:
-```objc
-#ifdef XRG_DEBUG
-NSLog(@"Debug info: %@", data);
-#endif
-```
-
-### Drawing Graphs
-
-Use helper methods from `XRGGenericView`:
-
-```objc
-// Stacked area graph
-[self drawGraphWithDataFromDataSet:dataset
-                          maxValue:maxValue
-                            inRect:graphRect
-                           flipped:YES
-                            filled:YES
-                             color:[appSettings graphFG1Color]];
-
-// Line graph
-[self drawRangedGraphWithDataFromDataSet:dataset
-                              upperBound:100
-                              lowerBound:0
-                                  inRect:graphRect
-                                 flipped:NO
-                                  filled:NO
-                                   color:[appSettings graphFG2Color]];
-
-// Mini mode
-[self drawMiniGraphWithValues:values
-                   upperBound:max
-                   lowerBound:min
-                    leftLabel:@"Label"
-                   rightLabel:@"Value"];
-```
-
-### Color Scheme
-
-All modules use centralized color preferences:
-- `graphBGColor`: Graph background
-- `graphFG1Color`, `graphFG2Color`, `graphFG3Color`: Three data series colors
-- `backgroundColor`: Window background
-- `textColor`: Labels and text
-- `borderColor`: Window borders
-
-Each has corresponding transparency settings.
-
-### Size and Layout
-
-Modules define size constraints:
-```objc
-m.minHeight = 40;         // Minimum height in pixels
-m.maxHeight = 300;        // Maximum height
-m.minWidth = 100;         // Minimum width
-// Width auto-adjusts based on window size
-```
-
-`XRGModuleManager` handles layout based on orientation:
-- Vertical: Modules stack top-to-bottom
-- Horizontal: Modules arrange left-to-right
-
-### Testing Without Running Full App
-
-For testing miners or calculations:
-```objc
-// In a separate test file
-int main() {
-    @autoreleasepool {
-        XRGYourModuleMiner *miner = [[XRGYourModuleMiner alloc] init];
-        [miner graphUpdate:nil];
-        NSLog(@"Result: %@", [miner dataValues]);
-    }
-    return 0;
-}
-```
+- Use `XRGGraphRenderer` and `XRGGraphLabels` for drawing, labels and mini mode.
+  Colors and transparency come from `XRGSettings`/`XRGTheme`.
+- Keep UI mutations on the main actor. Prefer injected clocks/readers/transports
+  and fixture snapshots over starting production timers or endpoints in tests.
+- Preserve explicit Objective-C runtime names, selectors and archive keys when
+  migrating or simplifying Swift classes. Existing keyedarchives and NIBArchive
+  fixtures exercise both forms of the historical UI resources.
+- Keep bundle identifier `com.sdelavega.xrg`, internal module names, defaults keys
+  and saved settings formats stable across the XRG-ng product rename.
+- Keep the 26.0 deployment target and both supported executable slices. Inspect
+  `Tools/ci-macos.sh` before changing required runtime classes or metadata.
+- Most `.h` files are compatibility imports for generated Swift interfaces.
+  Retain imports/selectors covered by Objective-C bridge tests. Obsolete AI
+  prototypes and unused macro/plugin/PPP headers have been removed.
 
 ## Code Conventions
 
-- **Language**: Objective-C (modern runtime, ARC enabled where applicable)
-- **Naming**: Classes prefixed with `XRG-ng`, ivars with underscores (legacy style)
-- **Memory**: Use `strong` properties, avoid manual retain/release in new code
-- **Headers**: Import foundation classes in `.h`, specific dependencies in `.m`
-- **Comments**: License header in all files (GPL v3 or later), inline comments for complex logic
-- **Indentation**: 4 spaces (not tabs in source, tabs in NIB XML)
+- New macOS implementation code is Swift; class names retain the `XRG` prefix.
+- Keep licensing and source attribution when translating code. First-party code
+  is GPL-3.0-or-later; APSL-derived sensor translations remain APSL 2.0. See
+  `THIRD_PARTY_NOTICES.md` for files and the unresolved combined-distribution issue.
+- Use four-space indentation and comments that explain non-obvious behavior.
+- Add project membership for new source files; merely creating a file is not
+  sufficient. Do not add duplicate implementations under `Resources/`.
+- Keep regression assertions and transport failure coverage intact. Report what
+  tests establish separately from live hardware, whole-app and Intel runtime checks.
 
 ## Common Issues
 
-### Network Interface Changes
-
-When adding new network interfaces, ensure `lo0` (loopback) is filtered out to avoid phantom traffic from VPN connections. See commit `0fca322`.
-
-### Temperature Sensor Names
-
-Sensor names are hardware-specific. Use `SMCSensorNames.plist` for friendly name mapping. Auto-configuration runs on first launch.
-
-### GPU Metrics on Apple Silicon
-
-GPU monitoring uses different APIs on Apple Silicon vs. Intel. Check `[XRGCPUMiner systemModelIdentifier]` to determine architecture.
-
-### Build Errors After Adding Files
-
-If Xcode can't find newly added files:
-1. Verify files are added to project (not just filesystem)
-2. Check target membership (should be checked)
-3. Clean build folder (⇧⌘K)
-4. Verify imports use correct paths
-
-### High CPU Usage
-
-If XRG-ng uses excessive CPU:
-- Check for infinite loops in `drawRect:` (use `setNeedsDisplay:` sparingly)
-- Verify timer intervals are reasonable (1 second minimum for most modules)
-- Profile with Instruments to identify hotspots
-
-### Module Display Order Issues
-
-If modules overlap or have incorrect positioning:
-- Display order must be **sequential** (0, 1, 2, 3...) - see table in Overview section
-- Gaps in numbering cause layout problems - use next sequential number when adding modules
-- Check `m.displayOrder` in each view's `awakeFromNib` method
-
-### Rate Calculation Bug Pattern
-
-When implementing rate calculations from cumulative counters:
-```objc
-// ❌ WRONG - Will always return 0
-- (UInt32)myRate {
-    return (UInt32)(totalCount - lastCount);  // lastCount already updated!
-}
-
-// ✅ CORRECT - Store rate in instance variable
-- (void)update {
-    currentRate = (UInt32)(totalCount - lastCount);  // Calculate BEFORE updating
-    lastCount = totalCount;  // Then update
-}
-
-- (UInt32)myRate {
-    return currentRate;  // Return stored value
-}
-```
-
-### Missing Readonly Property Getters
-
-When declaring readonly properties in the header, you **must** implement the getter method in the .m file:
-
-```objc
-// ❌ WRONG - Header declares property but .m has no implementation
-// XRGMyClass.h
-@property (readonly) NSDictionary *myData;
-
-// XRGMyClass.m
-// (no getter implementation - property returns nil!)
-
-// ✅ CORRECT - Implement the getter
-// XRGMyClass.m
-- (NSDictionary *)myData {
-    // Compute and return the value
-    return [self computeData];
-}
-```
-
-**Real Example from AI Token Observer** (Nov 2025 fix):
-The header declared `dailyByModel` and `dailyByProvider` as readonly properties, but had no getter implementations. This caused the breakdown sections to never display. Fixed by implementing getters that combine prompt and completion token dictionaries.
-
-### macOS SDK Compatibility
-
-When targeting older macOS versions (10.13+), be aware of API availability:
-
-**NSBindingName Constants** (10.15+):
-```objc
-// ❌ WRONG - Not available on macOS 10.13
-[control bind:NSBindingNameValue toObject:udc ...];
-
-// ✅ CORRECT - Use string literals for backwards compatibility
-[control bind:@"value" toObject:udc ...];
-```
-
-Common binding names that require string literals on 10.13:
-- `NSBindingNameValue` → `@"value"`
-- `NSBindingNameEnabled` → `@"enabled"`
-- `NSBindingNameHidden` → `@"hidden"`
-
-### Duplicate File Prevention
-
-When adding new modules, ensure files are not duplicated across directories:
-- ✅ **Correct**: Implementation files in proper directories (`Data Miners/`, `Graph Views/`)
-- ❌ **Wrong**: Duplicate or experimental files in `Resources/` directory
-
-Before building, verify no conflicting implementations exist:
-```bash
-# Check for duplicate implementations
-find . -name "XRGYourModule*.m" -o -name "XRGYourModule*.h"
-```
-
-If duplicate files exist, remove them from the Xcode project (not just filesystem):
-1. Select file in Xcode Project Navigator
-2. Delete → "Remove Reference" (not "Move to Trash")
-3. Or edit `XRG-ng.xcodeproj/project.pbxproj` to remove PBXBuildFile entries
+- **Network counters:** filter loopback and calculate deltas before advancing the
+  previous counter. Cover resets and interface replacement with fixtures.
+- **Temperature names:** use `Resources/SMCSensorNames.plist`; wildcard selection,
+  ordering and known/unknown filtering have compatibility tests.
+- **Module layout:** preserve module identities and the default order table. The
+  manager sorts nonsequential values and preserves registration order for ties;
+  ensure registration is idempotent and old managers release detached modules.
+- **Missing UI callbacks:** verify generated Objective-C selectors and nib class
+  identities as well as Swift compilation. A universal build alone cannot prove
+  a nib-only class survives linking; the CI script checks required symbols.
+- **Slow or hanging collection:** keep collection bounded and inspect Instruments
+  traces. Do not add synchronous provider/network work to drawing callbacks.
 
 ### Linux: Preferences Window Tab Navigation
 
@@ -717,7 +501,7 @@ Multi-provider AI token tracking works on both platforms. Zero configuration req
 | Hermes agents | SQLite (`~/.hermes/state.db`, `sessions` table) |
 
 **Key Files**:
-- macOS: `Data Miners/XRGAITokenMiner.m`, `Graph Views/XRGAITokenView.m`
+- macOS: `XRGCore/XRGAITokenMiner.swift`, `XRGCore/XRGAITokenView.swift`, `XRGCore/XRGAITokensObserver.swift`
 - Linux: `xrg-linux/src/collectors/aitoken_collector.c`
 
 **JSONL Parsing Note**: Model field is in `message.model`, not root level:
@@ -737,12 +521,12 @@ Multi-provider AI token tracking works on both platforms. Zero configuration req
 
 **Hermes Format**: Agent-orchestrator activity in SQLite `~/.hermes/state.db` (`sessions` table). Each row has `model`, `input_tokens`, `output_tokens`, and cost columns (`actual_cost_usd`, falling back to `estimated_cost_usd`). XRG-ng aggregates every model with a per-model token breakdown and takes cost straight from the DB (never re-priced). The AI Token view shows all models under the Hermes line; the on-graph "API Cost" section was removed in favor of the right-click Cost Intelligence menu.
 
-**Settings** (macOS - `XRGAISettingsKeys.h`):
+**Settings** (macOS - `XRGCore/XRGSettings.swift` and `XRGCore/XRGAITokensObserver.swift`):
 - `aiTokensTrackingEnabled`: Master toggle (must be YES for Observer)
 - `aiTokensAggregateByModel`: Per-model breakdown
 - `aiTokensDailyBudget`: Daily limit (0 = unlimited)
 
 ## Platform Requirements
 
-**macOS**: 10.13+, Xcode, Cocoa/IOKit/Accelerate frameworks
+**macOS**: 26.0+, Xcode 26.3 or newer, Cocoa/IOKit/Accelerate frameworks
 **Linux**: GTK 3.24+, Cairo 1.16+, GLib 2.66+, SQLite3, libcurl, json-glib, CMake 3.16+
