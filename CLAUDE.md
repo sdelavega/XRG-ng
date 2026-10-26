@@ -88,7 +88,7 @@ that domain. Reports and offscreen PNGs are in `Smoke/`. Run the standalone chec
 with `python3 Tools/smoke-macos.py --configuration Debug` (or Release).
 This composition harness uses assembled classes; the separate packaged check below
 loads MainMenu through the shipping entry point. LaunchServices and interactive
-dialogs still need separate validation.
+dialogs have a separate manual workflow in `Tools/interactive-smoke-macos.md`.
 Its sensor nib is generated from `Resources/Sensors.xib` with only automatic
 presentation/frame autosave suppressed; source parity is checked before running.
 `Tools/packaged-smoke-macos.py --app /absolute/path/XRG-ng.app` tests a disposable
@@ -103,6 +103,11 @@ permits only the disposable preference file plus necessary parent metadata for
 home-directory reads. External-provider graphs/update checks stay disabled. Native
 read-only system collectors run, but their readings and screenshots are not
 included in reports. Reports/logs are in `PackagedSmoke/`; binaries are not uploaded.
+For a visible Finder launch and UI check, `Tools/interactive-smoke-macos.py` prepares
+a disposable app with private preferences, verifies expected saved values after
+quit, and cleans up its LaunchServices registration and private home artifacts.
+This manual copy has no injected hooks or sandbox; keep provider tracking disabled.
+Do not count that workflow as automated CI coverage or complete accessibility QA.
 Do not replace these checks with a build alone or claim Intel runtime coverage
 from an arm64 host's universal build.
 

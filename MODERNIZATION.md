@@ -883,3 +883,43 @@ This closes shipping-entry-point and original-nib coverage on the local ARM host
 LaunchServices, notarized/hardened-runtime launch, interactive UI and VoiceOver,
 physical sleep/wake, live external providers, sensor/fan changes and Intel runtime
 remain separate validation work.
+
+## Finder launch and interactive Release validation (2026-10-26)
+
+Hosted run 40398575098 passed Debug and Release, including the packaged check.
+The next validation used the unchanged Release production binary on the local
+ARM host, in a disposable UUID copy with external-provider graphs, AI tracking
+and update checks disabled. Unlike the automated packaged harness, this copy had
+no injected hooks or sandbox; real read-only system collectors and normal AppKit
+presentation ran. Its executable text, entry command and original MainMenu hashes
+matched the build before and after the UI check.
+
+Native app control launched the copy for the initial interaction and a collapsed
+relaunch. A further launch explicitly double-clicked XRG-ng.app in Finder after
+confirming the disposable process had exited. Read-only process inspection then
+confirmed the exact copied executable was running; its graph displayed the saved
+title and budget. This exercises a local Finder/LaunchServices launch, without
+claiming notarized or hardened-runtime distribution coverage.
+
+The visible UI check opened Preferences with Command-comma; changed the title and
+orientation; toggled GPU visibility off/on; visited all ten preference panels;
+saved and loaded a task-owned theme through the native dialogs; and opened/closed
+the production sensor window. AI tracking remained disabled while setting a
+budget of 2345. The horizontal graph collapsed through its title double-click,
+survived a normal quit/relaunch and expanded again. Saved preferences independently
+matched the title, orientation, budget, visibility and collapsed/expanded states.
+Normal Command-Q quit was verified before each offline preference check.
+
+Tools/interactive-smoke-macos.py makes preparation, saved-value verification and
+cleanup repeatable; Tools/interactive-smoke-macos.md records the manual steps.
+Verification refuses a still-running copy. Cleanup unregisters only the disposable
+bundle and removes its UUID-owned home artifacts; successful cleanup was checked
+after this run. Reports contain identity hashes, static outcomes and preference
+key names, without saved-value dumps or sensor readings. No screenshots or app
+binaries are committed or added to CI artifacts.
+
+This adds manual Release evidence, not additional automated test cases or Debug
+interactive coverage. Full VoiceOver navigation, font/color dialogs, invalid-theme
+alerts, physical sleep/wake, provider operation, sensor accuracy and Intel runtime
+remain unverified. The production code and the two Objective-C hardware boundaries
+are unchanged.
