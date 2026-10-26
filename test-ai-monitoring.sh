@@ -1,8 +1,8 @@
 #!/bin/bash
 # Test AI Token Monitoring System
-# Verifies the complete pipeline: Claude Code → OTel Bridge → XRG
+# Verifies the complete pipeline: Claude Code → OTel Bridge → XRG-ng
 
-echo "=== XRG AI Token Monitoring Test ==="
+echo "=== XRG-ng AI Token Monitoring Test ==="
 echo ""
 
 FAIL=0
@@ -68,26 +68,26 @@ fi
 
 echo ""
 
-# Test 4: Check if XRG is running
-echo "4. Checking if XRG is running..."
+# Test 4: Check if XRG-ng is running
+echo "4. Checking if XRG-ng is running..."
 if ps aux | grep -i xrg | grep -v grep > /dev/null; then
     PID=$(ps aux | grep -i xrg | grep -v grep | awk '{print $2}' | head -1)
-    echo "   ✓ XRG running (PID: $PID)"
+    echo "   ✓ XRG-ng running (PID: $PID)"
 else
-    echo "   ⚠️  XRG not running"
-    echo "      Launch XRG from Xcode or Applications folder"
+    echo "   ⚠️  XRG-ng not running"
+    echo "      Launch XRG-ng from Xcode or Applications folder"
 fi
 
 echo ""
 
-# Test 5: Verify XRG preferences
-echo "5. Checking XRG AI Token module preferences..."
+# Test 5: Verify XRG-ng preferences
+echo "5. Checking XRG-ng AI Token module preferences..."
 AI_ENABLED=$(defaults read com.gauchosoft.xrg showAITokenGraph 2>/dev/null)
 if [ "$AI_ENABLED" = "1" ]; then
-    echo "   ✓ AI Token graph enabled in XRG"
+    echo "   ✓ AI Token graph enabled in XRG-ng"
 else
     echo "   ⚠️  AI Token graph not enabled"
-    echo "      Enable in XRG: Preferences → Graphs → Show AI Tokens"
+    echo "      Enable in XRG-ng: Preferences → Graphs → Show AI Tokens"
 fi
 
 CUSTOM_ENDPOINT=$(defaults read com.gauchosoft.xrg XRG_aiTokenOTelEndpoint 2>/dev/null)
@@ -106,7 +106,7 @@ if [ $FAIL -eq 0 ]; then
     echo ""
     echo "Next steps:"
     echo "  1. Use Claude Code to generate some token traffic"
-    echo "  2. Watch XRG for real-time graph updates"
+    echo "  2. Watch XRG-ng for real-time graph updates"
     echo "  3. Verify metrics with: curl http://localhost:4318/v1/metrics"
 else
     echo "❌ Some checks failed - see errors above"

@@ -1,5 +1,5 @@
 #import <Cocoa/Cocoa.h>
-#import "XRGAppDelegate.h"
+#import "XRG-Swift.h"
 
 @interface XRGAppDelegate (AIWindowIntegration)
 

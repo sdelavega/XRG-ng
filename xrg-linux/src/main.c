@@ -313,7 +313,7 @@ static gboolean on_draw_title_bar(GtkWidget *widget, cairo_t *cr, gpointer user_
     cairo_set_font_size(cr, 10);
     
     cairo_move_to(cr, 5, 14);
-    cairo_show_text(cr, "XRG-Linux");
+    cairo_show_text(cr, "XRG-ng for Linux");
     
     /* Draw the menu button (three "kebab" dots, top-right). Left-clicking this
      * region opens the context menu; see on_title_bar_button_press. */
@@ -527,7 +527,7 @@ static void on_menu_about(GtkMenuItem *item, gpointer user_data) {
     AppState *state = (AppState *)user_data;
 
     GtkWidget *dialog = gtk_about_dialog_new();
-    gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dialog), "XRG-Linux");
+    gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dialog), "XRG-ng for Linux");
     gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(dialog), "1.0.0");
     gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(dialog),
                                   "System Resource Graph Monitor\n\n"
@@ -535,9 +535,12 @@ static void on_menu_about(GtkMenuItem *item, gpointer user_data) {
                                   "Disk, GPU, Temperature, Battery, and AI Tokens");
     gtk_about_dialog_set_website(GTK_ABOUT_DIALOG(dialog), "https://gaucho.software/xrg/");
     gtk_about_dialog_set_website_label(GTK_ABOUT_DIALOG(dialog), "Visit Website");
-    gtk_about_dialog_set_license_type(GTK_ABOUT_DIALOG(dialog), GTK_LICENSE_GPL_2_0);
+    gtk_about_dialog_set_license_type(GTK_ABOUT_DIALOG(dialog), GTK_LICENSE_GPL_3_0);
 
-    const gchar *authors[] = {"Marc Shade", NULL};
+    const gchar *authors[] = {"Mike Piatek-Jimenez (original XRG)", "Marc Shade", "Stephen de la Vega", NULL};
+    gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(dialog),
+        "Copyright © 2002–2024 Mike Piatek-Jimenez / Gaucho Software, LLC\n"
+        "Copyright © 2025–2026 Marc Shade\nCopyright © 2026 Stephen de la Vega");
     gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(dialog), authors);
 
     gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(state->window));
@@ -582,7 +585,7 @@ static void show_title_bar_context_menu(AppState *state, GdkEventButton *event) 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), separator2);
 
     /* About */
-    GtkWidget *about_item = gtk_menu_item_new_with_label("About XRG");
+    GtkWidget *about_item = gtk_menu_item_new_with_label("About XRG-ng");
     g_signal_connect(about_item, "activate", G_CALLBACK(on_menu_about), state);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), about_item);
 
@@ -770,7 +773,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 
     /* Create main window */
     state->window = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(state->window), "XRG-Linux");
+    gtk_window_set_title(GTK_WINDOW(state->window), "XRG-ng for Linux");
     gtk_window_set_default_size(GTK_WINDOW(state->window),
                                 state->prefs->window_width,
                                 state->prefs->window_height + TITLE_BAR_HEIGHT);
@@ -1116,7 +1119,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_visible(state->aitoken_box, state->prefs->show_aitoken);
     gtk_widget_set_visible(state->process_box, state->prefs->show_process);
 
-    g_message("XRG-Linux started - Monitoring %d CPU cores",
+    g_message("XRG-ng for Linux started - Monitoring %d CPU cores",
               xrg_cpu_collector_get_num_cpus(state->cpu_collector));
 }
 
@@ -4920,7 +4923,7 @@ static void on_window_destroy(GtkWidget *widget, gpointer user_data) {
     xrg_preferences_free(state->prefs);
     g_free(state);
 
-    g_message("XRG-Linux stopped");
+    g_message("XRG-ng for Linux stopped");
 }
 
 /**
@@ -4972,7 +4975,7 @@ static void on_preferences_applied(gpointer user_data) {
                                                    GTK_BUTTONS_OK_CANCEL,
                                                    "Layout orientation changed");
         gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog),
-                                                 "XRG needs to restart for the layout change to take effect.\nRestart now?");
+                                                 "XRG-ng needs to restart for the layout change to take effect.\nRestart now?");
 
         gint response = gtk_dialog_run(GTK_DIALOG(dialog));
         gtk_widget_destroy(dialog);

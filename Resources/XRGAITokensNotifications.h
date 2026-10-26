@@ -1,10 +1,10 @@
 #ifndef XRGAITokensNotifications_h
 #define XRGAITokensNotifications_h
 
-#import <Foundation/Foundation.h>
+#import <XRGCore/XRGCore-Swift.h>
 
-extern NSString * const XRGAITokensDidResetSessionNotification;
-extern NSString * const XRGAITokensDidResetDailyNotification;
-extern NSString * const XRGAITokensBudgetThresholdReachedNotification;
+#define XRGAITokensDidResetSessionNotification [XRGAITokensNotifications resetSession]
+#define XRGAITokensDidResetDailyNotification [XRGAITokensNotifications resetDaily]
+#define XRGAITokensBudgetThresholdReachedNotification [XRGAITokensNotifications budgetThresholdReached]
 
-#endif /* XRGAITokensNotifications_h */
+#endif

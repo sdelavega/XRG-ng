@@ -1,5 +1,5 @@
 #import "XRGGraphWindow+AITokens.h"
-#import "XRGAppDelegate.h"
+#import "XRG-Swift.h"
 #import "XRGSettings.h"
 
 @implementation XRGGraphWindow (AITokens)

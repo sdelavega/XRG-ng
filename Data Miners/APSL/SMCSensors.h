@@ -27,37 +27,5 @@
  */
 
 
-#import <Cocoa/Cocoa.h>
-
-@class SMCInterface;
-
-@interface SMCSensors : NSObject 
-
-@property (strong) NSDictionary *descriptionsForSMCKeys;
-
-@property (nonatomic, readonly, strong)  NSSet<NSString *> *unknownTemperatureKeys; // property descs for temp properties with description
-@property (nonatomic, readonly, strong)  NSSet<NSString *> *knownTemperatureKeys; // property descs for temp properties with description
-
-/// returns an plain dict of values with their 4cc IDs.
-/// contains only values where a known conversion from the SMC data type to NSNumber / NDSData is implemented in SMCInterface
-@property (readonly, copy) NSDictionary *allValues;
-
-/// as far as their meaning is known (==guessable), the values have human readable keys
-/// Fan values - returns an NSDictionary of NSDictionaries
-@property (readonly, copy) NSDictionary *fanValues;
-
-/// Temperature senor values
-/// withUnknownSensors: include sensors where humanReadableNameForKey will fail
-/// return an NSDictionary with key: SMCSensorName, value: NSNumber with temperature in Celsius
-- (NSDictionary *) temperatureValuesIncludingUnknown:(BOOL) withUnknownSensors;
-
-/// additional sensors (motion etc.).
-@property (readonly, copy) NSDictionary *sensorValues;
-
-/// lookup a human readbale description of the 4 character string key.
-/// will return key, if no description can be found
-- (NSString *) humanReadableNameForKey:(NSString *)key;
-
-- (BOOL) isKnownKey:(NSString *)key;
-
-@end
+// Swift compatibility declaration; modified 2026-10-26 by Stephen de la Vega.
+#import <XRGCore/XRGCore-Swift.h>

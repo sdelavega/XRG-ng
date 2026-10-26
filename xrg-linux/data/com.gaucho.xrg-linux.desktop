@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=XRG System Monitor
+Name=XRG-ng System Monitor
 GenericName=System Resource Monitor
 Comment=Real-time system resource monitor with floating graphs
 Exec=xrg-linux

@@ -1,8 +1,2 @@
-#import <Cocoa/Cocoa.h>
-#import "XRGAppDelegate.h"
-
-@interface XRGAppDelegate (AIPreferences)
-
-- (IBAction)openAIPreferences:(id)sender;
-
-@end
+// The legacy action is implemented by the Swift app delegate.
+#import "XRG-Swift.h"

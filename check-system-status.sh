@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  XRG AI Token Monitoring - System Status Check"
+echo "  XRG-ng AI Token Monitoring - System Status Check"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -67,10 +67,10 @@ else
 fi
 echo ""
 
-# Check 4: XRG Application
-echo "4️⃣  XRG Application"
-if pgrep -f "XRG.app" > /dev/null; then
-    PID=$(pgrep -f "XRG.app")
+# Check 4: XRG-ng Application
+echo "4️⃣  XRG-ng Application"
+if pgrep -f "XRG-ng.app" > /dev/null; then
+    PID=$(pgrep -f "XRG-ng.app")
     echo "   ✅ Running (PID: $PID)"
 
     # Check AI Token graph setting
@@ -91,7 +91,7 @@ if pgrep -f "XRG.app" > /dev/null; then
     fi
 else
     echo "   ❌ NOT RUNNING"
-    echo "      Start: open ~/Library/Developer/Xcode/DerivedData/.../Debug/XRG.app"
+    echo "      Start: open ~/Library/Developer/Xcode/DerivedData/.../Debug/XRG-ng.app"
 fi
 echo ""
 
@@ -102,12 +102,12 @@ ALL_GOOD=true
 if ! pgrep -f otelcol-contrib > /dev/null && ! pgrep -f "claude-otel-bridge.py" > /dev/null; then ALL_GOOD=false; fi
 if [ -z "$ENDPOINT_URL" ]; then ALL_GOOD=false; fi
 if [ "$CLAUDE_CODE_ENABLE_TELEMETRY" != "1" ]; then ALL_GOOD=false; fi
-if ! pgrep -f "XRG" > /dev/null; then ALL_GOOD=false; fi
+if ! pgrep -f "XRG-ng" > /dev/null; then ALL_GOOD=false; fi
 
 if $ALL_GOOD; then
     echo "  ✅ ALL SYSTEMS OPERATIONAL"
     echo ""
-    echo "  📊 View AI token usage in real-time in XRG window"
+    echo "  📊 View AI token usage in real-time in XRG-ng window"
     echo "  🔗 Metrics: $ENDPOINT_URL"
     echo "  📝 Docs: $(pwd)/OTEL_DEPLOYMENT_COMPLETE.md"
 else

@@ -1,0 +1,18 @@
+XRG-ng
+
+Copyright (C) 2002-2024 Mike Piatek-Jimenez / Gaucho Software, LLC.
+Copyright (C) 2025-2026 Marc Shade.
+Copyright (C) 2026 Stephen de la Vega.
+
+Mike Piatek-Jimenez created XRG. Marc Shade maintains the fork that added
+AI token monitoring and the Linux port. Stephen de la Vega maintains
+XRG-ng and the Swift migration, beginning in 2026.
+
+These are project-level credits for each contributor's respective work.
+Other contributors retain copyright in their contributions; see the source
+notices and Git history. A year range does not transfer anyone's copyright.
+
+Project code is distributed under the GNU General Public License,
+version 3 or (at your option) any later version (GPL-3.0-or-later).
+See LICENSE for the complete license and THIRD_PARTY_NOTICES.md for
+components that retain different licenses.

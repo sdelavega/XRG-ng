@@ -1,20 +1,20 @@
-# XRG AI Token Monitoring
+# XRG-ng AI Token Monitoring
 
-Track AI API token usage and costs system-wide in real-time with XRG's AI Token module.
+Track AI API token usage and costs system-wide in real-time with XRG-ng's AI Token module.
 
 ## Quick Start (Zero Configuration)
 
 ```bash
-# 1. Build and run XRG
-xcodebuild -project XRG.xcodeproj -scheme XRG build
-open ~/Library/Developer/Xcode/DerivedData/XRG-*/Build/Products/Debug/XRG.app
+# 1. Build and run XRG-ng
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng build
+open ~/Library/Developer/Xcode/DerivedData/XRG-ng-*/Build/Products/Debug/XRG-ng.app
 
-# 2. Enable in XRG: Preferences → Graphs → Show AI Tokens
+# 2. Enable in XRG-ng: Preferences → Graphs → Show AI Tokens
 
-# 3. Use any AI tool - XRG auto-detects and tracks tokens!
+# 3. Use any AI tool - XRG-ng auto-detects and tracks tokens!
 ```
 
-XRG will display real-time token usage in a 5-layer stacked area graph with **accurate per-model cost tracking**!
+XRG-ng will display real-time token usage in a 5-layer stacked area graph with **accurate per-model cost tracking**!
 
 ## What It Tracks
 
@@ -36,7 +36,7 @@ XRG will display real-time token usage in a 5-layer stacked area graph with **ac
 
 ## Per-Model Pricing (Accurate API Costs)
 
-XRG extracts the actual model name from each API call and calculates costs using **official provider pricing**:
+XRG-ng extracts the actual model name from each API call and calculates costs using **official provider pricing**:
 
 ### Claude (Anthropic) Models
 | Model | Input $/MTok | Output $/MTok |
@@ -75,7 +75,7 @@ XRG extracts the actual model name from each API call and calculates costs using
 ### Hermes (Agent Orchestrator)
 - **Source**: SQLite `~/.hermes/state.db` (`sessions` table)
 - Tracks every model the agent dispatched to, with a per-model token breakdown
-- **Cost**: read straight from Hermes (`actual_cost_usd`, falling back to `estimated_cost_usd`) and never re-priced by XRG — local models report $0, cloud models report their real cost
+- **Cost**: read straight from Hermes (`actual_cost_usd`, falling back to `estimated_cost_usd`) and never re-priced by XRG-ng — local models report $0, cloud models report their real cost
 
 **Note for Max/Subscription Users**: The displayed API costs are for reference only - they show what your usage *would* cost at API rates. Great for understanding the value of your subscription!
 
@@ -83,7 +83,7 @@ XRG extracts the actual model name from each API call and calculates costs using
 
 ```
 Claude/Codex/Gemini → JSONL files ┐
-Ollama              → REST API     ├─→ XRG Parser → Graph
+Ollama              → REST API     ├─→ XRG-ng Parser → Graph
 Hermes agents       → SQLite DB    ┘   (real-time)
 ```
 
@@ -96,8 +96,8 @@ Hermes agents       → SQLite DB    ┘   (real-time)
 
 ## Requirements
 
-- macOS 10.13+ (XRG requirement)
-- XRG application
+- macOS 26+ (XRG-ng requirement)
+- XRG-ng application
 - One or more AI coding tools:
   - Claude Code (`~/.claude/projects/` must exist)
   - OpenAI Codex CLI (`~/.codex/sessions/` must exist)
@@ -105,12 +105,12 @@ Hermes agents       → SQLite DB    ┘   (real-time)
   - Ollama (running on localhost:11434)
   - Hermes agents (`~/.hermes/state.db` must exist)
 
-**No additional setup required** - XRG auto-detects all installed tools!
+**No additional setup required** - XRG-ng auto-detects all installed tools!
 
 ## How It Works
 
 1. **AI Tools** (Claude/Codex/Gemini) write session transcripts to JSONL files
-2. **XRG Parser** monitors these files in the background (non-blocking)
+2. **XRG-ng Parser** monitors these files in the background (non-blocking)
 3. **Per-Model Pricing** extracts model name from `message.model` field
 4. **Cost Calculation** uses accurate per-model rates from provider pricing
 5. **Graph** displays real-time stacked area chart with token rates and costs
@@ -125,9 +125,9 @@ Hermes agents       → SQLite DB    ┘   (real-time)
 | Ollama | `http://localhost:11434/api/*` | REST API |
 | Hermes agents | `~/.hermes/state.db` | SQLite (`sessions` table) |
 
-## XRG Integration
+## XRG-ng Integration
 
-The AI Token module appears in XRG alongside other system monitors:
+The AI Token module appears in XRG-ng alongside other system monitors:
 - **5-layer stacked area graph** (Claude, Codex, Gemini, Ollama, Hermes)
 - **Real-time rate indicator** (color-coded per provider)
 - **Provider legend** (C=Claude, X=Codex, G=Gemini, O=Ollama, H=Hermes)
@@ -136,7 +136,7 @@ The AI Token module appears in XRG alongside other system monitors:
 - **Cost Intelligence menu** - right-click the graph for total cost, $/hour burn rate, projected 24-hour cost, and per-provider costs (cost lives in the menu, not drawn on the graph)
 - **Mini-mode support** for compact display
 
-Colors follow XRG's theme (customizable in Preferences → Appearance).
+Colors follow XRG-ng's theme (customizable in Preferences → Appearance).
 
 ## Performance
 
@@ -150,10 +150,10 @@ Efficient caching avoids re-parsing unchanged files.
 ## FAQ
 
 **Q: Does this track ALL AI usage on my Mac?**
-A: Yes! XRG tracks Claude Code, OpenAI Codex CLI, Gemini CLI, Ollama, and Hermes agents - all major AI coding tools plus your agent orchestrator.
+A: Yes! XRG-ng tracks Claude Code, OpenAI Codex CLI, Gemini CLI, Ollama, and Hermes agents - all major AI coding tools plus your agent orchestrator.
 
 **Q: Are the costs accurate?**
-A: Yes! XRG extracts the actual model name from each API call and uses official provider pricing. Different models (Opus vs Sonnet vs Haiku) have different costs.
+A: Yes! XRG-ng extracts the actual model name from each API call and uses official provider pricing. Different models (Opus vs Sonnet vs Haiku) have different costs.
 
 **Q: I use Max/subscription - why show API costs?**
 A: The costs are for reference - they show what your usage would cost at API rates. Great for understanding the value you're getting from your subscription!
@@ -165,21 +165,21 @@ A: Yes! Automatically tracks all sessions from all providers system-wide.
 A: No. All monitoring is 100% local. Only reads local JSONL files and Ollama API.
 
 **Q: What about privacy?**
-A: Only token counts, model names, and costs are tracked. XRG never reads prompts, responses, or file contents.
+A: Only token counts, model names, and costs are tracked. XRG-ng never reads prompts, responses, or file contents.
 
 ## Support
 
-- **XRG Issues**: https://gaucho.software/xrg/
+- **XRG-ng Issues**: https://gaucho.software/xrg/
 - **Claude Code Docs**: https://docs.anthropic.com/en/docs/claude-code
 - **Codex CLI Docs**: https://github.com/openai/codex
 
 ## License
 
-XRG is licensed under GNU GPL v2.
+XRG-ng project code uses GNU GPL version 3 or later. See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md) for retained APSL components and the combined-distribution limitation.
 
 ## Credits
 
-- **XRG**: Gaucho Software
+- **XRG-ng**: Gaucho Software
 - **AI Token Monitoring**: marc-shade (2025)
 - **Claude Code**: Anthropic
 - **Codex CLI**: OpenAI

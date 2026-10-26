@@ -1,14 +1,16 @@
-# XRG-Linux
+# XRG-ng for Linux
 
 A real-time system resource monitor for Linux with customizable floating graphs.
 
-Port of the macOS [XRG](https://github.com/marc-shade/XRG) application to Linux using GTK and Cairo.
+Port of the macOS [XRG-ng](https://github.com/marc-shade/XRG) application to Linux using GTK and Cairo.
 
-![XRG-Linux Screenshot](docs/screenshot.png)
+![XRG-ng for Linux Screenshot](docs/screenshot.png)
+
+The Linux executable and configuration directory remain `xrg-linux` for compatibility.
 
 ## Features
 
-XRG-Linux displays real-time graphs for:
+XRG-ng for Linux displays real-time graphs for:
 
 - **CPU Usage** - Per-core utilization and load averages
 - **Memory** - RAM usage, swap, page ins/outs
@@ -102,7 +104,7 @@ xrg-linux
 
 ## AI Token Monitoring
 
-XRG-Linux includes real-time monitoring of AI API token usage across multiple providers (auto-detected):
+XRG-ng for Linux includes real-time monitoring of AI API token usage across multiple providers (auto-detected):
 
 | Provider | Data Source |
 |----------|-------------|
@@ -132,7 +134,7 @@ The AI Token monitor automatically detects and uses the best available data sour
 
 ### Quick Start
 
-1. Run XRG-Linux
+1. Run XRG-ng for Linux
 2. Open Preferences → Modules
 3. Enable "AI Tokens" module
 4. Use Claude Code in another terminal
@@ -178,7 +180,7 @@ Or via Preferences UI: **AI Token → Show Model Breakdown**
 
 ## Configuration
 
-XRG-Linux stores preferences in `~/.config/xrg-linux/settings.conf` (GKeyFile format).
+XRG-ng for Linux stores preferences in `~/.config/xrg-linux/settings.conf` (GKeyFile format).
 
 ### Default Settings
 
@@ -205,7 +207,7 @@ Each module can be individually:
 
 ## Architecture
 
-XRG-Linux follows the original XRG three-layer architecture:
+XRG-ng for Linux follows the original XRG-ng three-layer architecture:
 
 1. **Data Collector Layer** - Gathers system metrics via /proc, /sys, lm-sensors
 2. **Graph Widget Layer** - Renders graphs using Cairo (GTK)
@@ -279,7 +281,7 @@ sudo rpm -i xrg-linux-1.0.0.x86_64.rpm
 
 ## Performance
 
-XRG-Linux is designed to be lightweight:
+XRG-ng for Linux is designed to be lightweight:
 
 - **CPU Usage:** <1% when idle, 2-3% during active monitoring
 - **Memory:** ~30-50 MB RAM
@@ -295,9 +297,9 @@ Contributions welcome! Please:
 4. Push to branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## Comparison with Original XRG
+## Comparison with Original XRG-ng
 
-| Feature | macOS XRG | XRG-Linux |
+| Feature | macOS XRG-ng | XRG-ng for Linux |
 |---------|-----------|-----------|
 | CPU Monitor | ✓ | ✓ |
 | Memory Monitor | ✓ | ✓ |
@@ -320,19 +322,19 @@ Contributions welcome! Please:
 
 ## License
 
-GNU General Public License v2.0 - see [LICENSE](LICENSE) file for details.
+GNU General Public License v3.0 or later - see [LICENSE](../LICENSE) file for details.
 
-Based on the original XRG by Gaucho Software, LLC.
+See [project copyright](../COPYRIGHT) and [third-party notices](../THIRD_PARTY_NOTICES.md). Based on the original XRG by Mike Piatek-Jimenez / Gaucho Software, LLC.
 
 ## Credits
 
-- Original XRG: Gaucho Software, LLC
-- AI Token Monitoring: marc-shade (2025)
-- Linux Port: marc-shade (2025)
+- Mike Piatek-Jimenez / Gaucho Software, LLC (2002–2024): original XRG.
+- Marc Shade (2025–2026): fork maintenance, AI token monitoring, and Linux port.
+- Stephen de la Vega (2026–present): XRG-ng maintenance and Swift migration.
 
 ## Links
 
-- **XRG Website:** https://gaucho.software/xrg/
+- **Original XRG website:** https://gaucho.software/xrg/
 - **GitHub Repository:** https://github.com/marc-shade/XRG
 - **Issues:** https://github.com/marc-shade/XRG/issues
 - **Documentation:** https://github.com/marc-shade/XRG/wiki

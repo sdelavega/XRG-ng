@@ -462,7 +462,7 @@ static void test_tpu(gboolean verbose) {
 }
 
 static void print_usage(const char *prog) {
-    printf("XRG CLI Test Utility\n");
+    printf("XRG-ng CLI Test Utility\n");
     printf("Usage: %s [options]\n", prog);
     printf("\nOptions:\n");
     printf("  -l, --loop         Run continuously with 1-second updates\n");
@@ -511,7 +511,7 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, signal_handler);
 
     printf("╔═══════════════════════════════════════════════════╗\n");
-    printf("║           XRG CLI Test Utility                    ║\n");
+    printf("║           XRG-ng CLI Test Utility                    ║\n");
     printf("╚═══════════════════════════════════════════════════╝\n\n");
 
     gint iteration = 0;

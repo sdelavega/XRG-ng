@@ -73,10 +73,10 @@
         </window>
         <menu title="MainMenu" systemMenu="main" id="29" userLabel="MainMenu">
             <items>
-                <menuItem title="XRG" id="56">
-                    <menu key="submenu" title="XRG" systemMenu="apple" id="57">
+                <menuItem title="XRG-ng" id="56">
+                    <menu key="submenu" title="XRG-ng" systemMenu="apple" id="57">
                         <items>
-                            <menuItem title="About XRG" id="58">
+                            <menuItem title="About XRG-ng" id="58">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
                                     <action selector="orderFrontStandardAboutPanel:" target="-2" id="142"/>
@@ -96,7 +96,7 @@
                             <menuItem isSeparatorItem="YES" id="144">
                                 <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                             </menuItem>
-                            <menuItem title="Hide XRG" keyEquivalent="h" id="134">
+                            <menuItem title="Hide XRG-ng" keyEquivalent="h" id="134">
                                 <connections>
                                     <action selector="hide:" target="-2" id="152"/>
                                 </connections>
@@ -115,7 +115,7 @@
                             <menuItem isSeparatorItem="YES" id="149">
                                 <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                             </menuItem>
-                            <menuItem title="Quit XRG" keyEquivalent="q" id="136">
+                            <menuItem title="Quit XRG-ng" keyEquivalent="q" id="136">
                                 <connections>
                                     <action selector="terminate:" target="-2" id="139"/>
                                 </connections>
@@ -282,7 +282,7 @@
                 <menuItem title="Help" id="103">
                     <menu key="submenu" title="Help" id="106">
                         <items>
-                            <menuItem title="XRG Help" keyEquivalent="?" id="111">
+                            <menuItem title="XRG-ng Help" keyEquivalent="?" id="111">
                                 <connections>
                                     <action selector="showHelp:" target="-1" id="122"/>
                                 </connections>

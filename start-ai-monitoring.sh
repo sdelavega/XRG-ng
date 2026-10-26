@@ -1,10 +1,10 @@
 #!/bin/bash
-# Start AI Token Monitoring for XRG
+# Start AI Token Monitoring for XRG-ng
 # This script enables Claude Code telemetry and starts the OTel bridge
 
 set -e
 
-echo "=== XRG AI Token Monitoring Setup ==="
+echo "=== XRG-ng AI Token Monitoring Setup ==="
 echo ""
 
 # Check if bridge script exists
@@ -55,7 +55,7 @@ if [ -n "$SHELL_CONFIG" ]; then
         echo "📝 Adding telemetry config to $SHELL_CONFIG"
         cat >> "$SHELL_CONFIG" <<'EOF'
 
-# Claude Code OpenTelemetry for XRG AI Token Monitoring
+# Claude Code OpenTelemetry for XRG-ng AI Token Monitoring
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"

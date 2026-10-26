@@ -1,21 +1,21 @@
-XRG
-===
+XRG-ng
+======
 
 <img width="1080" height="188" alt="AI-Tokens" src="https://github.com/user-attachments/assets/bfb873ea-6564-437f-af2c-315b14b3dfb0" />
 
 
 A real-time system resource monitor for **macOS and Linux** with customizable floating graphs.
 
-🍎 **macOS**: Native Objective-C/Cocoa implementation
+🍎 **macOS**: Native Swift/Objective-C AppKit implementation (macOS 26+, Intel and Apple silicon)
 🐧 **Linux**: Native C/GTK3 implementation
 
 
 
-Website: https://gaucho.software/xrg/
+Original XRG website: https://gaucho.software/xrg/
 
 ## Features
 
-XRG displays real-time graphs for:
+XRG-ng displays real-time graphs for:
 
 - **CPU Usage** - Per-core utilization and load averages
 - **GPU Usage** - GPU utilization and memory (Apple Silicon & Intel)
@@ -87,7 +87,7 @@ The AI Token monitor automatically detects all installed AI coding tools:
 
 ### Quick Start
 
-1. Build and run XRG
+1. Build and run XRG-ng
 2. Open Preferences → Graphs
 3. Enable "Show AI Tokens"
 4. Use Claude Code in another terminal
@@ -100,20 +100,43 @@ For detailed documentation, see [README_AI_TOKENS.md](README_AI_TOKENS.md)
 ### macOS
 
 **Requirements:**
-- macOS 10.13 or later
-- Xcode with Command Line Tools
+- Xcode 26.3 or newer with the macOS SDK and Command Line Tools selected
+- macOS 26 or newer to run the app and tests; Intel and Apple silicon builds remain supported.
+
+This checkout includes local signing and bundle-identifier changes. Select your own development team in Xcode for signed builds. For a compile-only check without a signing identity:
+
+```bash
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng -configuration Debug CODE_SIGNING_ALLOWED=NO build
+```
+
+The app product and shared launch scheme are `XRG-ng`; internal `XRGCore`/`XRGTests` modules and preference identifiers remain stable.
+
+See [the modernization review](MODERNIZATION.md) for the current baseline, fork-specific issues, and remaining work.
+
+**Tests:** Select either shared scheme (`XRG-ng` or `XRGTests`) in Xcode and choose Product → Test. The macOS-only Swift Testing suite links the same static Swift `XRGCore` framework as the app and uses temporary preferences suites. Its 837 cases across 439 test functions cover themes, settings, ring buffers, vector arithmetic, concurrent statistics, request cancellation, Claude/Codex/Gemini log parsing, Hermes/Claude SQLite snapshots, local-provider responses, stock request/response handling, scan caching, rate tracking, CPU/memory sampling, process snapshots, battery states, network sampling, GPU snapshots, and temperature/fan state. It does not launch the monitoring app or modify your XRG-ng preferences.
+
+**Continuous integration:** [The macOS workflow](.github/workflows/macos.yml) builds universal Apple Silicon/Intel apps and runs the tests for both Debug and Release on pushes, pull requests, and manual dispatch. It uses Xcode 26.3 on `macos-26`, requires no signing secrets, and retains logs and test results for seven days. These are compile/test builds, not signed distribution packages.
+
+Run the same checks locally with your selected Xcode:
+
+```bash
+bash Tools/ci-macos.sh Debug
+bash Tools/ci-macos.sh Release
+```
+
+Each run prints a temporary directory containing its build output, logs, and `.xcresult` bundle. The script fails on build/test errors or an empty test run. Remove that directory when you no longer need the results. Command-line tests require access to the macOS test runner service; in restricted environments, run the tests from Xcode instead.
 
 **Build Commands:**
 
 ```bash
 # Build
-xcodebuild -project XRG.xcodeproj -scheme XRG build
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng build
 
 # Clean and rebuild
-xcodebuild -project XRG.xcodeproj -scheme XRG clean build
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng clean build
 
 # Open in Xcode
-open XRG.xcodeproj
+open XRG-ng.xcodeproj
 ```
 
 ### Linux
@@ -146,9 +169,13 @@ For detailed Linux documentation, see [xrg-linux/README.md](xrg-linux/README.md)
 
 ## License
 
-GNU General Public License v2.0 - see LICENSE file for details
+Project code uses **GNU GPL version 3 or later (GPL-3.0-or-later)**. See [LICENSE](LICENSE), [COPYRIGHT](COPYRIGHT), and [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Bundled Apple/CodeExchange sensor sources retain APSL licenses. APSL/GPL compatibility for distribution of the combined macOS executable remains unresolved; the project license update does not relicense those components.
 
 ## Credits
 
-- Original XRG by Gaucho Software, LLC
-- AI Token Monitoring by marc-shade (2025)
+- **Mike Piatek-Jimenez / Gaucho Software, LLC — 2002–2024:** original XRG creator.
+- **Marc Shade — 2025–2026:** fork maintenance, AI token monitoring, and Linux port.
+- **Stephen de la Vega — 2026–present:** XRG-ng maintenance and Swift migration.
+- Other contributors retain their source notices and Git attribution.

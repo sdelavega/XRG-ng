@@ -1,12 +1,14 @@
 /*
- * XRG (X Resource Graph):  A system resource grapher for Mac OS X.
- * Copyright (C) 2002-2022 Gaucho Software, LLC.
+ * XRG-ng: A system resource grapher for macOS and Linux.
+ * Copyright (C) 2002-2024 Mike Piatek-Jimenez / Gaucho Software, LLC.
+ * Copyright (C) 2025-2026 Marc Shade.
+ * Copyright (C) 2026 Stephen de la Vega.
  * You can view the complete license in the LICENSE file in the root
  * of the source tree.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
+ * as published by the Free Software Foundation; either version 3
  * of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -15,200 +17,8 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  *
  */
 
-//
-//  XRGAITokenMiner.h
-//  Universal AI Token monitoring with multi-strategy data collection
-//  Works on all Macs with any Claude Code installation
-//
-
-#import <Foundation/Foundation.h>
-#import "XRGDataSet.h"
-
-// Data collection strategies (auto-detected and used in priority order)
-typedef NS_ENUM(NSInteger, XRGAIDataStrategy) {
-    XRGAIDataStrategyNone = 0,
-    XRGAIDataStrategyJSONL = 1,       // Universal: ~/.claude/projects/*/sessionid.jsonl (DEFAULT Claude Code)
-    XRGAIDataStrategySQLite = 2,      // Advanced: ~/.claude/monitoring/claude_usage.db (custom monitoring)
-    XRGAIDataStrategyOTel = 3         // Advanced: OpenTelemetry endpoint (OTel configured)
-};
-
-@interface XRGAITokenMiner : NSObject {
-@private
-    int numSamples;
-
-    // Data sets for different AI services
-    XRGDataSet *claudeCodeTokens;      // Claude Code API tokens/sec
-    XRGDataSet *codexTokens;            // OpenAI Codex CLI tokens/sec
-    XRGDataSet *geminiTokens;           // Google Gemini CLI tokens/sec
-    XRGDataSet *ollamaTokens;           // Ollama local inference tokens/sec
-    XRGDataSet *hermesTokens;           // Hermes agent tokens/sec
-    XRGDataSet *costPerSecond;          // Cost tracking ($/sec for burn rate)
-
-    // Cumulative counters
-    UInt64 totalClaudeTokens;
-    UInt64 totalCodexTokens;
-    UInt64 totalGeminiTokens;
-    UInt64 totalOllamaTokens;
-    UInt64 totalHermesTokens;
-    double totalCostUSD;
-
-    // Input/Output token tracking for accurate cost calculation
-    UInt64 claudeInputTokens;
-    UInt64 claudeOutputTokens;
-    UInt64 codexInputTokens;
-    UInt64 codexOutputTokens;
-    UInt64 geminiInputTokens;
-    UInt64 geminiOutputTokens;
-    UInt64 ollamaInputTokens;
-    UInt64 ollamaOutputTokens;
-    UInt64 hermesInputTokens;
-    UInt64 hermesOutputTokens;
-    double hermesCostUSD;                // Hermes cost straight from its own DB
-
-    // Rate tracking (for proper delta calculation)
-    UInt64 lastClaudeCount;
-    UInt64 lastCodexCount;
-    UInt64 lastGeminiCount;
-    UInt64 lastGeminiInputCount;
-    UInt64 lastGeminiOutputCount;
-    UInt64 lastOllamaCount;
-    UInt64 lastHermesCount;
-    double lastTotalCost;
-
-    // Current rates (stored to avoid recalculation bug)
-    UInt32 currentClaudeRate;
-    UInt32 currentCodexRate;
-    UInt32 currentGeminiRate;
-    UInt32 currentOllamaRate;
-    UInt32 currentHermesRate;
-    double currentCostRate;  // $/second burn rate
-
-    // Ollama local inference tracking
-    NSString *ollamaApiEndpoint;         // Ollama API endpoint (default: localhost:11434)
-    BOOL ollamaAvailable;                // Whether Ollama server is running
-    NSArray *ollamaAvailableModels;      // Models available in Ollama
-    NSArray *ollamaRunningModels;        // Currently loaded/running models
-    NSDate *lastOllamaScanTime;          // Last time we checked Ollama API
-    UInt64 cachedOllamaTokens;           // Cached token count
-
-    // Multi-strategy data collection
-    XRGAIDataStrategy activeStrategy;
-    NSString *jsonlProjectsPath;        // Claude JSONL transcripts path
-    NSString *codexSessionsPath;        // Codex CLI sessions path
-    NSString *geminiTmpPath;            // Gemini CLI tmp path
-    NSString *dbPath;                   // SQLite database path (advanced)
-    NSString *otelEndpoint;             // OTel metrics endpoint (advanced)
-    NSString *hermesDbPath;             // Hermes agent state DB (~/.hermes/state.db)
-
-    // JSONL caching for performance (avoid re-parsing every second)
-    NSMutableDictionary *jsonlFileModTimes;  // Track file modification times
-    NSMutableDictionary *geminiFileModTimes; // Track Gemini file mod times
-    UInt64 cachedJSONLTokens;                 // Cached total from last parse
-    UInt64 cachedCodexTokens;                 // Cached Codex tokens
-    UInt64 cachedGeminiTokens;                // Cached Gemini tokens
-
-    // Cached input/output tokens for accurate cost calculation (thread-safe)
-    UInt64 cachedClaudeInputTokens;           // Cached Claude input tokens
-    UInt64 cachedClaudeOutputTokens;          // Cached Claude output tokens
-    UInt64 cachedCodexInputTokens;            // Cached Codex input tokens
-    UInt64 cachedCodexOutputTokens;           // Cached Codex output tokens
-    UInt64 cachedGeminiInputTokens;           // Cached Gemini input tokens
-    UInt64 cachedGeminiOutputTokens;          // Cached Gemini output tokens
-
-    // Dynamic model-based cost tracking (parsed from actual API responses)
-    NSMutableDictionary *claudeModelCosts;    // Per-model cost tracking {modelName: {input:X, output:Y, cost:Z}}
-    double cachedClaudeCost;                   // Cached total Claude cost (calculated from per-model data)
-    NSMutableDictionary *geminiModelCosts;    // Per-model cost tracking for Gemini
-    double cachedGeminiCost;                   // Cached total Gemini cost
-
-    // Hermes per-model tracking (key: model name -> @{@"input":@(n), @"output":@(n)})
-    // Kept separate so Hermes' DB-supplied cost is never re-priced elsewhere.
-    NSMutableDictionary *hermesModelTokens;
-    NSString *hermesTopModel;                  // Most-used Hermes model (by tokens)
-
-    NSDate *lastJSONLScanTime;                // Last time we scanned for new files
-    NSDate *lastCodexScanTime;                // Last time we scanned Codex files
-    NSDate *lastGeminiScanTime;               // Last time we scanned Gemini files
-    dispatch_queue_t jsonlParsingQueue;       // Background queue for file I/O
-    dispatch_semaphore_t cacheSemaphore;      // Thread-safe cache access
-}
-
-// Properties
-@property (nonatomic, assign) UInt64 totalClaudeTokens;
-@property (nonatomic, assign) UInt64 totalCodexTokens;
-@property (nonatomic, assign) UInt64 totalGeminiTokens;
-@property (nonatomic, assign) UInt64 totalOllamaTokens;
-@property (nonatomic, assign) UInt64 totalHermesTokens;
-@property (nonatomic, assign) double totalCostUSD;
-@property (nonatomic, assign, readonly) XRGAIDataStrategy activeStrategy;
-@property (nonatomic, assign, readonly) BOOL ollamaAvailable;
-@property (nonatomic, strong, readonly) NSArray *ollamaRunningModels;
-
-// Core methods
-- (void)getLatestTokenInfo;
-- (void)setDataSize:(int)newNumSamples;
-- (void)reset;
-
-// Accessor methods for current rates (tokens per second)
-- (UInt32)claudeTokenRate;
-- (UInt32)codexTokenRate;
-- (UInt32)geminiTokenRate;
-- (UInt32)ollamaTokenRate;
-- (UInt32)hermesTokenRate;
-- (UInt32)totalTokenRate;
-
-// Cost intelligence methods
-- (double)costPerHour;              // Current $/hour burn rate
-- (double)projectedDailyCost;       // Projected cost for 24 hours at current rate
-- (double)claudeCostUSD;            // Total Claude cost
-- (double)codexCostUSD;             // Total Codex cost
-- (double)geminiCostUSD;            // Total Gemini cost
-- (double)hermesCostUSD;            // Total Hermes cost (from its own DB)
-- (XRGDataSet *)costData;           // Cost per second data for graphing
-
-// Data set accessors for graphing
-- (XRGDataSet *)claudeTokenData;
-- (XRGDataSet *)codexTokenData;
-- (XRGDataSet *)geminiTokenData;
-- (XRGDataSet *)ollamaTokenData;
-- (XRGDataSet *)hermesTokenData;
-
-// Hermes agent (SQLite ~/.hermes/state.db)
-- (NSDictionary *)hermesModelTokens;   // model name -> @{@"input":, @"output":}
-- (NSString *)hermesTopModel;          // most-used Hermes model
-
-// Strategy detection and management
-- (void)detectBestStrategy;
-- (NSString *)strategyName;
-
-// Data collection strategies - Claude Code
-- (BOOL)fetchFromJSONLTranscripts;
-- (void)updateJSONLCacheInBackground;
-- (UInt64)parseJSONLFile:(NSString *)filePath;
-- (BOOL)fetchFromSQLiteDatabase;
-- (BOOL)fetchFromOTelEndpoint;
-
-// Data collection strategies - Codex CLI
-- (BOOL)fetchFromCodexCLI;
-- (void)updateCodexCacheInBackground;
-- (UInt64)parseCodexJSONLFile:(NSString *)filePath;
-
-// Data collection strategies - Gemini CLI
-- (BOOL)fetchFromGeminiCLI;
-- (void)updateGeminiCacheInBackground;
-- (UInt64)parseGeminiSessionFile:(NSString *)filePath;
-
-// Data collection strategies - Ollama Local Inference
-- (BOOL)fetchFromOllamaAPI;
-- (void)updateOllamaStatusInBackground;
-- (NSString *)ollamaStatusString;
-
-// Data collection strategies - Hermes agent (SQLite)
-- (BOOL)fetchFromHermesDatabase;
-
-@end
+#import <XRGCore/XRGCore-Swift.h>

@@ -128,7 +128,7 @@ XRGPreferencesWindow* xrg_preferences_window_new(GtkWindow *parent, XRGPreferenc
     win->prefs = prefs;
 
     /* Create dialog window */
-    win->window = gtk_dialog_new_with_buttons("XRG-Linux Preferences",
+    win->window = gtk_dialog_new_with_buttons("XRG-ng for Linux Preferences",
                                                parent,
                                                GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
                                                "Cancel", GTK_RESPONSE_CANCEL,

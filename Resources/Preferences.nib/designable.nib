@@ -365,7 +365,7 @@
                                     <font key="font" metaFont="smallSystem"/>
                                 </buttonCell>
                             </button>
-                            <button toolTip="Display a drop shadow for the XRG window." fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="816">
+                            <button toolTip="Display a drop shadow for the XRG-ng window." fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="816">
                                 <rect key="frame" x="18" y="11" width="252" height="18"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <buttonCell key="cell" type="check" title="Enable drop shadow for the graph window." bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="1101">
@@ -382,7 +382,7 @@
                                     <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
                                 </textFieldCell>
                             </textField>
-                            <textField toolTip="Leave blank to use default of hostname or &quot;XRG.&quot;" focusRingType="none" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="839">
+                            <textField toolTip="Leave blank to use default of hostname or &quot;XRG-ng.&quot;" focusRingType="none" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="839">
                                 <rect key="frame" x="213" y="100" width="116" height="19"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <textFieldCell key="cell" controlSize="small" scrollable="YES" lineBreakMode="clipping" selectable="YES" editable="YES" sendsActionOnEndEditing="YES" state="on" borderStyle="bezel" alignment="left" drawsBackground="YES" id="1103">
@@ -394,10 +394,10 @@
                         </subviews>
                     </view>
                 </box>
-                <button toolTip="Check with the XRG web server for a new version every time the application loads." fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="751">
+                <button toolTip="Check with the XRG-ng web server for a new version every time the application loads." fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="751">
                     <rect key="frame" x="393" y="56" width="247" height="18"/>
                     <autoresizingMask key="autoresizingMask"/>
-                    <buttonCell key="cell" type="check" title="Check for updates when starting XRG" bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="1095">
+                    <buttonCell key="cell" type="check" title="Check for updates when starting XRG-ng" bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="1095">
                         <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                         <font key="font" metaFont="smallSystem"/>
                     </buttonCell>
@@ -449,7 +449,7 @@
                         <rect key="frame" x="0.0" y="0.0" width="269" height="69"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
-                            <button toolTip="Load colors and transparencies from an XRG Theme File." verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="733">
+                            <button toolTip="Load colors and transparencies from an XRG-ng Theme File." verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="733">
                                 <rect key="frame" x="14" y="16" width="118" height="32"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <buttonCell key="cell" type="push" title="Load Theme" bezelStyle="rounded" alignment="center" borderStyle="border" inset="2" id="1135">
@@ -460,7 +460,7 @@
                                     <action selector="loadTheme:" target="5" id="737"/>
                                 </connections>
                             </button>
-                            <button toolTip="Save colors and transparencies to an XRG Theme File." verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="734">
+                            <button toolTip="Save colors and transparencies to an XRG-ng Theme File." verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="734">
                                 <rect key="frame" x="132" y="16" width="116" height="32"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <buttonCell key="cell" type="push" title="Save Theme" bezelStyle="rounded" alignment="center" borderStyle="border" inset="2" id="1136">
@@ -646,7 +646,7 @@
                         <rect key="frame" x="0.0" y="0.0" width="318" height="67"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
-                            <button toolTip="Fast CPU Bar shows a more immediate CPU usage, though XRG performance will decrease by about 10%." tag="32" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="429">
+                            <button toolTip="Fast CPU Bar shows a more immediate CPU usage, though XRG-ng performance will decrease by about 10%." tag="32" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="429">
                                 <rect key="frame" x="11" y="32" width="156" height="18"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <buttonCell key="cell" type="check" title="Show CPU Bars" bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" tag="32" inset="2" id="1141">
@@ -749,10 +749,10 @@
                                     <font key="font" metaFont="smallSystem"/>
                                 </buttonCell>
                             </button>
-                            <button toolTip="Display the total bandwidth used since XRG was loaded." fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="833">
+                            <button toolTip="Display the total bandwidth used since XRG-ng was loaded." fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="833">
                                 <rect key="frame" x="11" y="12" width="296" height="18"/>
                                 <autoresizingMask key="autoresizingMask"/>
-                                <buttonCell key="cell" type="check" title="Show Total Bandwidth used since XRG was opened." bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="1161">
+                                <buttonCell key="cell" type="check" title="Show total bandwidth since opening XRG-ng." bezelStyle="regularSquare" imagePosition="left" alignment="left" controlSize="small" inset="2" id="1161">
                                     <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                     <font key="font" metaFont="smallSystem"/>
                                 </buttonCell>
@@ -994,7 +994,7 @@
                                     <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
                                 </textFieldCell>
                             </textField>
-                            <popUpButton toolTip="Configure XRG to show pressure in inches or hectopascals." tag="76" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="469">
+                            <popUpButton toolTip="Configure XRG-ng to show pressure in inches or hectopascals." tag="76" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="469">
                                 <rect key="frame" x="105" y="10" width="137" height="22"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <popUpButtonCell key="cell" type="push" title="Item1" bezelStyle="rounded" alignment="left" controlSize="small" lineBreakMode="clipping" state="on" borderStyle="borderAndBezel" inset="2" arrowPosition="arrowAtCenter" preferredEdge="maxY" selectedItem="472" id="1165">
@@ -1018,7 +1018,7 @@
                                     <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
                                 </textFieldCell>
                             </textField>
-                            <popUpButton toolTip="Configure XRG to show distances in miles or kilometers." tag="75" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="475">
+                            <popUpButton toolTip="Configure XRG-ng to show distances in miles or kilometers." tag="75" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="475">
                                 <rect key="frame" x="105" y="35" width="137" height="22"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <popUpButtonCell key="cell" type="push" title="Item1" bezelStyle="rounded" alignment="left" controlSize="small" lineBreakMode="clipping" state="on" borderStyle="borderAndBezel" inset="2" arrowPosition="arrowAtCenter" preferredEdge="maxY" selectedItem="464" id="1167">
@@ -1033,7 +1033,7 @@
                                     </menu>
                                 </popUpButtonCell>
                             </popUpButton>
-                            <popUpButton toolTip="Configure XRG to show temperature in F or C." tag="74" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="476">
+                            <popUpButton toolTip="Configure XRG-ng to show temperature in F or C." tag="74" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="476">
                                 <rect key="frame" x="105" y="60" width="137" height="22"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <popUpButtonCell key="cell" type="push" title="Fahrenheit" bezelStyle="rounded" alignment="left" controlSize="small" lineBreakMode="clipping" state="on" borderStyle="borderAndBezel" inset="2" arrowPosition="arrowAtCenter" preferredEdge="maxY" selectedItem="474" id="1168">

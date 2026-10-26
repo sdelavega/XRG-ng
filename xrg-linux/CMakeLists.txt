@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(xrg-linux VERSION 1.0.0 LANGUAGES C)
+project(XRG-ng VERSION 1.0.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -178,7 +178,7 @@ endif()
 
 # Print configuration summary
 message(STATUS "")
-message(STATUS "XRG-Linux Configuration:")
+message(STATUS "XRG-ng for Linux Configuration:")
 message(STATUS "  Version: ${PROJECT_VERSION}")
 message(STATUS "  C Compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
@@ -188,3 +188,7 @@ message(STATUS "  Optional dependencies:")
 message(STATUS "    lm-sensors: ${SENSORS_FOUND}")
 message(STATUS "    UPower: ${UPOWER_FOUND}")
 message(STATUS "")
+
+# Project attribution and license accompany the installed executable.
+install(FILES "${CMAKE_SOURCE_DIR}/../LICENSE" "${CMAKE_SOURCE_DIR}/../COPYRIGHT"
+    "${CMAKE_SOURCE_DIR}/../THIRD_PARTY_NOTICES.md" DESTINATION share/doc/xrg-linux)

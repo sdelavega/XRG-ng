@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-XRG is a **cross-platform** system resource monitoring application with native implementations for **macOS** (Objective-C/Cocoa) and **Linux** (C/GTK3). It displays real-time graphs for CPU, memory, network, disk, GPU, battery, temperature, weather, stocks, and AI token usage.
+XRG-ng is a **cross-platform** system resource monitoring application with native implementations for **macOS** (Swift/Objective-C AppKit) and **Linux** (C/GTK3). It displays real-time graphs for CPU, memory, network, disk, GPU, battery, temperature, weather, stocks, and AI token usage.
 
 **Key Points:**
 - Both platforms share identical three-layer architecture (Data Collector → Graph View → Module Manager)
@@ -34,30 +34,30 @@ XRG is a **cross-platform** system resource monitoring application with native i
 
 ```bash
 # Build the project
-xcodebuild -project XRG.xcodeproj -scheme XRG build
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng build
 
 # Build for debugging
-xcodebuild -project XRG.xcodeproj -scheme XRG -configuration Debug build
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng -configuration Debug build
 
 # Build for release
-xcodebuild -project XRG.xcodeproj -scheme XRG -configuration Release build
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng -configuration Release build
 
 # Clean build folder
-xcodebuild -project XRG.xcodeproj -scheme XRG clean
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng clean
 
 # Build and run (use Xcode for easier debugging)
-open XRG.xcodeproj  # Then press ⌘R in Xcode
+open XRG-ng.xcodeproj  # Then press ⌘R in Xcode
 ```
 
 **Build Without Code Signing:**
 ```bash
-xcodebuild -project XRG.xcodeproj -scheme XRG \
+xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng \
     CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO build
 ```
 
 **Target Information:**
-- **Single Target**: XRG
-- **Schemes**: XRG
+- **Single Target**: XRG-ng
+- **Schemes**: XRG-ng
 - **Minimum OS**: macOS 10.13
 - **Build Configurations**: Debug, Release
 - **Required Frameworks**: Cocoa, IOKit, Accelerate
@@ -119,7 +119,7 @@ sudo apt install libgtk-3-dev libcairo2-dev libglib2.0-dev libjson-glib-dev \
 
 ## Architecture
 
-XRG maintains a consistent three-layer architecture across **both macOS and Linux** implementations, with platform-specific data collection and rendering layers.
+XRG-ng maintains a consistent three-layer architecture across **both macOS and Linux** implementations, with platform-specific data collection and rendering layers.
 
 ### Three-Layer Module Pattern
 
@@ -416,10 +416,10 @@ int main() {
 ## Code Conventions
 
 - **Language**: Objective-C (modern runtime, ARC enabled where applicable)
-- **Naming**: Classes prefixed with `XRG`, ivars with underscores (legacy style)
+- **Naming**: Classes prefixed with `XRG-ng`, ivars with underscores (legacy style)
 - **Memory**: Use `strong` properties, avoid manual retain/release in new code
 - **Headers**: Import foundation classes in `.h`, specific dependencies in `.m`
-- **Comments**: License header in all files (GPL v2), inline comments for complex logic
+- **Comments**: License header in all files (GPL v3 or later), inline comments for complex logic
 - **Indentation**: 4 spaces (not tabs in source, tabs in NIB XML)
 
 ## Common Issues
@@ -446,7 +446,7 @@ If Xcode can't find newly added files:
 
 ### High CPU Usage
 
-If XRG uses excessive CPU:
+If XRG-ng uses excessive CPU:
 - Check for infinite loops in `drawRect:` (use `setNeedsDisplay:` sparingly)
 - Verify timer intervals are reasonable (1 second minimum for most modules)
 - Profile with Instruments to identify hotspots
@@ -534,7 +534,7 @@ find . -name "XRGYourModule*.m" -o -name "XRGYourModule*.h"
 If duplicate files exist, remove them from the Xcode project (not just filesystem):
 1. Select file in Xcode Project Navigator
 2. Delete → "Remove Reference" (not "Move to Trash")
-3. Or edit `XRG.xcodeproj/project.pbxproj` to remove PBXBuildFile entries
+3. Or edit `XRG-ng.xcodeproj/project.pbxproj` to remove PBXBuildFile entries
 
 ### Linux: Preferences Window Tab Navigation
 
@@ -594,7 +594,7 @@ record_inference(latency_ms=18.5, model_name="mobilenet_v2")
 
 ### Linux: GPU Collector nvidia-smi Blocking
 
-**Symptom**: XRG takes 10+ seconds to start, or hangs completely during initialization.
+**Symptom**: XRG-ng takes 10+ seconds to start, or hangs completely during initialization.
 
 **Cause**: The GPU collector calls `popen("nvidia-smi ...")` to detect NVIDIA GPUs. When the nouveau driver is active (instead of proprietary nvidia), nvidia-smi either times out or blocks indefinitely.
 
@@ -619,7 +619,7 @@ cat /sys/class/drm/card*/device/driver/module/drivers
 
 ### Linux: Battery Collector HID Device Blocking
 
-**Symptom**: XRG opens but shows "Not Responding" dialog. Window appears but graphs never render.
+**Symptom**: XRG-ng opens but shows "Not Responding" dialog. Window appears but graphs never render.
 
 **Cause**: Bluetooth HID devices (keyboards, mice, trackpads) appear in `/sys/class/power_supply/` as `hid-XX:XX:XX:XX:XX:XX-battery`. Reading certain sysfs files for these devices (especially `status`) can block indefinitely if the Bluetooth device is disconnected, sleeping, or has communication issues.
 
@@ -735,7 +735,7 @@ Multi-provider AI token tracking works on both platforms. Zero configuration req
 {"messages":[{"tokens":{"input":X,"output":Y,"total":Z}}]}
 ```
 
-**Hermes Format**: Agent-orchestrator activity in SQLite `~/.hermes/state.db` (`sessions` table). Each row has `model`, `input_tokens`, `output_tokens`, and cost columns (`actual_cost_usd`, falling back to `estimated_cost_usd`). XRG aggregates every model with a per-model token breakdown and takes cost straight from the DB (never re-priced). The AI Token view shows all models under the Hermes line; the on-graph "API Cost" section was removed in favor of the right-click Cost Intelligence menu.
+**Hermes Format**: Agent-orchestrator activity in SQLite `~/.hermes/state.db` (`sessions` table). Each row has `model`, `input_tokens`, `output_tokens`, and cost columns (`actual_cost_usd`, falling back to `estimated_cost_usd`). XRG-ng aggregates every model with a per-model token breakdown and takes cost straight from the DB (never re-priced). The AI Token view shows all models under the Hermes line; the on-graph "API Cost" section was removed in favor of the right-click Cost Intelligence menu.
 
 **Settings** (macOS - `XRGAISettingsKeys.h`):
 - `aiTokensTrackingEnabled`: Master toggle (must be YES for Observer)
