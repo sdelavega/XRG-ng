@@ -80,6 +80,16 @@ statistics and brief ibtool/ibtoold/xctest stack samples every five minutes. The
 diagnostic logs are uploaded with the results; they omit process arguments and
 environments. Local runs do not start the sampler. The build/test exit status and
 all validation checks still determine success.
+The script also runs `Tools/smoke-macos.py` against the freshly built test products.
+Two separate, hidden AppKit processes assemble the production delegate/window/panel
+classes with fixture collectors. A UUID bundle identifier isolates standard
+preferences; the second process verifies saved state before the runner removes
+that domain. Reports and offscreen PNGs are in `Smoke/`. Run the standalone check
+with `python3 Tools/smoke-macos.py --configuration Debug` (or Release).
+This composition harness does not load the packaged MainMenu nib or exercise the
+shipping entry point, LaunchServices, interactive dialogs or physical hardware.
+Its sensor nib is generated from `Resources/Sensors.xib` with only automatic
+presentation/frame autosave suppressed; source parity is checked before running.
 Do not replace these checks with a build alone or claim Intel runtime coverage
 from an arm64 host's universal build.
 

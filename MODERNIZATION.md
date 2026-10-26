@@ -771,3 +771,62 @@ initial ARM allocation failure may recur; the runner change is an attempt to
 complete hosted validation, not a claim that the pending run passes. Local ARM
 tests and successful hosted Intel universal app builds remain separate evidence;
 hosted Intel test execution is still unverified.
+
+## Isolated application composition and process restoration (2026-10-26)
+
+The previous ARM CI run (40379975106, b08f400) completed successfully in both
+Debug and Release. The new work adds an application-level harness beyond the
+individual panel/controller tests.
+
+XRGAppDelegate now has an internal dependency-injected initializer for preferences,
+nib loading, window presentation, activation, sensor data/policy and theme errors.
+Its default initializer retains the production standard-defaults, main-bundle,
+Dock/application activation, live sensor fallback and alert behavior. Sensor
+controllers with no data source explicitly receive their owning delegate. The
+same delegate source is compiled into the test target; no production smoke flag,
+menu or framework-wide mutable test configuration is added.
+
+XRGApplicationSmokeScene composes the production delegate, graph window,
+background, all ten panels, preferences and sensor controller using fixture
+collectors and private notifications. Coverage includes duplicate launch callbacks,
+visibility actions, resize/layout, all ten preference routes, lazy nib reuse,
+sensor policy/forwarding, valid/invalid theme files, collapsed restoration in both
+orientations, wake notification handling and power-off/termination cleanup.
+Graph update callbacks are driven explicitly; its graph timers are created but
+not scheduled. Existing collector/transport assertions remain intact.
+
+Tools/smoke-macos.py builds a disposable, ad-hoc-signed AppKit executable using
+these classes and the test-enabled framework. Two distinct processes enter the
+real NSApplication run loop. The first saves a budget, title, horizontal orientation,
+collapsed state and sensor-window preference. The second verifies those persisted
+values and state before repeating the controls and shutdown checks. Both must
+keep their windows hidden, invalidate all four graph timer objects, produce JSON
+reports/offscreen PNGs and succeed within thirty seconds per process. Release
+compiles the harness/delegate with optimization. A generated UUID bundle identifier
+must match the allowed private preference namespace before standard defaults can
+be used; the runner deletes that domain and treats cleanup failure as a failure.
+
+The sensor nib fixture is generated from the unchanged production Sensors.xib;
+only automatic presentation and frame autosave are suppressed. Source parity is
+checked before every process run. Early checks caught the original nib presenting
+itself, Foundation rejecting a suite named after its own bundle, and AppKit treating
+positional harness inputs as documents. The harness now uses the hidden fixture,
+standard defaults under its verified private bundle ID, and environment inputs.
+It also accepts restored sensor-window loading before lazy preference loading,
+while still requiring each nib to load exactly once. These were harness isolation
+and expectation fixes; the production resources are unchanged.
+
+Both local CI configurations pass universal app builds, bundled metadata/notices,
+required runtime classes, and 843 cases across 443 test functions with zero failures.
+Each also passes the two-process smoke check and preference cleanup. Isolated
+failure checks confirm command timeouts kill/reap children and SIGTERM preserves
+exit 143 without leaving a command running. Offscreen captures were inspected.
+CI runs the new check after the complete test suite and uploads only its logs,
+JSON and PNGs, not the temporary executable/framework. The temporary preference
+domain is removed; the running user's app and its preference domain are not used.
+
+This is a production-class composition harness, not a launch of the packaged app.
+The shipping main.swift/NSApplicationMain path, original MainMenu nib loading,
+LaunchServices, interactive dialogs/VoiceOver, physical sleep/wake, live providers,
+physical sensor/fan changes and Intel runtime still need separate validation.
+The existing APSL/GPL combined-distribution issue remains unchanged.

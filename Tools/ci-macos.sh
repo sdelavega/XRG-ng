@@ -117,4 +117,7 @@ if passed < 1 or failed != 0:
     raise SystemExit(f"Expected passing tests; passed={passed}, failed={failed}")
 print(f"Verified {passed} passing tests, {failed} failures")
 PY
+phase "Isolated AppKit launch and restore smoke check"
+python3 Tools/smoke-macos.py --configuration "$configuration" \
+    --products "$output/DerivedData/Build/Products/$configuration" --results "$output/Smoke"
 phase "Validation complete"

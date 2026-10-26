@@ -39,5 +39,8 @@ jobs:
             ${{ steps.verify.outputs.results }}/*.log
             ${{ steps.verify.outputs.results }}/*.json
             ${{ steps.verify.outputs.results }}/*.xcresult
+            ${{ steps.verify.outputs.results }}/Smoke/*.log
+            ${{ steps.verify.outputs.results }}/Smoke/*.json
+            ${{ steps.verify.outputs.results }}/Smoke/*.png
           retention-days: 7
           if-no-files-found: warn

@@ -28,6 +28,46 @@ import XRGCore
 @objc(XRGAppDelegate)
 @objcMembers
 final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, XRGSensorWindowDataSource, XRGGraphWindowController, XRGPreferencesDataSource {
+    private let defaults: UserDefaults
+    private let loadNib: (String, XRGAppDelegate) -> Void
+    private let presentWindow: (NSWindow, Any?) -> Void
+    private let activateApplication: () -> Void
+    private let sensorProvider: (Bool) -> [XRGSensorData]
+    private let includeUnknownSensors: () -> Bool
+    private let invalidThemeNotice: (Error) -> Void
+
+    override convenience init() {
+        self.init(defaults: .standard,
+                  loadNib: { name, owner in _ = Bundle.main.loadNibNamed(NSNib.Name(name), owner: owner, topLevelObjects: nil) },
+                  presentWindow: { $0.makeKeyAndOrderFront($1) },
+                  activateApplication: {
+                      NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.activate(options: [])
+                      DispatchQueue.main.async { NSApp.activate() }
+                  }, includeUnknownSensors: { XRGTemperatureView.showUnknownSensors() }, sensorProvider: { includingUnknown in
+                      let miner = XRGTemperatureMiner.shared
+                      return miner.locationKeys(includingUnknown: includingUnknown).compactMap { miner.sensor(forLocation: $0) }
+                  }, invalidThemeNotice: { error in
+                      let alert = NSAlert()
+                      alert.messageText = NSLocalizedString("Unable to Load Theme", comment: "Invalid theme alert title")
+                      alert.informativeText = error.localizedDescription
+                      alert.addButton(withTitle: NSLocalizedString("OK", comment: "Dismiss alert"))
+                      alert.runModal()
+                  })
+    }
+
+    @nonobjc init(defaults: UserDefaults, loadNib: @escaping (String, XRGAppDelegate) -> Void,
+                  presentWindow: @escaping (NSWindow, Any?) -> Void = { _, _ in },
+                  activateApplication: @escaping () -> Void = {},
+                  includeUnknownSensors: (() -> Bool)? = nil,
+                  sensorProvider: @escaping (Bool) -> [XRGSensorData] = { _ in [] },
+                  invalidThemeNotice: @escaping (Error) -> Void = { _ in }) {
+        self.defaults = defaults; self.loadNib = loadNib; self.presentWindow = presentWindow
+        self.activateApplication = activateApplication; self.sensorProvider = sensorProvider
+        self.includeUnknownSensors = includeUnknownSensors ?? { defaults.bool(forKey: "tempShowUnknownSensors") }
+        self.invalidThemeNotice = invalidThemeNotice
+        super.init()
+    }
+
     @IBOutlet var prefController: XRGPrefController?
     @IBOutlet var xrgGraphWindow: XRGGraphWindow?
     @IBOutlet var sensorWindow: NSWindow?
@@ -36,19 +76,18 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     var appSettings: XRGSettings? { xrgGraphWindow?.appSettings }
     var moduleManager: XRGModuleManager? { xrgGraphWindow?.moduleManager }
 
-    var sensorWindowIncludesUnknownSensors: Bool { XRGTemperatureView.showUnknownSensors() }
+    var sensorWindowIncludesUnknownSensors: Bool { includeUnknownSensors() }
 
     func sensorWindowSensors(includingUnknown: Bool) -> [XRGSensorData] {
-        let miner = XRGTemperatureMiner.shared
-        return miner.locationKeys(includingUnknown: includingUnknown).compactMap { miner.sensor(forLocation: $0) }
+        sensorProvider(includingUnknown)
     }
 
     @IBAction func showPrefs(_ sender: Any?) {
         if prefController == nil {
-            Bundle.main.loadNibNamed("Preferences", owner: self, topLevelObjects: nil)
+            loadNib("Preferences", self)
         }
         prefController?.setUpTemperaturePanel()
-        prefController?.window?.makeKeyAndOrderFront(sender)
+        if let window = prefController?.window { presentWindow(window, sender) }
     }
 
     @objc(showPrefsWithPanel:)
@@ -63,16 +102,17 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
 
     @IBAction func openSensorWindow(_ sender: Any?) {
         if sensorViewController == nil {
-            Bundle.main.loadNibNamed("Sensors", owner: self, topLevelObjects: nil)
+            loadNib("Sensors", self)
         }
+        if sensorViewController?.dataSource == nil { sensorViewController?.dataSource = self }
         sensorWindow?.level = .normal
-        sensorWindow?.makeKeyAndOrderFront(self)
-        UserDefaults.standard.set(true, forKey: "showSensorWindow")
+        if let window = sensorWindow { presentWindow(window, self) }
+        defaults.set(true, forKey: "showSensorWindow")
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if sender === sensorWindow {
-            UserDefaults.standard.set(false, forKey: "showSensorWindow")
+            defaults.set(false, forKey: "showSensorWindow")
         }
         return true
     }
@@ -99,7 +139,6 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         window.moduleManager?.windowChanged(to: window.frame.size)
         window.initializeAITokenView()
 
-        let defaults = UserDefaults.standard
         if defaults.bool(forKey: "windowIsMinimized") {
             // Restore the expanded dimensions before collapsing, preserving the
             // fork's fix for relaunches that otherwise get stuck as a thin strip.
@@ -123,9 +162,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
 
         // Preserve the existing launch ordering until menu activation is
         // verified independently of the language migration.
-        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock")
-            .first?.activate(options: [])
-        DispatchQueue.main.async { NSApp.activate() }
+        activateApplication()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -137,16 +174,12 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: filename))
             let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-            try settings.applyThemeDictionary(plist, defaults: .standard)
+            try settings.applyThemeDictionary(plist, defaults: defaults)
             xrgGraphWindow?.display()
             prefController?.setUpColorPanel()
             return true
         } catch {
-            let alert = NSAlert()
-            alert.messageText = NSLocalizedString("Unable to Load Theme", comment: "Invalid theme alert title")
-            alert.informativeText = error.localizedDescription
-            alert.addButton(withTitle: NSLocalizedString("OK", comment: "Dismiss alert"))
-            alert.runModal()
+            invalidThemeNotice(error)
             return false
         }
     }

@@ -40,6 +40,7 @@
 		A1B2C3D4E5F6071829AABBCC /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829AABBDD /* libsqlite3.tbd */; };
 		FC9F0ADD308E5AE2001445A9 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC9F0ADC308E5AE2001445A9 /* UniformTypeIdentifiers.framework */; };
 		FC9F0B03308E6333001445A9 /* XRGAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC9F0B02308E6333001445A9 /* XRGAppDelegate.swift */; };
+		FCAF26003093000000000001 /* XRGAppDelegate.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = FC9F0B02308E6333001445A9 /* XRGAppDelegate.swift */; };
 		FCAA3A01308F000100000001 /* Sensors.xib in Test Resources */ = {isa = PBXBuildFile; fileRef = 278E90B823F21F6600874941 /* Sensors.xib */; };
 		FCAA3A03308F000100000001 /* XRGTemperatureHardwareReader.m in Test Sources */ = {isa = PBXBuildFile; fileRef = 273ECE9E15740EAF00E65D82 /* XRGTemperatureHardwareReader.m */; settings = {COMPILER_FLAGS = "-DXRG_SENSOR_TEST_TRANSPORTS=1"; }; };
 /* End PBXBuildFile section */
@@ -552,6 +553,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FCAF26003093000000000001 /* XRGAppDelegate.swift in Test Sources */,
 				FCAA3A03308F000100000001 /* XRGTemperatureHardwareReader.m in Test Sources */,
 				FCAD26003092000000000001 /* SMCInterface.m in Test Sources */,
 			);
