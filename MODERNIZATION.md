@@ -754,3 +754,20 @@ processes. The updated Debug script completed locally with both app slices,
 metadata/runtime checks and 837 cases across 439 functions, with zero failures.
 Release source and validation assertions are unchanged from the previous pass.
 The remote Xcode 26.6 retry is tracked separately from these local checks.
+
+### Restore the ARM CI host after Intel fixture stalls
+
+The Xcode 26.6 retry (40376824201) also exceeded twenty minutes in both
+configurations. Each universal app build succeeded and passed product, deployment
+floor and runtime-symbol checks. Both test builds stopped producing output at
+WeatherView.xib compilation, with ibtool/ibtoold still active at cancellation.
+This reproduces the stalled test-build phase across 26.3 and 26.6 on hosted Intel;
+it does not prove a specific tool or operating-system root cause.
+
+The workflow returns to its original ARM macos-26 host and keeps the Xcode 26.6
+pin plus the new diagnostic sampler. Every build/test assertion, both executable
+architectures, the 26.0 floor and the twenty-minute limit remain enforced. The
+initial ARM allocation failure may recur; the runner change is an attempt to
+complete hosted validation, not a claim that the pending run passes. Local ARM
+tests and successful hosted Intel universal app builds remain separate evidence;
+hosted Intel test execution is still unverified.
