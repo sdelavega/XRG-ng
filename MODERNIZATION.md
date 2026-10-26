@@ -717,3 +717,20 @@ metadata/notices/runtime-class checks, and 837 cases across 439 test functions p
 configuration, with zero failures. Tests executed on arm64 with local Xcode 27.2;
 this does not establish Intel runtime or Xcode 26.3 compatibility. Project syntax
 and whitespace checks passed, and retained archives were not modified.
+
+### Intel CI toolchain follow-up
+
+Run 40373509915 allocated both Intel runners successfully. Debug and Release
+universal app builds passed under Xcode 26.3, including bundled metadata/notices,
+the 26.0 floor and required runtime classes in both slices. Both jobs then reached
+test-fixture XIB compilation and exceeded twenty minutes while ibtool/ibtoold were
+active. Tests never started, so this run does not establish Intel test coverage.
+
+The workflow now pins Xcode 26.6, the Intel runner image's documented default,
+to retry fixture compilation with the current toolchain. This is an attempted
+remedy pending remote results, not a proven root cause or a claimed pass. The
+runner architecture, deployment floor, source fixtures, test assertions, universal
+build checks and twenty-minute limit are unchanged. The 26.3 app-build result
+remains useful evidence separately from the pending 26.6 test run.
+
+Runner image: https://github.com/actions/runner-images/blob/main/images/macos/macos-26-Readme.md

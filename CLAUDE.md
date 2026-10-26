@@ -62,7 +62,7 @@ xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng \
 - **Tests**: XRGTests, including Swift tests and Objective-C compatibility/transport fixtures.
 - **Minimum OS**: macOS 26.0 for app, framework and tests.
 - **Architectures**: arm64 and x86_64, Debug and Release.
-- **CI**: standard `macos-26-intel` runner, Xcode 26.3.
+- **CI**: standard `macos-26-intel` runner, Xcode 26.6.
 
 Run the same checks as CI from the repository root:
 
