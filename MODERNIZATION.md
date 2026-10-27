@@ -1243,3 +1243,16 @@ Linux CI now runs both configurations on native ubuntu-24.04 and ubuntu-24.04-ar
 runners, with distinct artifacts per runner/configuration. Physical Mali, Adreno,
 Apple/Asahi and other ARM GPU validation remains open; fixtures and ARM64 builds
 are not evidence of physical GPU behavior. macOS production sources are unchanged.
+
+
+### Vendor Mali devfreq load
+
+Rockchip's published devfreq load interface adds a read-only measured device busy
+percentage (`percent@frequencyHz`) for a single owned GPU devfreq domain. It does
+not estimate load from frequency or need DRM profiling. Empty/invalid samples and
+multiple ambiguous domains stay unavailable. Three additional fixtures verify
+measured percentages including genuine zero, malformed/zero-clock samples, and
+avoidance of memory-domain load. All 60 Rust tests and the complete local Linux
+Debug/Release scripts pass. The earlier ARM integration commit (064b5d8) passed all four hosted jobs on native
+x86_64/ARM64 in Debug/Release; the load addition is validated again on the same
+matrix after push.

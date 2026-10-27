@@ -202,9 +202,47 @@ fn devfreq(sys: &Path, device: &mut Device) {
             }
         }
     }
+    // Collapse class/local aliases before deciding whether a single domain
+    // unambiguously describes device load (not e.g. a separate memory clock).
+    domains = domains
+        .into_iter()
+        .filter_map(|p| fs::canonicalize(p).ok())
+        .collect();
     domains.sort();
     domains.dedup();
+    let single_domain = domains.len() == 1;
     for domain in domains {
+        if single_domain {
+            match hardware::text(&domain.join("load")) {
+                Ok(Some(value)) if !value.is_empty() => {
+                    // Rockchip's devfreq ABI publishes measured busy percent and
+                    // the reporting clock as "percent@frequencyHz", not a frequency ratio.
+                    let parsed = value
+                        .split_once('@')
+                        .and_then(|(busy, hz)| {
+                            Some((
+                                busy.parse::<u64>().ok()?,
+                                hz.strip_suffix("Hz")?.parse::<u64>().ok()?,
+                            ))
+                        })
+                        .filter(|(busy, hz)| *busy <= 100 && *hz > 0);
+                    if let Some((busy, hz)) = parsed {
+                        device.gpu.utilization = Some(busy as f64);
+                        if device.gpu.frequency_mhz.is_none() {
+                            device.gpu.frequency_mhz = Some(hz as f64 / 1_000_000.);
+                        }
+                    } else {
+                        device
+                            .gpu
+                            .notes
+                            .push("Invalid GPU devfreq load sample".into());
+                    }
+                }
+                Ok(_) => (),
+                Err(error) => device.gpu.notes.push(error),
+            }
+        }
+
         if let Some(hz) = unsigned(&domain.join("cur_freq"), &mut device.gpu.notes)
             && device.gpu.frequency_mhz.is_none()
         {

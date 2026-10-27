@@ -682,3 +682,53 @@ fn msm_display_master_clock_and_sensor_are_never_gpu_telemetry() {
             .any(|n| n.contains("physical GPU telemetry mapping unavailable"))
     );
 }
+
+#[test]
+fn vendor_mali_devfreq_load_is_measured_activity_not_a_clock_ratio() {
+    let f = Fixture::new();
+    f.platform("gpu0", "mali", None);
+    let path = "devices/platform/gpu0/devfreq/gpu/load";
+    for (text, busy) in [
+        ("35@800000000Hz", 35.),
+        ("0@800000000Hz", 0.),
+        ("100@200000000Hz", 100.),
+    ] {
+        f.put(path, text);
+        let gpu = f.collect().sample().unwrap().values.remove(0);
+        assert_eq!(gpu.utilization, Some(busy));
+        assert!(gpu.frequency_mhz.is_some());
+        assert_eq!(gpu.client_activity, None);
+    }
+}
+#[test]
+fn vendor_mali_invalid_or_empty_devfreq_load_does_not_invent_idle() {
+    let f = Fixture::new();
+    f.platform("gpu0", "mali", None);
+    for text in [
+        "",
+        "101@500000000Hz",
+        "-1@500000000Hz",
+        "25@0Hz",
+        "25@500000000MHz",
+        "500000000",
+        "NaN@500000000Hz",
+    ] {
+        f.put("devices/platform/gpu0/devfreq/gpu/load", text);
+        assert_eq!(
+            f.collect().sample().unwrap().values[0].utilization,
+            None,
+            "{text}"
+        );
+    }
+}
+#[test]
+fn multiple_devfreq_domains_do_not_guess_gpu_load_from_memory_activity() {
+    let f = Fixture::new();
+    f.platform("gpu0", "mali", None);
+    f.put("devices/platform/gpu0/devfreq/core/load", "25@400000000Hz");
+    f.put(
+        "devices/platform/gpu0/devfreq/memory/load",
+        "90@800000000Hz",
+    );
+    assert_eq!(f.collect().sample().unwrap().values[0].utilization, None);
+}

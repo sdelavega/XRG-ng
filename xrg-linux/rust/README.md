@@ -70,8 +70,8 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | NVIDIA nvidia | One bounded `nvidia-smi` query, matched by PCI address |
 | Intel i915 | Reported clock and available hwmon telemetry; utilization unavailable |
 | Intel xe | Available hwmon telemetry; utilization unavailable |
-| Mali panfrost / panthor | Owned devfreq clocks, readable DRM-client activity and resident allocations when exposed; profiling must already be enabled |
-| Mali lima / vendor Mali | Identification, owned devfreq/hwmon, readable DRM-client stats where the driver exports them |
+| Mali panfrost / panthor | Owned devfreq clocks/load when provided, readable DRM-client activity and resident allocations; client activity needs profiling |
+| Mali lima / vendor Mali | Identification, owned devfreq/hwmon, vendor devfreq load where provided, readable DRM-client stats where exported |
 | Adreno mainline MSM | Owned GPU devfreq/hwmon and readable DRM-client engine stats |
 | Adreno vendor KGSL | `gpubusy` busy/total interval and `gpuclk` Hz, including KGSL class-device layout |
 | Apple AGX / Asahi | Platform/render-node discovery and available devfreq/hwmon/client stats; unexposed utilization stays unavailable |
@@ -92,6 +92,11 @@ controller clocks/sensors are never treated as GPU telemetry. Devfreq aliases ar
 read only when their canonical owner belongs to that GPU. Clock frequency never
 becomes a utilization estimate. KGSL intervals require `0 <= busy <= total` and a
 nonzero total; `0 0` means no measurement.
+Rockchip-style devfreq `load` samples (`percent@frequencyHz`) provide measured
+whole-device activity when the GPU owns exactly one domain. Empty, malformed,
+out-of-range or zero-clock samples remain unavailable. Multiple domains are not
+guessed to represent graphics load, and this path does not require DRM profiling.
+
 
 DRM fdinfo is **per-client accounting**, not a global device utilization counter.
 The scanner reads permitted `/proc/<pid>/fdinfo` records associated with known GPU
@@ -128,6 +133,7 @@ Sources: [DRM client accounting](https://docs.kernel.org/gpu/drm-usage-stats.htm
 [Panfrost profiling](https://docs.kernel.org/gpu/panfrost.html),
 [Panthor profiling](https://docs.kernel.org/gpu/panthor.html),
 [Asahi driver](https://github.com/AsahiLinux/linux/blob/asahi/drivers/gpu/drm/asahi/driver.rs),
+[Rockchip devfreq load interface](https://github.com/rockchip-linux/kernel/blob/develop-5.10/drivers/devfreq/devfreq.c),
 [AMDGPU monitoring ABI](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.html),
 [NVIDIA query documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
 
