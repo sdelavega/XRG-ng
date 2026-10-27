@@ -2,6 +2,11 @@
 
 A real-time system resource monitor for Linux with customizable floating graphs.
 
+The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rust/README.md).
+It currently provides CPU, memory, network and disk graphs with shared macOS Swift
+histories, rate tracking and themes. The instructions below describe the existing
+C/GTK3 implementation, retained during migration.
+
 Port of the macOS [XRG-ng](https://github.com/marc-shade/XRG) application to Linux using GTK and Cairo.
 
 ![XRG-ng for Linux Screenshot](docs/screenshot.png)
@@ -26,7 +31,7 @@ XRG-ng for Linux displays real-time graphs for:
 ### Build Dependencies
 
 **Required:**
-- GTK 3.24+ (or GTK 4.x)
+- GTK 3.24+ (the C application requires GTK3; GTK4 is used by the Rust rewrite)
 - Cairo 1.16+
 - GLib 2.66+
 - SQLite3

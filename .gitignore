@@ -27,3 +27,8 @@ DerivedData/
 
 # Linux port build output
 xrg-linux/build/
+
+# Portable Swift / Rust
+.build/
+.swiftpm/
+xrg-linux/rust/target/

@@ -21,13 +21,19 @@
  *
  */
 
+#if canImport(Accelerate)
 import Accelerate
+#endif
 import Foundation
 
 /// Ring-buffer storage owned by Swift. Swift rendering consumes orderedValues;
 /// remaining Objective-C callers may copy samples into their own destination.
+#if canImport(ObjectiveC)
 @objc(XRGDataSet)
+#endif
+#if canImport(ObjectiveC)
 @objcMembers
+#endif
 public final class XRGDataSet: NSObject {
     private var samples: [Double] = []
     public var numValues: Int { samples.count }
@@ -42,14 +48,18 @@ public final class XRGDataSet: NSObject {
         super.init()
     }
 
+    #if canImport(ObjectiveC)
     @objc(initWithContentsOfOtherDataSet:)
+    #endif
     public init?(contentsOfOtherDataSet other: XRGDataSet?) {
         guard let other else { return nil }
         super.init()
         copyValues(from: other)
     }
 
+    #if canImport(ObjectiveC)
     @objc(copyValuesFromDataSet:)
+    #endif
     public func copyValues(from other: XRGDataSet) {
         samples = other.samples
         currentIndex = other.currentIndex
@@ -58,7 +68,9 @@ public final class XRGDataSet: NSObject {
         sum = other.sum
     }
 
+    #if canImport(ObjectiveC)
     @nonobjc
+    #endif
     public var orderedValues: [CGFloat] {
         guard !samples.isEmpty else { return [] }
         let start = (currentIndex + 1) % samples.count
@@ -109,19 +121,31 @@ public final class XRGDataSet: NSObject {
 
     public func addOtherDataSetValues(_ other: XRGDataSet?) {
         guard let other, other.numValues == numValues, !samples.isEmpty else { return }
+        #if canImport(Accelerate)
         samples = vDSP.add(samples, other.samples)
+        #else
+        samples = zip(samples, other.samples).map(+)
+        #endif
         updateStatistics()
     }
 
     public func subtractOtherDataSetValues(_ other: XRGDataSet?) {
         guard let other, other.numValues == numValues, !samples.isEmpty else { return }
+        #if canImport(Accelerate)
         samples = vDSP.subtract(samples, other.samples)
+        #else
+        samples = zip(samples, other.samples).map(-)
+        #endif
         updateStatistics()
     }
 
     public func divideAllValues(by divisor: CGFloat) {
         guard divisor != 0, !samples.isEmpty else { return }
+        #if canImport(Accelerate)
         samples = vDSP.divide(samples, Double(divisor))
+        #else
+        samples = samples.map { $0 / Double(divisor) }
+        #endif
         updateStatistics()
     }
 
@@ -132,8 +156,14 @@ public final class XRGDataSet: NSObject {
             sum = 0
             return
         }
+        #if canImport(Accelerate)
         min = CGFloat(vDSP.minimum(samples))
         max = CGFloat(vDSP.maximum(samples))
         sum = CGFloat(vDSP.sum(samples))
+        #else
+        min = CGFloat(samples.min() ?? 0)
+        max = CGFloat(samples.max() ?? 0)
+        sum = CGFloat(samples.reduce(0, +))
+        #endif
     }
 }

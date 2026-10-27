@@ -23,8 +23,12 @@
 
 import Foundation
 
+#if canImport(ObjectiveC)
 @objc(XRGTokenTotals)
+#endif
+#if canImport(ObjectiveC)
 @objcMembers
+#endif
 public final class XRGTokenTotals: NSObject {
     public private(set) var input: UInt64 = 0
     public private(set) var output: UInt64 = 0
@@ -45,7 +49,9 @@ public final class XRGTokenTotals: NSObject {
 
 /// Decoding and aggregation are Swift-owned. The synchronous callback leaves
 /// the existing model-price policy with the caller while it is migrated separately.
+#if canImport(ObjectiveC)
 @objc(XRGProviderLogParser)
+#endif
 public final class XRGProviderLogParser: NSObject {
     private struct ClaudeRecord: Decodable {
         let message: Message?
@@ -99,7 +105,9 @@ public final class XRGProviderLogParser: NSObject {
         return total
     }
 
+    #if canImport(ObjectiveC)
     @objc(parseClaudeAtPath:consume:)
+    #endif
     public static func parseClaude(atPath path: String,
                                    consume: (String?, UInt64, UInt64) -> Void) -> XRGTokenTotals {
         let totals = XRGTokenTotals()
@@ -115,7 +123,9 @@ public final class XRGProviderLogParser: NSObject {
         return totals
     }
 
+    #if canImport(ObjectiveC)
     @objc(parseGeminiAtPath:consume:)
+    #endif
     public static func parseGemini(atPath path: String,
                                    consume: (String?, UInt64, UInt64) -> Void) -> XRGTokenTotals {
         let totals = XRGTokenTotals()

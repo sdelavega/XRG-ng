@@ -23,8 +23,12 @@
 
 import Foundation
 
+#if canImport(ObjectiveC)
 @objc(XRGCounterSample)
+#endif
+#if canImport(ObjectiveC)
 @objcMembers
+#endif
 public final class XRGCounterSample: NSObject {
     public let delta: UInt64
     public let rate: UInt32
@@ -34,17 +38,24 @@ public final class XRGCounterSample: NSObject {
     }
 }
 
+#if canImport(ObjectiveC)
 @objc(XRGRateTracker)
+#endif
 public final class XRGRateTracker: NSObject {
     private let lock = NSLock()
     private var counters: [String: (UInt64, TimeInterval)] = [:]
     private var costSample: (Double, TimeInterval)?
 
-    @objc public func reset() {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    public func reset() {
         lock.withLock { counters = [:]; costSample = nil }
     }
 
+    #if canImport(ObjectiveC)
     @objc(sampleCounter:key:time:)
+    #endif
     public func sample(counter: UInt64, key: String, time: TimeInterval) -> XRGCounterSample {
         lock.withLock {
             guard time.isFinite else { return XRGCounterSample(delta: 0, rate: 0) }
@@ -61,7 +72,9 @@ public final class XRGRateTracker: NSObject {
         }
     }
 
+    #if canImport(ObjectiveC)
     @objc(sampleCost:time:)
+    #endif
     public func sampleCost(_ total: Double, time: TimeInterval) -> Double {
         lock.withLock {
             guard total.isFinite, total >= 0, time.isFinite else { return 0 }

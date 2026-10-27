@@ -1,0 +1,11 @@
+FROM swift:6.4.1-noble
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential curl pkg-config libgtk-4-dev xvfb xauth dbus-x11 \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.99.1 \
+       --component clippy --component rustfmt \
+    && rm /tmp/rustup-init.sh
+ENV PATH="/root/.cargo/bin:${PATH}" CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/tmp/xrg-cargo-target
+WORKDIR /workspace
+CMD ["bash", "Tools/ci-linux.sh"]

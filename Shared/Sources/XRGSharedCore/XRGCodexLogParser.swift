@@ -24,7 +24,9 @@
 
 import Foundation
 
+#if canImport(ObjectiveC)
 @objc(XRGCodexLogParser)
+#endif
 public final class XRGCodexLogParser: NSObject {
     private struct Record: Decodable {
         let type: String
@@ -65,7 +67,9 @@ public final class XRGCodexLogParser: NSObject {
         return record.payload.info?.totalTokenUsage?.total
     }
 
+    #if canImport(ObjectiveC)
     @objc(totalTokensAtPath:)
+    #endif
     public static func totalTokens(atPath path: String) -> UInt64 {
         guard let handle = FileHandle(forReadingAtPath: path) else { return 0 }
         defer { try? handle.close() }

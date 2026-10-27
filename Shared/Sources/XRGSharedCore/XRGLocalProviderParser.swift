@@ -23,8 +23,12 @@
 
 import Foundation
 
+#if canImport(ObjectiveC)
 @objc(XRGMetricSnapshot)
+#endif
+#if canImport(ObjectiveC)
 @objcMembers
+#endif
 public final class XRGMetricSnapshot: NSObject {
     public let tokens: UInt64
     public let cost: Double
@@ -34,14 +38,18 @@ public final class XRGMetricSnapshot: NSObject {
     }
 }
 
+#if canImport(ObjectiveC)
 @objc(XRGLocalProviderParser)
+#endif
 public final class XRGLocalProviderParser: NSObject {
     private struct Models: Decodable {
         let models: [Model]
         struct Model: Decodable { let name: String }
     }
 
+    #if canImport(ObjectiveC)
     @objc(modelNamesFromData:)
+    #endif
     public static func modelNames(from data: Data) -> [String]? {
         guard let response = try? JSONDecoder().decode(Models.self, from: data) else { return nil }
         return response.models.map(\.name)
@@ -49,7 +57,9 @@ public final class XRGLocalProviderParser: NSObject {
 
     /// Prometheus samples have a name/label set, value, and optional timestamp.
     /// Whitespace inside quoted labels is not a field separator.
+    #if canImport(ObjectiveC)
     @objc(metricsFromText:)
+    #endif
     public static func metrics(from text: String) -> XRGMetricSnapshot {
         var tokens: UInt64 = 0
         var cost = 0.0

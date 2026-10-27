@@ -1,0 +1,13 @@
+[package]
+name = "xrg-ng-linux"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+build = "build.rs"
+
+[features]
+default = []
+gtk-ui = ["dep:gtk"]
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = true }

@@ -141,6 +141,7 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FC9F0AE3308E5E96001445A9 /* XRGTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = XRGTests; sourceTree = "<group>"; };
 		FC9F0AF2308E61FC001445A9 /* XRGCore */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = XRGCore; sourceTree = "<group>"; };
+		FC0000000000000000000101 /* Shared Swift */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Shared/Sources/XRGSharedCore; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -179,6 +180,7 @@
 				273ECE6F15740DE700E65D82 /* XRG-ng */,
 				FC9F0AE3308E5E96001445A9 /* XRGTests */,
 				FC9F0AF2308E61FC001445A9 /* XRGCore */,
+				FC0000000000000000000101 /* Shared Swift */,
 				273ECE6815740DE700E65D82 /* Frameworks */,
 				273ECE6615740DE700E65D82 /* Products */,
 				494DEE442EBF89E300AF02EC /* Recovered References */,
@@ -434,6 +436,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				FC9F0AF2308E61FC001445A9 /* XRGCore */,
+				FC0000000000000000000101 /* Shared Swift */,
 			);
 			name = XRGCore;
 			packageProductDependencies = (

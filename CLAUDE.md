@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-XRG-ng is a **cross-platform** system resource monitoring application with native implementations for **macOS** (Swift AppKit with small Objective-C hardware boundaries) and **Linux** (C/GTK3). It displays real-time graphs for CPU, memory, network, disk, GPU, battery, temperature, weather, stocks, and AI token usage.
+XRG-ng is a **cross-platform** system resource monitoring application with native implementations for **macOS** (Swift AppKit with small Objective-C hardware boundaries) and **Linux** (Swift/Rust + GTK4 transition; C/GTK3 retained). It displays real-time graphs for CPU, memory, network, disk, GPU, battery, temperature, weather, stocks, and AI token usage.
 
 **Key Points:**
 - Both platforms follow a collector → graph → module-manager architecture.
 - AI token monitoring works on both platforms (parses `~/.claude/projects/*/sessionid.jsonl`)
 - macOS: `XRGCore/` holds Swift models, miners, panels and window/preferences controllers; `Controllers/XRGAppDelegate.swift` and `Other Sources/main.swift` form the app shell. Remaining `.h` files mostly preserve Objective-C import compatibility.
-- Linux: `xrg-linux/src/collectors/`, `xrg-linux/src/widgets/`, `xrg-linux/src/core/`
+- Shared portable Swift: `Shared/Sources/XRGSharedCore/`, compiled by Xcode and root SwiftPM.
+- New Linux: `xrg-linux/rust/` (see its README); validate with `Tools/ci-linux.sh`.
+- Existing Linux: `xrg-linux/src/collectors/`, `xrg-linux/src/widgets/`, `xrg-linux/src/core/`
 
 **Default Module Display Order:**
 
@@ -352,7 +354,7 @@ gboolean preferences_get_bool(const char *key, gboolean default_value) {
 - New macOS implementation code is Swift; class names retain the `XRG` prefix.
 - Keep licensing and source attribution when translating code. First-party code
   is GPL-3.0-or-later; APSL-derived sensor translations remain APSL 2.0. See
-  `THIRD_PARTY_NOTICES.md` for files and the unresolved combined-distribution issue.
+  `THIRD_PARTY_NOTICES.md` for files and the confirmed distribution arrangement.
 - Use four-space indentation and comments that explain non-obvious behavior.
 - Add project membership for new source files; merely creating a file is not
   sufficient. Do not add duplicate implementations under `Resources/`.

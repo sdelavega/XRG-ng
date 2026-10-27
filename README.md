@@ -7,7 +7,8 @@ XRG-ng
 A real-time system resource monitor for **macOS and Linux** with customizable floating graphs.
 
 🍎 **macOS**: Native Swift/Objective-C AppKit implementation (macOS 26+, Intel and Apple silicon)
-🐧 **Linux**: Native C/GTK3 implementation
+🐧 **Linux**: Swift/Rust + GTK4 rewrite in progress; C/GTK3 application remains available.
+See the [new Linux build and migration status](xrg-linux/rust/README.md).
 
 
 

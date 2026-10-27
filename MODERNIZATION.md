@@ -1063,3 +1063,53 @@ signature/metadata checks, notarization/stapling, ZIP/DMG packaging, Gatekeeper
 checks and checksums. RELEASING.md documents the process; build metadata ties
 release assets to their source commit. Distribution results are recorded by the
 packaging logs and GitHub release rather than inferred from these source checks.
+
+## Linux Swift / Rust GTK4 foundation (2026-10-27)
+
+The maintainer selected GTK4 for the Linux rewrite. Six existing Swift files now
+live in Shared/Sources/XRGSharedCore: XRGDataSet, XRGRateTracker,
+XRGLocalProviderParser, XRGCodexLogParser, XRGProviderLogParser and XRGWeatherReport.
+Xcode compiles these same files into XRGCore; SwiftPM compiles them into the dynamic
+XRGSharedCore library on Linux/macOS. Objective-C annotations are conditional, and
+XRGDataSet retains its Accelerate path on macOS with a Swift arithmetic path on
+Linux. Runtime class names/selectors and macOS archives remain compatible.
+XRGBuiltinTheme provides the six shared palettes; the AppKit extension retains
+Classic's device-RGB identity, fourteen-field XTF dictionaries and opacity values.
+
+A Swift 6.3+ @c ABI exports thread-confined retained handles, fixed-width scalars,
+explicit buffer capacities, and parser statuses. Shared/include/xrg_shared.h
+specifies caller ownership and bounds; no Swift object layout crosses into Rust.
+Rust wrappers prevent Send/Sync for mutable Swift handles and free each exactly
+once. Claude/Gemini/METAR sources are portable but their ABI consumers remain future
+work; local metrics and individual Codex records are exposed now.
+
+xrg-linux/rust provides the first runnable Linux slice: aggregate CPU, memory,
+network receive/send and physical-disk read/write graphs, all six theme presets,
+and persisted preset selection in a separate xrg-ng config directory. Rust owns
+Linux acquisition and GTK4/Cairo presentation. A worker owns Swift histories/rate
+trackers and publishes copied Rust data through one bounded latest-snapshot slot.
+No external processes or provider scans run in the UI thread. The existing C/GTK3
+executable, build and preferences remain available throughout migration.
+
+Tools/ci-linux.sh and the Linux workflow verify Swift tests, a C executable against
+the documented ABI, Rust formatting/Clippy/tests, live headless collection, and a
+GTK/Xvfb main loop with actual draw callbacks and Paper/Ocean selection actions.
+Smoke mode avoids user preference reads/writes and saves an optional rendered PNG.
+The supplied Swift/Rust Dockerfile builds the same environment. GTK 4.10 is the
+minimum; Linux development binaries have a build-local rpath and are not yet
+standalone distribution packages.
+
+Local validation passed seven shared Swift test functions (including six palette
+cases) on macOS and Linux, eight Rust tests on both platforms, and complete Linux
+Debug/Release scripts in ARM64 Ubuntu 24.04 containers with Swift 6.4.1,
+Rust 1.99.1 and GTK 4.14.5. Both GTK runs reached four samples / sixteen draws and
+saved visually inspected snapshots. The Dockerfile itself built successfully.
+The complete macOS Debug and Release scripts each passed 447 test functions / 857
+cases on native ARM and Rosetta x86_64, composition and both packaged smoke checks.
+
+This is not C feature parity. Remaining Rust collectors include GPU, battery,
+temperature, process and TPU. Provider acquisition, detailed preferences/custom
+load-save/import, per-device selection, module controls, window pinning/placement,
+accessibility/compositor verification and runtime packaging remain. Xvfb/Cairo
+results do not establish Wayland, GPU acceleration or physical-device behavior.
+See xrg-linux/rust/README.md for construction, commands and the migration checklist.
