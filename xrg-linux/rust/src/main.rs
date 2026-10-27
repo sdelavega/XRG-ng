@@ -8,6 +8,10 @@ use xrg_ng_linux::{engine::Sampler, shared};
 fn main() -> ExitCode {
     shared::check_abi();
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args == ["--version"] {
+        println!("XRG-ng {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     if args.first().is_some_and(|arg| arg == "--headless") {
         let count = match args.as_slice() {
             [_] => 3,
@@ -48,7 +52,7 @@ fn main() -> ExitCode {
 }
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: xrg-ng-linux [--headless [--samples 2..3600] | --smoke-test]\nBuild with --features gtk-ui for the GTK 4 application."
+        "Usage: xrg-ng-linux [--version | --headless [--samples 2..3600] | --smoke-test]\nBuild with --features gtk-ui for the GTK 4 application."
     );
     ExitCode::from(2)
 }

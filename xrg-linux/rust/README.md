@@ -159,6 +159,15 @@ Sources: [DRM client accounting](https://docs.kernel.org/gpu/drm-usage-stats.htm
 
 ## Build and run
 
+For an installable preview, download the native `linux-ubuntu-24.04-preview`
+(x86_64) or `linux-ubuntu-24.04-arm-preview` (ARM64) artifact from a successful
+[Linux workflow](https://github.com/sdelavega/XRG-ng/actions/workflows/linux.yml).
+Each contains an archive and SHA-256 checksum. The included
+[preview instructions](../preview/README.md) cover dependencies, direct launch,
+per-user desktop installation, upgrades and uninstall. Swift/Rust toolchains are
+not needed to run these archives. Previews retain version 0.1.0 and are separate
+from the published macOS release.
+
 On Linux install **Swift 6.3+** (CI: 6.4.1), **Rust 1.99.1**, pkg-config, a C compiler
 and **GTK 4.10+** development libraries. GTK4-rs is locked through Cargo.lock. On
 Ubuntu 24.04 the GTK package is `libgtk-4-dev`. The build script builds and links the
@@ -205,6 +214,38 @@ mode uses temporary settings/theme files and never reads or writes user preferen
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
 behavior, screen readers or physical-device collection. Linux build output is
 separate from host Swift output when using a shared Docker checkout.
+
+Release jobs also package the exact tested binary/Swift library with the resolved
+Swift runtime closure. ELF RUNPATHs are changed to `$ORIGIN` paths; GTK, glibc,
+graphics drivers and their system dependencies remain external. Packages include
+licenses, a manifest with commit/toolchain/input hashes, and corresponding source
+with vendored locked Cargo dependencies. Offline Cargo resolution is checked in
+an empty cache. The package baseline is Ubuntu 24.04, rather than all Linux
+distributions. Runtime checks run as an unprivileged user in a separate Ubuntu
+24.04 container with no Swift or Rust installation. They verify archive checksums,
+relocation, private library resolution, desktop Exec parsing, a full installed GTK
+smoke flow, upgrade/uninstall and preservation of unrelated files/preferences.
+
+To package an already-tested native Release build:
+
+```bash
+python3 Tools/package-linux.py --binary /absolute/path/to/release/xrg-ng-linux \
+  --swift-library /absolute/path/to/libXRGSharedCore.so
+```
+
+Packaging needs Python 3.11+, patchelf, desktop-file-utils, native Swift 6.4.1,
+Rust/Cargo and a clean committed checkout. CI passes the paths emitted by
+`Tools/ci-linux.sh release`, so it never builds Swift again during packaging.
+The default output is `dist/linux/`. `--allow-dirty` is for local development only
+and marks the source snapshot accordingly. To repeat runtime validation locally:
+
+```bash
+docker build -f xrg-linux/Dockerfile.preview-test -t xrg-ng-preview-test .
+# Make /absolute/results writable by container UID 10001.
+docker run --rm -v /absolute/download:/download:ro -v /absolute/results:/results \
+  xrg-ng-preview-test --archive /download/xrg-ng-0.1.0-linux-aarch64-preview.tar.gz \
+  --results /results
+```
 
 ## Graph and theme preferences
 
@@ -424,7 +465,7 @@ Support remains best effort; device reports and feedback are welcome.
    window placement / keep-above APIs; supported positioning/pinning needs a
    compositor-specific implementation. No always-on-top or edge-placement promise
    is made by this initial shell.
-5. Runtime bundling, desktop integration and distribution packages before replacing
+5. Signed/tagged Linux releases and distribution-native packages before replacing
    the C application's release path. Broaden real-device coverage through community
    feedback as hardware becomes available.
 

@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Stephen de la Vega.
+set -eu
+launcher=$(readlink -f -- "$0")
+bundle=$(CDPATH= cd -- "$(dirname -- "$launcher")" && pwd -P)
+if [ "$(uname -m)" != "@ARCH@" ]; then
+    echo "This XRG-ng preview requires @ARCH@ Linux. Download the archive for your architecture." >&2
+    exit 1
+fi
+exec "$bundle/bin/xrg-ng-linux" "$@"

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=XRG-ng Preview
+GenericName=System Resource Monitor
+Comment=System graphs and process monitoring
+Exec=xrg-ng-linux
+Icon=com.sdelavega.xrg-ng
+Terminal=false
+Type=Application
+Categories=System;Monitor;GTK;
+Keywords=cpu;memory;network;disk;gpu;temperature;battery;monitor;performance;
+StartupWMClass=xrg-ng-linux
+StartupNotify=false

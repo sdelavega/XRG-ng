@@ -52,3 +52,20 @@ The Rust process/TPU port uses Serde and serde_json under their MIT license opti
 Their license text is retained in `xrg-linux/rust/licenses/serde-MIT.txt` (identical
 in the selected crate versions). Cargo.lock records exact versions and transitive
 dependencies; distribution packaging must retain their applicable notices too.
+
+## Linux preview archives
+
+Preview archives retain the project license/credits, dependency license files and
+Cargo package metadata under `share/doc/xrg-ng/`. Their `source.tar.gz` contains
+the corresponding project snapshot and locked Cargo sources, including third-party
+source notices. Rust standard-library copyright and license files are copied from
+the build toolchain. GTK, GLib, glibc and graphics driver libraries are system
+dependencies and are not included in the archive.
+
+The private Swift 6.4.1 libraries include Swift, Foundation, Dispatch, BlocksRuntime
+and Foundation's ICU dependency. The toolchain's license is copied into the package.
+Additional upstream notices are retained in `xrg-linux/rust/licenses/swift-6.4.1/`;
+`sources.json` records the upstream release URLs and hashes. ICU 76.1 notices follow
+the version selected in Swift 6.4.1's Foundation ICU source. Bundled ELF loader
+paths are adjusted for relocation; the runtime implementations are otherwise
+unchanged. Changing the toolchain/runtime version requires reviewing these notices.

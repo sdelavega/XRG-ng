@@ -13,6 +13,11 @@ Claude/Codex/Gemini/Hermes usage and Ollama model
 status; see the [new provider sources and limits](rust/README.md#ai-monitoring). The instructions below describe the existing
 C/GTK3 implementation, retained during migration.
 
+Installable x86_64/ARM64 preview archives are produced by the
+[Linux workflow](https://github.com/sdelavega/XRG-ng/actions/workflows/linux.yml).
+They bundle the Swift runtime and support direct launch or per-user desktop
+installation; see the [preview requirements and instructions](preview/README.md).
+
 Port of the macOS [XRG-ng](https://github.com/marc-shade/XRG) application to Linux using GTK and Cairo.
 
 ![XRG-ng for Linux Screenshot](docs/screenshot.png)

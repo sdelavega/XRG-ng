@@ -32,3 +32,5 @@ xrg-linux/build/
 .build/
 .swiftpm/
 xrg-linux/rust/target/
+/dist/
+__pycache__/

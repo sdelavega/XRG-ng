@@ -34,3 +34,8 @@ cargo run "${cargo_options[@]}" -- --headless --samples 3
 # This does not establish Wayland/compositor or hardware-specific behavior.
 XRG_SMOKE_IMAGE="$output/gtk-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferences-smoke.png" XRG_SMOKE_PROCESS_IMAGE="$output/processes-smoke.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    cargo_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+    echo "binary=$cargo_target/$configuration/xrg-ng-linux" >> "$GITHUB_OUTPUT"
+    echo "swift_library=$swift_bin/libXRGSharedCore.so" >> "$GITHUB_OUTPUT"
+fi

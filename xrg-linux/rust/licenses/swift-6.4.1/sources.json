@@ -1,0 +1,32 @@
+[
+  {
+    "file": "swift-corelibs-foundation.txt",
+    "url": "https://raw.githubusercontent.com/swiftlang/swift-corelibs-foundation/swift-6.4.1-RELEASE/LICENSE",
+    "sha256": "0ca84095d1de77cad1a866ebbad28f8db98a0826c6055d92b0608c5baa1643e2"
+  },
+  {
+    "file": "swift-corelibs-libdispatch.txt",
+    "url": "https://raw.githubusercontent.com/swiftlang/swift-corelibs-libdispatch/swift-6.4.1-RELEASE/LICENSE",
+    "sha256": "0ca84095d1de77cad1a866ebbad28f8db98a0826c6055d92b0608c5baa1643e2"
+  },
+  {
+    "file": "swift-corelibs-blocksruntime.txt",
+    "url": "https://raw.githubusercontent.com/swiftlang/swift-corelibs-blocksruntime/swift-6.4.1-RELEASE/LICENSE",
+    "sha256": "0ca84095d1de77cad1a866ebbad28f8db98a0826c6055d92b0608c5baa1643e2"
+  },
+  {
+    "file": "swift-foundation.txt",
+    "url": "https://raw.githubusercontent.com/swiftlang/swift-foundation/swift-6.4.1-RELEASE/LICENSE.md",
+    "sha256": "2245a990b635558be210fb3eb4f8a6f7a49aebc0fefbf5859146a65ddc7ddcf3"
+  },
+  {
+    "file": "swift-foundation-icu.txt",
+    "url": "https://raw.githubusercontent.com/swiftlang/swift-foundation-icu/swift-6.4.1-RELEASE/LICENSE.md",
+    "sha256": "2245a990b635558be210fb3eb4f8a6f7a49aebc0fefbf5859146a65ddc7ddcf3"
+  },
+  {
+    "file": "ICU-76.1.txt",
+    "url": "https://raw.githubusercontent.com/unicode-org/icu/release-76-1/LICENSE",
+    "sha256": "01edac20612b1e590c1c1cfb02b7218c6adc7b0a944eda7a1e03aeee10725aed"
+  }
+]
