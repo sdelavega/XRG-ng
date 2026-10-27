@@ -210,7 +210,7 @@ fn optional_hardware_does_not_fail_the_live_core_gate() {
     f.put("proc/stat", "cpu 150 0 50 840 60 0 0 0");
     let second = sampler.sample();
     assert!(second.valid);
-    assert_eq!(second.panels.len(), 8);
+    assert_eq!(second.panels.len(), 10);
     assert_eq!(second.panels[4].label, "No system battery");
     assert!(second.panels[4].series.is_empty());
     assert_eq!(second.panels[5].label, "No temperature sensors");
@@ -259,4 +259,52 @@ fn temperature_graph_uses_maximum_and_keeps_signed_scale() {
         (-30., 120.)
     );
     assert_eq!(Scale::Percent.bounds(&[]), (0., 100.));
+}
+
+#[test]
+fn process_panel_counts_readable_tasks_and_exposes_rankings() {
+    let f = Fixture::new();
+    f.core();
+    f.put(
+        "proc/123/stat",
+        "123 (fixture worker) R 1 2 3 4 5 0 0 0 0 0 10 2 0 0 20 0 2 0 100 1048576 5\n",
+    );
+    f.put("proc/123/status", "Uid: 1000 1000 1000 1000\n");
+    let mut sampler = Sampler::with_sources(f.sources());
+    let snapshot = sampler.sample();
+    let panel = snapshot
+        .panels
+        .iter()
+        .find(|p| p.title == "Processes")
+        .unwrap();
+    assert!(panel.label.contains("1 readable"));
+    assert!(panel.label.contains("1 running"));
+    assert!(panel.detail.contains("fixture worker"));
+    assert!(panel.detail.contains("UID 1000"));
+    assert!(panel.detail.contains("Top RSS"));
+    assert_eq!(panel.series.len(), 2);
+}
+#[test]
+fn tpu_panel_keeps_producer_scope_and_omits_invalid_or_missing_series() {
+    let f = Fixture::new();
+    f.core();
+    f.put(
+        "stats.json",
+        "{\"total_inferences\":5,\"last_latency_ms\":2.5}",
+    );
+    let mut sampler = Sampler::with_sources(f.sources().with_tpu_stats(f.0.join("stats.json")));
+    let snapshot = sampler.sample();
+    let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    assert!(panel.label.contains("hardware unverified"));
+    assert!(panel.detail.contains("2.50 ms"));
+    assert!(panel.series.is_empty());
+    f.put("stats.json", "{\"total_inferences\":6}");
+    let snapshot = sampler.sample();
+    let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    assert_eq!(panel.series.len(), 1);
+    f.put("stats.json", "{\"total_inferences\":7,\"timestamp\":0}");
+    let snapshot = sampler.sample();
+    let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    assert!(panel.series.is_empty());
+    assert!(panel.detail.contains("stale"));
 }

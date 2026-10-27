@@ -26,5 +26,5 @@ cargo test "${cargo_options[@]}"
 cargo run "${cargo_options[@]}" -- --headless --samples 3
 # A real GTK main loop, Cairo drawing and live worker snapshots under X11.
 # This does not establish Wayland/compositor or hardware-specific behavior.
-XRG_SMOKE_IMAGE="$output/gtk-smoke.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a \
+XRG_SMOKE_IMAGE="$output/gtk-smoke.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test

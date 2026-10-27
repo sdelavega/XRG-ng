@@ -108,6 +108,8 @@ pub fn run(smoke: bool) -> bool {
             "Temperature · hottest readable sensor",
             "GPU · activity",
             "AI tokens · observed rate",
+            "Processes · readable / running",
+            "TPU · reported inference rate",
         ]
         .into_iter()
         .enumerate()
@@ -157,7 +159,7 @@ pub fn run(smoke: bool) -> bool {
             .application(application)
             .title("XRG-ng")
             .default_width(460)
-            .default_height(if smoke { 940 } else { 850 })
+            .default_height(if smoke { 1160 } else { 850 })
             .child(&content)
             .build();
         window.present();

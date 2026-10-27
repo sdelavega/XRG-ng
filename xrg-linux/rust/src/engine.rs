@@ -53,6 +53,10 @@ pub struct Sampler {
     source: LinuxSources,
     ai: Option<crate::ai::Worker>,
     ai_panel: Panel,
+    process: crate::process::Collector,
+    process_histories: [History; 2],
+    tpu: crate::tpu::Collector,
+    tpu_history: History,
     previous_cpu: Option<Cpu>,
     rates: Rates,
     histories: [History; 7],
@@ -75,11 +79,17 @@ impl Sampler {
     }
     pub fn with_sources(source: LinuxSources) -> Self {
         let gpu = source.gpu_collector();
+        let process = source.process_collector();
+        let tpu = source.tpu_collector();
         Self {
             source,
             ai: None,
             ai_panel: crate::ai::waiting(),
             gpu,
+            process,
+            process_histories: array::from_fn(|_| History::new(120)),
+            tpu,
+            tpu_history: History::new(120),
             gpu_histories: BTreeMap::new(),
             previous_cpu: None,
             rates: Rates::new(),
@@ -156,11 +166,155 @@ impl Sampler {
             self.ai_panel = panel;
         }
         panels.push(self.ai_panel.clone());
+        panels.push(self.process_panel());
+        panels.push(self.tpu_panel());
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
             panels,
             valid,
+        }
+    }
+    fn process_panel(&mut self) -> Panel {
+        let mut series = Vec::new();
+        let (label, detail) = match self.process.sample() {
+            Err(error) => ("Processes unavailable".into(), error),
+            Ok(report) => {
+                let count = report.processes.len();
+                let running = report.processes.iter().filter(|p| p.state == 'R').count();
+                let mut details = vec![format!("{} PID directories discovered; {} attempted; {count} readable; {running} running; {} vanished; {} unreadable. Counts/rankings cover this scan's readable processes in the current PID namespace. Graph: readable / running counts.",report.discovered,report.attempted,report.vanished,report.unreadable), "CPU: 100% is one core; multi-threaded processes may exceed 100%. First/new/reused PID samples wait for an interval. RSS is approximate and may include shared pages; it is never summed into system memory usage. Names come from stat; arguments and environments are not read.".into()];
+                for (title, sort) in [
+                    ("Top CPU", crate::process::Sort::Cpu),
+                    ("Top RSS", crate::process::Sort::Memory),
+                ] {
+                    details.push(title.into());
+                    for process in report.ranked(sort, None, "", 10) {
+                        let cpu = process
+                            .cpu_percent
+                            .map(|v| format!("{v:.1}% CPU"))
+                            .unwrap_or_else(|| "CPU waiting for interval".into());
+                        let memory = process
+                            .memory_percent
+                            .map(|v| format!(" · {v:.1}% memory"))
+                            .unwrap_or_default();
+                        let uid = process
+                            .uid
+                            .map(|u| u.to_string())
+                            .unwrap_or_else(|| "unknown".into());
+                        details.push(format!("{} · PID {} · UID {uid} · {cpu} · {:.1} MiB RSS{memory} · {} threads · state {} · nice {}",process.name,process.pid,process.rss_bytes as f64 / 1_048_576.,process.threads,process.state,process.nice));
+                    }
+                }
+                let label = if count == 0 {
+                    "No readable processes".into()
+                } else {
+                    self.process_histories[0].append(count as f64);
+                    self.process_histories[1].append(running as f64);
+                    series = self.process_histories.iter().map(History::values).collect();
+                    format!(
+                        "{count} readable · {running} running{}",
+                        if report.partial() { " · partial" } else { "" }
+                    )
+                };
+                details.extend(report.errors);
+                (label, details.join("\n"))
+            }
+        };
+        Panel {
+            title: "Processes",
+            label,
+            detail,
+            series,
+            scale: Scale::Automatic,
+        }
+    }
+    fn tpu_panel(&mut self) -> Panel {
+        let report = self.tpu.sample();
+        let mut details = vec!["Coral discovery is read-only and does not prove the device can run inference. Graph: observed producer-counter change per second, not TPU utilization. Producer statistics are unscoped and are not assigned to individual adapters.".into()];
+        let mut devices = 0;
+        let detection_error;
+        match report.devices {
+            Err(error) => {
+                detection_error = true;
+                details.push(error);
+            }
+            Ok(readings) => {
+                devices = readings.values.len();
+                detection_error = !readings.errors.is_empty();
+                for device in readings.values {
+                    let state = if device.suspended {
+                        "suspended; telemetry deferred"
+                    } else if device.initialized {
+                        "runtime USB ID / bound apex driver detected; inference capability unverified"
+                    } else {
+                        "USB firmware or PCIe driver not initialized"
+                    };
+                    let temp = device
+                        .temperature_c
+                        .map(|v| format!(" · {v:.1} °C"))
+                        .unwrap_or_default();
+                    details.push(format!("{} · {state}{temp}\n{}", device.label, device.id));
+                }
+                details.extend(readings.errors);
+            }
+        }
+        let mut series = Vec::new();
+        let label = match report.inference {
+            Err(error) => {
+                details.push(error);
+                if devices > 0 {
+                    format!("{devices} Coral detected · statistics unavailable")
+                } else if detection_error {
+                    "TPU discovery/statistics unavailable".into()
+                } else {
+                    "No Coral / no fresh producer statistics".into()
+                }
+            }
+            Ok(inference) => {
+                let stats = inference.stats;
+                details.push(format!(
+                    "Producer total: {} · report age {:.1} s",
+                    stats.total_inferences, inference.age_seconds
+                ));
+                if let Some(model) = stats.model_name {
+                    details.push(format!("Model: {model}"));
+                }
+                if let Some(v) = stats.last_latency_ms {
+                    details.push(format!("Last reported latency: {v:.2} ms"));
+                }
+                if let Some(v) = stats.avg_latency_ms {
+                    details.push(format!("Average reported latency: {v:.2} ms"));
+                }
+                if let Some(v) = stats.temperature {
+                    details.push(format!(
+                        "Producer-reported temperature: {v:.1} °C (unscoped)"
+                    ));
+                }
+                if let Some(c) = stats.by_category {
+                    details.push(format!("Reported categories: direct {} · hooked {} · logged {} · warming {} (not assumed exclusive)",c.direct.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.hooked.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.logged.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.warming.map_or_else(|| "unavailable".into(), |v|v.to_string())));
+                }
+                let rate = if let Some(rate) = inference.rate {
+                    self.tpu_history.append(rate);
+                    series.push(self.tpu_history.values());
+                    format!("{rate:.1} inf/s")
+                } else {
+                    "Waiting for inference interval".into()
+                };
+                if devices == 0 {
+                    format!("{rate} · hardware unverified")
+                } else {
+                    format!(
+                        "{rate} · {devices} Coral{}",
+                        if detection_error { " · partial" } else { "" }
+                    )
+                }
+            }
+        };
+        Panel {
+            title: "TPU",
+            label,
+            detail: details.join("\n\n"),
+            series,
+            scale: Scale::Automatic,
         }
     }
     fn gpu_panel(&mut self) -> Panel {

@@ -4,7 +4,8 @@ This is the GTK 4 replacement in progress. It runs alongside the C/GTK3 applicat
 in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
-battery capacity, temperature, GPU activity and AI token-rate graphs.
+battery capacity, temperature, GPU activity, AI token-rate, process-count and
+Coral TPU inference-rate graphs.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Hardware support and feedback
@@ -248,10 +249,98 @@ never scan the user's actual provider data. Log formats are internal to provider
 and may change; feedback and sample schemas with private content removed are welcome.
 
 
+## Processes
+
+The ninth panel graphs the number of **readable / running processes** in the current
+PID namespace. Running counts mean process leaders whose stat state is `R`;
+threads doing work under a sleeping leader do not increment that count. Its
+tooltip and accessibility details list the top ten processes by
+CPU and RSS, with PID, name, real UID when readable, threads, state and nice value.
+Names come from `/proc/PID/stat`; command-line arguments and environments are not
+read. The collector API also supports CPU/memory/PID/name sorting, name filters
+and UID filters; detailed GTK table/filter controls remain follow-up work.
+
+CPU percentages use per-process `utime + stime`, elapsed monotonic time and the
+host's `_SC_CLK_TCK`: **100% is one core**, so a multi-threaded process may exceed
+100%. PID plus kernel start time identifies each process. New/reused PIDs and
+regressed counters establish a new interval; stale sample times do not consume
+newer counters. Dead/unreadable processes lose their baseline. During budgeted
+scan rotation, an observed process keeps its own elapsed interval.
+
+Resident pages use the host's `_SC_PAGESIZE`, with overflow checks. RSS is an
+approximate kernel measurement and may include shared pages; it is never summed
+into system memory usage. Memory percentages are omitted when MemTotal is unknown,
+and missing UIDs stay unknown. No blocking user-name service lookup is required.
+The parser handles spaces and closing parentheses in process names and checks
+start time before/after reading UID information to reject PID-reuse races.
+
+Discovery and reads have a cooperative 100 ms budget, a 65,536-entry directory
+limit, an 8 KiB stat limit and 64 KiB status/memory limits. A read window rotates
+when a pass cannot cover every PID. Counts and rankings describe that pass's
+readable subset; partial coverage, protected/malformed tasks and ordinary process
+exits are reported separately. Mount options such as hidepid and container PID
+namespaces restrict visibility. No process-control actions are implemented.
+See the kernel's [proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
+
+## Coral Edge TPU
+
+The tenth panel separates **hardware inventory** from **producer-reported inference
+statistics**. It recognizes Coral USB IDs `1a6e:089a` (before firmware initialization)
+and `18d1:9302` (runtime firmware), plus PCIe/M.2 `1ac1:089a` devices. PCIe and
+`/sys/class/apex/apex_N` aliases are deduplicated by canonical device path. A bound
+apex driver's `temp` attribute is interpreted as millidegrees Celsius; temperature
+reads are deferred while runtime power is suspended or transitioning. Missing
+telemetry stays unavailable. See Google's [USB firmware notes](https://github.com/google-coral/webcoral)
+and [apex driver](https://github.com/google/gasket-driver/blob/main/src/apex_driver.c).
+
+Discovery only reads sysfs. It does not open device nodes, initialize firmware,
+reset devices, run inference or change clock/power controls. Detection and a bound
+driver alone do not establish that inference will succeed. Discovery is bounded
+to 4,096 entries per root and a cooperative 100 ms budget; errors reduce coverage.
+
+The existing `/tmp/xrg-coral-tpu-stats.json` integration is preserved. The inference
+engine must write a complete JSON object, preferably by atomic rename, for example:
+
+```json
+{
+  "total_inferences": 12345,
+  "last_latency_ms": 18.5,
+  "avg_latency_ms": 19.2,
+  "model_name": "mobilenet_v2",
+  "timestamp": 1793116800.0,
+  "session_id": "unique-producer-start-id",
+  "by_category": {"direct": 100, "hooked": 200, "logged": 12000, "warming": 45}
+}
+```
+
+`total_inferences` is required and must be an unsigned integer. Other fields are
+optional. `timestamp` is Unix wall time in seconds: supply the current time when
+writing, and refresh the report at least every 30 seconds, including while idle.
+Without a timestamp, file modification time is used. `session_id` is an optional
+extension; change it on producer restart. Legacy files without it are supported,
+but a restart that overtakes the old counter between polls cannot be recognized.
+Optional `temperature` is producer-reported Celsius, separate from sysfs readings.
+
+The graph shows observed counter change per elapsed second, including fractional
+rates. Batched writes can produce bursts. The first sample, decreased counter,
+changed session ID, read failure and recovery establish a new baseline. Missing,
+malformed, partial or over-30-second-old reports create no synthetic idle samples.
+Future timestamps beyond five seconds are rejected. Unknown category counts remain
+unavailable and categories are not assumed exclusive. Latency values stay in
+millisecond details rather than sharing a scale with inference rates.
+
+Reports are capped at 64 KiB, must be regular files without final-component symlinks,
+and must remain stable while being read. Producer statistics are unscoped: they
+are not assigned to every detected adapter. Valid statistics without detected
+hardware are explicitly labeled **hardware unverified**. Hardware without fresh
+statistics shows **statistics unavailable**. No device utilization is inferred
+from USB connection, mapped pages, latency, temperature or inference counts.
+Support remains best effort; device reports and feedback are welcome.
+
 ## Remaining migration
 
-1. Rust process and TPU collectors; Intel GPU PMU utilization, additional vendor counters,
-   VRAM graphs/device selection, richer battery health/time and calibrated/fan sensors.
+1. Intel GPU PMU utilization, additional vendor counters, VRAM graphs/device selection,
+   richer battery health/time, calibrated/fan sensors and detailed process controls.
 2. AI provider/model detail controls, custom data roots/endpoints, append-offset
    scanning for very large logs, optional price tables, and a weather ABI consumer.
 3. Per-core/interface/device selection, module visibility/order, context menus,

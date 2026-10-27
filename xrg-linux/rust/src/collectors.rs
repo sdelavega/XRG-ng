@@ -118,6 +118,7 @@ pub struct LinuxSources {
     proc: PathBuf,
     sys: PathBuf,
     allow_commands: bool,
+    tpu_stats: Option<PathBuf>,
 }
 impl LinuxSources {
     pub fn with_roots(proc: impl Into<PathBuf>, sys: impl Into<PathBuf>) -> Self {
@@ -125,7 +126,18 @@ impl LinuxSources {
             proc: proc.into(),
             sys: sys.into(),
             allow_commands: false,
+            tpu_stats: None,
         }
+    }
+    pub fn with_tpu_stats(mut self, path: impl Into<PathBuf>) -> Self {
+        self.tpu_stats = Some(path.into());
+        self
+    }
+    pub fn process_collector(&self) -> crate::process::Collector {
+        crate::process::Collector::new(self.proc.clone())
+    }
+    pub fn tpu_collector(&self) -> crate::tpu::Collector {
+        crate::tpu::Collector::new(self.sys.clone(), self.tpu_stats.clone())
     }
     pub fn battery(&self) -> Result<crate::hardware::Readings<crate::hardware::Battery>, String> {
         crate::hardware::batteries(&self.sys)
@@ -151,6 +163,7 @@ impl LinuxSources {
             proc: "/proc".into(),
             sys: "/sys".into(),
             allow_commands: true,
+            tpu_stats: Some("/tmp/xrg-coral-tpu-stats.json".into()),
         }
     }
     fn read(root: &Path, file: &str) -> Result<String, String> {

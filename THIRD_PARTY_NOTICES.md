@@ -45,3 +45,10 @@ The Swift/Rust Linux executable uses rusqlite and libsqlite3-sys (MIT, copyright
 in the public domain; see https://www.sqlite.org/copyright.html.
 Cargo.lock records the complete Rust dependency versions. Distribution packaging
 must include applicable dependency notices alongside the Swift runtime notices.
+
+## Linux Rust JSON decoding
+
+The Rust process/TPU port uses Serde and serde_json under their MIT license option.
+Their license text is retained in `xrg-linux/rust/licenses/serde-MIT.txt` (identical
+in the selected crate versions). Cargo.lock records exact versions and transitive
+dependencies; distribution packaging must retain their applicable notices too.
