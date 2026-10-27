@@ -1,6 +1,6 @@
 FROM ubuntu:24.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libgtk-4-1 adwaita-icon-theme libstdc++6 libgcc-s1 python3 python3-gi xvfb xauth dbus-x11 desktop-file-utils \
+    libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 python3-gi xvfb xauth dbus-x11 desktop-file-utils \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home xrg-preview
 COPY Tools/preview-smoke-linux.py /opt/xrg-ng/preview-smoke-linux.py

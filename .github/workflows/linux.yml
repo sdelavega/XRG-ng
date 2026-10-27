@@ -79,7 +79,7 @@ jobs:
       - name: Install runtime and smoke tools only
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgtk-4-1 adwaita-icon-theme libstdc++6 libgcc-s1 python3 python3-gi xvfb xauth dbus-x11 desktop-file-utils
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 python3-gi xvfb xauth dbus-x11 desktop-file-utils
           useradd --uid 10001 --create-home xrg-preview
           mkdir -p /tmp/xrg-preview-results
           chown xrg-preview /tmp/xrg-preview-results

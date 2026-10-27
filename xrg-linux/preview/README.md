@@ -16,7 +16,7 @@ On Ubuntu 24.04:
 
 ```sh
 sudo apt-get update
-sudo apt-get install libgtk-4-1 adwaita-icon-theme libstdc++6 libgcc-s1 python3
+sudo apt-get install libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3
 ```
 
 Python 3.11+ is only used by the optional install/uninstall scripts. Running directly

@@ -3,6 +3,7 @@
 # Copyright (C) 2026 Stephen de la Vega.
 """Exercise the preview on a runtime-only Linux system, under an unprivileged UID."""
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -44,6 +45,19 @@ def desktop_launch(path):
     require(len(children) == 1, "Desktop entry did not start one application")
     _, status = os.waitpid(children[0], 0)
     require(os.waitstatus_to_exitcode(status) == 0, f"Desktop launch exited with status {status}")
+
+
+def decode_icon(path):
+    # Use the runtime image's real SVG loader without requiring GTK development
+    # tools or the optional GdkPixbuf introspection package.
+    library = ctypes.CDLL("libgdk_pixbuf-2.0.so.0")
+    library.gdk_pixbuf_new_from_file.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
+    library.gdk_pixbuf_new_from_file.restype = ctypes.c_void_p
+    pixbuf = library.gdk_pixbuf_new_from_file(os.fsencode(path), None)
+    require(pixbuf is not None, f"Runtime cannot decode icon: {path}")
+    objects = ctypes.CDLL("libgobject-2.0.so.0")
+    objects.g_object_unref.argtypes = [ctypes.c_void_p]
+    objects.g_object_unref(pixbuf)
 
 
 def smoke(args):
@@ -116,6 +130,8 @@ def smoke(args):
         run([launcher, "--version"], env, results / "installed-version.log")
         desktop = prefix / "share/applications/com.sdelavega.xrg-ng.desktop"
         run(["desktop-file-validate", desktop], env, results / "desktop-validate.log")
+        decode_icon(icon)
+        decode_icon(Path("/usr/share/icons/Adwaita/symbolic/categories/preferences-system-symbolic.svg"))
         # Keep Exec quoting exactly as installed; add only the application's smoke flag.
         test_desktop = results / "desktop-smoke.desktop"
         test_desktop.write_text(re.sub(r"^Exec=(.*)$", r"Exec=\1 --smoke-test", desktop.read_text(), flags=re.M))
