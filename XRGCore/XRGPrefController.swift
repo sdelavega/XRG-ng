@@ -218,6 +218,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         check(generalShowSummary, "showSummary", #selector(XRGGraphWindow.setShowSummary(_:)))
         bind(showCPUGraph, #selector(XRGGraphWindow.setShowCPUGraph(_:))); showCPUGraph?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "CPU")?.isDisplayed == true ? .on : .off
         bind(showGPUGraph, #selector(XRGGraphWindow.setShowGPUGraph(_:))); showGPUGraph?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "GPU")?.isDisplayed == true ? .on : .off
+        showGPUGraph?.toolTip = "Enable/Disable the GPU Graph"
         bind(showMemoryGraph, #selector(XRGGraphWindow.setShowMemoryGraph(_:))); showMemoryGraph?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "Memory")?.isDisplayed == true ? .on : .off
         bind(showBatteryGraph, #selector(XRGGraphWindow.setShowBatteryGraph(_:))); showBatteryGraph?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "Battery")?.isDisplayed == true ? .on : .off
         bind(showTemperatureGraph, #selector(XRGGraphWindow.setShowTemperatureGraph(_:))); showTemperatureGraph?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "Temperature")?.isDisplayed == true ? .on : .off

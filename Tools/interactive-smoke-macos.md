@@ -32,6 +32,14 @@ Check these actions in the visible UI:
    orientation and collapsed geometry, and expand the graph again.
 5. Quit normally before inspecting saved preferences or cleaning up.
 
+For accessibility checks, use a native accessibility client to invoke the graph
+title group's named Collapse Graph and Expand Graph actions in both orientations.
+The group's value should change between Expanded and Collapsed. After explicit
+expansion, moving the pointer away must leave the graph expanded. Disabled graph
+panels must not expose their readings; toggle a system graph off and on to check
+that its readings leave and return to the accessibility tree. The GPU checkbox's
+help should identify the GPU graph.
+
 Write the expected saved values to a JSON file, for example:
 
 ```json

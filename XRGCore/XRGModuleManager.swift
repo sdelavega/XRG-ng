@@ -139,6 +139,8 @@ public final class XRGModuleManager: NSObject {
     @objc(windowChangedToSize:)
     public func windowChanged(to size: NSSize) {
         guard window?.minimized != true, size.width.isFinite, size.height.isFinite else { return }
+        // Zero-size panels can still expose descendants to accessibility clients.
+        for module in allModules { module.reference?.isHidden = !module.isDisplayed }
         for module in allModules where !module.isDisplayed {
             apply(.zero, to: module)
         }

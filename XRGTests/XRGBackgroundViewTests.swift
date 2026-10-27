@@ -258,6 +258,31 @@ struct XRGBackgroundViewTests {
         f.view.mouseEntered(with: try f.headerEvent()); #expect(f.host.minimized)
     }
 
+    @Test(arguments: [true, false])
+    func accessibilityActionsRestoreGeometryAndReleaseTheHoverLatch(vertical: Bool) throws {
+        let f = try BackgroundFixture(vertical: vertical); defer { f.cleanUp() }
+        f.settings.autoExpandGraph = true
+        let original = f.host.frame
+        #expect(f.view.accessibilityValue() as? String == "Expanded")
+        let collapse = try #require(f.view.accessibilityCustomActions()?.first)
+        #expect(collapse.name == "Collapse Graph" && collapse.target === f.view)
+        #expect(NSApp.sendAction(try #require(collapse.selector), to: collapse.target, from: nil))
+        #expect(f.host.minimized && f.view.clickedMinimized && f.module.reference?.isHidden == true)
+        #expect(f.defaults.bool(forKey: "windowIsMinimized"))
+        #expect(f.view.accessibilityValue() as? String == "Collapsed")
+        #expect(f.view.accessibilityCustomActions()?.first?.name == "Expand Graph")
+        #expect(f.view.accessibilityPerformPress())
+        #expect(!f.host.minimized && !f.view.clickedMinimized && f.host.frame == original)
+        #expect(f.module.reference?.isHidden == false && !f.defaults.bool(forKey: "windowIsMinimized"))
+        #expect(f.view.accessibilityValue() as? String == "Expanded")
+        #expect(f.view.accessibilityCustomActions()?.first?.name == "Collapse Graph")
+        f.view.mouseExited(with: try f.headerEvent())
+        #expect(!f.host.minimized)
+        f.view.removeFromSuperview()
+        #expect(f.view.accessibilityCustomActions()?.isEmpty != false)
+        #expect(!f.view.accessibilityPerformPress() && f.host.frame == original)
+    }
+
     @Test(arguments: [0, 1, 2])
     func levelsAndDesktopOrderingUseTheSettingsIndex(level: Int) throws {
         let f = try BackgroundFixture(); defer { f.cleanUp() }

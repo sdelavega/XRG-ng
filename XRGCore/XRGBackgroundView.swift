@@ -175,6 +175,25 @@ public final class XRGBackgroundView: NSView {
     @nonobjc var displayTitle: String { settings?.windowTitle.isEmpty == false ? settings!.windowTitle : hostname }
     private func updateAccessibility() {
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel(displayTitle)
+        guard let host, settings != nil, manager != nil else {
+            setAccessibilityValue(nil); setAccessibilityCustomActions(nil); return
+        }
+        setAccessibilityValue(host.minimized ? "Collapsed" : "Expanded")
+        let name = host.minimized ? "Expand Graph" : "Collapse Graph"
+        if accessibilityCustomActions()?.first?.name != name {
+            setAccessibilityCustomActions([NSAccessibilityCustomAction(name: name, target: self,
+                selector: #selector(performAccessibilityToggle))])
+        }
+    }
+    @objc private func performAccessibilityToggle() -> Bool {
+        guard let host, settings != nil, manager != nil else { return false }
+        // Explicit activation must release the hover latch, just like a title double-click.
+        if host.minimized { clickedMinimized = false; expandWindow() }
+        else { clickedMinimized = true; minimizeWindow() }
+        return true
+    }
+    public override func accessibilityPerformPress() -> Bool {
+        performAccessibilityToggle()
     }
     public override func draw(_ dirtyRect: NSRect) {
         guard let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
@@ -246,7 +265,8 @@ public final class XRGBackgroundView: NSView {
             host.level = settings.windowLevel == 0 ? .normal : settings.windowLevel == 1 ? .floating : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
         }
         defaults.set(true, forKey: "windowIsMinimized"); defaults.set(NSStringFromRect(unminimizedRect), forKey: "unminimizedFrame")
-        needsDisplay = true
+        needsDisplay = true; updateAccessibility()
+        NSAccessibility.post(element: self, notification: .valueChanged)
     }
     public func expandWindow() {
         guard let host, let manager, let settings, host.minimized else { return }
@@ -258,7 +278,8 @@ public final class XRGBackgroundView: NSView {
         if settings.foregroundWhenExpanding && settings.autoExpandGraph { host.level = .floating }
         host.setFrame(expanded, display: true, animate: animateResizing)
         for module in manager.displayList() { module.reference?.isHidden = false; module.reference?.needsDisplay = true }
-        defaults.set(false, forKey: "windowIsMinimized"); needsDisplay = true
+        defaults.set(false, forKey: "windowIsMinimized"); needsDisplay = true; updateAccessibility()
+        NSAccessibility.post(element: self, notification: .valueChanged)
     }
     @nonobjc func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Background View")

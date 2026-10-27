@@ -177,6 +177,8 @@ sudo apt install libgtk-3-dev libcairo2-dev libglib2.0-dev libjson-glib-dev \
    to `XRGModuleView`. They compose `XRGGraphRenderer` and `XRGGraphLabels`.
    The Swift `XRGGenericView` remains a compatibility base; active leaf panels
    inherit directly from NSView.
+   Disabled module views must be hidden as well as sized to zero so their readings
+   do not remain in the accessibility tree. Collapsed layout must keep panels hidden.
 3. **Modules and window** (`XRGModule`, `XRGModuleManager`, `XRGGraphWindow`) own
    registration, layout, visibility and timer dispatch. Panel registration must
    remain idempotent; detach/rebind removes only the panel's own module. Panels
@@ -185,6 +187,8 @@ sudo apt install libgtk-3-dev libcairo2-dev libglib2.0-dev libjson-glib-dev \
    retain existing defaults keys, bindings, settings formats and nib selectors.
    `XRGAppDelegate` handles application lifecycle and routes AI preferences to the
    existing AI panel. The executable entry point is Swift.
+   The background title group exposes its expanded/collapsed state and named
+   accessibility actions. Explicit expansion releases the hover-collapse latch.
 
 Graph updates use the saved positive finite refresh interval, falling back to one
 second. Fast updates run every 0.125 seconds; slow timers run every 300 and 1800

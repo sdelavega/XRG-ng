@@ -923,3 +923,41 @@ interactive coverage. Full VoiceOver navigation, font/color dialogs, invalid-the
 alerts, physical sleep/wake, provider operation, sensor accuracy and Intel runtime
 remain unverified. The production code and the two Objective-C hardware boundaries
 are unchanged.
+
+## Accessible graph visibility and expansion (2026-10-27)
+
+Hosted run 40404698228 passed both configurations before this change. Inspection
+of the native accessibility tree found that disabled Weather, Stock and AI panels
+still exposed readings: layout reduced their frames to zero without hiding their
+views. XRGModuleManager now hides disabled panels during expanded layout and shows
+enabled panels. The existing collapsed-layout guard keeps layout callbacks from
+revealing panels while the graph is collapsed.
+
+XRGBackgroundView's title group now exposes Expanded/Collapsed as its accessible
+value and a named Collapse Graph or Expand Graph custom action. The standard
+accessibility press action uses the same path. These actions retain the existing
+geometry/defaults behavior; explicit expansion releases the hover-collapse latch.
+State changes post the standard accessibility value notification. Detached views
+expose no custom action and refuse activation. The GPU preference checkbox's
+inherited Temperature Graph help text is corrected in Swift setup.
+
+Regression coverage checks disabled/re-enabled panel visibility, layout while
+collapsed, action routing, state/defaults, restored geometry in both orientations,
+hover-latch release and detached activation. Both complete local CI configurations
+pass universal builds, product/runtime checks, 445 test functions covering 846
+cases, fixture composition and packaged launch/restore/shutdown checks. This run
+used Xcode 27.2 on arm64; hosted CI retains its Xcode 26.6 pin.
+
+Native accessibility actions were invoked against the disposable Debug app in
+both orientations. The tree reported each state change, removed all readings when
+collapsed, omitted disabled providers, and removed/reinstated GPU readings when
+its checkbox changed. The corrected GPU help was visible. The optimized Release
+app also collapsed through its named action, quit/relaunched with Collapsed state
+and expanded through the named action afterward. Saved preferences and cleanup
+were independently verified for both copies. The manual workflow documents these
+checks without exporting sensor readings or screenshots.
+
+This verifies the native accessibility interface and targeted interactions. A full
+VoiceOver session, physical Intel execution and the previously listed hardware and
+distribution checks remain separate work. The two production Objective-C hardware
+boundaries and original nib resources are unchanged.

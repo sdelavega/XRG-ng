@@ -182,6 +182,31 @@ struct XRGModuleTests {
         }
     }
 
+    @Test func disabledPanelsAreHiddenAndCollapsedLayoutCannotRevealThem() throws {
+        try withDefaults { defaults in
+            let window = ModuleWindow(defaults: defaults)
+            let manager = XRGModuleManager(window: window)
+            let visible = module("visible", 0, defaults: defaults)
+            let disabled = module("disabled", 1, defaults: defaults)
+            disabled.isDisplayed = false
+            manager.addModule(visible); manager.addModule(disabled)
+            manager.windowChanged(to: window.frame.size)
+            #expect(visible.reference?.isHidden == false)
+            #expect(disabled.reference?.isHidden == true)
+            manager.setModule("disabled", isDisplayed: true)
+            manager.windowChanged(to: window.frame.size)
+            #expect(disabled.reference?.isHidden == false && disabled.currentSize.width > 0)
+            window.minimized = true
+            visible.reference?.isHidden = true; disabled.reference?.isHidden = true
+            manager.windowChanged(to: window.frame.size)
+            #expect(visible.reference?.isHidden == true && disabled.reference?.isHidden == true)
+            window.minimized = false
+            manager.setModule("disabled", isDisplayed: false)
+            manager.windowChanged(to: window.frame.size)
+            #expect(visible.reference?.isHidden == false && disabled.reference?.isHidden == true)
+        }
+    }
+
     @Test func threeHorizontalDividerPositions() throws {
         try withDefaults { defaults in
             let window = ModuleWindow(defaults: defaults)
