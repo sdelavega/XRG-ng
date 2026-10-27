@@ -383,3 +383,77 @@ fn gpu_histories_follow_pci_identity_across_card_renumbering() {
         "No GPU detected"
     );
 }
+
+#[test]
+fn gpu_selection_keeps_full_inventory_but_plots_only_the_chosen_adapter() {
+    use xrg_ng_linux::settings::MetricSelection;
+    let f = Fixture::new();
+    f.core();
+    for (card, pci, value) in [
+        ("card0", "0000:03:00.0", "10"),
+        ("card1", "0000:04:00.0", "70"),
+    ] {
+        f.gpu(card, pci, "0x1002", "amdgpu");
+        f.put(&format!("bus/pci/devices/{pci}/gpu_busy_percent"), value);
+    }
+    let report = f.collector().sample().unwrap();
+    let selected = report
+        .values
+        .iter()
+        .find(|g| g.label == "card1")
+        .unwrap()
+        .id
+        .clone();
+    let mut sampler = Sampler::with_sources(LinuxSources::with_roots(f.0.join("proc"), &f.0));
+    sampler
+        .set_selection(MetricSelection {
+            gpu: Some(selected.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let snapshot = sampler.sample();
+    let gpu = snapshot.panels.iter().find(|p| p.title == "GPU").unwrap();
+    assert_eq!(snapshot.inventory.gpus.len(), 2);
+    assert_eq!(gpu.series.len(), 1);
+    assert_eq!(gpu.series[0].last(), Some(&70.));
+    assert!(gpu.detail.contains("card1"));
+    assert!(!gpu.detail.contains("card0"));
+    sampler
+        .set_selection(MetricSelection {
+            gpu: Some("missing-adapter".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let snapshot = sampler.sample();
+    let gpu = snapshot.panels.iter().find(|p| p.title == "GPU").unwrap();
+    assert!(gpu.series.is_empty());
+    assert_eq!(gpu.label, "Selected GPU unavailable");
+    assert_eq!(snapshot.selection.gpu.as_deref(), Some("missing-adapter"));
+}
+#[test]
+fn rejected_selection_does_not_mutate_existing_gpu_history() {
+    use xrg_ng_linux::settings::MetricSelection;
+    let f = Fixture::new();
+    f.core();
+    f.gpu("card0", "0000:03:00.0", "0x1002", "amdgpu");
+    let busy = "bus/pci/devices/0000:03:00.0/gpu_busy_percent";
+    f.put(busy, "10");
+    let mut sampler = Sampler::with_sources(LinuxSources::with_roots(f.0.join("proc"), &f.0));
+    sampler.sample();
+    f.put(busy, "20");
+    sampler.sample();
+    assert!(
+        sampler
+            .set_selection(MetricSelection {
+                cpu: Some(u32::MAX),
+                gpu: Some("other".into()),
+                ..Default::default()
+            })
+            .is_err()
+    );
+    f.put(busy, "30");
+    let snapshot = sampler.sample();
+    let gpu = snapshot.panels.iter().find(|p| p.title == "GPU").unwrap();
+    assert_eq!(&gpu.series[0][117..], [10., 20., 30.]);
+    assert_eq!(snapshot.selection, MetricSelection::default());
+}

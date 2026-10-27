@@ -166,6 +166,12 @@ impl LinuxSources {
             tpu_stats: Some("/tmp/xrg-coral-tpu-stats.json".into()),
         }
     }
+    pub(crate) fn proc_root(&self) -> &Path {
+        &self.proc
+    }
+    pub(crate) fn sys_root(&self) -> &Path {
+        &self.sys
+    }
     fn read(root: &Path, file: &str) -> Result<String, String> {
         fs::read_to_string(root.join(file)).map_err(|e| format!("{file}: {e}"))
     }

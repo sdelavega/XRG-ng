@@ -233,3 +233,71 @@ fn missing_proc_root_and_invalid_host_parameters_are_errors() {
             .is_err()
     );
 }
+
+#[test]
+fn process_table_queries_filter_before_limiting_and_keep_unknown_cpu_distinct() {
+    use xrg_ng_linux::settings::ProcessView;
+    let f = Fixture::new();
+    for pid in 1..=35 {
+        let (uid, name, rss) = if pid <= 15 {
+            (1000, format!("Alpha-{pid}"), pid as i64)
+        } else {
+            (2000, format!("other-{pid}"), 1000)
+        };
+        f.put(pid, &stat(pid, &name, "S", 0, 1, rss), Some(uid));
+    }
+    let report = f.collector().sample_at(1.).unwrap();
+    let view = ProcessView {
+        sort: Sort::Memory,
+        uid: Some(1000),
+        filter: "ALPHA".into(),
+        limit: 10,
+    };
+    let listing = report.listing(&view).unwrap();
+    assert_eq!(listing.matched, 15);
+    assert_eq!(listing.readable, 35);
+    assert_eq!(listing.rows.len(), 10);
+    assert_eq!(listing.rows[0].pid, 15);
+    assert_eq!(listing.rows[9].pid, 6);
+    assert!(
+        listing
+            .rows
+            .iter()
+            .all(|p| p.cpu_percent.is_none() && p.uid == Some(1000))
+    );
+    let missing = ProcessView {
+        uid: Some(9999),
+        ..view
+    };
+    assert!(report.listing(&missing).unwrap().rows.is_empty());
+}
+#[test]
+fn process_table_queries_reject_invalid_limits_and_filters() {
+    use xrg_ng_linux::settings::ProcessView;
+    let f = Fixture::new();
+    f.put(1, &stat(1, "worker", "S", 0, 1, 1), None);
+    let report = f.collector().sample_at(1.).unwrap();
+    assert!(
+        report
+            .listing(&ProcessView {
+                limit: 9,
+                ..Default::default()
+            })
+            .is_err()
+    );
+    assert!(
+        report
+            .listing(&ProcessView {
+                filter: "x".repeat(129),
+                ..Default::default()
+            })
+            .is_err()
+    );
+    let uid = report
+        .listing(&ProcessView {
+            uid: Some(0),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(uid.matched, 0);
+}

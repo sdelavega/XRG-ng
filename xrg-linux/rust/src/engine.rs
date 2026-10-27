@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use crate::{
-    collectors::{Cpu, LinuxSources, cpu_percent},
-    shared::{History, Rates},
-};
+use crate::{collectors::LinuxSources, settings::MetricSelection, shared::History};
 use std::{
     array,
     collections::BTreeMap,
@@ -48,6 +45,9 @@ pub struct Snapshot {
     pub sequence: u64,
     pub panels: Vec<Panel>,
     pub valid: bool,
+    pub selection: MetricSelection,
+    pub inventory: crate::metrics::Inventory,
+    pub processes: Result<Arc<crate::process::Report>, String>,
 }
 pub struct Sampler {
     source: LinuxSources,
@@ -57,9 +57,11 @@ pub struct Sampler {
     process_histories: [History; 2],
     tpu: crate::tpu::Collector,
     tpu_history: History,
-    previous_cpu: Option<Cpu>,
-    rates: Rates,
-    histories: [History; 7],
+    metrics: crate::metrics::Sampler,
+    memory_history: History,
+    temperature_history: History,
+    inventory: crate::metrics::Inventory,
+    process_report: Result<Arc<crate::process::Report>, String>,
     battery_histories: BTreeMap<String, History>,
     gpu: crate::gpu::GpuCollector,
     gpu_histories: BTreeMap<String, (bool, History)>,
@@ -91,72 +93,46 @@ impl Sampler {
             tpu,
             tpu_history: History::new(120),
             gpu_histories: BTreeMap::new(),
-            previous_cpu: None,
-            rates: Rates::new(),
-            histories: array::from_fn(|_| History::new(120)),
+            metrics: crate::metrics::Sampler::default(),
+            memory_history: History::new(120),
+            temperature_history: History::new(120),
+            inventory: crate::metrics::Inventory::default(),
+            process_report: Err("Waiting for process sample".into()),
             battery_histories: BTreeMap::new(),
             start: Instant::now(),
             sequence: 0,
         }
     }
+    pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
+        selection.validate()?;
+        if self.metrics.selection().gpu != selection.gpu {
+            self.gpu_histories.clear();
+        }
+        self.metrics.set_selection(selection)
+    }
     pub fn sample(&mut self) -> Snapshot {
         let time = self.start.elapsed().as_secs_f64();
-        let cpu = self.source.cpu().and_then(|next| {
-            let value = self.previous_cpu.and_then(|prev| cpu_percent(prev, next));
-            self.previous_cpu = Some(next);
-            value.ok_or_else(|| "Waiting for CPU interval".into())
-        });
+        let metrics = self.metrics.sample(&self.source, time);
+        self.inventory = metrics.inventory;
         let memory = self.source.memory();
-        let network = self.source.network().map(|v| {
-            [
-                self.rates.sample(0, v[0], time).1 as f64,
-                self.rates.sample(1, v[1], time).1 as f64,
-            ]
-        });
-        let disk = self.source.disk().map(|v| {
-            [
-                self.rates.sample(2, v[0], time).1 as f64,
-                self.rates.sample(3, v[1], time).1 as f64,
-            ]
-        });
-        let valid = cpu.is_ok() && memory.is_ok() && network.is_ok() && disk.is_ok();
-        let mut panels = Vec::new();
-        for (index, title, result) in [(0, "CPU", cpu), (1, "Memory", memory)] {
-            let label = match result {
-                Ok(value) => {
-                    self.histories[index].append(value);
-                    format!("{value:.1}%")
-                }
-                Err(error) => error,
-            };
-            panels.push(Panel {
-                title,
-                detail: label.clone(),
-                label,
-                series: vec![self.histories[index].values()],
-                scale: Scale::Percent,
-            });
-        }
-        for (index, title, result) in [(2, "Network", network), (4, "Disk", disk)] {
-            let label = match result {
-                Ok([a, b]) => {
-                    self.histories[index].append(a);
-                    self.histories[index + 1].append(b);
-                    format!("{} / {}", bytes_per_second(a), bytes_per_second(b))
-                }
-                Err(error) => error,
-            };
-            panels.push(Panel {
-                title,
-                detail: label.clone(),
-                label,
-                series: vec![
-                    self.histories[index].values(),
-                    self.histories[index + 1].values(),
-                ],
-                scale: Scale::Automatic,
-            });
-        }
+        let valid = metrics.valid && memory.is_ok();
+        let mut series = Vec::new();
+        let label = match memory {
+            Ok(value) => {
+                self.memory_history.append(value);
+                series.push(self.memory_history.values());
+                format!("{value:.1}%")
+            }
+            Err(error) => error,
+        };
+        let memory = Panel {
+            title: "Memory",
+            detail: label.clone(),
+            label,
+            series,
+            scale: Scale::Percent,
+        };
+        let mut panels = vec![metrics.cpu, memory, metrics.network, metrics.disk];
         panels.push(self.battery_panel());
         panels.push(self.temperature_panel());
         panels.push(self.gpu_panel());
@@ -173,12 +149,16 @@ impl Sampler {
             sequence: self.sequence,
             panels,
             valid,
+            selection: self.metrics.selection().clone(),
+            inventory: self.inventory.clone(),
+            processes: self.process_report.clone(),
         }
     }
     fn process_panel(&mut self) -> Panel {
         let mut series = Vec::new();
-        let (label, detail) = match self.process.sample() {
-            Err(error) => ("Processes unavailable".into(), error),
+        self.process_report = self.process.sample().map(Arc::new);
+        let (label, detail) = match &self.process_report {
+            Err(error) => ("Processes unavailable".into(), error.clone()),
             Ok(report) => {
                 let count = report.processes.len();
                 let running = report.processes.iter().filter(|p| p.state == 'R').count();
@@ -215,7 +195,7 @@ impl Sampler {
                         if report.partial() { " · partial" } else { "" }
                     )
                 };
-                details.extend(report.errors);
+                details.extend(report.errors.clone());
                 (label, details.join("\n"))
             }
         };
@@ -319,7 +299,40 @@ impl Sampler {
     }
     fn gpu_panel(&mut self) -> Panel {
         let mut series = Vec::new();
-        let (label, detail) = match self.gpu.sample() {
+        let mut result = self.gpu.sample();
+        self.inventory.gpus.clear();
+        if let Ok(report) = &mut result {
+            self.inventory.gpus = report
+                .values
+                .iter()
+                .map(|gpu| crate::metrics::GpuOption {
+                    id: gpu.id.clone(),
+                    label: format!(
+                        "{} · {}",
+                        gpu.label,
+                        crate::hardware::short_label(&gpu.name)
+                    ),
+                })
+                .collect();
+            if let Some(selected) = &self.metrics.selection().gpu {
+                report.values.retain(|gpu| gpu.id == *selected);
+                if report.values.is_empty() {
+                    self.gpu_histories.clear();
+                    return Panel {
+                        title: "GPU",
+                        label: "Selected GPU unavailable".into(),
+                        detail: format!(
+                            "GPU identity {selected} was not present in the latest sample.\n{}",
+                            report.errors.join("\n")
+                        ),
+                        series,
+                        scale: Scale::Percent,
+                    };
+                }
+            }
+        }
+
+        let (label, detail) = match result {
             Err(error) => ("GPU unavailable".into(), error),
             Ok(report) if report.values.is_empty() => {
                 if report.errors.is_empty() {
@@ -493,7 +506,7 @@ impl Sampler {
             Err(error) => ("Temperature unavailable".into(), error),
             Ok(report) if report.values.is_empty() => {
                 if report.errors.is_empty() {
-                    self.histories[6] = History::new(120);
+                    self.temperature_history = History::new(120);
                     (
                         "No temperature sensors".into(),
                         "No readable hwmon or thermal-zone temperature detected".into(),
@@ -508,8 +521,8 @@ impl Sampler {
                     .iter()
                     .map(|v| v.celsius)
                     .fold(f64::NEG_INFINITY, f64::max);
-                self.histories[6].append(maximum);
-                series.push(self.histories[6].values());
+                self.temperature_history.append(maximum);
+                series.push(self.temperature_history.values());
                 let partial = if report.errors.is_empty() {
                     ""
                 } else {
@@ -536,7 +549,7 @@ impl Sampler {
         }
     }
 }
-fn bytes_per_second(value: f64) -> String {
+pub(crate) fn bytes_per_second(value: f64) -> String {
     if value >= 1_048_576. {
         format!("{:.1} MiB/s", value / 1_048_576.)
     } else if value >= 1024. {
@@ -546,24 +559,47 @@ fn bytes_per_second(value: f64) -> String {
     }
 }
 
+#[derive(Clone)]
+pub struct SelectionControl(Arc<Mutex<Option<MetricSelection>>>);
+impl SelectionControl {
+    pub fn set(&self, selection: MetricSelection) -> Result<(), String> {
+        selection.validate()?;
+        *self.0.lock().unwrap() = Some(selection);
+        Ok(())
+    }
+}
 pub struct Worker {
     pub latest: Arc<Mutex<Option<Snapshot>>>,
     stop: Option<mpsc::Sender<()>>,
     join: Option<thread::JoinHandle<()>>,
+    selection: SelectionControl,
 }
 impl Worker {
     pub fn start() -> Self {
         Self::start_with_ai(true)
     }
     pub fn start_with_ai(ai_enabled: bool) -> Self {
+        Self::start_configured(ai_enabled, MetricSelection::default())
+    }
+    pub fn start_configured(ai_enabled: bool, initial: MetricSelection) -> Self {
+        let selection = SelectionControl(Arc::new(Mutex::new(None::<MetricSelection>)));
+        let updates = selection.clone();
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
         let (stop, receiver) = mpsc::channel();
         let join = thread::spawn(move || {
             // Swift handles are created and destroyed on this worker only.
             let mut sampler = Sampler::live(ai_enabled);
+            sampler
+                .set_selection(initial)
+                .expect("Validated initial selection");
             loop {
                 let next_sample = Instant::now() + Duration::from_secs(1);
+                if let Some(selection) = updates.0.lock().unwrap().take() {
+                    sampler
+                        .set_selection(selection)
+                        .expect("Validated selection update");
+                }
                 *output.lock().unwrap() = Some(sampler.sample());
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 match receiver.recv_timeout(next_sample.saturating_duration_since(Instant::now())) {
@@ -576,7 +612,14 @@ impl Worker {
             latest,
             stop: Some(stop),
             join: Some(join),
+            selection,
         }
+    }
+    pub fn selection_control(&self) -> SelectionControl {
+        self.selection.clone()
+    }
+    pub fn set_selection(&self, selection: MetricSelection) -> Result<(), String> {
+        self.selection.set(selection)
     }
 }
 impl Drop for Worker {

@@ -6,7 +6,9 @@ The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rus
 It currently provides CPU, memory, network, disk, battery, temperature, GPU, AI
 token-rate, process-count and Coral TPU inference-rate graphs, with shared macOS Swift histories, rate tracking, provider parsers
 and themes. The new Preferences editor saves graph visibility/order/height and
-custom colors, with built-in presets and JSON theme load/save. AI monitoring covers
+custom colors, with built-in presets and JSON theme load/save.
+Per-core/interface/disk/GPU selectors and a sortable process table with name/UID
+filters are available in the new UI. AI monitoring covers
 Claude/Codex/Gemini/Hermes usage and Ollama model
 status; see the [new provider sources and limits](rust/README.md#ai-monitoring). The instructions below describe the existing
 C/GTK3 implementation, retained during migration.

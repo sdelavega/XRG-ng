@@ -154,6 +154,81 @@ impl ThemeChoice {
         }
     }
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetricSelection {
+    /// None selects the aggregate; a number selects one logical CPU.
+    pub cpu: Option<u32>,
+    pub network: Option<String>,
+    pub disk: Option<String>,
+    /// Collector-provided identity, compared with inventory; never used as a path.
+    pub gpu: Option<String>,
+}
+impl MetricSelection {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cpu.is_some_and(|n| n > 1_048_575) {
+            return Err("CPU index is out of range".into());
+        }
+        for name in [&self.network, &self.disk].into_iter().flatten() {
+            if name.is_empty()
+                || name == "."
+                || name == ".."
+                || name.len() > 255
+                || name
+                    .chars()
+                    .any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == ':')
+            {
+                return Err("Invalid network/disk name".into());
+            }
+        }
+        if self
+            .gpu
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control))
+        {
+            return Err("Invalid GPU identity".into());
+        }
+        Ok(())
+    }
+    pub fn matches(&self, other: &Self, module: Module) -> bool {
+        match module {
+            Module::Cpu => self.cpu == other.cpu,
+            Module::Network => self.network == other.network,
+            Module::Disk => self.disk == other.disk,
+            Module::Gpu => self.gpu == other.gpu,
+            _ => true,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProcessView {
+    pub sort: crate::process::Sort,
+    pub uid: Option<u32>,
+    pub filter: String,
+    pub limit: u32,
+}
+impl Default for ProcessView {
+    fn default() -> Self {
+        Self {
+            sort: crate::process::Sort::Cpu,
+            uid: None,
+            filter: String::new(),
+            limit: 50,
+        }
+    }
+}
+impl ProcessView {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(10..=200).contains(&self.limit) {
+            return Err("Process row limit must be between 10 and 200".into());
+        }
+        if self.filter.chars().count() > 128 || self.filter.chars().any(char::is_control) {
+            return Err("Process name filter must contain at most 128 printable characters".into());
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -161,11 +236,15 @@ pub struct Settings {
     pub theme: ThemeChoice,
     pub modules: Vec<ModuleSetting>,
     pub graph_height: u32,
+    #[serde(default)]
+    pub metrics: MetricSelection,
+    #[serde(default)]
+    pub processes: ProcessView,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -174,12 +253,14 @@ impl Default for Settings {
                 .map(|id| ModuleSetting { id, visible: true })
                 .collect(),
             graph_height: 100,
+            metrics: MetricSelection::default(),
+            processes: ProcessView::default(),
         }
     }
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1 {
+        if self.version != 2 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -190,6 +271,8 @@ impl Settings {
             return Err("Settings must contain each graph exactly once".into());
         }
         self.theme.palette()?;
+        self.metrics.validate()?;
+        self.processes.validate()?;
         Ok(())
     }
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
@@ -197,7 +280,7 @@ impl Settings {
             return Err("Settings file exceeds 128 KiB".into());
         }
         let text = std::str::from_utf8(bytes).map_err(|_| "Invalid settings encoding")?;
-        let result = if text.trim_start().starts_with('{') {
+        let mut result: Self = if text.trim_start().starts_with('{') {
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid settings: {e}"))?
         } else {
             // Upgrade only the exact original Rust format; never treat another
@@ -218,6 +301,9 @@ impl Settings {
                 ..Self::default()
             }
         };
+        if result.version == 1 {
+            result.version = 2;
+        }
         result.validate()?;
         Ok(result)
     }

@@ -3,6 +3,7 @@
 //! Readable processes in the selected proc/PID namespace. No command lines,
 //! environments, NSS lookups, privilege escalation, signals or subprocesses.
 use crate::{hardware::short_label, system_file};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
@@ -27,7 +28,8 @@ pub struct Process {
     pub nice: i32,
     pub threads: u64,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum Sort {
     Cpu,
     Memory,
@@ -79,6 +81,50 @@ impl Report {
         });
         rows.truncate(limit.min(1000));
         rows
+    }
+}
+#[derive(Clone, Debug)]
+pub struct Listing {
+    pub rows: Vec<Process>,
+    pub matched: usize,
+    pub readable: usize,
+    pub partial: bool,
+    pub coverage: String,
+}
+impl Report {
+    pub fn listing(&self, view: &crate::settings::ProcessView) -> Result<Listing, String> {
+        view.validate()?;
+        let filter = view.filter.to_lowercase();
+        let matched = self
+            .processes
+            .iter()
+            .filter(|p| {
+                view.uid.is_none_or(|u| p.uid == Some(u)) && p.name.to_lowercase().contains(&filter)
+            })
+            .count();
+        let rows = self
+            .ranked(view.sort, view.uid, &view.filter, view.limit as usize)
+            .into_iter()
+            .cloned()
+            .collect();
+        Ok(Listing {
+            rows,
+            matched,
+            readable: self.processes.len(),
+            partial: self.partial(),
+            coverage: format!(
+                "{} PID directories · {} attempted · {} vanished · {} unreadable{}",
+                self.discovered,
+                self.attempted,
+                self.vanished,
+                self.unreadable,
+                if self.partial() {
+                    " · partial coverage"
+                } else {
+                    ""
+                }
+            ),
+        })
     }
 }
 #[derive(Clone, Copy)]

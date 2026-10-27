@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod preferences;
+mod processes;
 mod smoke;
+mod targets;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -10,8 +12,9 @@ use std::{
     time::{Duration, Instant},
 };
 use xrg_ng_linux::{
-    engine::{Panel, Snapshot, Worker},
-    settings::{self, Module, Settings, Store, ThemeChoice, Writer},
+    engine::{Panel, SelectionControl, Snapshot, Worker},
+    metrics::Inventory,
+    settings::{self, Module, ProcessView, Settings, Store, ThemeChoice, Writer},
     shared::{self, Theme},
 };
 
@@ -28,7 +31,10 @@ struct Shell {
     updating: Cell<bool>,
     css: gtk::CssProvider,
     theme: Rc<RefCell<Theme>>,
-    settings: RefCell<Settings>,
+    settings: Rc<RefCell<Settings>>,
+    state: Rc<RefCell<Option<Snapshot>>>,
+    selection: crate::ui::SelectionControl,
+    processes: RefCell<Option<Rc<processes::Window>>>,
     writer: Writer,
     revision: Cell<u64>,
     saved_revision: Cell<u64>,
@@ -42,9 +48,15 @@ impl Shell {
         error: Option<String>,
         smoke: bool,
         state: Rc<RefCell<Option<Snapshot>>>,
+        selection: SelectionControl,
     ) -> Rc<Self> {
+        let settings = Rc::new(RefCell::new(settings));
         let theme = Rc::new(RefCell::new(
-            settings.theme.palette().expect("Validated settings"),
+            settings
+                .borrow()
+                .theme
+                .palette()
+                .expect("Validated settings"),
         ));
         let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
         content.add_css_class("xrg-shell");
@@ -76,11 +88,15 @@ impl Shell {
             .unwrap()
             .downcast::<gtk::StringList>()
             .unwrap();
+        limit_dropdown(&chooser);
         chooser.set_tooltip_text(Some("Theme"));
         chooser.update_property(&[gtk::accessible::Property::Label("Theme")]);
         toolbar.append(&chooser);
-        let prefs = gtk::Button::with_label("Preferences…");
-        prefs.set_tooltip_text(Some("Graphs and themes"));
+        let process_button = gtk::Button::with_label("Processes…");
+        toolbar.append(&process_button);
+        let prefs = gtk::Button::from_icon_name("preferences-system-symbolic");
+        prefs.set_tooltip_text(Some("Preferences · graphs and themes"));
+        prefs.update_property(&[gtk::accessible::Property::Label("Preferences")]);
         toolbar.append(&prefs);
         content.append(&toolbar);
         let graphs = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -108,6 +124,7 @@ impl Shell {
             area.update_property(&[gtk::accessible::Property::Label(module.title())]);
             let state = state.clone();
             let theme = theme.clone();
+            let settings = settings.clone();
             let count = Rc::new(Cell::new(0u32));
             let draw_count = count.clone();
             area.set_draw_func(move |_, context, width, height| {
@@ -119,7 +136,10 @@ impl Shell {
                     height,
                     &theme.borrow(),
                     module.title(),
-                    state.as_ref().and_then(|s| s.panels.get(module.index())),
+                    state
+                        .as_ref()
+                        .filter(|s| s.selection.matches(&settings.borrow().metrics, module))
+                        .and_then(|s| s.panels.get(module.index())),
                 );
             });
             graphs.append(&area);
@@ -135,7 +155,7 @@ impl Shell {
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("XRG-ng")
-            .default_width(460)
+            .default_width(540)
             .default_height(if smoke { 1160 } else { 850 })
             .child(&content)
             .build();
@@ -153,7 +173,10 @@ impl Shell {
             updating: Cell::new(false),
             css,
             theme,
-            settings: RefCell::new(settings),
+            settings,
+            state: state.clone(),
+            selection,
+            processes: RefCell::new(None),
             writer: Writer::start(store),
             revision: Cell::new(0),
             saved_revision: Cell::new(0),
@@ -191,6 +214,12 @@ impl Shell {
         prefs.connect_clicked(move |_| {
             if let Some(shell) = weak.upgrade() {
                 shell.preferences();
+            }
+        });
+        let weak = Rc::downgrade(&shell);
+        process_button.connect_clicked(move |_| {
+            if let Some(shell) = weak.upgrade() {
+                shell.processes();
             }
         });
         if let Some(error) = error {
@@ -240,14 +269,55 @@ impl Shell {
                 return;
             }
         };
+        let old = self.settings.borrow().clone();
+        if old.metrics != settings.metrics {
+            self.selection
+                .set(settings.metrics.clone())
+                .expect("Validated selection");
+        }
+        let process_change = old.processes != settings.processes;
         *self.theme.borrow_mut() = palette;
         *self.settings.borrow_mut() = settings.clone();
+        if process_change && let Some(window) = self.processes.borrow().as_ref() {
+            window.set_view(settings.processes.clone());
+        }
         self.refresh();
+        self.persist(settings);
+    }
+    fn persist(&self, settings: Settings) {
         let revision = self.revision.get() + 1;
         self.revision.set(revision);
         self.writer.queue(revision, settings);
         self.status.set_text("Saving preferences…");
         self.status.set_tooltip_text(None);
+    }
+    fn save_process_view(&self, view: ProcessView) {
+        if self.settings.borrow().processes == view {
+            return;
+        }
+        self.settings.borrow_mut().processes = view;
+        let settings = self.settings.borrow().clone();
+        self.persist(settings);
+    }
+    fn inventory(&self) -> Inventory {
+        self.state
+            .borrow()
+            .as_ref()
+            .map(|s| s.inventory.clone())
+            .unwrap_or_default()
+    }
+    fn processes(self: &Rc<Self>) -> Rc<processes::Window> {
+        if let Some(window) = self.processes.borrow().as_ref() {
+            window.window.present();
+            return window.clone();
+        }
+        let window = processes::Window::new(self);
+        if let Some(snapshot) = self.state.borrow().as_ref() {
+            window.update(&snapshot.processes);
+        }
+        *self.processes.borrow_mut() = Some(window.clone());
+        window.window.present();
+        window
     }
     fn persistence_error(&self, error: &str) {
         self.status
@@ -316,7 +386,8 @@ pub fn run(smoke_mode: bool) -> bool {
             settings::preferences_path()
         };
         let (store, settings, error) = Store::open(path);
-        let monitor = Worker::start_with_ai(!smoke_mode);
+        let monitor = Worker::start_configured(!smoke_mode, settings.metrics.clone());
+        let selection = monitor.selection_control();
         let latest = monitor.latest.clone();
         *owner.borrow_mut() = Some(monitor);
         let state = Rc::new(RefCell::new(None::<Snapshot>));
@@ -327,6 +398,7 @@ pub fn run(smoke_mode: bool) -> bool {
             error,
             smoke_mode,
             state.clone(),
+            selection,
         );
         *shell_owner.borrow_mut() = Some(view.clone());
         let weak = Rc::downgrade(&view);
@@ -338,7 +410,17 @@ pub fn run(smoke_mode: bool) -> bool {
                 return glib::ControlFlow::Break;
             };
             if let Some(snapshot) = latest.lock().unwrap().take() {
-                for (area, panel) in shell.areas.iter().zip(&snapshot.panels) {
+                for (module, (area, panel)) in Module::ALL
+                    .into_iter()
+                    .zip(shell.areas.iter().zip(&snapshot.panels))
+                {
+                    if !snapshot
+                        .selection
+                        .matches(&shell.settings.borrow().metrics, module)
+                    {
+                        area.set_tooltip_text(Some("Waiting for selected source…"));
+                        continue;
+                    }
                     area.set_tooltip_text(Some(&panel.detail));
                     area.update_property(&[
                         gtk::accessible::Property::Label(&format!(
@@ -347,6 +429,9 @@ pub fn run(smoke_mode: bool) -> bool {
                         )),
                         gtk::accessible::Property::Description(&panel.detail),
                     ]);
+                }
+                if let Some(window) = shell.processes.borrow().as_ref() {
+                    window.update(&snapshot.processes);
                 }
                 *state.borrow_mut() = Some(snapshot);
                 for area in &shell.areas {
@@ -396,6 +481,27 @@ pub fn run(smoke_mode: bool) -> bool {
     shell.borrow_mut().take();
     worker.borrow_mut().take();
     success.get() && exit == glib::ExitCode::SUCCESS
+}
+pub(super) fn limit_dropdown(dropdown: &gtk::DropDown) {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, object| {
+        let item = object.downcast_ref::<gtk::ListItem>().unwrap();
+        let label = gtk::Label::new(None);
+        label.set_max_width_chars(26);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        item.set_child(Some(&label));
+    });
+    factory.connect_bind(|_, object| {
+        let item = object.downcast_ref::<gtk::ListItem>().unwrap();
+        if let (Some(text), Some(label)) = (
+            item.item().and_downcast::<gtk::StringObject>(),
+            item.child().and_downcast::<gtk::Label>(),
+        ) {
+            label.set_text(&text.string());
+            label.set_tooltip_text(Some(&text.string()));
+        }
+    });
+    dropdown.set_factory(Some(&factory));
 }
 fn color(context: &gtk::cairo::Context, color: [f64; 4]) {
     context.set_source_rgba(color[0], color[1], color[2], color[3]);

@@ -14,6 +14,7 @@ pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
     dialog: Option<Rc<Dialog>>,
+    process: Option<Rc<super::processes::Window>>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -41,6 +42,7 @@ impl Harness {
             root,
             stage: 0,
             dialog: None,
+            process: None,
             expected: None,
             since: Instant::now(),
         })
@@ -48,7 +50,20 @@ impl Harness {
     pub fn preferences_path(&self) -> PathBuf {
         self.root.join("settings.conf")
     }
-    fn configure(dialog: &Dialog) {
+    fn configure(dialog: &Dialog, shell: &Shell) {
+        let inventory = shell.inventory();
+        dialog
+            .targets
+            .set(&xrg_ng_linux::settings::MetricSelection {
+                cpu: inventory.cpus.first().copied(),
+                network: inventory
+                    .networks
+                    .iter()
+                    .find(|n| n.as_str() != "lo")
+                    .cloned(),
+                disk: inventory.disks.first().cloned(),
+                gpu: inventory.gpus.first().map(|g| g.id.clone()),
+            });
         dialog.check(Module::Cpu).set_active(false);
         for _ in 0..9 {
             dialog.move_up(Module::Tpu);
@@ -93,14 +108,14 @@ impl Harness {
                     *shell.settings.borrow() == before,
                     "Invalid Apply changed active settings",
                 )?;
-                Self::configure(&dialog);
+                Self::configure(&dialog, shell);
                 dialog.cancel.emit_clicked();
                 require(
                     *shell.settings.borrow() == before,
                     "Cancel changed active settings",
                 )?;
                 let dialog = shell.preferences();
-                Self::configure(&dialog);
+                Self::configure(&dialog, shell);
                 self.expected = Some(dialog.draft());
                 dialog.load_theme(self.root.join("invalid.json"));
                 self.dialog = Some(dialog);
@@ -219,7 +234,75 @@ impl Harness {
                 )?;
                 self.stage = 9;
             }
-            9 => return Ok(true),
+            9 if shell
+                .state
+                .borrow()
+                .as_ref()
+                .is_some_and(|s| s.selection == shell.settings.borrow().metrics) =>
+            {
+                let state = shell.state.borrow();
+                let snapshot = state.as_ref().unwrap();
+                if let Some(cpu) = snapshot.selection.cpu {
+                    require(
+                        snapshot.panels[0].label.contains(&format!("CPU {cpu}")),
+                        "CPU selector did not reach the worker",
+                    )?;
+                }
+                let own = snapshot
+                    .processes
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .processes
+                    .iter()
+                    .find(|p| p.pid == std::process::id())
+                    .ok_or("Own process missing from readable scan")?
+                    .clone();
+                drop(state);
+                let window = shell.processes();
+                window.uid.set_text("invalid");
+                require(
+                    window.row_count() == 0 && window.status().contains("numeric UID"),
+                    "Invalid UID filter did not fail closed",
+                )?;
+                window
+                    .uid
+                    .set_text(&own.uid.ok_or("Own UID missing")?.to_string());
+                window.filter.set_text(&own.name);
+                window.sort.set_selected(3);
+                window.limit.set_value(20.);
+                self.process = Some(window);
+                self.stage = 10;
+            }
+            10 => {
+                let window = self.process.as_ref().unwrap();
+                if !window.settled() {
+                    return Ok(false);
+                }
+                require(
+                    window.row_count() == 1,
+                    "Process name/UID filters did not isolate the app",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_PROCESS_IMAGE") {
+                    window.snapshot(&PathBuf::from(path))?;
+                }
+                window.window.close();
+                self.process.take();
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 11;
+            }
+            11 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Metric/process preferences did not persist",
+                )?;
+                require(
+                    loaded.version == 2 && loaded.processes.limit == 20,
+                    "Settings upgrade/process options lost",
+                )?;
+                self.stage = 12;
+            }
+            12 => return Ok(true),
             _ => (),
         }
         if self.stage != before {

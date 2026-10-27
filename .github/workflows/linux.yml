@@ -44,3 +44,4 @@ jobs:
             ${{ steps.verify.outputs.results }}/validation.log
             ${{ steps.verify.outputs.results }}/gtk-smoke.png
             ${{ steps.verify.outputs.results }}/preferences-smoke.png
+            ${{ steps.verify.outputs.results }}/processes-smoke.png

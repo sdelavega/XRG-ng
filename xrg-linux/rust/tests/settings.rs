@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 2;
+    value.version = 3;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -341,5 +341,97 @@ fn module_indices_match_the_sampler_contract_after_ui_reordering() {
             snapshot.panels[id.index()].title,
             id.title().split(" · ").next().unwrap()
         );
+    }
+}
+
+#[test]
+fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
+    let f = Fixture::new();
+    let mut expected = Settings {
+        graph_height: 136,
+        theme: ThemeChoice::Custom {
+            theme: Box::new(document()),
+        },
+        ..Default::default()
+    };
+    expected.modules[0].visible = false;
+    expected.move_module(Module::Tpu, -9);
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    let object = wire.as_object_mut().unwrap();
+    object.insert("version".into(), 1.into());
+    object.remove("metrics");
+    object.remove("processes");
+    let original = serde_json::to_vec_pretty(&wire).unwrap();
+    fs::write(f.path(), &original).unwrap();
+    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+    store.save(&loaded).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
+        2
+    );
+}
+#[test]
+fn metric_targets_and_process_filters_persist_and_validate_as_typed_preferences() {
+    use xrg_ng_linux::{
+        process::Sort,
+        settings::{MetricSelection, ProcessView},
+    };
+    let f = Fixture::new();
+    let (mut store, mut settings, _) = Store::open(Some(f.path()));
+    settings.metrics = MetricSelection {
+        cpu: Some(404),
+        network: Some("missing-interface".into()),
+        disk: Some("missing-disk".into()),
+        gpu: Some("pci:0000:02:00.0".into()),
+    };
+    settings.processes = ProcessView {
+        sort: Sort::Name,
+        uid: Some(1000),
+        filter: "worker".into(),
+        limit: 20,
+    };
+    store.save(&settings).unwrap();
+    let (_, loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, settings);
+    for name in ["", "..", "../eth0", "bad\nname"] {
+        let invalid = MetricSelection {
+            network: Some(name.into()),
+            ..Default::default()
+        };
+        assert!(invalid.validate().is_err());
+    }
+    assert!(
+        MetricSelection {
+            cpu: Some(u32::MAX),
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+    let mut invalid = settings.clone();
+    invalid.processes.limit = 201;
+    assert!(invalid.validate().is_err());
+    invalid.processes.limit = 20;
+    invalid.processes.filter = "bad\nfilter".into();
+    assert!(invalid.validate().is_err());
+    let mut wire = serde_json::to_value(settings).unwrap();
+    wire["processes"]["uid"] = (-1).into();
+    assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+}
+#[test]
+fn snapshot_scope_matching_blocks_only_the_metric_whose_target_changed() {
+    use xrg_ng_linux::settings::MetricSelection;
+    let old = MetricSelection::default();
+    let selected = MetricSelection {
+        cpu: Some(2),
+        ..Default::default()
+    };
+    assert!(!old.matches(&selected, Module::Cpu));
+    for module in Module::ALL.into_iter().filter(|m| *m != Module::Cpu) {
+        assert!(old.matches(&selected, module));
     }
 }

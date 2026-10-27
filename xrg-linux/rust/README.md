@@ -5,7 +5,8 @@ in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature, GPU activity, AI token-rate, process-count and
-Coral TPU inference-rate graphs.
+Coral TPU inference-rate graphs, with per-core/interface/disk/GPU selection and a
+sortable, filterable process table.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Hardware support and feedback
@@ -39,7 +40,8 @@ and contributions are welcome. See the [project support policy](../../README.md#
   lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
   Rust snapshots through bounded latest-value slots; GTK touches them on its main
   thread. No shell commands, provider scans or collection run in drawing callbacks.
-- **Preferences:** graph visibility/order, height and theme colors are saved in
+- **Preferences:** graph visibility/order, height, metric sources, process filters
+  and theme colors are saved in
   `$XDG_CONFIG_HOME/xrg-ng/settings.conf` (or `~/.config/xrg-ng`). All six shared
   presets remain selectable alongside a custom palette. The editor supports
   portable JSON theme load/save; details are below. Legacy C settings stay separate.
@@ -50,7 +52,8 @@ traffic more than once); disks aggregate whole non-loop/ram/zram/dm/md devices t
 avoid counting partitions and stacked devices twice. Rates use elapsed monotonic
 time and the shared reset/saturation policy. Disk/network labels show read/receive
 first, write/send second. First CPU sample waits for an interval. Failed collection
-shows an error and retains previous history rather than recording fabricated zeros.
+shows an error rather than recording fabricated zeros; CPU/network/disk source
+failures clear their plotted histories and establish a fresh interval on recovery.
 
 Battery collection reads system power supplies, skips HID/HID++ names before
 opening attributes, and excludes `scope=Device` and absent batteries. Each percent
@@ -195,7 +198,9 @@ live headless samples, and a GTK/Xvfb launch that requires multiple live samples
 and actual Cairo draw callbacks. The GTK check switches Paper/Ocean presets,
 opens Preferences, tests invalid drafts/imports and Cancel/Apply, exports/reloads
 a custom theme, reorders/hides graphs, recovers from an all-hidden layout and reopens
-saved settings. It exports the main window and preferences dialog as PNGs. Smoke
+saved settings. It also selects live metric sources, opens the process table,
+checks invalid UID handling, filters to its own process and reopens saved filters.
+It exports the main window, preferences dialog and process table as PNGs. Smoke
 mode uses temporary settings/theme files and never reads or writes user preferences.
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
 behavior, screen readers or physical-device collection. Linux build output is
@@ -208,6 +213,8 @@ entry opens the editor when a built-in preset is active. In Preferences:
 
 - Check which graphs to show; use **Up/Down** to arrange them.
 - Set graph height between 64 and 240 pixels.
+- Choose aggregate or individual CPU, network, disk and GPU sources. **Refresh
+  source lists** uses the latest collector inventory without discarding the draft.
 - Select a preset, name a custom palette and edit its seven colors.
 - Use **Load theme…** and **Save theme…** for local portable JSON files.
 - **Apply** uses the draft and saves preferences; **Cancel** keeps the active layout
@@ -219,6 +226,16 @@ shows a recovery message and keeps Preferences accessible. Headless diagnostics
 continue reporting all collectors independently of these presentation preferences.
 Graph height is a minimum; small windows scroll. Window placement/pinning is not
 part of these preferences.
+
+CPU choices use logical core IDs. Network choices include loopback, while the
+default aggregate excludes it. Individual disks include partitions and stacked
+devices; the default aggregate uses whole physical devices as described above.
+GPU choices retain the collector's adapter identity; the default displays up to
+three adapters. A saved source that disappears stays selected and shows unavailable
+until it returns or another source is chosen. It never silently changes to an
+aggregate. Changing sources resets the affected history. Network/disk membership,
+identity changes and counter resets establish a fresh rate baseline; device
+replacement detection is limited by the identity metadata the kernel exposes.
 
 Custom theme files use the suggested `.xrg-theme.json` extension. Exporting a preset
 provides a valid starting document. The format contains `format: "xrg-ng-theme"`,
@@ -237,8 +254,9 @@ palette is embedded in saved preferences, so reopening does not depend on the
 original imported file. XTF conversion and legacy C/GTK3 INI import remain follow-up
 work; the macOS application's XTF load/save behavior is unchanged.
 
-Settings use versioned JSON in the existing `settings.conf` path. The earlier Rust
-`theme=Ocean` format still loads and upgrades only when preferences are next saved.
+Settings use version 2 JSON in the existing `settings.conf` path. Version 1 JSON
+and the earlier Rust `theme=Ocean` format still load, preserving their theme/layout
+and using defaults for new controls. They upgrade only when preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:
@@ -308,8 +326,14 @@ threads doing work under a sleeping leader do not increment that count. Its
 tooltip and accessibility details list the top ten processes by
 CPU and RSS, with PID, name, real UID when readable, threads, state and nice value.
 Names come from `/proc/PID/stat`; command-line arguments and environments are not
-read. The collector API also supports CPU/memory/PID/name sorting, name filters
-and UID filters; detailed GTK table/filter controls remain follow-up work.
+read. **Processes…** in the toolbar opens a read-only table with PID, name, real
+UID, CPU percentage, resident MiB, threads and state. Sort by CPU or RSS descending,
+PID ascending or name A–Z; filter by case-insensitive name substring and numeric
+real UID, with **My UID** as a shortcut. Filters apply before the 10–200 row limit.
+An invalid UID clears the table and reports the error. Sorting/filtering runs in a
+background query over the collector's existing snapshot, without another `/proc`
+scan. Controls persist between launches. Coverage counts and partial-scan status
+remain visible; unknown CPU percentages and UIDs display as unavailable.
 
 CPU percentages use per-process `utime + stime`, elapsed monotonic time and the
 host's `_SC_CLK_TCK`: **100% is one core**, so a multi-threaded process may exceed
@@ -390,12 +414,12 @@ Support remains best effort; device reports and feedback are welcome.
 
 ## Remaining migration
 
-1. Intel GPU PMU utilization, additional vendor counters, VRAM graphs/device selection,
+1. Intel GPU PMU utilization, additional vendor counters, VRAM graphs,
    richer battery health/time, calibrated/fan sensors and detailed process controls.
 2. AI provider/model detail controls, custom data roots/endpoints, append-offset
    scanning for very large logs, optional price tables, and a weather ABI consumer.
-3. Per-core/interface/device selection, process tables/filters, context menus,
-   deeper metric preferences, XTF conversion and explicit legacy-settings import.
+3. Context menus, deeper metric preferences, XTF conversion and explicit
+   legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global
    window placement / keep-above APIs; supported positioning/pinning needs a
    compositor-specific implementation. No always-on-top or edge-placement promise

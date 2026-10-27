@@ -19,6 +19,7 @@ struct Row {
 pub(super) struct Dialog {
     pub window: gtk::Window,
     shell: Weak<Shell>,
+    pub targets: Rc<super::targets::Targets>,
     draft: RefCell<Settings>,
     updating: Cell<bool>,
     busy: Cell<bool>,
@@ -89,6 +90,14 @@ impl Dialog {
         height.update_property(&[gtk::accessible::Property::Label("Graph height in pixels")]);
         graph_row.append(&height);
         form.append(&graph_row);
+        let targets = Rc::new(super::targets::Targets::new(
+            &shell.inventory(),
+            &shell.settings.borrow().metrics,
+        ));
+        form.append(&targets.widget);
+        let refresh = gtk::Button::with_label("Refresh source lists");
+        form.append(&refresh);
+
         form.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         let theme_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let label = gtk::Label::new(Some("Theme"));
@@ -183,6 +192,7 @@ impl Dialog {
         let dialog = Rc::new(Self {
             window,
             shell: Rc::downgrade(shell),
+            targets,
             draft: RefCell::new(shell.settings.borrow().clone()),
             updating: Cell::new(false),
             busy: Cell::new(false),
@@ -288,6 +298,25 @@ impl Dialog {
             }
         });
         let weak = Rc::downgrade(&dialog);
+        dialog.targets.connect_changed(move || {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().metrics = dialog.targets.value();
+            }
+        });
+        let weak = Rc::downgrade(&dialog);
+        refresh.connect_clicked(move |_| {
+            if let Some(dialog) = weak.upgrade()
+                && let Some(shell) = dialog.shell.upgrade()
+            {
+                dialog.updating.set(true);
+                let selection = dialog.draft.borrow().metrics.clone();
+                dialog.targets.refresh(&shell.inventory(), &selection);
+                dialog.updating.set(false);
+            }
+        });
+        let weak = Rc::downgrade(&dialog);
         reset.connect_clicked(move |_| {
             if let Some(dialog) = weak.upgrade() {
                 *dialog.draft.borrow_mut() = Settings::default();
@@ -372,6 +401,7 @@ impl Dialog {
             previous = Some(row.widget.clone());
         }
         self.height.set_value(settings.graph_height as f64);
+        self.targets.set(&settings.metrics);
         let palette = match &settings.theme {
             ThemeChoice::Custom { theme } => shared::Theme {
                 name: theme.name.clone(),
