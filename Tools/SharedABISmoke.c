@@ -7,6 +7,26 @@
 #include <string.h>
 int main(void) {
     assert(xrg_shared_abi_version() == 1);
+    uint8_t station[4] = {42, 42, 42, 42};
+    assert(xrg_metar_station((const uint8_t *)"too-long", 8, station, 4) == -1 && station[0] == 42);
+    assert(xrg_metar_station((const uint8_t *)" ksea ", 6, station, 4) == 4);
+    assert(memcmp(station, "KSEA", 4) == 0);
+    const char *metar = "KSEA 271200Z 00000KT 10SM 00/M02 A3000";
+    double weather[10];
+    for (int i = 0; i < 10; i++) weather[i] = 99;
+    uint32_t weather_flags = 99;
+    uint8_t raw_metar[8192] = {42};
+    assert(xrg_metar_latest_parse((const uint8_t *)metar, strlen(metar), station, 4,
+        1793103000, weather, 10, &weather_flags, raw_metar, 1) == -2);
+    assert(weather[0] == 99 && weather[9] == 99 && weather_flags == 99 && raw_metar[0] == 42);
+    int32_t raw_count = xrg_metar_latest_parse((const uint8_t *)metar, strlen(metar), station, 4,
+        1793103000, weather, 10, &weather_flags, raw_metar, sizeof(raw_metar));
+    assert(raw_count == (int32_t)strlen(metar) && memcmp(raw_metar, metar, raw_count) == 0);
+    assert(weather[0] == 1793102400 && weather[1] == 0 && (weather_flags & 1));
+    assert(weather[5] == 0 && (weather_flags & (1 << 4)) && !(weather_flags & (1 << 5)));
+    assert(fabs(weather[9] - 30) < 0.000001);
+    assert(xrg_metar_latest_parse(NULL, 1, station, 4, 1793103000,
+        weather, 10, &weather_flags, raw_metar, sizeof(raw_metar)) == -1);
     void *history = xrg_history_create(3);
     assert(history);
     for (int i = 1; i <= 4; i++) assert(xrg_history_append(history, i) == 0);

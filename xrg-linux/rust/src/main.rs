@@ -26,7 +26,7 @@ fn main() -> ExitCode {
         if let Some(error) = error {
             eprintln!("Preferences unavailable; using default AI sources: {error}");
         }
-        let mut sampler = Sampler::live_with_preferences(true, settings.ai);
+        let mut sampler = Sampler::live_with_sources(true, settings.ai, settings.weather);
         let mut valid = false;
         for index in 0..count {
             let snapshot = sampler.sample();
@@ -34,6 +34,9 @@ fn main() -> ExitCode {
             println!("sample={} valid={}", snapshot.sequence, snapshot.valid);
             for panel in snapshot.panels {
                 println!("{}: {}", panel.title, panel.label);
+            }
+            if let Some(weather) = snapshot.weather {
+                println!("Weather: {}", weather.summary);
             }
             if index + 1 < count {
                 std::thread::sleep(Duration::from_secs(1));

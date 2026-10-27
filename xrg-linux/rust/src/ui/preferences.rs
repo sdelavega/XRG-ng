@@ -322,8 +322,10 @@ impl Dialog {
         reset.connect_clicked(move |_| {
             if let Some(dialog) = weak.upgrade() {
                 let ai = dialog.draft.borrow().ai.clone();
+                let weather = dialog.draft.borrow().weather.clone();
                 *dialog.draft.borrow_mut() = Settings {
                     ai,
+                    weather,
                     ..Settings::default()
                 };
                 dialog.refresh();

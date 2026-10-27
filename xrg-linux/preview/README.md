@@ -16,7 +16,7 @@ On Ubuntu 24.04:
 
 ```sh
 sudo apt-get update
-sudo apt-get install libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 curl
+sudo apt-get install libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 curl ca-certificates
 ```
 
 Python 3.11+ is only used by the optional install/uninstall scripts. Running directly
@@ -44,6 +44,13 @@ Use **AI…** for provider totals, Ollama model inventories and saved source set
 The Sources tab can disable providers, override local data paths and select local
 HTTP endpoints. These controls and their limits are described in
 `share/doc/xrg-ng/DEVELOPMENT.md`.
+
+The toolbar's sun icon opens **Weather**. Requests are off by default; enable
+them and apply a four-character ICAO station to show current station observations.
+Metric/US units and a 5–60 minute refresh interval are saved. The window shows the
+observation age, raw METAR and explicit stale/error states. **Refresh now** obeys
+a one-minute request minimum per instance. Weather uses HTTPS to the NWS Aviation
+Weather Center; it does not detect your location or provide a forecast.
 
 ## Optional desktop installation
 

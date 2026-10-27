@@ -5,6 +5,7 @@ mod preferences;
 mod processes;
 mod smoke;
 mod targets;
+mod weather;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -38,6 +39,8 @@ struct Shell {
     processes: RefCell<Option<Rc<processes::Window>>>,
     ai_window: RefCell<Option<Rc<ai::Window>>>,
     ai_control: xrg_ng_linux::ai::Control,
+    weather_window: RefCell<Option<Rc<weather::Window>>>,
+    weather_control: xrg_ng_linux::weather::Control,
     writer: Writer,
     revision: Cell<u64>,
     saved_revision: Cell<u64>,
@@ -51,9 +54,13 @@ impl Shell {
         error: Option<String>,
         smoke: bool,
         state: Rc<RefCell<Option<Snapshot>>>,
-        controls: (SelectionControl, xrg_ng_linux::ai::Control),
+        controls: (
+            SelectionControl,
+            xrg_ng_linux::ai::Control,
+            xrg_ng_linux::weather::Control,
+        ),
     ) -> Rc<Self> {
-        let (selection, ai_control) = controls;
+        let (selection, ai_control, weather_control) = controls;
         let settings = Rc::new(RefCell::new(settings));
         let theme = Rc::new(RefCell::new(
             settings
@@ -101,6 +108,10 @@ impl Shell {
         let ai_button = gtk::Button::with_label("AI…");
         ai_button.set_tooltip_text(Some("AI usage, model inventories and sources"));
         toolbar.append(&ai_button);
+        let weather_button = gtk::Button::from_icon_name("weather-clear-symbolic");
+        weather_button.set_tooltip_text(Some("Weather · station observations"));
+        weather_button.update_property(&[gtk::accessible::Property::Label("Weather")]);
+        toolbar.append(&weather_button);
         let prefs = gtk::Button::from_icon_name("preferences-system-symbolic");
         prefs.set_tooltip_text(Some("Preferences · graphs and themes"));
         prefs.update_property(&[gtk::accessible::Property::Label("Preferences")]);
@@ -162,7 +173,7 @@ impl Shell {
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("XRG-ng")
-            .default_width(600)
+            .default_width(640)
             .default_height(if smoke { 1400 } else { 850 })
             .child(&content)
             .build();
@@ -186,6 +197,8 @@ impl Shell {
             processes: RefCell::new(None),
             ai_window: RefCell::new(None),
             ai_control,
+            weather_window: RefCell::new(None),
+            weather_control,
             writer: Writer::start(store),
             revision: Cell::new(0),
             saved_revision: Cell::new(0),
@@ -235,6 +248,12 @@ impl Shell {
         ai_button.connect_clicked(move |_| {
             if let Some(shell) = weak.upgrade() {
                 shell.ai();
+            }
+        });
+        let weak = Rc::downgrade(&shell);
+        weather_button.connect_clicked(move |_| {
+            if let Some(shell) = weak.upgrade() {
+                shell.weather();
             }
         });
         if let Some(error) = error {
@@ -297,6 +316,11 @@ impl Shell {
                 .expect("Validated AI preferences");
         }
         *self.theme.borrow_mut() = palette;
+        if old.weather != settings.weather {
+            self.weather_control
+                .set(settings.weather.clone())
+                .expect("Validated weather preferences");
+        }
         *self.settings.borrow_mut() = settings.clone();
         if process_change && let Some(window) = self.processes.borrow().as_ref() {
             window.set_view(settings.processes.clone());
@@ -337,6 +361,23 @@ impl Shell {
             &self.settings.borrow().ai,
         );
         *self.ai_window.borrow_mut() = Some(window.clone());
+        window.window.present();
+        window
+    }
+    fn weather(self: &Rc<Self>) -> Rc<weather::Window> {
+        if let Some(window) = self.weather_window.borrow().as_ref() {
+            window.window.present();
+            return window.clone();
+        }
+        let window = weather::Window::new(self);
+        window.update(
+            self.state
+                .borrow()
+                .as_ref()
+                .and_then(|s| s.weather.as_ref()),
+            &self.settings.borrow().weather,
+        );
+        *self.weather_window.borrow_mut() = Some(window.clone());
         window.window.present();
         window
     }
@@ -420,13 +461,15 @@ pub fn run(smoke_mode: bool) -> bool {
             settings::preferences_path()
         };
         let (store, settings, error) = Store::open(path);
-        let monitor = Worker::start_with_preferences(
+        let monitor = Worker::start_with_sources(
             !smoke_mode,
             settings.metrics.clone(),
             settings.ai.clone(),
+            settings.weather.clone(),
         );
         let selection = monitor.selection_control();
         let ai_control = monitor.ai_control();
+        let weather_control = monitor.weather_control();
         let latest = monitor.latest.clone();
         *owner.borrow_mut() = Some(monitor);
         let state = Rc::new(RefCell::new(None::<Snapshot>));
@@ -437,7 +480,7 @@ pub fn run(smoke_mode: bool) -> bool {
             error,
             smoke_mode,
             state.clone(),
-            (selection, ai_control),
+            (selection, ai_control, weather_control),
         );
         *shell_owner.borrow_mut() = Some(view.clone());
         let weak = Rc::downgrade(&view);
@@ -475,6 +518,12 @@ pub fn run(smoke_mode: bool) -> bool {
                     window.update(Some(update), &shell.settings.borrow().ai);
                 }
                 *state.borrow_mut() = Some(snapshot);
+                if let (Some(window), Some(update)) = (
+                    shell.weather_window.borrow().as_ref(),
+                    state.borrow().as_ref().and_then(|s| s.weather.as_ref()),
+                ) {
+                    window.update(Some(update), &shell.settings.borrow().weather);
+                }
                 for area in &shell.areas {
                     area.queue_draw();
                 }

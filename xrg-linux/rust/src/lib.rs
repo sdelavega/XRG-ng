@@ -9,6 +9,7 @@ pub mod gpu;
 pub mod gpu_memory;
 pub mod hardware;
 pub mod shared;
+pub mod weather;
 
 pub mod process;
 mod system_file;

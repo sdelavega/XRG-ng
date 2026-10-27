@@ -66,6 +66,38 @@ struct SharedCoreTests {
         #expect(report.windKnots == 16 && report.gustKnots == 24 && report.visibilityMiles == 1.5)
         #expect(XRGWeatherReport.reports(in: "KSEA 251953Z NIL", station: "KSEA").isEmpty)
     }
+    @Test func metarDatesCrossMonthAndLeapBoundariesWithoutMixingStations() throws {
+        let formatter = ISO8601DateFormatter()
+        let reference = try #require(formatter.date(from: "2026-11-01T00:10:00Z"))
+        let body = "KSEA 312353Z 00000KT 10SM 00/M02 A3000\nKJFK 010001Z 09040KT 1SM 30/20 A2900\nKSEA 312253Z 18005KT 10SM 10/05 A2990"
+        let latest = try #require(XRGWeatherReport.latest(in: body, station: "ksea", relativeTo: reference))
+        #expect(latest.0.temperatureC == 0 && latest.0.windKnots == 0)
+        #expect(latest.1 == formatter.date(from: "2026-10-31T23:53:00Z"))
+        #expect(!latest.0.raw.contains("KJFK"))
+        let leap = try #require(formatter.date(from: "2024-03-01T00:10:00Z"))
+        #expect(XRGWeatherReport.latest(in: "KSEA 292353Z 00000KT", station: "KSEA", relativeTo: leap)?.1 == formatter.date(from: "2024-02-29T23:53:00Z"))
+        let nonLeap = try #require(formatter.date(from: "2025-03-01T00:10:00Z"))
+        #expect(XRGWeatherReport.latest(in: "KSEA 292353Z 00000KT", station: "KSEA", relativeTo: nonLeap) == nil)
+    }
+    @Test func metarAndSpeciPrefixesStayWithTheirOwnReport() throws {
+        let body = "METAR KSEA 272053Z 22012KT 10SM 12/07 A2997 RMK AO2\nSPECI KSEA 272032Z 22012KT 10SM 11/07 A2997\nMETAR KJFK 272000Z 09005KT 10SM 20/10 A3000"
+        let reports = XRGWeatherReport.reports(in: body, station: "KSEA")
+        #expect(reports.count == 2)
+        #expect(reports.first?.raw == "KSEA 272053Z 22012KT 10SM 12/07 A2997 RMK AO2")
+        #expect(reports.last?.raw == "KSEA 272032Z 22012KT 10SM 11/07 A2997")
+        #expect(reports.last?.temperatureC == 11)
+    }
+    @Test func metarFreshnessAndInternationalWindUnits() throws {
+        let reference = try #require(ISO8601DateFormatter().date(from: "2026-10-27T12:10:00Z"))
+        #expect(XRGWeatherReport.latest(in: "KSEA 271230Z 00000KT", station: "KSEA", relativeTo: reference) == nil)
+        #expect(XRGWeatherReport.latest(in: "KSEA 251200Z 00000KT", station: "KSEA", relativeTo: reference) == nil)
+        let report = try #require(XRGWeatherReport.latest(in: "KSEA 271200Z VRB05G10MPS CAVOK M01/M03 Q1013", station: "KSEA", relativeTo: reference)?.0)
+        #expect(abs((report.windKnots ?? 0) * 1.852 - 18) < 0.000001)
+        #expect(report.windDirection == -1 && report.temperatureC == -1)
+        #expect(report.visibilityQualifier == "≥")
+        let kmh = try #require(XRGWeatherReport.reports(in: "KSEA 271200Z 09020KMH", station: "KSEA").first)
+        #expect(abs((kmh.windKnots ?? 0) * 1.852 - 20) < 0.000001)
+    }
     @Test(arguments: XRGBuiltinTheme.allCases) func palettesKeepSevenBoundedColors(_ theme: XRGBuiltinTheme) {
         #expect(theme.rgba.count == 7)
         #expect(theme.rgba.allSatisfy { $0.count == 4 && $0.allSatisfy { $0.isFinite && (0...1).contains($0) } })

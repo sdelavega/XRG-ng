@@ -248,11 +248,13 @@ pub struct Settings {
     pub processes: ProcessView,
     #[serde(default)]
     pub ai: crate::ai::Preferences,
+    #[serde(default)]
+    pub weather: crate::weather::Preferences,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 4,
+            version: 5,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -264,12 +266,13 @@ impl Default for Settings {
             metrics: MetricSelection::default(),
             processes: ProcessView::default(),
             ai: crate::ai::Preferences::default(),
+            weather: crate::weather::Preferences::default(),
         }
     }
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 4 {
+        if self.version != 5 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -283,6 +286,7 @@ impl Settings {
         self.metrics.validate()?;
         self.processes.validate()?;
         self.ai.validate()?;
+        self.weather.validate()?;
         Ok(())
     }
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
@@ -325,10 +329,10 @@ impl Settings {
             result.modules.extend(
                 [Module::GpuMemory, Module::Fans].map(|id| ModuleSetting { id, visible: false }),
             );
-            result.version = 4;
+            result.version = 5;
         }
-        if result.version == 3 {
-            result.version = 4;
+        if result.version == 3 || result.version == 4 {
+            result.version = 5;
         }
         result.validate()?;
         Ok(result)

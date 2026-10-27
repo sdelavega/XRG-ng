@@ -7,6 +7,49 @@ import Foundation
 // the matching create function and release it exactly once. No Swift layout escapes.
 @c(xrg_shared_abi_version) public func abiVersion() -> UInt32 { 1 }
 
+// Additive weather ABI. Fixed-width scalar arrays, never Swift struct layout.
+@c(xrg_metar_station) public func metarStation(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
+    guard length <= 64, let bytes, let output, capacity >= 4,
+          let text = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(length)), encoding: .utf8),
+          let station = XRGWeatherReport.station(text) else { return -1 }
+    for (index, byte) in station.utf8.enumerated() { output[index] = byte }
+    return 4
+}
+@c(xrg_metar_latest_parse) public func metarLatestParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ station: UnsafePointer<UInt8>?, _ stationLength: UInt32, _ reference: Int64,
+    _ values: UnsafeMutablePointer<Double>?, _ capacity: UInt32, _ flags: UnsafeMutablePointer<UInt32>?,
+    _ raw: UnsafeMutablePointer<UInt8>?, _ rawCapacity: UInt32) -> Int32 {
+    guard length <= 2_097_152, stationLength <= 64, (0...253_402_300_799).contains(reference),
+          let bytes, let station, let values, capacity >= 10, let flags, let raw,
+          let body = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(length)), encoding: .utf8),
+          let code = String(bytes: UnsafeBufferPointer(start: station, count: Int(stationLength)), encoding: .utf8),
+          let (report, date) = XRGWeatherReport.latest(in: body, station: code, relativeTo: Date(timeIntervalSince1970: Double(reference))),
+          report.raw.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { return -1 }
+    let encoded = Array(report.raw.utf8)
+    guard encoded.count <= 8192 else { return -1 }
+    guard encoded.count <= rawCapacity else { return -2 }
+    let fields: [Double?] = [report.temperatureC, report.dewpointC, report.humidity.map(Double.init),
+        report.windDirection.map(Double.init), report.windKnots, report.gustKnots, report.visibilityMiles,
+        report.pressureHPA, report.pressureIn]
+    var valid: UInt32 = 0
+    var result = [date.timeIntervalSince1970]
+    for (index, field) in fields.enumerated() {
+        if let field, field.isFinite { valid |= 1 << index; result.append(field) }
+        else { result.append(0) }
+    }
+    switch report.visibilityQualifier {
+    case "<": valid |= 1 << 16
+    case ">": valid |= 1 << 17
+    case "≥": valid |= 1 << 18
+    default: break
+    }
+    for (index, value) in result.enumerated() { values[index] = value }
+    for (index, byte) in encoded.enumerated() { raw[index] = byte }
+    flags.pointee = valid
+    return Int32(encoded.count)
+}
+
 @c(xrg_history_create) public func historyCreate(_ capacity: UInt32) -> UnsafeMutableRawPointer? {
     guard (1...86_400).contains(capacity) else { return nil }
     let history = XRGDataSet()

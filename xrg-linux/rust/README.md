@@ -7,6 +7,8 @@ aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature, GPU activity, AI token-rate, process-count and
 Coral TPU inference-rate, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU selection and a
 sortable, filterable process table.
+An opt-in **Weather** window shows station observations using the shared Swift
+METAR decoder, with saved station, units and refresh controls.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Hardware support and feedback
@@ -35,12 +37,13 @@ and contributions are welcome. See the [project support policy](../../README.md#
   `Shared/include/xrg_shared.h` documents ownership and capacities. No C
   implementation or shared Swift/Rust object layout is required. The first ABI
   exposes histories, rates, themes, provider usage records, local metrics and model
-  inventories. METAR sources compile in the package but have no Rust consumer yet.
+  inventories, station validation and dated METAR observations. Missing weather
+  values have explicit validity flags, so a valid zero is not treated as absent.
 - **Rust:** owns `/proc` and `/sys` collection, GTK4/Cairo drawing, configuration and
   lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
   Rust snapshots through bounded latest-value slots; GTK touches them on its main
   thread. No shell commands, provider scans or collection run in drawing callbacks.
-- **Preferences:** graph visibility/order, height, metric sources, process filters and AI sources
+- **Preferences:** graph visibility/order, height, metric sources, process filters, AI sources and weather
   and theme colors are saved in
   `$XDG_CONFIG_HOME/xrg-ng/settings.conf` (or `~/.config/xrg-ng`). All six shared
   presets remain selectable alongside a custom palette. The editor supports
@@ -238,8 +241,11 @@ checks invalid UID handling, filters to its own process and reopens saved filter
 The AI window checks invalid paths/URLs, applying/reopening provider settings,
 discarding drafts, stale-report suppression, and preservation of AI sources when
 restoring graph defaults. It renders a clearly labeled synthetic usage/model fixture
-without scanning provider data. The main window, preferences, process table and
-both AI tabs are exported as PNGs. Smoke
+without scanning provider data. Weather checks invalid station rejection, normalized
+Apply/reopen, draft discard, old-station suppression and preservation when restoring
+graph defaults, using an explicitly labeled fixture with no network requests.
+The main window, preferences, process table, both AI tabs and weather window are
+exported as PNGs. Smoke
 mode uses temporary settings/theme files and never reads or writes user preferences.
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
 behavior, screen readers or physical-device collection. Linux build output is
@@ -325,12 +331,13 @@ palette is embedded in saved preferences, so reopening does not depend on the
 original imported file. XTF conversion and legacy C/GTK3 INI import remain follow-up
 work; the macOS application's XTF load/save behavior is unchanged.
 
-Settings use version 4 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 5 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
 twelve graphs by default. Version 3 layouts also load, adding default AI source
-controls. The earlier Rust `theme=Ocean` format also loads with
+controls. Versions 1–4 gain weather settings with requests **disabled**. Existing
+AI sources, layouts and themes are preserved. The earlier Rust `theme=Ocean` format also loads with
 default controls. Formats upgrade only when preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
@@ -373,7 +380,7 @@ optionally with a path prefix, to which `/api/tags` and `/api/ps` are appended.
 
 **Apply sources** validates the entire draft and saves it; **Close** discards unsaved
 edits. **Default sources** changes only the draft until applied. Restoring graph/theme
-defaults keeps AI source choices. Changes coalesce in a bounded slot and apply on
+defaults keeps AI source and weather choices. Changes coalesce in a bounded slot and apply on
 the next five-second AI poll; a running scan may finish first. Rates/history reset
 when source preferences change, and the UI suppresses reports from the old
 configuration while waiting. No worker restart/join, file scan, SQLite query or
@@ -517,12 +524,50 @@ statistics shows **statistics unavailable**. No device utilization is inferred
 from USB connection, mapped pages, latency, temperature or inference counts.
 Support remains best effort; device reports and feedback are welcome.
 
+## Weather observations
+
+Open **Weather** with the sun icon in the main toolbar. Requests are **off by
+default**. Enable them, enter a four-character ICAO station such as `KSEA`, choose
+Metric or US units, and press **Apply**. Station codes are normalized to uppercase;
+invalid drafts leave active settings unchanged. **Close** discards unapplied edits.
+No automatic location detection or API key is used.
+
+The window shows temperature, dewpoint, relative humidity, wind/gusts, visibility,
+pressure, observation time/age, source and normalized raw METAR. Missing values
+show **unavailable**; zero temperature and calm wind remain valid readings.
+Metric uses °C, km/h, km and hPa; US uses °F, mph, miles and inHg. The shared Swift
+decoder handles KT/MPS/KMH winds, visibility qualifiers, mixed-station responses
+and METAR/SPECI prefixes. Month/year are inferred in UTC relative to the local
+clock, accepting observations from the preceding 36 hours through five minutes
+ahead, including month/leap-day rollover. The newest matching report wins.
+These are station observations, not forecasts.
+
+Automatic refresh is configurable from **5–60 minutes**, defaulting to 15.
+**Refresh now** coalesces repeated clicks. All requests, including changes of
+station and re-enabling weather, obey a **one-minute minimum per app instance**.
+Changing display units reuses the cached report. Observations older than two
+hours are marked **stale**. A failed refresh retains the same station's previous
+report with its age and an explicit error/stale status; changing station or
+disabling weather clears that cache. The cache is in memory only.
+
+Rust requests the fixed NWS Aviation Weather Center HTTPS endpoint
+`/api/data/metar?ids=STATION&format=raw&hours=24` with an XRG-ng user agent.
+The runtime needs `curl` and trusted CA certificates. Redirects and proxies are
+disabled; normal TLS certificate verification remains enabled. Each request has
+a three-second connection timeout, five-second curl timeout and a bounded child
+process deadline of 5.5 seconds. Responses are capped at 2 MiB; parsing examines
+up to 2,048 headers, with at most 8,192 UTF-8 bytes and 256 fields per report.
+Acquisition and parsing run on a separate weather worker, outside GTK and the
+system/AI workers. Publishing uses a copied latest-value slot whose mutex is not
+held during network activity. Headless diagnostics honor saved weather settings;
+automated tests use fixtures and make no weather requests.
+
 ## Remaining migration
 
 1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
    support, individual fan/sensor controls and detailed process controls.
 2. Per-model provider token breakdowns where recorded, append-offset scanning for
-   very large logs, optional price tables, and a weather ABI consumer.
+   very large logs and optional price tables.
 3. Context menus, deeper metric preferences, XTF conversion and explicit
    legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global

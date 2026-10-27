@@ -16,6 +16,7 @@ pub(super) struct Harness {
     dialog: Option<Rc<Dialog>>,
     process: Option<Rc<super::processes::Window>>,
     ai: Option<Rc<super::ai::Window>>,
+    weather: Option<Rc<super::weather::Window>>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -45,6 +46,7 @@ impl Harness {
             dialog: None,
             process: None,
             ai: None,
+            weather: None,
             expected: None,
             since: Instant::now(),
         })
@@ -299,7 +301,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 4 && loaded.processes.limit == 20,
+                    loaded.version == 5 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -411,6 +413,96 @@ impl Harness {
                 require(
                     error.is_none() && loaded == *self.expected.as_ref().unwrap(),
                     "Graph defaults lost the saved AI settings",
+                )?;
+                let before = shell.settings.borrow().clone();
+                let window = shell.weather();
+                window.enabled.set_active(true);
+                window.station.set_text("BAD;URL");
+                window.apply.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before
+                        && window.status().contains("four-character"),
+                    "Invalid weather station changed preferences",
+                )?;
+                window.station.set_text(" ksea ");
+                window.units.set_selected(1);
+                window.interval.set_value(5.);
+                window.apply.emit_clicked();
+                require(
+                    shell.settings.borrow().weather.station == "KSEA"
+                        && shell.settings.borrow().weather.enabled,
+                    "Weather station did not normalize/apply",
+                )?;
+                window.refresh.emit_clicked();
+                require(
+                    window.status().contains("cooldown"),
+                    "Weather refresh did not explain throttling",
+                )?;
+                let active = shell.settings.borrow().weather.clone();
+                let fixture = xrg_ng_linux::weather::Update {
+                    preferences: active.clone(), observation: None, stale: true, cooldown_seconds: 60,
+                    summary: "Automated weather UI fixture".into(),
+                    detail: "Automated UI fixture — not a live report\n\nKSEA · stale observation\nObserved: 2026-10-27 12:00 UTC\nObservation age: 180 min\n\nTemperature: 32.0 °F\nDewpoint: 28.4 °F\nHumidity: 86 %\nWind: 11.5 mph\nVisibility: <0.25 mi\nPressure: 30.00 inHg\n\nRaw METAR:\nKSEA 271200Z 09010KT M1/4SM 00/M02 A3000".into(),
+                };
+                window.update(Some(&fixture), &active);
+                require(
+                    window.text().contains("stale observation"),
+                    "Weather observation did not render",
+                )?;
+                let other = xrg_ng_linux::weather::Preferences {
+                    station: "KJFK".into(),
+                    ..active.clone()
+                };
+                window.update(Some(&fixture), &other);
+                require(
+                    !window.text().contains("KSEA"),
+                    "Old station data survived a weather source change",
+                )?;
+                window.update(Some(&fixture), &active);
+                self.expected = Some(shell.settings.borrow().clone());
+                self.weather = Some(window);
+                self.stage = 17;
+            }
+            17 if self.since.elapsed() > Duration::from_millis(200) => {
+                let window = self.weather.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_WEATHER_IMAGE") {
+                    window.snapshot(&PathBuf::from(path))?;
+                }
+                window.close.emit_clicked();
+                self.stage = 18;
+            }
+            18 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Weather preferences did not persist",
+                )?;
+                let window = shell.weather();
+                require(
+                    window.station.text() == "KSEA" && window.units.selected() == 1,
+                    "Weather preferences did not reopen",
+                )?;
+                window.station.set_text("KJFK");
+                window.close.emit_clicked();
+                require(
+                    shell.settings.borrow().weather == loaded.weather,
+                    "Closing weather applied an unsaved draft",
+                )?;
+                let graphs = shell.preferences();
+                graphs.reset.emit_clicked();
+                graphs.apply.emit_clicked();
+                require(
+                    shell.settings.borrow().weather == loaded.weather,
+                    "Graph defaults reset the weather station",
+                )?;
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 19;
+            }
+            19 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Weather preferences were lost after graph defaults",
                 )?;
                 return Ok(true);
             }

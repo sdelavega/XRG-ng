@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 5;
+    value.version = 6;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -381,7 +381,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        4
+        5
     );
 }
 #[test]
@@ -461,7 +461,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 4);
+    assert_eq!(migrated.version, 5);
     assert_eq!(migrated.modules.len(), 12);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -514,6 +514,34 @@ fn version_three_ai_defaults_upgrade_without_writes_and_custom_sources_round_tri
     loaded.ai.enabled = [false, true, false, true];
     loaded.ai.claude_logs = Some("/offline/custom projects".into());
     loaded.ai.ollama_url = "http://[::1]:11434/local".into();
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+}
+
+#[test]
+fn version_four_keeps_ai_and_layout_and_adds_opt_in_weather_without_writing() {
+    let f = Fixture::new();
+    let mut old = Settings::default();
+    old.ai.enabled = [false; 4];
+    old.modules[0].visible = false;
+    let mut wire = serde_json::to_value(&old).unwrap();
+    wire["version"] = 4.into();
+    wire.as_object_mut().unwrap().remove("weather");
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, old);
+    assert!(!loaded.weather.enabled);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.weather = xrg_ng_linux::weather::Preferences {
+        enabled: true,
+        station: "KSEA".into(),
+        units: xrg_ng_linux::weather::Units::Us,
+        refresh_minutes: 5,
+    };
     store.save(&loaded).unwrap();
     let (_, reopened, error) = Store::open(Some(f.path()));
     assert!(error.is_none());

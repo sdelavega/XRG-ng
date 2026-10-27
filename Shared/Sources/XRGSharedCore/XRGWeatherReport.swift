@@ -28,6 +28,7 @@ import Foundation
 struct XRGWeatherReport: Sendable {
     let raw: String
     let time: Int
+    var observationDay = 0
     var windDirection: Int?
     var windKnots: Double?
     var gustKnots: Double?
@@ -64,31 +65,37 @@ struct XRGWeatherReport: Sendable {
         guard let station = Self.station(station), text.utf8.count <= 2_097_152 else { return [] }
         let clean = text.replacingOccurrences(of: "<[^>]*>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "&nbsp;", with: " ").replacingOccurrences(of: "&#160;", with: " ")
-        let pattern = "(?<![A-Z0-9])" + NSRegularExpression.escapedPattern(for: station) + "\\s+[0-9]{6}Z\\b"
+        // Split at every station header, not just the requested station. A mixed
+        // response must not overwrite one station's values with another's body.
+        let pattern = "(?<![A-Z0-9])(?:(?:METAR|SPECI)\\s+)?[A-Z0-9]{4}\\s+[0-9]{6}Z\\b"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let matches = regex.matches(in: clean, range: NSRange(clean.startIndex..., in: clean))
         let ns = clean as NSString
         return matches.prefix(2048).enumerated().compactMap { index, match in
             let end = index + 1 < matches.count ? matches[index + 1].range.location : ns.length
             let raw = ns.substring(with: NSRange(location: match.range.location, length: end - match.range.location))
+            guard raw.utf8.count <= 8192 else { return nil }
             return parse(raw, station: station)
         }
     }
     private static func parse(_ raw: String, station: String) -> Self? {
-        let fields = raw.split(whereSeparator: { $0.isWhitespace || $0 == "=" }).map(String.init)
-        guard fields.count >= 2, fields[0] == station,
+        var fields = raw.split(whereSeparator: { $0.isWhitespace || $0 == "=" }).map(String.init)
+        if fields.first == "METAR" || fields.first == "SPECI" { fields.removeFirst() }
+        guard (2...256).contains(fields.count), fields[0] == station,
               let date = captures("^([0-9]{2})([0-9]{2})([0-9]{2})Z$", in: fields[1]),
               let day = Int(date[1]), (1...31).contains(day), let hour = Int(date[2]), hour < 24,
               let minute = Int(date[3]), minute < 60 else { return nil }
         let body = Array(fields.prefix { $0 != "RMK" })
         guard !body.contains("NIL") else { return nil }
-        var report = Self(raw: fields.joined(separator: " "), time: hour * 100 + minute)
+        var report = Self(raw: fields.joined(separator: " "), time: hour * 100 + minute, observationDay: day)
         for (index, field) in body.enumerated().dropFirst(2) {
-            if let wind = captures("^(VRB|[0-9]{3})([0-9]{2,3})(?:G([0-9]{2,3}))?KT$", in: field) {
+            if let wind = captures("^(VRB|[0-9]{3})([0-9]{2,3})(?:G([0-9]{2,3}))?(KT|MPS|KMH)$", in: field) {
                 let direction = wind[1] == "VRB" ? -1 : Int(wind[1]) ?? 361
                 if direction <= 360 {
                     report.windDirection = direction
-                    report.windKnots = Double(wind[2]); report.gustKnots = Double(wind[3])
+                    let factor = wind[4] == "MPS" ? 3600.0 / 1852.0 : wind[4] == "KMH" ? 1.0 / 1.852 : 1.0
+                    report.windKnots = Double(wind[2]).map { $0 * factor }
+                    report.gustKnots = Double(wind[3]).map { $0 * factor }
                 }
             } else if let visibility = captures("^([MP]?)([0-9]+(?:/[0-9]+)?)SM$", in: field) {
                 let parts = visibility[2].split(separator: "/").compactMap { Double($0) }
@@ -126,5 +133,30 @@ struct XRGWeatherReport: Sendable {
         if report.pressureIn == nil { report.pressureIn = report.pressureHPA.map { $0 * 0.02953 } }
         if report.pressureHPA == nil { report.pressureHPA = report.pressureIn.map { $0 / 0.02953 } }
         return report
+    }
+
+    /// Infer the month/year only inside the requested 36-hour observation window.
+    /// Validate components after Calendar construction, which can normalize an
+    /// invalid date (e.g. February 31) into the following month.
+    func observationDate(relativeTo reference: Date) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let month = calendar.date(from: calendar.dateComponents([.year, .month], from: reference)) else { return nil }
+        return (-1...1).compactMap { offset -> Date? in
+            guard let start = calendar.date(byAdding: .month, value: offset, to: month) else { return nil }
+            var parts = calendar.dateComponents([.year, .month], from: start)
+            parts.day = observationDay; parts.hour = time / 100; parts.minute = time % 100; parts.second = 0
+            guard let date = calendar.date(from: parts),
+                  calendar.component(.month, from: date) == parts.month,
+                  calendar.component(.day, from: date) == observationDay,
+                  date.timeIntervalSince(reference) <= 300,
+                  date.timeIntervalSince(reference) >= -129_600 else { return nil }
+            return date
+        }.max()
+    }
+    static func latest(in text: String, station: String, relativeTo reference: Date) -> (Self, Date)? {
+        reports(in: text, station: station).compactMap { report in
+            report.observationDate(relativeTo: reference).map { (report, $0) }
+        }.max { $0.1 < $1.1 }
     }
 }

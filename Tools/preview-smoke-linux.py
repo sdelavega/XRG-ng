@@ -139,7 +139,8 @@ def smoke(args):
                        XRG_SMOKE_PREFS_IMAGE=str(results / "installed-preferences.png"),
                        XRG_SMOKE_PROCESS_IMAGE=str(results / "installed-processes.png"),
                        XRG_SMOKE_AI_IMAGE=str(results / "installed-ai.png"),
-                       XRG_SMOKE_AI_SOURCES_IMAGE=str(results / "installed-ai-sources.png"))
+                       XRG_SMOKE_AI_SOURCES_IMAGE=str(results / "installed-ai-sources.png"),
+                       XRG_SMOKE_WEATHER_IMAGE=str(results / "installed-weather.png"))
         gtk = run(["dbus-run-session", "--", "xvfb-run", "-a", "--server-args=-screen 0 1280x1400x24",
                    sys.executable, Path(__file__).resolve(), "--desktop", test_desktop], gui_env, results / "desktop-launch.log")
         require("GTK_SMOKE_OK" in gtk, "Installed desktop launch did not finish the GTK smoke flow")

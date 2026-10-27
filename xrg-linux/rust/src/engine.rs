@@ -49,12 +49,15 @@ pub struct Snapshot {
     pub inventory: crate::metrics::Inventory,
     pub processes: Result<Arc<crate::process::Report>, String>,
     pub ai: Option<crate::ai::Update>,
+    pub weather: Option<crate::weather::Update>,
 }
 pub struct Sampler {
     source: LinuxSources,
     ai: Option<crate::ai::Worker>,
     ai_panel: Panel,
     ai_update: Option<crate::ai::Update>,
+    weather: Option<crate::weather::Worker>,
+    weather_update: Option<crate::weather::Update>,
     process: crate::process::Collector,
     process_histories: [History; 2],
     tpu: crate::tpu::Collector,
@@ -80,12 +83,27 @@ impl Sampler {
         Self::live_with_preferences(ai_enabled, crate::ai::Preferences::default())
     }
     pub fn live_with_preferences(ai_enabled: bool, preferences: crate::ai::Preferences) -> Self {
+        Self::live_with_sources(
+            ai_enabled,
+            preferences,
+            crate::weather::Preferences::default(),
+        )
+    }
+    pub fn live_with_sources(
+        ai_enabled: bool,
+        preferences: crate::ai::Preferences,
+        weather: crate::weather::Preferences,
+    ) -> Self {
         preferences.validate().expect("Validated AI preferences");
         let mut sampler = Self::with_sources(LinuxSources::live());
         if ai_enabled {
             sampler.ai = crate::ai::Config::live().map(|config| {
                 crate::ai::Worker::controlled(config, preferences, crate::ai::Control::default())
             });
+            sampler.weather = Some(crate::weather::Worker::start(
+                weather,
+                crate::weather::Control::default(),
+            ));
         }
         sampler
     }
@@ -98,6 +116,8 @@ impl Sampler {
             ai: None,
             ai_panel: crate::ai::waiting(),
             ai_update: None,
+            weather: None,
+            weather_update: None,
             gpu,
             process,
             process_histories: array::from_fn(|_| History::new(120)),
@@ -162,6 +182,11 @@ impl Sampler {
         panels.push(self.tpu_panel());
         panels.push(vram);
         panels.push(self.fan_panel());
+        if let Some(weather) = &self.weather
+            && let Some(update) = weather.latest.lock().unwrap().take()
+        {
+            self.weather_update = Some(update);
+        }
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
@@ -171,6 +196,7 @@ impl Sampler {
             inventory: self.inventory.clone(),
             processes: self.process_report.clone(),
             ai: self.ai_update.clone(),
+            weather: self.weather_update.clone(),
         }
     }
     fn process_panel(&mut self) -> Panel {
@@ -670,6 +696,7 @@ pub struct Worker {
     join: Option<thread::JoinHandle<()>>,
     selection: SelectionControl,
     ai: crate::ai::Control,
+    weather: crate::weather::Control,
 }
 impl Worker {
     pub fn start() -> Self {
@@ -686,9 +713,27 @@ impl Worker {
         initial: MetricSelection,
         ai_preferences: crate::ai::Preferences,
     ) -> Self {
+        Self::start_with_sources(
+            ai_enabled,
+            initial,
+            ai_preferences,
+            crate::weather::Preferences::default(),
+        )
+    }
+    pub fn start_with_sources(
+        ai_enabled: bool,
+        initial: MetricSelection,
+        ai_preferences: crate::ai::Preferences,
+        weather_preferences: crate::weather::Preferences,
+    ) -> Self {
         ai_preferences.validate().expect("Validated AI preferences");
         let ai = crate::ai::Control::default();
         let ai_updates = ai.clone();
+        weather_preferences
+            .validate()
+            .expect("Validated weather preferences");
+        let weather = crate::weather::Control::default();
+        let weather_updates = weather.clone();
         let selection = SelectionControl(Arc::new(Mutex::new(None::<MetricSelection>)));
         let updates = selection.clone();
         let latest = Arc::new(Mutex::new(None));
@@ -702,6 +747,12 @@ impl Worker {
                     config,
                     ai_preferences,
                     ai_updates,
+                ));
+            }
+            if ai_enabled {
+                sampler.weather = Some(crate::weather::Worker::start(
+                    weather_preferences,
+                    weather_updates,
                 ));
             }
             sampler
@@ -728,6 +779,7 @@ impl Worker {
             join: Some(join),
             selection,
             ai,
+            weather,
         }
     }
     pub fn selection_control(&self) -> SelectionControl {
@@ -735,6 +787,9 @@ impl Worker {
     }
     pub fn ai_control(&self) -> crate::ai::Control {
         self.ai.clone()
+    }
+    pub fn weather_control(&self) -> crate::weather::Control {
+        self.weather.clone()
     }
     pub fn set_selection(&self, selection: MetricSelection) -> Result<(), String> {
         self.selection.set(selection)

@@ -4,6 +4,19 @@ use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
     fn xrg_shared_abi_version() -> u32;
+    fn xrg_metar_station(bytes: *const u8, length: u32, output: *mut u8, capacity: u32) -> i32;
+    fn xrg_metar_latest_parse(
+        bytes: *const u8,
+        length: u32,
+        station: *const u8,
+        station_length: u32,
+        reference: i64,
+        values: *mut f64,
+        capacity: u32,
+        flags: *mut u32,
+        raw: *mut u8,
+        raw_capacity: u32,
+    ) -> i32;
     fn xrg_history_create(capacity: u32) -> *mut c_void;
     fn xrg_history_free(handle: *mut c_void);
     fn xrg_history_append(handle: *mut c_void, value: f64) -> i32;
@@ -47,6 +60,76 @@ pub fn check_abi() {
         1,
         "Incompatible Swift core"
     );
+}
+pub fn metar_station(text: &str) -> Option<String> {
+    let length = u32::try_from(text.len()).ok()?;
+    let mut output = [0u8; 4];
+    let count = unsafe { xrg_metar_station(text.as_ptr(), length, output.as_mut_ptr(), 4) };
+    (count == 4).then(|| String::from_utf8_lossy(&output).into_owned())
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Metar {
+    pub station: String,
+    pub observed_at: i64,
+    pub temperature_c: Option<f64>,
+    pub dewpoint_c: Option<f64>,
+    pub humidity: Option<f64>,
+    pub wind_degrees: Option<f64>,
+    pub wind_knots: Option<f64>,
+    pub gust_knots: Option<f64>,
+    pub visibility_miles: Option<f64>,
+    pub visibility_qualifier: &'static str,
+    pub pressure_hpa: Option<f64>,
+    pub pressure_in: Option<f64>,
+    pub raw: String,
+}
+pub fn metar_latest(bytes: &[u8], station: &str, reference: i64) -> Option<Metar> {
+    let length = u32::try_from(bytes.len()).ok()?;
+    let station = metar_station(station)?;
+    let mut values = [0.; 10];
+    let mut flags = 0;
+    let mut raw = [0u8; 8192];
+    let count = unsafe {
+        xrg_metar_latest_parse(
+            bytes.as_ptr(),
+            length,
+            station.as_ptr(),
+            4,
+            reference,
+            values.as_mut_ptr(),
+            10,
+            &mut flags,
+            raw.as_mut_ptr(),
+            raw.len() as u32,
+        )
+    };
+    if !(0..=8192).contains(&count) {
+        return None;
+    }
+    let value = |index: usize| (flags & (1 << index) != 0).then_some(values[index + 1]);
+    Some(Metar {
+        station,
+        observed_at: values[0] as i64,
+        temperature_c: value(0),
+        dewpoint_c: value(1),
+        humidity: value(2),
+        wind_degrees: value(3),
+        wind_knots: value(4),
+        gust_knots: value(5),
+        visibility_miles: value(6),
+        visibility_qualifier: if flags & (1 << 16) != 0 {
+            "<"
+        } else if flags & (1 << 17) != 0 {
+            ">"
+        } else if flags & (1 << 18) != 0 {
+            "≥"
+        } else {
+            ""
+        },
+        pressure_hpa: value(7),
+        pressure_in: value(8),
+        raw: std::str::from_utf8(&raw[..count as usize]).ok()?.to_owned(),
+    })
 }
 
 // Rc marker prevents Send/Sync: these Swift objects are confined to their creator
