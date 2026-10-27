@@ -619,13 +619,20 @@ fn gpu_panel_labels_client_scope_and_resets_history_when_counter_scope_changes()
     );
     let mut sampler = Sampler::with_sources(LinuxSources::with_roots(f.0.join("proc"), &f.0));
     assert_eq!(
-        sampler.sample().panels.last().unwrap().series[0].last(),
+        sampler
+            .sample()
+            .panels
+            .iter()
+            .find(|p| p.title == "GPU")
+            .unwrap()
+            .series[0]
+            .last(),
         Some(&20.)
     );
     sampler.sample();
     fs::remove_file(f.0.join("devices/platform/gpu0/gpubusy")).unwrap();
     let next = sampler.sample();
-    let panel = next.panels.last().unwrap();
+    let panel = next.panels.iter().find(|p| p.title == "GPU").unwrap();
     assert!(panel.label.contains("clients"));
     assert!(
         panel

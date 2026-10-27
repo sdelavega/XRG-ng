@@ -26,7 +26,16 @@ int32_t xrg_theme_name(uint32_t index, uint8_t *output, uint32_t capacity);
 /* Seven RGBA colors (28 doubles) in background, graphBG, FG1, FG2, FG3, border, text order. */
 int32_t xrg_theme_colors(uint32_t index, double *output, uint32_t capacity);
 int32_t xrg_metrics_parse(const uint8_t *bytes, uint32_t length, uint64_t *tokens, double *cost);
+/* Valid sample flags: 1 token, 2 cost; -1 invalid arguments. */
+int32_t xrg_metrics_sample_parse(const uint8_t *bytes, uint32_t length, uint64_t *tokens, double *cost);
 int32_t xrg_codex_record_parse(const uint8_t *bytes, uint32_t length, uint64_t *tokens);
+/* Usage kind: 0 Claude record, 1 Gemini record, 2 Gemini session.
+ * Returns identity UTF-8 byte count (no NUL), -1 invalid/nonmatching input, -2
+ * insufficient identity capacity. All outputs remain untouched on failure. */
+int32_t xrg_provider_usage_parse(const uint8_t *bytes, uint32_t length, uint32_t kind,
+    uint64_t *input, uint64_t *output, uint64_t *total, uint8_t *identity, uint32_t capacity);
+/* Newline-delimited model names; returns byte count or -1. */
+int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *output, uint32_t capacity);
 #ifdef __cplusplus
 }
 #endif

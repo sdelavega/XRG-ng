@@ -32,6 +32,8 @@ import Foundation
 public final class XRGMetricSnapshot: NSObject {
     public let tokens: UInt64
     public let cost: Double
+    public fileprivate(set) var hasTokenSamples = false
+    public fileprivate(set) var hasCostSamples = false
     init(tokens: UInt64, cost: Double) {
         self.tokens = tokens
         self.cost = cost
@@ -63,6 +65,8 @@ public final class XRGLocalProviderParser: NSObject {
     public static func metrics(from text: String) -> XRGMetricSnapshot {
         var tokens: UInt64 = 0
         var cost = 0.0
+        var hasTokens = false
+        var hasCost = false
         for rawLine in text.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
@@ -85,15 +89,19 @@ public final class XRGLocalProviderParser: NSObject {
                   let valueText = line[separator...].split(whereSeparator: \.isWhitespace).first,
                   let value = Double(valueText), value.isFinite, value >= 0 else { continue }
             let metric = line[..<separator]
-            if metric.contains("token_usage") || metric.contains("tokens") {
-                guard ["input", "output", "cache_read", "cache_create"].contains(where: { metric.contains($0) }),
+            if metric.contains("token_usage") || metric.contains("tokens") || metric.contains("token.usage") {
+                guard ["input", "output", "cache_read", "cache_create", "cacheRead", "cacheCreation"].contains(where: { metric.contains($0) }),
                       let count = UInt64(String(valueText)) ?? UInt64(exactly: value) else { continue }
                 let (sum, overflow) = tokens.addingReportingOverflow(count)
-                if !overflow { tokens = sum }
+                if !overflow { tokens = sum; hasTokens = true }
             } else if metric.contains("cost"), (cost + value).isFinite {
                 cost += value
+                hasCost = true
             }
         }
-        return XRGMetricSnapshot(tokens: tokens, cost: cost)
+        let result = XRGMetricSnapshot(tokens: tokens, cost: cost)
+        result.hasTokenSamples = hasTokens
+        result.hasCostSamples = hasCost
+        return result
     }
 }

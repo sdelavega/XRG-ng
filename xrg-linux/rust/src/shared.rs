@@ -21,6 +21,23 @@ unsafe extern "C" {
     fn xrg_theme_name(index: u32, output: *mut u8, capacity: u32) -> i32;
     fn xrg_theme_colors(index: u32, output: *mut f64, capacity: u32) -> i32;
     fn xrg_metrics_parse(bytes: *const u8, length: u32, tokens: *mut u64, cost: *mut f64) -> i32;
+    fn xrg_provider_usage_parse(
+        bytes: *const u8,
+        length: u32,
+        kind: u32,
+        input: *mut u64,
+        output: *mut u64,
+        total: *mut u64,
+        identity: *mut u8,
+        capacity: u32,
+    ) -> i32;
+    fn xrg_model_names_parse(bytes: *const u8, length: u32, output: *mut u8, capacity: u32) -> i32;
+    fn xrg_metrics_sample_parse(
+        bytes: *const u8,
+        length: u32,
+        tokens: *mut u64,
+        cost: *mut f64,
+    ) -> i32;
     fn xrg_codex_record_parse(bytes: *const u8, length: u32, tokens: *mut u64) -> i32;
 }
 
@@ -184,5 +201,82 @@ mod tests {
             -1
         );
         assert_eq!(out, [42.0; 28]);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input: u64,
+    pub output: u64,
+    pub total: u64,
+}
+impl Usage {
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        Some(Self {
+            input: self.input.checked_add(other.input)?,
+            output: self.output.checked_add(other.output)?,
+            total: self.total.checked_add(other.total)?,
+        })
+    }
+}
+pub fn provider_usage(bytes: &[u8], kind: u32) -> Option<(Usage, String)> {
+    let mut usage = Usage::default();
+    let mut identity = [0u8; 1024];
+    let length = u32::try_from(bytes.len()).ok()?;
+    let count = unsafe {
+        xrg_provider_usage_parse(
+            bytes.as_ptr(),
+            length,
+            kind,
+            &mut usage.input,
+            &mut usage.output,
+            &mut usage.total,
+            identity.as_mut_ptr(),
+            identity.len() as u32,
+        )
+    };
+    (count >= 0).then(|| {
+        (
+            usage,
+            String::from_utf8_lossy(&identity[..count as usize]).into_owned(),
+        )
+    })
+}
+pub fn model_names(bytes: &[u8]) -> Option<Vec<String>> {
+    let mut output = vec![0u8; 1_048_576];
+    let length = u32::try_from(bytes.len()).ok()?;
+    let count = unsafe {
+        xrg_model_names_parse(
+            bytes.as_ptr(),
+            length,
+            output.as_mut_ptr(),
+            output.len() as u32,
+        )
+    };
+    if count < 0 {
+        return None;
+    }
+    let text = std::str::from_utf8(&output[..count as usize]).ok()?;
+    Some(if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split('\n').map(str::to_owned).collect()
+    })
+}
+
+pub fn metrics_sample(text: &str) -> Option<(u64, Option<f64>)> {
+    let (mut tokens, mut cost) = (0, 0.0);
+    let flags = unsafe {
+        xrg_metrics_sample_parse(
+            text.as_ptr(),
+            u32::try_from(text.len()).ok()?,
+            &mut tokens,
+            &mut cost,
+        )
+    };
+    if flags < 0 || flags & 1 == 0 {
+        None
+    } else {
+        Some((tokens, (flags & 2 != 0).then_some(cost)))
     }
 }

@@ -36,3 +36,12 @@ Reference: https://www.gnu.org/licenses/license-list.en.html#apsl2
 
 Other authors' source notices and Git authorship remain part of the project
 attribution. The project credits in COPYRIGHT do not supersede them.
+
+## Linux Rust SQLite dependencies
+
+The Swift/Rust Linux executable uses rusqlite and libsqlite3-sys (MIT, copyright
+2014 The rusqlite developers). Their license is retained in
+`xrg-linux/rust/licenses/rusqlite-MIT.txt`. The bundled SQLite implementation is
+in the public domain; see https://www.sqlite.org/copyright.html.
+Cargo.lock records the complete Rust dependency versions. Distribution packaging
+must include applicable dependency notices alongside the Swift runtime notices.

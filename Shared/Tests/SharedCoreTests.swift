@@ -70,4 +70,20 @@ struct SharedCoreTests {
         #expect(theme.rgba.count == 7)
         #expect(theme.rgba.allSatisfy { $0.count == 4 && $0.allSatisfy { $0.isFinite && (0...1).contains($0) } })
     }
+    @Test func usageRecordsAndMetricsValidity() throws {
+        let bytes = Data(#"{"message":{"id":"msg-1","usage":{"input_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4,"output_tokens":5}}}"#.utf8)
+        let record = try #require(XRGProviderLogParser.claudeRecord(from: bytes))
+        #expect(record.total == 14 && record.identity == "msg-1")
+        var input: UInt64 = 99, output: UInt64 = 99, total: UInt64 = 99
+        var name = [UInt8](repeating: 42, count: 8)
+        let status = bytes.withUnsafeBytes { raw in
+            providerUsageParse(raw.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(bytes.count), 0, &input, &output, &total, &name, 2)
+        }
+        #expect(status == -2 && input == 99 && output == 99 && total == 99 && name == Array(repeating: 42, count: 8))
+        let metrics = XRGLocalProviderParser.metrics(from: "claude_code.token.usage{type=\"cacheRead\"} 7\nclaude_code_token_usage_total{type=\"cacheCreation\"} 3\n")
+        #expect(metrics.hasTokenSamples && !metrics.hasCostSamples && metrics.tokens == 10)
+        #expect(!XRGLocalProviderParser.metrics(from: "tokens_input_total NaN").hasTokenSamples)
+        #expect(XRGLocalProviderParser.metrics(from: "tokens_input_total 0").hasTokenSamples)
+        #expect(XRGProviderLogParser.geminiSession(from: Data(#"{"messages":[{"tokens":{"input":18446744073709551615,"output":1}}]}"#.utf8)) == nil)
+    }
 }

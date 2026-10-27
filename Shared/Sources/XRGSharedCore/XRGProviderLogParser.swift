@@ -56,6 +56,7 @@ public final class XRGProviderLogParser: NSObject {
     private struct ClaudeRecord: Decodable {
         let message: Message?
         struct Message: Decodable {
+            let id: String?
             let model: String?
             let usage: Usage?
         }
@@ -103,6 +104,47 @@ public final class XRGProviderLogParser: NSObject {
             total = next
         }
         return total
+    }
+
+    /// A single bounded record, used by the Linux acquisition layer. Identity lets
+    /// the caller replace repeated Claude assistant snapshots instead of summing them.
+    public struct UsageRecord {
+        public let input: UInt64
+        public let output: UInt64
+        public let total: UInt64
+        public let identity: String
+    }
+
+    public static func claudeRecord(from data: Data) -> UsageRecord? {
+        guard let record = try? JSONDecoder().decode(ClaudeRecord.self, from: data),
+              let message = record.message, let usage = message.usage,
+              let input = sum(usage.input ?? 0, usage.cacheCreation ?? 0, usage.cacheRead ?? 0),
+              let total = sum(input, usage.output ?? 0) else { return nil }
+        return UsageRecord(input: input, output: usage.output ?? 0, total: total,
+                           identity: message.id ?? "")
+    }
+
+    public static func geminiRecord(from data: Data) -> UsageRecord? {
+        guard let message = try? JSONDecoder().decode(GeminiMessage.self, from: data),
+              let tokens = message.tokens else { return nil }
+        let input = tokens.input ?? 0
+        let output = tokens.output ?? 0
+        guard let total = (tokens.total ?? 0) == 0 ? sum(input, output) : tokens.total else { return nil }
+        return UsageRecord(input: input, output: output, total: total, identity: "")
+    }
+
+    public static func geminiSession(from data: Data) -> UsageRecord? {
+        guard let session = try? JSONDecoder().decode(GeminiSession.self, from: data),
+              let messages = session.messages else { return nil }
+        let totals = XRGTokenTotals()
+        for message in messages {
+            guard let tokens = message.value?.tokens else { continue }
+            let input = tokens.input ?? 0
+            let output = tokens.output ?? 0
+            guard let total = (tokens.total ?? 0) == 0 ? sum(input, output) : tokens.total,
+                  totals.add(input: input, output: output, total: total) else { return nil }
+        }
+        return UsageRecord(input: totals.input, output: totals.output, total: totals.total, identity: "")
     }
 
     #if canImport(ObjectiveC)

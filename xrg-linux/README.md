@@ -3,9 +3,10 @@
 A real-time system resource monitor for Linux with customizable floating graphs.
 
 The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rust/README.md).
-It currently provides CPU, memory, network, disk, battery, temperature and GPU graphs
-with shared macOS Swift
-histories, rate tracking and themes. The instructions below describe the existing
+It currently provides CPU, memory, network, disk, battery, temperature, GPU and AI
+token-rate graphs, with shared macOS Swift histories, rate tracking, provider parsers
+and themes. AI monitoring covers Claude/Codex/Gemini/Hermes usage and Ollama model
+status; see the [new provider sources and limits](rust/README.md#ai-monitoring). The instructions below describe the existing
 C/GTK3 implementation, retained during migration.
 
 Port of the macOS [XRG-ng](https://github.com/marc-shade/XRG) application to Linux using GTK and Cairo.

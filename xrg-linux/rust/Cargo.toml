@@ -12,3 +12,4 @@ gtk-ui = ["dep:gtk"]
 [dependencies]
 libc = "0.2"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = true }
+rusqlite = { version = "0.41.0", features = ["bundled", "hooks"] }

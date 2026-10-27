@@ -108,7 +108,12 @@ fn intel_clock_is_not_fabricated_utilization() {
     assert_eq!(gpu.memory_total, None);
     f.core();
     let mut sampler = Sampler::with_sources(LinuxSources::with_roots(f.0.join("proc"), &f.0));
-    let panel = sampler.sample().panels.pop().unwrap();
+    let panel = sampler
+        .sample()
+        .panels
+        .into_iter()
+        .find(|p| p.title == "GPU")
+        .unwrap();
     assert!(panel.series.is_empty());
     assert!(panel.label.contains("unavailable"));
     assert!(panel.detail.contains("500 MHz"));
@@ -325,22 +330,56 @@ fn gpu_histories_follow_pci_identity_across_card_renumbering() {
     f.put(busy, "20");
     let mut sampler = Sampler::with_sources(LinuxSources::with_roots(f.0.join("proc"), &f.0));
     assert_eq!(
-        sampler.sample().panels.last().unwrap().series[0].last(),
+        sampler
+            .sample()
+            .panels
+            .iter()
+            .find(|p| p.title == "GPU")
+            .unwrap()
+            .series[0]
+            .last(),
         Some(&20.)
     );
     fs::rename(f.0.join("class/drm/card0"), f.0.join("class/drm/card2")).unwrap();
     f.put(busy, "40");
     let next = sampler.sample();
-    let gpu = next.panels.last().unwrap();
+    let gpu = next.panels.iter().find(|p| p.title == "GPU").unwrap();
     assert_eq!(&gpu.series[0][118..], [20., 40.]);
     assert!(gpu.label.contains("card2"));
     f.put(busy, "invalid");
-    assert!(sampler.sample().panels.last().unwrap().series.is_empty());
+    assert!(
+        sampler
+            .sample()
+            .panels
+            .iter()
+            .find(|p| p.title == "GPU")
+            .unwrap()
+            .series
+            .is_empty()
+    );
     f.put(busy, "0");
     let next = sampler.sample();
-    assert_eq!(&next.panels.last().unwrap().series[0][118..], [40., 0.]);
+    assert_eq!(
+        &next
+            .panels
+            .iter()
+            .find(|p| p.title == "GPU")
+            .unwrap()
+            .series[0][118..],
+        [40., 0.]
+    );
     fs::remove_dir_all(f.0.join("class/drm/card2")).unwrap();
     let next = sampler.sample();
-    assert!(next.panels.last().unwrap().series.is_empty());
-    assert_eq!(next.panels.last().unwrap().label, "No GPU detected");
+    assert!(
+        next.panels
+            .iter()
+            .find(|p| p.title == "GPU")
+            .unwrap()
+            .series
+            .is_empty()
+    );
+    assert_eq!(
+        next.panels.iter().find(|p| p.title == "GPU").unwrap().label,
+        "No GPU detected"
+    );
 }

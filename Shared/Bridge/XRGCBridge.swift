@@ -77,3 +77,54 @@ import Foundation
     tokens.pointee = total
     return 0
 }
+
+// Additive ABI v1 entry points. Outputs are untouched on failure.
+// kind: 0 Claude record, 1 Gemini record, 2 Gemini session. Returns identity byte
+// count (zero when absent), -1 invalid/nonmatching input, -2 insufficient capacity.
+@c(xrg_provider_usage_parse) public func providerUsageParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ kind: UInt32, _ input: UnsafeMutablePointer<UInt64>?, _ output: UnsafeMutablePointer<UInt64>?,
+    _ total: UnsafeMutablePointer<UInt64>?, _ identity: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
+    guard length <= 8_388_608, let bytes, let input, let output, let total, let identity else { return -1 }
+    let data = Data(bytes: bytes, count: Int(length))
+    let record: XRGProviderLogParser.UsageRecord?
+    switch kind {
+    case 0: record = XRGProviderLogParser.claudeRecord(from: data)
+    case 1: record = XRGProviderLogParser.geminiRecord(from: data)
+    case 2: record = XRGProviderLogParser.geminiSession(from: data)
+    default: return -1
+    }
+    guard let record else { return -1 }
+    let name = Array(record.identity.utf8)
+    guard name.count <= capacity else { return -2 }
+    for (index, byte) in name.enumerated() { identity[index] = byte }
+    input.pointee = record.input
+    output.pointee = record.output
+    total.pointee = record.total
+    return Int32(name.count)
+}
+
+// Model names are newline-delimited UTF-8. Reject embedded newlines and bound
+// names before crossing the ABI. No model inventory is interpreted as token usage.
+@c(xrg_model_names_parse) public func modelNamesParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
+    guard length <= 8_388_608, let bytes, let output,
+          let names = XRGLocalProviderParser.modelNames(from: Data(bytes: bytes, count: Int(length))),
+          names.count <= 1024,
+          names.allSatisfy({ $0.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) } && $0.utf8.count <= 1024 }) else { return -1 }
+    let result = Array(names.joined(separator: "\n").utf8)
+    guard result.count <= capacity else { return -1 }
+    for (index, byte) in result.enumerated() { output[index] = byte }
+    return Int32(result.count)
+}
+
+// Returns valid sample flags (1 tokens, 2 cost), or -1 for invalid arguments.
+@c(xrg_metrics_sample_parse) public func metricsSampleParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ tokens: UnsafeMutablePointer<UInt64>?, _ cost: UnsafeMutablePointer<Double>?) -> Int32 {
+    guard length <= 8_388_608, let bytes, let tokens, let cost,
+          let text = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(length)), encoding: .utf8)
+    else { return -1 }
+    let result = XRGLocalProviderParser.metrics(from: text)
+    tokens.pointee = result.tokens
+    cost.pointee = result.cost
+    return (result.hasTokenSamples ? 1 : 0) | (result.hasCostSamples ? 2 : 0)
+}

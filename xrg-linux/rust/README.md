@@ -4,7 +4,7 @@ This is the GTK 4 replacement in progress. It runs alongside the C/GTK3 applicat
 in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
-battery capacity, temperature and GPU activity graphs.
+battery capacity, temperature, GPU activity and AI token-rate graphs.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Hardware support and feedback
@@ -32,11 +32,11 @@ and contributions are welcome. See the [project support policy](../../README.md#
 - **C ABI:** `Shared/Bridge/XRGCBridge.swift` exports versioned `@c` functions;
   `Shared/include/xrg_shared.h` documents ownership and capacities. No C
   implementation or shared Swift/Rust object layout is required. The first ABI
-  exposes histories, rates, themes, local metrics and individual Codex records.
-  Claude/Gemini/METAR sources compile in the package but are not exposed to Rust yet.
+  exposes histories, rates, themes, provider usage records, local metrics and model
+  inventories. METAR sources compile in the package but have no Rust consumer yet.
 - **Rust:** owns `/proc` and `/sys` collection, GTK4/Cairo drawing, configuration and
-  lifecycle. A worker creates/owns all mutable Swift handles. It sends only copied
-  Rust snapshots through a single latest-value slot; GTK touches them on its main
+  lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
+  Rust snapshots through bounded latest-value slots; GTK touches them on its main
   thread. No shell commands, provider scans or collection run in drawing callbacks.
 - **Themes:** all six shared presets are selectable. The new UI saves the selection
   atomically in `$XDG_CONFIG_HOME/xrg-ng/settings.conf` (or `~/.config/xrg-ng`). It
@@ -196,12 +196,64 @@ Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compos
 behavior, screen readers or physical-device collection. Linux build output is
 separate from host Swift output when using a shared Docker checkout.
 
+## AI monitoring
+
+The eighth panel graphs **observed token-counter change per second**, polling every
+five seconds on a separate worker. Core graphs keep their one-second schedule even
+when provider scans or local APIs are slow. Tooltips/accessibility details show each
+provider's locally retained token total, rate, source, recorded cost when available,
+and errors. These totals are not account billing or a billing-period summary;
+batched log writes produce bursts in the graph.
+
+| Provider | Default source and behavior |
+| --- | --- |
+| Claude | `~/.claude/projects/**/*.jsonl`; cache creation/read tokens included; repeated assistant message IDs replace earlier snapshots and copied IDs are deduplicated |
+| Claude fallback | Custom `~/.claude/monitoring/claude_usage.db` when no transcript directory exists; otherwise local Claude OTel metrics at `127.0.0.1:8889/metrics` when neither disk source exists |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl`; last cumulative token count per file, never a sum of cumulative events |
+| Gemini | `~/.gemini/tmp/**/chats/session-*.json` or `.jsonl`; saved session/message token counts |
+| Hermes | Read-only `~/.hermes/state.db`; input/output tokens and actual cost, falling back to recorded estimated cost |
+| Ollama | Installed and loaded model lists at `127.0.0.1:11434/api/tags` and `/api/ps`; these endpoints provide no lifetime token counter, so inventory never becomes token usage |
+
+Claude's sources are exclusive and use the priority above; read failures retain
+that source instead of silently switching to a different counter. OTel monitoring
+must already be configured by the user. Only Claude's token/cost metric families
+are accepted. See [Claude telemetry](https://code.claude.com/docs/en/monitoring-usage)
+and [Ollama's inventory API](https://docs.ollama.com/api/tags).
+
+The shared Swift decoders own JSON/metrics interpretation. Rust owns discovery,
+metadata caches, reads, SQLite and local HTTP acquisition. Unchanged log files are
+not reread; changed files are reparsed so truncation/replacement cannot leave old
+usage behind. Incomplete scans publish no partial provider total. A failed source
+shows unavailable and the last complete total as stale; it contributes no synthetic
+idle series. First samples, source changes, counter resets and recovery establish
+new rate baselines. The graph combines rates only from currently readable sources.
+Anonymous legacy Claude records cannot be deduplicated by message ID. Codex totals
+cover retained session files; independently copied rollout files can count twice.
+
+Scans exclude symlinks and special files, bound discovery to 20,000 entries/six
+nested directory levels, keep at most 100,000 identified messages per provider,
+and allow 64 MiB per changed log file, 8 MiB per record/session, 128 MiB of changed
+files and two seconds per provider pass. Hitting a limit is reported as unavailable;
+completed file-cache work can be reused on the next poll. SQLite uses read-only
+connections, no lock waiting, a 250 ms VM deadline and a 100,000-row limit. WAL
+snapshots include committed changes. Costs are unavailable if rows lack recorded
+costs; no hard-coded model prices or synthetic token splits are used.
+
+Local API reads require the **`curl` executable**. Queries disable curl config,
+proxies and redirects, use fixed loopback HTTP endpoints, and cap each child at
+650 ms/1 MiB (curl also has its own 500 ms timeout). No prompts or transcripts
+are sent to these endpoints. SQLite is bundled through rusqlite; no sqlite CLI or
+system SQLite development package is required. Fixtures and the GTK smoke check
+never scan the user's actual provider data. Log formats are internal to providers
+and may change; feedback and sample schemas with private content removed are welcome.
+
+
 ## Remaining migration
 
 1. Rust process and TPU collectors; Intel GPU PMU utilization, additional vendor counters,
    VRAM graphs/device selection, richer battery health/time and calibrated/fan sensors.
-2. Connect the shared provider parsers to incremental Rust log/SQLite/network
-   acquisition; expose Claude/Gemini and weather through the ABI when consumers land.
+2. AI provider/model detail controls, custom data roots/endpoints, append-offset
+   scanning for very large logs, optional price tables, and a weather ABI consumer.
 3. Per-core/interface/device selection, module visibility/order, context menus,
    detailed preferences, custom theme load/save and explicit legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global

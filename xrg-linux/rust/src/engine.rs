@@ -51,6 +51,8 @@ pub struct Snapshot {
 }
 pub struct Sampler {
     source: LinuxSources,
+    ai: Option<crate::ai::Worker>,
+    ai_panel: Panel,
     previous_cpu: Option<Cpu>,
     rates: Rates,
     histories: [History; 7],
@@ -62,12 +64,21 @@ pub struct Sampler {
 }
 impl Sampler {
     pub fn new() -> Self {
-        Self::with_sources(LinuxSources::live())
+        Self::live(true)
+    }
+    pub fn live(ai_enabled: bool) -> Self {
+        let mut sampler = Self::with_sources(LinuxSources::live());
+        if ai_enabled {
+            sampler.ai = crate::ai::Config::live().map(crate::ai::Worker::start);
+        }
+        sampler
     }
     pub fn with_sources(source: LinuxSources) -> Self {
         let gpu = source.gpu_collector();
         Self {
             source,
+            ai: None,
+            ai_panel: crate::ai::waiting(),
             gpu,
             gpu_histories: BTreeMap::new(),
             previous_cpu: None,
@@ -139,6 +150,12 @@ impl Sampler {
         panels.push(self.battery_panel());
         panels.push(self.temperature_panel());
         panels.push(self.gpu_panel());
+        if let Some(ai) = &self.ai
+            && let Some(panel) = ai.latest.lock().unwrap().take()
+        {
+            self.ai_panel = panel;
+        }
+        panels.push(self.ai_panel.clone());
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
@@ -382,12 +399,15 @@ pub struct Worker {
 }
 impl Worker {
     pub fn start() -> Self {
+        Self::start_with_ai(true)
+    }
+    pub fn start_with_ai(ai_enabled: bool) -> Self {
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
         let (stop, receiver) = mpsc::channel();
         let join = thread::spawn(move || {
             // Swift handles are created and destroyed on this worker only.
-            let mut sampler = Sampler::new();
+            let mut sampler = Sampler::live(ai_enabled);
             loop {
                 let next_sample = Instant::now() + Duration::from_secs(1);
                 *output.lock().unwrap() = Some(sampler.sample());

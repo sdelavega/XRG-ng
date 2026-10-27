@@ -57,7 +57,7 @@ pub fn run(smoke: bool) -> bool {
             window.present();
             return;
         }
-        let monitor = Worker::start();
+        let monitor = Worker::start_with_ai(!smoke);
         let latest = monitor.latest.clone();
         *owner.borrow_mut() = Some(monitor);
         let themes = shared::themes();
@@ -107,6 +107,7 @@ pub fn run(smoke: bool) -> bool {
             "Battery",
             "Temperature · hottest readable sensor",
             "GPU · activity",
+            "AI tokens · observed rate",
         ]
         .into_iter()
         .enumerate()
@@ -156,7 +157,7 @@ pub fn run(smoke: bool) -> bool {
             .application(application)
             .title("XRG-ng")
             .default_width(460)
-            .default_height(850)
+            .default_height(if smoke { 940 } else { 850 })
             .child(&content)
             .build();
         window.present();
