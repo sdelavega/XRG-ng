@@ -5,7 +5,7 @@ in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature, GPU activity, AI token-rate, process-count and
-Coral TPU inference-rate, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU selection and a
+TPU/NPU neural accelerator, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU selection and a
 sortable, filterable process table.
 An opt-in **Weather** window shows station observations using the shared Swift
 METAR decoder, with saved station, units and refresh controls.
@@ -364,7 +364,7 @@ entry opens the editor when a built-in preset is active. In Preferences:
 - Set graph height between 64 and 240 pixels.
 - Choose **Vertical** (stacked) or **Horizontal** (side by side) layout. Ordering
   controls become Left/Right horizontally; graph menus use the same order.
-- Choose **Celsius** or **Fahrenheit** for system sensor, GPU and TPU temperatures.
+- Choose **Celsius** or **Fahrenheit** for system sensor, GPU and TPU/NPU temperatures.
   Graph labels, tooltips, accessibility text and open live details update together.
   Collector/history values stay Celsius; unit changes preserve history and graph
   shape. Missing readings stay unavailable. Weather has its own units setting.
@@ -573,24 +573,80 @@ exits are reported separately. Mount options such as hidepid and container PID
 namespaces restrict visibility. No process-control actions are implemented.
 See the kernel's [proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
 
-## Coral Edge TPU
+## TPU / NPU neural accelerators
 
-The tenth panel separates **hardware inventory** from **producer-reported inference
-statistics**. It recognizes Coral USB IDs `1a6e:089a` (before firmware initialization)
-and `18d1:9302` (runtime firmware), plus PCIe/M.2 `1ac1:089a` devices. PCIe and
-`/sys/class/apex/apex_N` aliases are deduplicated by canonical device path. A bound
-apex driver's `temp` attribute is interpreted as millidegrees Celsius; temperature
-reads are deferred while runtime power is suspended or transitioning. Missing
-telemetry stays unavailable. See Google's [USB firmware notes](https://github.com/google-coral/webcoral)
-and [apex driver](https://github.com/google/gasket-driver/blob/main/src/apex_driver.c).
+The tenth panel includes onboard **NPUs**, compute DSP/HTP endpoints and add-on
+TPUs. Its saved module ID remains `tpu`; existing visibility/order settings and
+legacy `show_tpu` imports keep working. Inventory, measured device activity and
+producer-reported inference throughput are distinct quantities.
 
-Discovery only reads sysfs. It does not open device nodes, initialize firmware,
-reset devices, run inference or change clock/power controls. Detection and a bound
-driver alone do not establish that inference will succeed. Discovery is bounded
-to 4,096 entries per root and a cooperative 100 ms budget; errors reduce coverage.
+| Family | Inventory evidence | Activity in this build |
+| --- | --- | --- |
+| Intel NPU | `intel_vpu`/`ivpu`, accel-class aliases and known NPU PCI IDs | Elapsed delta of `npu_busy_time_us`; optional reported MHz and allocated-memory bytes |
+| AMD Ryzen AI / XDNA | `amdxdna`, accel-class aliases and known AMD NPU PCI IDs | Inventory; utilization unavailable without a supported telemetry interface |
+| Apple Neural Engine | ANE platform compatible/driver; known M-series SoC fallback | Inventory or explicitly unverified SoC capability; no Linux ANE utilization reader |
+| Rockchip RKNN / RKNPU | `rknpu` and mainline `rocket` endpoints; selected known SoC fallback | Vendor `rknpu/load` mean core load when readable and uniquely owned; Rocket inventory only |
+| Qualcomm Hexagon / HTP | NPU or compute DSP CDSP/NSP platform compatibles, with remoteproc state where exposed; selected known SoC fallback | Inventory; no inference/activity estimate from firmware or DSP state |
+| Qualcomm Cloud AI | `qaic` and known PCI IDs, deduplicated with accel-class aliases | Inventory; activity unavailable |
+| Arm Ethos, including NXP systems exposing Ethos | Recognized Ethos-U/N compatible or driver | Inventory; activity unavailable |
+| NVIDIA DLA | NVDLA platform compatible or driver | Inventory; activity unavailable |
+| Samsung Exynos NPU / MediaTek APU | Accelerator-specific platform compatibles; clock, power and IOMMU nodes excluded | Inventory; activity unavailable |
+| Coral Edge TPU | USB firmware/runtime IDs and PCIe/M.2 apex devices | Existing producer-reported inference throughput, not device utilization |
 
-The existing `/tmp/xrg-coral-tpu-stats.json` integration is preserved. The inference
-engine must write a complete JSON object, preferably by atomic rename, for example:
+**Detection is not a promise that inference will work.** Bound drivers, firmware
+state and a running compute DSP do not verify the userspace runtime, firmware
+compatibility or inference execution. Qualcomm audio/modem DSPs, generic FastRPC
+presence, ordinary Intel/AMD PCI devices, GPUs and NPU clock/IOMMU nodes are not
+counted as neural accelerators. Core/VF endpoints are not necessarily separate
+physical chips; endpoint counts are not added into a performance estimate.
+
+When no corresponding Linux endpoint is detected, selected known Apple,
+Rockchip and Qualcomm machine compatibles produce a **SoC capability only**
+record. It explicitly marks availability/activity unverified and is replaced by
+real endpoint inventory when exposed. No runtime initialization is attempted.
+
+The graph prefers real NPU activity percentages, with up to three device series
+and all detected endpoints in **Live details**. Otherwise it retains the existing
+unscoped inference-rate graph. Percentages and inf/s never share a scale, and
+switching sources/scales clears their histories. Intel's first interval, counter
+resets, rebind/hotplug, missing attributes and suspended devices warm up again;
+zero is retained as a real reading. Implausible deltas are rejected (at most 2%
+read/scheduling skew is clamped at 100%). Rockchip's multi-core report is averaged,
+not summed; its global debugfs report is never copied onto multiple devices.
+Missing/inaccessible counters remain **unavailable**, with no privilege escalation.
+
+Discovery reads sysfs only: `/sys/class/accel`, PCI and platform devices, plus
+known machine compatibles. It does not open accelerator device nodes, submit
+ioctls, load firmware, reset hardware or change power/clocks. Rockchip load is read
+only if an active vendor `rknpu` endpoint uniquely owns the report; other debugfs
+controls are not read. Scans share a cooperative 100 ms budget, 4,096-entry root
+limits and a 256-record NPU inventory cap. Attributes are limited to 4 KiB;
+malformed/inaccessible optional telemetry preserves inventory with a note.
+Kernel sysfs reads themselves cannot be forcibly cancelled by this budget.
+
+Coral USB IDs `1a6e:089a` (before firmware initialization) and `18d1:9302` (runtime),
+plus PCIe/M.2 `1ac1:089a`, remain supported. PCI and apex-class aliases deduplicate
+by canonical device path. A bound apex driver's `temp` is millidegrees Celsius;
+temperature reads are deferred while runtime power is suspended/transitioning.
+
+Interface references: Intel [PCI IDs](https://github.com/torvalds/linux/blob/master/drivers/accel/ivpu/ivpu_drv.h)
+and [sysfs counters](https://github.com/torvalds/linux/blob/master/drivers/accel/ivpu/ivpu_sysfs.c),
+AMD [XDNA driver](https://docs.kernel.org/accel/amdxdna/amdnpu.html),
+Rockchip [vendor load format](https://github.com/rockchip-linux/kernel/blob/develop-6.1/drivers/rknpu/rknpu_debugger.c)
+and [Rocket](https://docs.kernel.org/accel/rocket/index.html),
+Qualcomm [CDSP bindings](https://github.com/torvalds/linux/blob/master/Documentation/devicetree/bindings/remoteproc/qcom,sm8550-pas.yaml)
+and [QAIC](https://docs.kernel.org/accel/qaic/qaic.html),
+Apple [ANE driver](https://github.com/eiln/ane) and
+[SoC/device list](https://asahilinux.org/docs/hw/devices/device-list/),
+Arm [Ethos-U driver](https://github.com/torvalds/linux/tree/master/drivers/accel/ethosu),
+and Google's [apex driver](https://github.com/google/gasket-driver/blob/main/src/apex_driver.c).
+Support is **best effort**: automated fixtures cover these interfaces; they do not
+establish physical-device validation. Feedback, device reports and sanitized
+counter samples are welcome and encouraged.
+
+The existing `/tmp/xrg-coral-tpu-stats.json` integration is preserved for any neural
+inference producer; its historical filename does not require a Coral device. The
+inference engine must write a complete JSON object, preferably by atomic rename, for example:
 
 ```json
 {
@@ -623,8 +679,8 @@ millisecond details rather than sharing a scale with inference rates.
 Reports are capped at 64 KiB, must be regular files without final-component symlinks,
 and must remain stable while being read. Producer statistics are unscoped: they
 are not assigned to every detected adapter. Valid statistics without detected
-hardware are explicitly labeled **hardware unverified**. Hardware without fresh
-statistics shows **statistics unavailable**. No device utilization is inferred
+hardware are explicitly labeled **hardware unverified**. Hardware without a readable activity counter or fresh producer statistics shows
+**activity unavailable**. No device utilization is inferred
 from USB connection, mapped pages, latency, temperature or inference counts.
 Support remains best effort; device reports and feedback are welcome.
 

@@ -22,6 +22,7 @@ pub(super) struct Harness {
     menu: Option<gtk::PopoverMenu>,
     menu_paintable: Option<gtk::WidgetPaintable>,
     details: Option<Rc<super::menus::Details>>,
+    neural_panel: Option<xrg_ng_linux::engine::Panel>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -61,12 +62,62 @@ impl Harness {
             menu: None,
             menu_paintable: None,
             details: None,
+            neural_panel: None,
             expected: None,
             since: Instant::now(),
         })
     }
     pub fn preferences_path(&self) -> PathBuf {
         self.root.join("settings.conf")
+    }
+    fn neural_fixture(&self) -> Result<xrg_ng_linux::engine::Panel, String> {
+        let create = || -> std::io::Result<xrg_ng_linux::engine::Panel> {
+            let sys = self.root.join("neural-fixture");
+            for (name, vendor, id, driver) in [
+                ("0000:00:0b.0", "0x8086", "0x7d1d", "intel_vpu"),
+                ("0000:01:00.0", "0x1022", "0x17f0", "amdxdna"),
+            ] {
+                let device = sys.join("bus/pci/devices").join(name);
+                let bound = sys.join("drivers").join(driver);
+                fs::create_dir_all(&device)?;
+                fs::create_dir_all(&bound)?;
+                fs::write(device.join("vendor"), vendor)?;
+                fs::write(device.join("device"), id)?;
+                std::os::unix::fs::symlink(bound, device.join("driver"))?;
+                if driver == "intel_vpu" {
+                    fs::write(device.join("npu_busy_time_us"), "0")?;
+                }
+            }
+            for (name, compatible, driver) in [
+                ("ane", "apple,t8103-ane\0", "ane"),
+                ("npu", "rockchip,rk3588-rknpu\0", "rknpu"),
+                ("cdsp", "qcom,x1e80100-cdsp-pas\0", "qcom_q6v5_pas"),
+            ] {
+                let device = sys.join("bus/platform/devices").join(name);
+                let bound = sys.join("drivers").join(driver);
+                fs::create_dir_all(device.join("of_node"))?;
+                fs::create_dir_all(&bound)?;
+                fs::write(device.join("of_node/compatible"), compatible)?;
+                std::os::unix::fs::symlink(bound, device.join("driver"))?;
+            }
+            fs::create_dir_all(sys.join("kernel/debug/rknpu"))?;
+            fs::write(
+                sys.join("kernel/debug/rknpu/load"),
+                "NPU load: Core0: 0%, Core1: 50%, Core2: 100%,",
+            )?;
+            let mut sampler = xrg_ng_linux::engine::Sampler::with_sources(
+                xrg_ng_linux::collectors::LinuxSources::with_roots(sys.join("proc"), &sys),
+            );
+            sampler.sample();
+            let mut panel = sampler.sample().panels.remove(Module::Tpu.index());
+            panel.detail = format!(
+                "Automated UI fixture — not live hardware\n\n{}",
+                panel.detail
+            );
+            panel.temperature_text = None;
+            Ok(panel)
+        };
+        create().map_err(|e| e.to_string())
     }
     fn configure(dialog: &Dialog, shell: &Shell) {
         let inventory = shell.inventory();
@@ -92,6 +143,14 @@ impl Harness {
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
         let before = self.stage;
+        if let Some(panel) = &self.neural_panel {
+            if let Some(snapshot) = shell.state.borrow_mut().as_mut() {
+                snapshot.panels[Module::Tpu.index()] = panel.clone();
+            }
+            shell.update_panel_text();
+            shell.update_details();
+            shell.areas[Module::Tpu.index()].queue_draw();
+        }
         match self.stage {
             0 if sequence >= 2 => {
                 shell.chooser.set_selected(4);
@@ -1067,6 +1126,44 @@ impl Harness {
                         && loaded.temperature_units == Units::Celsius,
                     "Switching back to vertical/Celsius failed",
                 )?;
+                self.neural_panel = Some(self.neural_fixture()?);
+                self.details = Some(shell.details(Module::Tpu));
+                self.details
+                    .as_ref()
+                    .unwrap()
+                    .window
+                    .set_default_size(840, 1100);
+                self.stage = 33;
+            }
+            33 if self.since.elapsed() > Duration::from_millis(300) => {
+                let details = self.details.take().unwrap();
+                let text = details.text();
+                for name in [
+                    "TPU / NPU",
+                    "Intel NPU",
+                    "AMD XDNA NPU",
+                    "Apple Neural Engine",
+                    "Rockchip NPU",
+                    "Qualcomm Hexagon / compute DSP",
+                ] {
+                    require(text.contains(name), &format!("NPU details omitted {name}"))?;
+                }
+                require(
+                    text.contains("Activity: 0.0%")
+                        && text.contains("Activity: 50.0%")
+                        && text.contains("Activity: unavailable"),
+                    "NPU details confused measured zero, load and unavailable activity",
+                )?;
+                require(
+                    shell.state.borrow().as_ref().unwrap().panels[Module::Tpu.index()].scale
+                        == xrg_ng_linux::engine::Scale::Percent,
+                    "NPU percentage graph uses inference-rate scale",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_NPU_IMAGE") {
+                    details.snapshot(&PathBuf::from(path))?;
+                }
+                details.window.close();
+                self.neural_panel.take();
                 return Ok(true);
             }
             _ => (),

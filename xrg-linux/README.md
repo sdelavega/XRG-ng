@@ -4,7 +4,7 @@ A real-time system resource monitor for Linux with customizable floating graphs.
 
 The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rust/README.md).
 It currently provides CPU, memory, network, disk, battery, temperature, GPU, AI
-token-rate, process-count and Coral TPU inference-rate graphs, with shared macOS Swift histories, rate tracking, provider parsers
+token-rate, process-count and TPU/NPU neural accelerator graphs, with shared macOS Swift histories, rate tracking, provider parsers
 and themes. The new Preferences editor saves graph visibility/order/height and
 custom colors, with built-in presets and JSON theme load/save. Layout can be
 vertical or horizontal, with Celsius/Fahrenheit system temperature display.
@@ -28,6 +28,14 @@ or themes; see [graph actions](rust/README.md#graph-actions-and-live-details).
 Preferences also offers a reviewed, read-only [legacy settings import](rust/README.md#importing-legacy-linux-settings)
 for the C app's graph visibility, global colors, layout and temperature units. Unsupported entries are listed;
 the old configuration is preserved.
+
+The **TPU / NPU** category includes onboard Intel, AMD XDNA, Apple ANE, Rockchip
+and Qualcomm neural compute hardware, plus Arm Ethos, NVIDIA DLA, Samsung/MediaTek
+endpoints and Coral accelerators. Intel busy time and readable Rockchip load
+provide measured activity; other detected devices show unavailable activity
+explicitly. Known SoC capability records are marked unverified. See the
+[coverage and best-effort limits](rust/README.md#tpu--npu-neural-accelerators);
+feedback and device reports are welcome and encouraged.
 
 Installable x86_64/ARM64 preview archives are produced by the
 [Linux workflow](https://github.com/sdelavega/XRG-ng/actions/workflows/linux.yml).

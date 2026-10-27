@@ -65,7 +65,7 @@ impl Module {
             Self::Gpu => "GPU · activity",
             Self::Ai => "AI tokens · observed rate",
             Self::Processes => "Processes · readable / running",
-            Self::Tpu => "TPU · reported inference rate",
+            Self::Tpu => "TPU / NPU · neural accelerators",
             Self::GpuMemory => "VRAM · reported pool used",
             Self::Fans => "Fans · RPM",
         }

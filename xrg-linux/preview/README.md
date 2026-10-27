@@ -63,6 +63,12 @@ imported into the draft; **Apply** saves them in the new app. Layout orientation
 and system temperature units also transfer. Unsupported fields
 are listed, and the original file stays unchanged.
 
+The **TPU / NPU** graph includes onboard neural accelerators as well as Coral.
+Inventory and activity coverage depend on the driver: see the
+[vendor/interface table](../rust/README.md#tpu--npu-neural-accelerators).
+Missing counters are unavailable; SoC capability records are explicitly unverified.
+Support is best effort and community feedback is encouraged.
+
 ## Optional desktop installation
 
 ```sh

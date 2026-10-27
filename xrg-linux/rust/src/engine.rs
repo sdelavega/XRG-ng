@@ -92,6 +92,8 @@ pub struct Sampler {
     process_histories: [History; 2],
     tpu: crate::tpu::Collector,
     tpu_history: History,
+    npu_histories: BTreeMap<String, History>,
+    npu_activity_mode: bool,
     metrics: crate::metrics::Sampler,
     memory_history: History,
     temperature_history: History,
@@ -153,6 +155,8 @@ impl Sampler {
             process_histories: array::from_fn(|_| History::new(120)),
             tpu,
             tpu_history: History::new(120),
+            npu_histories: BTreeMap::new(),
+            npu_activity_mode: false,
             gpu_histories: BTreeMap::new(),
             gpu_memory: crate::gpu_memory::View::default(),
             metrics: crate::metrics::Sampler::default(),
@@ -286,7 +290,20 @@ impl Sampler {
     }
     fn tpu_panel(&mut self) -> Panel {
         let report = self.tpu.sample();
-        let mut details: Vec<Text> = vec!["Coral discovery is read-only and does not prove the device can run inference. Graph: observed producer-counter change per second, not TPU utilization. Producer statistics are unscoped and are not assigned to individual adapters.".into()];
+        let mut details: Vec<Text> = vec!["Read-only TPU/NPU inventory. Detection or a bound driver does not prove usable inference. Graph: measured NPU activity (%) when a supported counter is readable; otherwise unscoped producer inference rate (inf/s). These quantities never share a scale. Producer statistics are not assigned to detected adapters.".into()];
+        let activity_mode = report.devices.as_ref().is_ok_and(|r| {
+            r.values
+                .iter()
+                .any(|d| d.busy_time_us.is_some() || d.utilization.is_some())
+        });
+        if activity_mode != self.npu_activity_mode {
+            self.tpu_history = History::new(120);
+            self.npu_histories.clear();
+            self.npu_activity_mode = activity_mode;
+        }
+        let mut activity_labels = Vec::new();
+        let mut activity_series = Vec::new();
+        let mut capability_records = 0;
         let mut devices = 0;
         let detection_error;
         match report.devices {
@@ -295,15 +312,41 @@ impl Sampler {
                 details.push(error.into());
             }
             Ok(readings) => {
-                devices = readings.values.len();
+                devices = readings
+                    .values
+                    .iter()
+                    .filter(|d| !d.capability_only)
+                    .count();
+                capability_records = readings.values.len() - devices;
+                self.npu_histories.retain(|id, _| {
+                    readings
+                        .values
+                        .iter()
+                        .any(|d| &d.id == id && d.utilization.is_some())
+                });
                 detection_error = !readings.errors.is_empty();
                 for device in readings.values {
-                    let state = if device.suspended {
+                    if let Some(value) = device.utilization {
+                        let history = self
+                            .npu_histories
+                            .entry(device.id.clone())
+                            .or_insert_with(|| History::new(120));
+                        history.append(value);
+                        if activity_series.len() < 3 {
+                            activity_series.push(history.values());
+                            activity_labels.push(format!("{} {value:.1}%", device.label));
+                        }
+                    }
+                    let state = if device.capability_only {
+                        "SoC capability only; Linux endpoint unavailable"
+                    } else if device.suspended {
                         "suspended; telemetry deferred"
+                    } else if device.initialized && device.label.starts_with("Coral USB") {
+                        "USB runtime firmware detected; inference capability unverified"
                     } else if device.initialized {
-                        "runtime USB ID / bound apex driver detected; inference capability unverified"
+                        "driver bound; inference capability unverified"
                     } else {
-                        "USB firmware or PCIe driver not initialized"
+                        "firmware/driver unavailable; inference capability unverified"
                     };
                     let prefix = format!("{} · {state}", device.label);
                     let text = match device.temperature_c {
@@ -313,20 +356,43 @@ impl Sampler {
                         None => format!("{prefix}\n{}", device.id).into(),
                     };
                     details.push(text);
+                    if let Some(driver) = &device.driver {
+                        details.push(format!("Driver: {driver}").into());
+                    }
+                    details.push(device.utilization.map_or_else(
+                        || "Activity: unavailable (not assumed idle)".into(),
+                        |v| format!("Activity: {v:.1}%").into(),
+                    ));
+                    if let Some(clock) = device.frequency_mhz {
+                        details.push(format!("Reported clock: {clock:.0} MHz").into());
+                    }
+                    if let Some(bytes) = device.memory_bytes {
+                        details
+                            .push(format!("Reported NPU memory allocations: {bytes} bytes").into());
+                    }
+                    details.extend(device.notes.into_iter().map(Text::from));
                 }
                 details.extend(readings.errors.into_iter().map(Text::from));
             }
         }
+        let inventory = format!(
+            "{devices} TPU/NPU endpoint(s){}",
+            if capability_records > 0 {
+                format!(" · {capability_records} SoC capability record(s)")
+            } else {
+                String::new()
+            }
+        );
         let mut series = Vec::new();
-        let label = match report.inference {
+        let inference_label = match report.inference {
             Err(error) => {
                 details.push(error.into());
-                if devices > 0 {
-                    format!("{devices} Coral detected · statistics unavailable")
+                if devices > 0 || capability_records > 0 {
+                    format!("{inventory} · activity unavailable")
                 } else if detection_error {
-                    "TPU discovery/statistics unavailable".into()
+                    "TPU/NPU discovery/statistics unavailable".into()
                 } else {
-                    "No Coral / no fresh producer statistics".into()
+                    "No TPU/NPU endpoint / no fresh producer statistics".into()
                 }
             }
             Ok(inference) => {
@@ -358,8 +424,11 @@ impl Sampler {
                     details.push(format!("Reported categories: direct {} · hooked {} · logged {} · warming {} (not assumed exclusive)",c.direct.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.hooked.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.logged.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.warming.map_or_else(|| "unavailable".into(), |v|v.to_string())).into());
                 }
                 let rate = if let Some(rate) = inference.rate {
-                    self.tpu_history.append(rate);
-                    series.push(self.tpu_history.values());
+                    if !activity_mode {
+                        self.tpu_history.append(rate);
+                        series.push(self.tpu_history.values());
+                    }
+                    details.push(format!("Unscoped producer rate: {rate:.1} inf/s").into());
                     format!("{rate:.1} inf/s")
                 } else {
                     "Waiting for inference interval".into()
@@ -368,18 +437,36 @@ impl Sampler {
                     format!("{rate} · hardware unverified")
                 } else {
                     format!(
-                        "{rate} · {devices} Coral{}",
+                        "{rate} · {inventory}{}",
                         if detection_error { " · partial" } else { "" }
                     )
                 }
             }
         };
+        let label = if activity_mode {
+            series = activity_series;
+            if activity_labels.is_empty() {
+                "NPU activity · waiting for counter interval".into()
+            } else {
+                format!(
+                    "{}{}",
+                    activity_labels.join(" / "),
+                    if detection_error { " · partial" } else { "" }
+                )
+            }
+        } else {
+            inference_label
+        };
         Panel {
-            title: "TPU",
+            title: "TPU / NPU",
             label: String::new(),
             detail: String::new(),
             series,
-            scale: Scale::Automatic,
+            scale: if activity_mode {
+                Scale::Percent
+            } else {
+                Scale::Automatic
+            },
             temperature_text: None,
         }
         .with_temperature_text(label.into(), Text::join(details, "\n\n"))

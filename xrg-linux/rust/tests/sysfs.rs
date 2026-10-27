@@ -310,7 +310,11 @@ fn tpu_panel_keeps_producer_scope_and_omits_invalid_or_missing_series() {
     );
     let mut sampler = Sampler::with_sources(f.sources().with_tpu_stats(f.0.join("stats.json")));
     let snapshot = sampler.sample();
-    let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    let panel = snapshot
+        .panels
+        .iter()
+        .find(|p| p.title == "TPU / NPU")
+        .unwrap();
     let fahrenheit = panel.display_detail(xrg_ng_linux::temperature::Units::Fahrenheit);
     assert!(fahrenheit.contains("Producer-reported temperature: 14.0 °F (unscoped)"));
     assert!(fahrenheit.contains("Model: Model 25.0 °C"));
@@ -319,11 +323,19 @@ fn tpu_panel_keeps_producer_scope_and_omits_invalid_or_missing_series() {
     assert!(panel.series.is_empty());
     f.put("stats.json", "{\"total_inferences\":6}");
     let snapshot = sampler.sample();
-    let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    let panel = snapshot
+        .panels
+        .iter()
+        .find(|p| p.title == "TPU / NPU")
+        .unwrap();
     assert_eq!(panel.series.len(), 1);
     f.put("stats.json", "{\"total_inferences\":7,\"timestamp\":0}");
     let snapshot = sampler.sample();
-    let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    let panel = snapshot
+        .panels
+        .iter()
+        .find(|p| p.title == "TPU / NPU")
+        .unwrap();
     assert!(panel.series.is_empty());
     assert!(panel.detail.contains("stale"));
 }

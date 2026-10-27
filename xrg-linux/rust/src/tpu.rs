@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-//! Coral inventory and externally reported inference statistics. Detection does
+//! TPU/NPU inventory and externally reported inference statistics. Detection does
 //! not prove usable inference, and producer counters are not device utilization.
+mod npu;
 use crate::{
     hardware::{self, Readings, short_label},
     system_file,
 };
+pub use npu::parse_rockchip_load;
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -15,6 +17,37 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 const MAX_AGE: f64 = 30.;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Coral,
+    Intel,
+    Amd,
+    Apple,
+    Rockchip,
+    Qualcomm,
+    QualcommCloud,
+    ArmEthos,
+    NvidiaDla,
+    Samsung,
+    MediaTek,
+}
+impl Family {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Coral => "Coral Edge TPU",
+            Self::Intel => "Intel NPU",
+            Self::Amd => "AMD XDNA NPU",
+            Self::Apple => "Apple Neural Engine",
+            Self::Rockchip => "Rockchip NPU",
+            Self::Qualcomm => "Qualcomm Hexagon / compute DSP",
+            Self::QualcommCloud => "Qualcomm Cloud AI",
+            Self::ArmEthos => "Arm Ethos NPU",
+            Self::NvidiaDla => "NVIDIA DLA",
+            Self::Samsung => "Samsung Exynos NPU",
+            Self::MediaTek => "MediaTek APU",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Device {
     pub id: String,
@@ -22,6 +55,15 @@ pub struct Device {
     pub initialized: bool,
     pub suspended: bool,
     pub temperature_c: Option<f64>,
+    pub family: Family,
+    pub driver: Option<String>,
+    /// Known SoC capability only, not an enumerated Linux accelerator endpoint.
+    pub capability_only: bool,
+    pub utilization: Option<f64>,
+    pub frequency_mhz: Option<f64>,
+    pub memory_bytes: Option<u64>,
+    pub notes: Vec<String>,
+    pub busy_time_us: Option<u64>,
 }
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Categories {
@@ -97,6 +139,7 @@ pub struct Collector {
     sys: PathBuf,
     stats: Option<PathBuf>,
     previous: Option<Baseline>,
+    activity: npu::Activity,
     start: Instant,
 }
 impl Collector {
@@ -105,6 +148,7 @@ impl Collector {
             sys,
             stats,
             previous: None,
+            activity: npu::Activity::default(),
             start: Instant::now(),
         }
     }
@@ -112,7 +156,8 @@ impl Collector {
         self.sample_at(self.start.elapsed().as_secs_f64(), SystemTime::now())
     }
     pub fn sample_at(&mut self, time: f64, wall: SystemTime) -> Report {
-        let devices = discover(&self.sys);
+        let mut devices = discover(&self.sys);
+        self.activity.update(&mut devices, time);
         let inference = self.read(time, wall);
         if inference.is_err() {
             self.previous = None;
@@ -219,7 +264,7 @@ fn note(errors: &mut Vec<String>, error: String) {
     }
 }
 /// Uses read-only sysfs attributes. Never opens /dev/apex*, USB devices, BARs or
-/// performance/clock-gating controls; discovery cannot reset or initialize a TPU.
+/// performance/clock-gating controls; discovery cannot reset or initialize a TPU/NPU.
 pub fn discover(sys: &Path) -> Result<Readings<Device>, String> {
     if !sys.is_dir() {
         return Err("TPU sysfs root unavailable".into());
@@ -265,6 +310,14 @@ pub fn discover(sys: &Path) -> Result<Readings<Device>, String> {
                         suspended: attr(&path, "power/runtime_status")?.as_deref()
                             == Some("suspended"),
                         temperature_c: None,
+                        family: Family::Coral,
+                        driver: None,
+                        capability_only: false,
+                        utilization: None,
+                        frequency_mhz: None,
+                        memory_bytes: None,
+                        notes: Vec::new(),
+                        busy_time_us: None,
                     });
                 } else {
                     let physical = if kind == 2 {
@@ -300,6 +353,14 @@ pub fn discover(sys: &Path) -> Result<Readings<Device>, String> {
                         initialized: driver,
                         suspended,
                         temperature_c: None,
+                        family: Family::Coral,
+                        driver: driver.then(|| "apex".into()),
+                        capability_only: false,
+                        utilization: None,
+                        frequency_mhz: None,
+                        memory_bytes: None,
+                        notes: Vec::new(),
+                        busy_time_us: None,
                     });
                     if kind == 2
                         && driver
@@ -320,6 +381,7 @@ pub fn discover(sys: &Path) -> Result<Readings<Device>, String> {
             }
         }
     }
+    npu::extend(sys, start, &mut found, &mut errors);
     Ok(Readings {
         values: found.into_values().collect(),
         errors,

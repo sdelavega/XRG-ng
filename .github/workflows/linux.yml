@@ -72,6 +72,7 @@ jobs:
             ${{ steps.verify.outputs.results }}/details-smoke.png
             ${{ steps.verify.outputs.results }}/import-smoke.png
             ${{ steps.verify.outputs.results }}/layout-smoke.png
+            ${{ steps.verify.outputs.results }}/npu-smoke.png
   preview-install:
     name: ${{ matrix.runner }} clean runtime install
     needs: build-and-test
