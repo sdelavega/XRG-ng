@@ -174,7 +174,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public func checkServerForUpdates() {
         xrgCheckURL?.cancelLoading()
         let request = makeUpdateURL(); xrgCheckURL = request
-        request.setURLString("https://raw.githubusercontent.com/marc-shade/XRG/main/latest_version.txt")
+        request.setURLString("https://raw.githubusercontent.com/sdelavega/XRG-ng/main/latest_version.txt")
         request.loadURLInBackground()
     }
     public func checkServerForUpdatesPostProcess() {
@@ -186,7 +186,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         request.cancelLoading(); xrgCheckURL = nil
         guard isVersion(latest, laterThanVersion: currentVersion) else { return }
         switch updateNotice(latest, currentVersion) {
-        case .moreInfo: _ = openURL(URL(string: "https://github.com/marc-shade/XRG/releases")!)
+        case .moreInfo: _ = openURL(URL(string: "https://github.com/sdelavega/XRG-ng/releases")!)
         case .disable: appSettings?.checkForUpdates = false; defaults.set(false, forKey: "checkForUpdates")
         case .notYet: break
         }

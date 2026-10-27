@@ -1045,3 +1045,21 @@ applied Midnight, and its colors survived a normal quit/relaunch. A visual check
 caught disabled-looking header text in the pull-down; its title now stays enabled.
 Disposable preferences and launch registrations were removed after verification.
 README documents the preset menu and the retained file controls.
+
+## Initial 0.1.0 release preparation (2026-10-27)
+
+Marketing versions now identify XRG-ng 0.1.0, build 1; latest_version.txt agrees.
+The updater now uses sdelavega/XRG-ng for version lookup and release links, avoiding
+an offer to replace this new version with the older fork's 3.x releases. Existing
+injected update-path tests cover the revised addresses. The maintainer confirmed
+that distribution permission or a licensing arrangement is in place for this
+release; the third-party notices record that confirmation without relicensing
+APSL sources.
+
+The complete local Release CI script passed 447 test functions / 857 cases on
+native ARM and Rosetta x86_64, both packaged smoke modes and fixture composition.
+Tools/release-macos.sh provides a separate clean-source Developer ID archive,
+signature/metadata checks, notarization/stapling, ZIP/DMG packaging, Gatekeeper
+checks and checksums. RELEASING.md documents the process; build metadata ties
+release assets to their source commit. Distribution results are recorded by the
+packaging logs and GitHub release rather than inferred from these source checks.

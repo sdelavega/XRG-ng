@@ -26,6 +26,10 @@ executable requires a compatible replacement, suitable permission, or another
 resolved licensing arrangement. This project license update does not claim
 to resolve that existing issue.
 
+For the XRG-ng 0.1.0 release, the current maintainer has confirmed that distribution
+permission or a licensing arrangement is in place. The original APSL license
+notices and source attribution remain unchanged.
+
 Reference: https://www.gnu.org/licenses/license-list.en.html#apsl2
 
 ## Other contributors

@@ -287,9 +287,9 @@ struct XRGGraphWindowTests {
         for _ in 0..<100 where target.xrgCheckURL?.isDataReady() != true && target.xrgCheckURL?.didErrorOccur() != true { try await Task.sleep(for: .milliseconds(1)) }
         target.checkServerForUpdatesPostProcess(); target.checkServerForUpdatesPostProcess()
         addresses = captured.values()
-        #expect(addresses == ["https://raw.githubusercontent.com/marc-shade/XRG/main/latest_version.txt"])
+        #expect(addresses == ["https://raw.githubusercontent.com/sdelavega/XRG-ng/main/latest_version.txt"])
         #expect(notices == (["invalid", "error", "same"].contains(choice) ? 0 : 1) && target.xrgCheckURL == nil)
-        #expect(opened.map(\.absoluteString) == (choice == "moreInfo" ? ["https://github.com/marc-shade/XRG/releases"] : []))
+        #expect(opened.map(\.absoluteString) == (choice == "moreInfo" ? ["https://github.com/sdelavega/XRG-ng/releases"] : []))
         if choice == "disable" { #expect(!f.defaults.bool(forKey: "checkForUpdates") && target.appSettings?.checkForUpdates == false) }
         else { #expect(f.defaults.bool(forKey: "checkForUpdates") && target.appSettings?.checkForUpdates == true) }
     }
