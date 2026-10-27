@@ -16,6 +16,8 @@ swift_bin=$(swift build --scratch-path "$output/swift" --configuration "$configu
 cc Tools/SharedABISmoke.c -I Shared/include -L "$swift_bin" -lXRGSharedCore \
     -Wl,-rpath,"$swift_bin" -o "$output/c-abi-smoke"
 "$output/c-abi-smoke"
+# Rust must exercise the same Swift artifact verified above, without rebuilding it.
+export XRG_SHARED_LIB_DIR="$swift_bin"
 cargo_options=(--manifest-path xrg-linux/rust/Cargo.toml --locked --all-features)
 if [[ "$configuration" == release ]]; then cargo_options+=(--release); fi
 cargo fmt --manifest-path xrg-linux/rust/Cargo.toml --check

@@ -1113,3 +1113,14 @@ load-save/import, per-device selection, module controls, window pinning/placemen
 accessibility/compositor verification and runtime packaging remain. Xvfb/Cairo
 results do not establish Wayland, GPU acceleration or physical-device behavior.
 See xrg-linux/rust/README.md for construction, commands and the migration checklist.
+
+### Reuse the tested Swift library in Linux CI
+
+The first hosted x86_64 Debug job passed. Release passed the standalone Swift
+suite but its second SwiftPM invocation, inside Cargo's build script, crashed in
+libdispatch. CI now exports XRG_SHARED_LIB_DIR for the exact library it has just
+built, tested and exercised through the C header. Cargo validates that directory
+and library and links it directly. Ordinary Cargo builds still build Swift with
+separate scratch output and bounded parallelism. This avoids duplicate Swift
+compilation in CI; it does not claim to repair the SwiftPM/libdispatch crash.
+Local ARM64 Linux Debug and Release scripts passed with the reused artifact.

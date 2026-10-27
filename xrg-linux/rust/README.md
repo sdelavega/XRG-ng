@@ -39,7 +39,10 @@ shows an error and retains previous history rather than recording fabricated zer
 On Linux install **Swift 6.3+** (CI: 6.4.1), **Rust 1.99.1**, pkg-config, a C compiler
 and **GTK 4.10+** development libraries. GTK4-rs is locked through Cargo.lock. On
 Ubuntu 24.04 the GTK package is `libgtk-4-dev`. The build script builds and links the
-Swift package automatically. Native builds are required; setting a foreign Cargo
+Swift package automatically. CI supplies `XRG_SHARED_LIB_DIR` to link the exact
+Swift library already built and tested by the script. The override must be an
+absolute directory containing the matching native/configuration library; its
+freshness is the caller's responsibility. Native builds are required; setting a foreign Cargo
 `--target` does not cross-compile the Swift side.
 
 From the repository root:

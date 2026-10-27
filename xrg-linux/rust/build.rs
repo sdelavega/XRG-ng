@@ -12,34 +12,57 @@ fn main() {
         .join("../..")
         .canonicalize()
         .unwrap();
-    // Use a separate scratch directory: host and Linux builds may share a checkout.
-    let scratch = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("swift");
-    let configuration = if env::var("PROFILE").unwrap() == "release" {
-        "release"
-    } else {
-        "debug"
-    };
-    let run = |extra: &[&str]| {
-        let output = Command::new(env::var_os("SWIFT").unwrap_or_else(|| "swift".into()))
-            .args(["build", "--package-path"])
-            .arg(&root)
-            .arg("--scratch-path")
-            .arg(&scratch)
-            .args(["--configuration", configuration])
-            .args(extra)
-            .output()
-            .expect("Swift 6.3+ is required; set SWIFT to its executable");
+    // CI can link the exact Swift product it has already built and tested.
+    // Ordinary Cargo builds still build Swift automatically in their own scratch.
+    let bin = if let Some(directory) = env::var_os("XRG_SHARED_LIB_DIR") {
+        let directory = PathBuf::from(directory);
         assert!(
-            output.status.success(),
-            "Swift build failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            directory.is_absolute(),
+            "XRG_SHARED_LIB_DIR must be absolute"
         );
-        String::from_utf8(output.stdout).unwrap()
+        let library = directory.join(if cfg!(target_os = "macos") {
+            "libXRGSharedCore.dylib"
+        } else {
+            "libXRGSharedCore.so"
+        });
+        assert!(
+            library.is_file(),
+            "Missing Swift library: {}",
+            library.display()
+        );
+        println!("cargo:rerun-if-changed={}", library.display());
+        directory
+            .to_str()
+            .expect("Swift library path must be UTF-8")
+            .to_owned()
+    } else {
+        let scratch = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("swift");
+        let configuration = if env::var("PROFILE").unwrap() == "release" {
+            "release"
+        } else {
+            "debug"
+        };
+        let run = |extra: &[&str]| {
+            let output = Command::new(env::var_os("SWIFT").unwrap_or_else(|| "swift".into()))
+                .args(["build", "--package-path"])
+                .arg(&root)
+                .arg("--scratch-path")
+                .arg(&scratch)
+                .args(["--jobs", "2", "--configuration", configuration])
+                .args(extra)
+                .output()
+                .expect("Swift 6.3+ is required; set SWIFT to its executable");
+            assert!(
+                output.status.success(),
+                "Swift build failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        run(&["--product", "XRGSharedCore"]);
+        run(&["--show-bin-path"]).trim().to_owned()
     };
-    run(&["--product", "XRGSharedCore"]);
-    let bin = run(&["--show-bin-path"]);
-    let bin = bin.trim();
     println!("cargo:rustc-link-search=native={bin}");
     println!("cargo:rustc-link-lib=dylib=XRGSharedCore");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{bin}");
@@ -50,4 +73,5 @@ fn main() {
         root.join("Package.swift").display()
     );
     println!("cargo:rerun-if-env-changed=SWIFT");
+    println!("cargo:rerun-if-env-changed=XRG_SHARED_LIB_DIR");
 }
