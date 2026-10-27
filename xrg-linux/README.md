@@ -21,6 +21,9 @@ switches, custom data paths, Claude source selection and loopback API endpoints.
 The toolbar's sun icon opens the opt-in **Weather** window, with shared Swift
 METAR decoding, saved station/units/refresh settings and explicit observation age
 and stale states. See [weather observations](rust/README.md#weather-observations).
+Right-click a graph (or use Shift+F10) for live details, settings and hide/reorder
+actions. The application menu can show all graphs again without resetting sources
+or themes; see [graph actions](rust/README.md#graph-actions-and-live-details).
 
 Installable x86_64/ARM64 preview archives are produced by the
 [Linux workflow](https://github.com/sdelavega/XRG-ng/actions/workflows/linux.yml).

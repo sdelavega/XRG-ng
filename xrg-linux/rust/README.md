@@ -246,7 +246,10 @@ formatter, including unattributed tokens, recorded Hermes costs and unsupported
 attribution. Weather checks invalid station rejection, normalized
 Apply/reopen, draft discard, old-station suppression and preservation when restoring
 graph defaults, using an explicitly labeled fixture with no network requests.
-The main window, preferences, process table, both AI tabs and weather window are
+Graph menu checks emit GTK mouse/key signals, test live details/source guards,
+hide/reorder/show-all persistence and existing window actions, including About.
+The main window, preferences, process table, both AI tabs, weather window, graph
+menu and live details are
 exported as PNGs. Smoke
 mode uses temporary settings/theme files and never reads or writes user preferences.
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
@@ -284,6 +287,28 @@ docker run --rm -v /absolute/download:/download:ro -v /absolute/results:/results
   xrg-ng-preview-test --archive /download/xrg-ng-0.1.0-linux-aarch64-preview.tar.gz \
   --results /results
 ```
+
+## Graph actions and live details
+
+Right-click any graph, or focus it with Tab and press **Shift+F10** or the
+**Menu** key. The GTK4 menu shows the latest copied summary and offers **Live
+details…**, **Graph preferences…**, **Move up/down** and **Hide graph**. AI and
+process graphs also link to their dedicated windows. Moving a graph updates the
+saved graph list, including hidden entries. Hiding and reordering preserve its
+sampling/history and the existing source, theme, AI and weather choices.
+
+Live details update from worker snapshots even while a graph is hidden. Each
+module has one details window; opening it again presents the existing window.
+Changing a metric source clears the old details immediately and waits for a
+matching sample. Missing hardware and read errors retain their explicit status.
+Opening menus or details performs no collection, filesystem scan or HTTP request.
+The menu summary is a snapshot taken when opened; the details window stays live.
+
+The toolbar's **Application menu** opens Preferences, Processes, AI monitoring,
+Weather, About and Quit. **Show all graphs** restores visibility while preserving
+order and other preferences, including when every graph has been hidden. Layout
+actions use the existing asynchronous settings writer and persistence-error
+handling. Graph focus has a visible outline for keyboard navigation.
 
 ## Graph and theme preferences
 
@@ -592,7 +617,7 @@ automated tests use fixtures and make no weather requests.
    support, individual fan/sensor controls and detailed process controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
-3. Context menus, deeper metric preferences, XTF conversion and explicit
+3. Deeper metric preferences, XTF conversion and explicit
    legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global
    window placement / keep-above APIs; supported positioning/pinning needs a

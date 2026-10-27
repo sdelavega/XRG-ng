@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod ai;
+mod menus;
 mod preferences;
 mod processes;
 mod smoke;
@@ -9,6 +10,7 @@ mod weather;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
+    collections::BTreeMap,
     path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
@@ -41,6 +43,7 @@ struct Shell {
     ai_control: xrg_ng_linux::ai::Control,
     weather_window: RefCell<Option<Rc<weather::Window>>>,
     weather_control: xrg_ng_linux::weather::Control,
+    details: RefCell<BTreeMap<Module, Rc<menus::Details>>>,
     writer: Writer,
     revision: Cell<u64>,
     saved_revision: Cell<u64>,
@@ -139,6 +142,7 @@ impl Shell {
             let area = gtk::DrawingArea::new();
             area.set_content_width(360);
             area.set_hexpand(true);
+            area.add_css_class("xrg-graph");
             area.update_property(&[gtk::accessible::Property::Label(module.title())]);
             let state = state.clone();
             let theme = theme.clone();
@@ -173,7 +177,7 @@ impl Shell {
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("XRG-ng")
-            .default_width(640)
+            .default_width(680)
             .default_height(if smoke { 1400 } else { 850 })
             .child(&content)
             .build();
@@ -199,11 +203,13 @@ impl Shell {
             ai_control,
             weather_window: RefCell::new(None),
             weather_control,
+            details: RefCell::new(BTreeMap::new()),
             writer: Writer::start(store),
             revision: Cell::new(0),
             saved_revision: Cell::new(0),
             dialog: RefCell::new(None),
         });
+        toolbar.append(&menus::install(&shell));
         shell.refresh();
         let weak = Rc::downgrade(&shell);
         shell.chooser.connect_selected_notify(move |chooser| {
@@ -326,6 +332,7 @@ impl Shell {
             window.set_view(settings.processes.clone());
         }
         self.refresh();
+        self.update_details();
         self.persist(settings);
     }
     fn persist(&self, settings: Settings) {
@@ -349,6 +356,22 @@ impl Shell {
             .as_ref()
             .map(|s| s.inventory.clone())
             .unwrap_or_default()
+    }
+    fn details(self: &Rc<Self>, module: Module) -> Rc<menus::Details> {
+        if let Some(view) = self.details.borrow().get(&module) {
+            view.window.present();
+            return view.clone();
+        }
+        let view = menus::Details::new(self, module);
+        view.update(self.state.borrow().as_ref(), &self.settings.borrow());
+        self.details.borrow_mut().insert(module, view.clone());
+        view.window.present();
+        view
+    }
+    fn update_details(&self) {
+        for view in self.details.borrow().values() {
+            view.update(self.state.borrow().as_ref(), &self.settings.borrow());
+        }
     }
     fn ai(self: &Rc<Self>) -> Rc<ai::Window> {
         if let Some(window) = self.ai_window.borrow().as_ref() {
@@ -427,7 +450,7 @@ impl Shell {
         }
     }
     fn snapshot(&self, path: &Path) -> Result<(), String> {
-        save_snapshot(self.window.upcast_ref(), &self.paintable, path)
+        save_snapshot(&self.window, &self.paintable, path)
     }
 }
 
@@ -518,6 +541,7 @@ pub fn run(smoke_mode: bool) -> bool {
                     window.update(Some(update), &shell.settings.borrow().ai);
                 }
                 *state.borrow_mut() = Some(snapshot);
+                shell.update_details();
                 if let (Some(window), Some(update)) = (
                     shell.weather_window.borrow().as_ref(),
                     state.borrow().as_ref().and_then(|s| s.weather.as_ref()),
@@ -673,7 +697,7 @@ fn draw(
 }
 
 fn save_snapshot(
-    window: &gtk::Window,
+    window: &(impl IsA<gtk::Widget> + IsA<gtk::Native>),
     paintable: &gtk::WidgetPaintable,
     path: &Path,
 ) -> Result<(), String> {
@@ -691,7 +715,7 @@ fn apply_shell_theme(provider: &gtk::CssProvider, theme: &Theme) {
     let background = theme.colors[0];
     let text = theme.colors[6];
     provider.load_from_data(&format!(
-        ".xrg-shell {{ background-color: rgb({:.0}, {:.0}, {:.0}); color: rgb({:.0}, {:.0}, {:.0}); }}",
+        ".xrg-shell {{ background-color: rgb({:.0}, {:.0}, {:.0}); color: rgb({:.0}, {:.0}, {:.0}); }} .xrg-graph:focus-visible {{ outline: 2px solid currentColor; outline-offset: -2px; }}",
         background[0] * 255., background[1] * 255., background[2] * 255.,
         text[0] * 255., text[1] * 255., text[2] * 255.));
 }

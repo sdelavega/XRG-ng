@@ -53,6 +53,10 @@ observation age, raw METAR and explicit stale/error states. **Refresh now** obey
 a one-minute request minimum per instance. Weather uses HTTPS to the NWS Aviation
 Weather Center; it does not detect your location or provide a forecast.
 
+Right-click a graph or focus it and press **Shift+F10** for live details,
+preferences, hide and reorder actions. The application menu's **Show all graphs**
+restores visibility, keeping saved order, themes and data sources.
+
 ## Optional desktop installation
 
 ```sh

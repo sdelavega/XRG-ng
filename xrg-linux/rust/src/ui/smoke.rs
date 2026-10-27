@@ -17,6 +17,9 @@ pub(super) struct Harness {
     process: Option<Rc<super::processes::Window>>,
     ai: Option<Rc<super::ai::Window>>,
     weather: Option<Rc<super::weather::Window>>,
+    menu: Option<gtk::PopoverMenu>,
+    menu_paintable: Option<gtk::WidgetPaintable>,
+    details: Option<Rc<super::menus::Details>>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -47,6 +50,9 @@ impl Harness {
             process: None,
             ai: None,
             weather: None,
+            menu: None,
+            menu_paintable: None,
+            details: None,
             expected: None,
             since: Instant::now(),
         })
@@ -566,21 +572,253 @@ impl Harness {
                 self.expected = Some(shell.settings.borrow().clone());
                 self.stage = 19;
             }
-            19 if shell.saved_revision.get() == shell.revision.get() => {
+            19 if shell.saved_revision.get() == shell.revision.get()
+                && shell.state.borrow().as_ref().is_some_and(|s| {
+                    super::snapshot_matches(s, &shell.settings.borrow(), Module::Cpu)
+                }) =>
+            {
                 let (_, loaded, error) = Store::open(Some(self.preferences_path()));
                 require(
                     error.is_none() && loaded == *self.expected.as_ref().unwrap(),
                     "Weather preferences were lost after graph defaults",
+                )?;
+                let controllers = shell.areas[Module::Cpu.index()].observe_controllers();
+                let key = (0..controllers.n_items())
+                    .filter_map(|i| controllers.item(i))
+                    .find_map(|c| c.downcast::<gtk::EventControllerKey>().ok())
+                    .ok_or("Graph keyboard controller missing")?;
+                shell.areas[Module::Cpu.index()].grab_focus();
+                let handled = key.emit_by_name::<bool>(
+                    "key-pressed",
+                    &[
+                        &gtk::gdk::Key::F10,
+                        &0u32,
+                        &gtk::gdk::ModifierType::SHIFT_MASK,
+                    ],
+                );
+                require(handled, "Shift+F10 did not open graph menu")?;
+                self.menu = shell.areas[Module::Cpu.index()]
+                    .first_child()
+                    .and_then(|p| p.downcast::<gtk::PopoverMenu>().ok());
+                require(
+                    self.menu.as_ref().is_some_and(|p| p.is_visible()),
+                    "Keyboard graph menu not visible",
+                )?;
+                self.menu_paintable = self
+                    .menu
+                    .as_ref()
+                    .map(|p| gtk::WidgetPaintable::new(Some(p)));
+                self.stage = 20;
+            }
+            20 if self.since.elapsed() > Duration::from_millis(200) => {
+                let popover = self.menu.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_MENU_IMAGE") {
+                    require(
+                        popover.width() > 0 && popover.height() > 0,
+                        &format!(
+                            "Menu has no layout: {}x{} mapped={}",
+                            popover.width(),
+                            popover.height(),
+                            popover.is_mapped()
+                        ),
+                    )?;
+                    let paintable = self.menu_paintable.take().unwrap();
+                    super::save_snapshot(&popover, &paintable, &PathBuf::from(path))?;
+                }
+                popover.popdown();
+                menu_action(shell, "graph-details", Some(Module::Cpu));
+                let details = shell
+                    .details
+                    .borrow()
+                    .get(&Module::Cpu)
+                    .cloned()
+                    .ok_or("Menu did not open graph details")?;
+                menu_action(shell, "graph-details", Some(Module::Cpu));
+                require(
+                    shell.details.borrow().len() == 1,
+                    "Details action opened duplicate windows",
+                )?;
+                self.details = Some(details);
+                self.stage = 21;
+            }
+            21 if self.since.elapsed() > Duration::from_millis(200) => {
+                let details = self.details.as_ref().unwrap();
+                require(
+                    details.text().contains("CPU")
+                        && !details.text().contains("Waiting for the next"),
+                    "Live details did not receive active CPU snapshot",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_DETAILS_IMAGE") {
+                    details.snapshot(&PathBuf::from(path))?;
+                }
+                let original = shell.settings.borrow().clone();
+                let mut changed = original.clone();
+                changed.metrics.cpu = Some(1_048_575);
+                shell.apply(changed);
+                require(
+                    details.text().contains("Waiting for the next sample"),
+                    "Details retained old source data after selection change",
+                )?;
+                shell.apply(original);
+                details.window.close();
+                self.details.take();
+                require(
+                    shell.details.borrow().is_empty(),
+                    "Closed details window stayed registered",
+                )?;
+                // Exercise the actual right-click signal callback and its teardown.
+                let controllers = shell.areas[Module::Cpu.index()].observe_controllers();
+                let click = (0..controllers.n_items())
+                    .filter_map(|i| controllers.item(i))
+                    .find_map(|c| c.downcast::<gtk::GestureClick>().ok())
+                    .ok_or("Graph mouse controller missing")?;
+                require(
+                    click.button() == 3,
+                    "Graph menu is not bound to right-click",
+                )?;
+                click.emit_by_name::<()>("pressed", &[&1i32, &24f64, &24f64]);
+                let popover = shell.areas[Module::Cpu.index()]
+                    .first_child()
+                    .and_then(|p| p.downcast::<gtk::PopoverMenu>().ok())
+                    .ok_or("Right-click did not open graph menu")?;
+                popover.popdown();
+                let key = (0..controllers.n_items())
+                    .filter_map(|i| controllers.item(i))
+                    .find_map(|c| c.downcast::<gtk::EventControllerKey>().ok())
+                    .ok_or("Menu key controller missing")?;
+                require(
+                    key.emit_by_name::<bool>(
+                        "key-pressed",
+                        &[
+                            &gtk::gdk::Key::Menu,
+                            &0u32,
+                            &gtk::gdk::ModifierType::empty(),
+                        ],
+                    ),
+                    "Menu key was not handled",
+                )?;
+                let popover = shell.areas[Module::Cpu.index()]
+                    .first_child()
+                    .and_then(|p| p.downcast::<gtk::PopoverMenu>().ok())
+                    .ok_or("Menu key did not open graph menu")?;
+                popover.popdown();
+
+                self.stage = 22;
+            }
+            22 if self.since.elapsed() > Duration::from_millis(200) => {
+                require(
+                    shell.areas[Module::Cpu.index()].first_child().is_none(),
+                    "Closed graph popover stayed parented",
+                )?;
+                let original = shell.settings.borrow().clone();
+                menu_action(shell, "graph-down", Some(Module::Cpu));
+                require(
+                    shell.settings.borrow().modules[1].id == Module::Cpu
+                        && shell.graphs.first_child().as_ref()
+                            == Some(shell.areas[Module::Memory.index()].upcast_ref()),
+                    "Menu move-down did not reorder the graph widgets",
+                )?;
+                menu_action(shell, "graph-up", Some(Module::Cpu));
+                let revision = shell.revision.get();
+                menu_action(shell, "graph-up", Some(Module::Cpu));
+                gtk::gio::prelude::ActionGroupExt::activate_action(
+                    &shell.window,
+                    "graph-hide",
+                    Some(&u32::MAX.to_variant()),
+                );
+                require(
+                    shell.revision.get() == revision,
+                    "Invalid or boundary menu action modified settings",
+                )?;
+                let live_details = shell.details(Module::Cpu);
+                for module in Module::ALL {
+                    menu_action(shell, "graph-hide", Some(module));
+                }
+                require(
+                    shell.empty.is_visible()
+                        && shell.settings.borrow().modules.iter().all(|m| !m.visible),
+                    "Menu hide actions did not reach all-hidden recovery",
+                )?;
+                require(
+                    live_details.window.is_visible() && live_details.text().contains("CPU"),
+                    "Hiding graphs closed their live details",
+                )?;
+                live_details.window.close();
+                menu_action(shell, "show-all", None);
+                require(
+                    *shell.settings.borrow() == original,
+                    "Show-all changed source, weather, theme or graph order preferences",
+                )?;
+                menu_action(shell, "preferences", None);
+                let prefs = shell
+                    .dialog
+                    .borrow()
+                    .clone()
+                    .ok_or("Menu preferences action failed")?;
+                prefs.cancel.emit_clicked();
+                menu_action(shell, "ai", None);
+                let ai = shell
+                    .ai_window
+                    .borrow()
+                    .clone()
+                    .ok_or("Menu AI action failed")?;
+                ai.cancel.emit_clicked();
+                menu_action(shell, "processes", None);
+                let processes = shell
+                    .processes
+                    .borrow()
+                    .clone()
+                    .ok_or("Menu processes action failed")?;
+                processes.window.close();
+                menu_action(shell, "weather", None);
+                let weather = shell
+                    .weather_window
+                    .borrow()
+                    .clone()
+                    .ok_or("Menu weather action failed")?;
+                weather.close.emit_clicked();
+                menu_action(shell, "about", None);
+                let about = shell
+                    .window
+                    .application()
+                    .unwrap()
+                    .windows()
+                    .into_iter()
+                    .find_map(|w| w.downcast::<gtk::AboutDialog>().ok())
+                    .ok_or("Menu About action failed")?;
+                require(
+                    about.program_name().as_deref() == Some("XRG-ng")
+                        && about.version().as_deref() == Some(env!("CARGO_PKG_VERSION")),
+                    "About metadata incorrect",
+                )?;
+                about.close();
+                require(
+                    shell.window.lookup_action("quit").is_some(),
+                    "Quit action missing",
+                )?;
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 23;
+            }
+            23 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Context-menu layout changes did not persist",
                 )?;
                 return Ok(true);
             }
             _ => (),
         }
         if self.stage != before {
+            self.since = Instant::now();
             eprintln!("GTK_PREFERENCES_STAGE {}", self.stage);
         }
         Ok(false)
     }
+}
+fn menu_action(shell: &Shell, name: &str, module: Option<Module>) {
+    let value = module.map(|m| (m.index() as u32).to_variant());
+    gtk::gio::prelude::ActionGroupExt::activate_action(&shell.window, name, value.as_ref());
 }
 impl Drop for Harness {
     fn drop(&mut self) {
