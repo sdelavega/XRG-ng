@@ -119,6 +119,20 @@ pub struct LinuxSources {
     sys: PathBuf,
 }
 impl LinuxSources {
+    pub fn with_roots(proc: impl Into<PathBuf>, sys: impl Into<PathBuf>) -> Self {
+        Self {
+            proc: proc.into(),
+            sys: sys.into(),
+        }
+    }
+    pub fn battery(&self) -> Result<crate::hardware::Readings<crate::hardware::Battery>, String> {
+        crate::hardware::batteries(&self.sys)
+    }
+    pub fn temperatures(
+        &self,
+    ) -> Result<crate::hardware::Readings<crate::hardware::Temperature>, String> {
+        crate::hardware::temperatures(&self.sys)
+    }
     pub fn live() -> Self {
         Self {
             proc: "/proc".into(),

@@ -6,6 +6,7 @@ use crate::{
 };
 use std::{
     array,
+    collections::BTreeMap,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
@@ -16,7 +17,31 @@ pub struct Panel {
     pub title: &'static str,
     pub label: String,
     pub series: Vec<Vec<f64>>,
-    pub percent: bool,
+    pub scale: Scale,
+    pub detail: String,
+}
+/// Temperature uses a signed range; missing data is represented by no series.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scale {
+    Percent,
+    Automatic,
+    Celsius,
+}
+impl Scale {
+    pub fn bounds(self, series: &[Vec<f64>]) -> (f64, f64) {
+        match self {
+            Self::Percent => (0., 100.),
+            Self::Automatic => (
+                0.,
+                series.iter().flatten().copied().fold(1.0, f64::max) * 1.1,
+            ),
+            Self::Celsius => {
+                let min = series.iter().flatten().copied().fold(0.0, f64::min);
+                let max = series.iter().flatten().copied().fold(120.0, f64::max);
+                ((min / 10.).floor() * 10., (max / 10.).ceil() * 10.)
+            }
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Snapshot {
@@ -28,17 +53,22 @@ pub struct Sampler {
     source: LinuxSources,
     previous_cpu: Option<Cpu>,
     rates: Rates,
-    histories: [History; 6],
+    histories: [History; 7],
+    battery_histories: BTreeMap<String, History>,
     start: Instant,
     sequence: u64,
 }
 impl Sampler {
     pub fn new() -> Self {
+        Self::with_sources(LinuxSources::live())
+    }
+    pub fn with_sources(source: LinuxSources) -> Self {
         Self {
-            source: LinuxSources::live(),
+            source,
             previous_cpu: None,
             rates: Rates::new(),
             histories: array::from_fn(|_| History::new(120)),
+            battery_histories: BTreeMap::new(),
             start: Instant::now(),
             sequence: 0,
         }
@@ -75,9 +105,10 @@ impl Sampler {
             };
             panels.push(Panel {
                 title,
+                detail: label.clone(),
                 label,
                 series: vec![self.histories[index].values()],
-                percent: true,
+                scale: Scale::Percent,
             });
         }
         for (index, title, result) in [(2, "Network", network), (4, "Disk", disk)] {
@@ -91,19 +122,126 @@ impl Sampler {
             };
             panels.push(Panel {
                 title,
+                detail: label.clone(),
                 label,
                 series: vec![
                     self.histories[index].values(),
                     self.histories[index + 1].values(),
                 ],
-                percent: false,
+                scale: Scale::Automatic,
             });
         }
+        panels.push(self.battery_panel());
+        panels.push(self.temperature_panel());
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
             panels,
             valid,
+        }
+    }
+    fn battery_panel(&mut self) -> Panel {
+        let mut series = Vec::new();
+        let (label, detail) = match self.source.battery() {
+            Err(error) => ("Battery unavailable".into(), error),
+            Ok(report) if report.values.is_empty() => {
+                if report.errors.is_empty() {
+                    self.battery_histories.clear();
+                    (
+                        "No system battery".into(),
+                        "No present system battery detected".into(),
+                    )
+                } else {
+                    ("Battery unavailable".into(), report.errors.join("\n"))
+                }
+            }
+            Ok(report) => {
+                let visible: Vec<_> = report.values.iter().take(3).collect();
+                self.battery_histories
+                    .retain(|name, _| visible.iter().any(|v| v.name == *name));
+                let mut labels = Vec::new();
+                for reading in visible {
+                    let history = self
+                        .battery_histories
+                        .entry(reading.name.clone())
+                        .or_insert_with(|| History::new(120));
+                    history.append(reading.percent);
+                    series.push(history.values());
+                    labels.push(format!("{} {:.0}%", reading.name, reading.percent));
+                }
+                let mut label = labels.join(" / ");
+                if report.values.len() > 3 {
+                    label.push_str(&format!(" (+{})", report.values.len() - 3));
+                }
+                if !report.errors.is_empty() {
+                    label.push_str(" · partial");
+                }
+                let mut detail: Vec<_> = report
+                    .values
+                    .iter()
+                    .map(|v| {
+                        let power = v.watts.map(|w| format!(" · {w:.1} W")).unwrap_or_default();
+                        format!("{}: {:.1}% · {}{power}", v.name, v.percent, v.status)
+                    })
+                    .collect();
+                detail.extend(report.errors);
+                (label, detail.join("\n"))
+            }
+        };
+        Panel {
+            title: "Battery",
+            label,
+            detail,
+            series,
+            scale: Scale::Percent,
+        }
+    }
+    fn temperature_panel(&mut self) -> Panel {
+        let mut series = Vec::new();
+        let (label, detail) = match self.source.temperatures() {
+            Err(error) => ("Temperature unavailable".into(), error),
+            Ok(report) if report.values.is_empty() => {
+                if report.errors.is_empty() {
+                    self.histories[6] = History::new(120);
+                    (
+                        "No temperature sensors".into(),
+                        "No readable hwmon or thermal-zone temperature detected".into(),
+                    )
+                } else {
+                    ("Temperature unavailable".into(), report.errors.join("\n"))
+                }
+            }
+            Ok(report) => {
+                let maximum = report
+                    .values
+                    .iter()
+                    .map(|v| v.celsius)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                self.histories[6].append(maximum);
+                series.push(self.histories[6].values());
+                let partial = if report.errors.is_empty() {
+                    ""
+                } else {
+                    " · partial"
+                };
+                let count = report.values.len();
+                let noun = if count == 1 { "sensor" } else { "sensors" };
+                let label = format!("{maximum:.1} °C max · {count} {noun}{partial}");
+                let mut detail: Vec<_> = report
+                    .values
+                    .iter()
+                    .map(|v| format!("{}: {:.1} °C", v.name, v.celsius))
+                    .collect();
+                detail.extend(report.errors);
+                (label, detail.join("\n"))
+            }
+        };
+        Panel {
+            title: "Temperature",
+            label,
+            detail,
+            series,
+            scale: Scale::Celsius,
         }
     }
 }

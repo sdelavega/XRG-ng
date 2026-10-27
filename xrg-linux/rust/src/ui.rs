@@ -90,19 +90,29 @@ pub fn run(smoke: bool) -> bool {
         chooser.set_tooltip_text(Some("Built-in theme"));
         toolbar.append(&chooser);
         content.append(&toolbar);
+        let graphs = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .vexpand(true)
+            .child(&graphs)
+            .build();
+        content.append(&scroll);
         let mut areas = Vec::new();
         for (index, title) in [
             "CPU",
             "Memory",
             "Network · receive / send",
             "Disk · read / write",
+            "Battery",
+            "Temperature · hottest readable sensor",
         ]
         .into_iter()
         .enumerate()
         {
             let area = gtk::DrawingArea::new();
             area.set_content_width(360);
-            area.set_content_height(120);
+            area.set_content_height(100);
             area.set_hexpand(true);
             area.set_vexpand(true);
             area.update_property(&[gtk::accessible::Property::Label(title)]);
@@ -121,7 +131,7 @@ pub fn run(smoke: bool) -> bool {
                     state.as_ref().and_then(|s| s.panels.get(index)),
                 );
             });
-            content.append(&area);
+            graphs.append(&area);
             areas.push(area);
         }
         let status = gtk::Label::new(Some("Sampling on a worker · 1 second interval"));
@@ -145,7 +155,7 @@ pub fn run(smoke: bool) -> bool {
             .application(application)
             .title("XRG-ng")
             .default_width(460)
-            .default_height(620)
+            .default_height(740)
             .child(&content)
             .build();
         window.present();
@@ -167,10 +177,14 @@ pub fn run(smoke: bool) -> bool {
                     } // Ocean
                 }
                 for (area, panel) in areas.iter().zip(&snapshot.panels) {
-                    area.update_property(&[gtk::accessible::Property::Label(&format!(
-                        "{}: {}",
-                        panel.title, panel.label
-                    ))]);
+                    area.set_tooltip_text(Some(&panel.detail));
+                    area.update_property(&[
+                        gtk::accessible::Property::Label(&format!(
+                            "{}: {}",
+                            panel.title, panel.label
+                        )),
+                        gtk::accessible::Property::Description(&panel.detail),
+                    ]);
                 }
                 *state.borrow_mut() = Some(snapshot);
                 for area in &areas {
@@ -182,7 +196,7 @@ pub fn run(smoke: bool) -> bool {
                     .borrow()
                     .as_ref()
                     .is_some_and(|s| s.sequence >= 4 && s.valid);
-                if ready && draw_count.get() >= 12 {
+                if ready && draw_count.get() >= (areas.len() * 3) as u32 {
                     if let Some(path) = std::env::var_os("XRG_SMOKE_IMAGE")
                         && let Err(error) = save_snapshot(&app, &paintable, PathBuf::from(path))
                     {
@@ -254,11 +268,7 @@ fn draw(
     let Some(panel) = panel else {
         return;
     };
-    let scale = if panel.percent {
-        100.
-    } else {
-        panel.series.iter().flatten().copied().fold(1.0, f64::max) * 1.1
-    };
+    let (minimum, maximum) = panel.scale.bounds(&panel.series);
     let bottom = height as f64 - 6.;
     let top = 49.;
     if bottom <= top || width <= 20 {
@@ -271,7 +281,8 @@ fn draw(
             let x = 8.
                 + offset as f64 * (width as f64 - 16.)
                     / (values.len().saturating_sub(1).max(1)) as f64;
-            let y = bottom - (value / scale).clamp(0., 1.) * (bottom - top);
+            let y =
+                bottom - ((value - minimum) / (maximum - minimum)).clamp(0., 1.) * (bottom - top);
             if offset == 0 {
                 context.move_to(x, y);
             } else {

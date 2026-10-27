@@ -3,7 +3,8 @@
 This is the GTK 4 replacement in progress. It runs alongside the C/GTK3 application
 in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
-aggregate CPU, memory, network receive/send and physical-disk read/write graphs.
+aggregate CPU, memory, network receive/send, physical-disk read/write, system
+battery capacity and temperature graphs.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Construction
@@ -33,6 +34,27 @@ avoid counting partitions and stacked devices twice. Rates use elapsed monotonic
 time and the shared reset/saturation policy. Disk/network labels show read/receive
 first, write/send second. First CPU sample waits for an interval. Failed collection
 shows an error and retains previous history rather than recording fabricated zeros.
+
+Battery collection reads system power supplies, skips HID/HID++ names before
+opening attributes, and excludes `scope=Device` and absent batteries. Each percent
+uses a complete energy or charge pair; a bounded capacity percent is the fallback.
+Up to three batteries have separate histories keyed by device name, with status
+and available power readings in tooltips. There is no mixed-unit aggregate or
+battery time/health estimate yet. Faulty devices are reported as partial data.
+
+Temperature collection reads standard hwmon temperature channels, honors disabled
+and fault flags, and falls back to thermal zones if no hwmon values are usable.
+The graph shows the maximum readable temperature; tooltips list individual sensors.
+Negative temperatures use a signed graph range. Channels marked as thermistors
+(`tempN_type=4`) are excluded until calibrated conversion is supported, since some
+report voltage rather than Celsius. This initial reader does not apply libsensors
+configuration/compute rules or collect fan speeds. See the kernel's
+[power-supply ABI](https://docs.kernel.org/power/power_supply_class.html) and
+[hwmon interface](https://docs.kernel.org/hwmon/sysfs-interface.html).
+Missing optional hardware shows an explicit absence label and no fabricated zero
+series; read failures show unavailable/partial labels. Neither makes core-only
+headless or live GTK smoke checks fail on desktops/containers without that hardware.
+The graph area scrolls on small windows and exposes details to accessibility APIs.
 
 ## Build and run
 
@@ -80,8 +102,8 @@ separate from host Swift output when using a shared Docker checkout.
 
 ## Remaining migration
 
-1. Rust GPU, battery, temperature, process and TPU collectors, with bounded optional
-   external commands and hardware fixtures.
+1. Rust GPU, process and TPU collectors, with bounded optional external commands
+   and hardware fixtures; richer battery health/time and calibrated/fan sensors.
 2. Connect the shared provider parsers to incremental Rust log/SQLite/network
    acquisition; expose Claude/Gemini and weather through the ABI when consumers land.
 3. Per-core/interface/device selection, module visibility/order, context menus,

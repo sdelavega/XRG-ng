@@ -2,4 +2,5 @@
 // Copyright (C) 2026 Stephen de la Vega.
 pub mod collectors;
 pub mod engine;
+pub mod hardware;
 pub mod shared;

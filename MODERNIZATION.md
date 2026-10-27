@@ -1124,3 +1124,39 @@ and library and links it directly. Ordinary Cargo builds still build Swift with
 separate scratch output and bounded parallelism. This avoids duplicate Swift
 compilation in CI; it does not claim to repair the SwiftPM/libdispatch crash.
 Local ARM64 Linux Debug and Release scripts passed with the reused artifact.
+
+## Linux battery and temperature slice (2026-10-27)
+
+Rust now reads system batteries and standard hwmon/thermal-zone temperatures through
+injectable sysfs roots. Battery scanning skips HID/HID++ names before attribute
+reads, excludes device-scoped and absent supplies, and never mixes energy and
+charge units. Complete pairs or capacity percent produce up to three per-device
+histories; tooltips include status and available wattage. Name-keyed histories
+survive ordering changes, reject malformed values and reset when a device leaves.
+Battery time/health estimates are not part of this slice.
+
+Temperature scanning retains labels and signed Celsius readings, honors channel
+fault/enable flags, and uses thermal zones only when hwmon has no usable values.
+The graph reports the highest readable temperature; tooltips list all readings
+and partial errors. Explicit type-4 thermistor channels are deferred until
+calibrated conversion support; raw voltage must not be displayed as Celsius.
+Libsensors configuration/compute rules and fan speeds remain future work. Missing
+optional hardware produces an absence label and no synthetic-zero graph. Per-device
+errors remain visible and do not suppress healthy devices or fail the core smoke
+gate on hosts without optional hardware.
+
+GTK now presents six panels with a scrollable graph area, signed temperature scale,
+hover details and accessible descriptions. Thirteen sysfs/sampler fixture tests
+cover energy/charge separation, actual zero charge, signed-current power,
+peripheral/HID exclusions, partial errors, multiple batteries, hotplug/history
+identity, temperature units/labels/negative values, fault/disabled channels,
+thermistor exclusion and thermal fallback. Together with the existing eight Rust
+tests they pass on macOS and ARM64 Linux. Full Linux Debug/Release scripts pass
+shared Swift tests, C ABI checks, strict Clippy, all 21 Rust tests, live core
+collection, and four GTK samples / 24 draws. The six-panel snapshot was visually
+inspected. Containers expose no battery or thermal sensors, so live readings from
+physical hardware remain unverified. No macOS production source changed here.
+
+The preceding CI correction (644f39a) passed both hosted x86_64 Linux Debug/Release
+jobs. macOS hosted runners were still queued when checked; local macOS Debug and
+Release suites passed at the initial shared-source extraction.
