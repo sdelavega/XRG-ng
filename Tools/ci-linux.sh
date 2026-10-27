@@ -10,9 +10,15 @@ exec > >(tee "$output/validation.log") 2>&1
 swift --version
 rustc --version
 pkg-config --modversion gtk4
-swift test --scratch-path "$output/swift" --configuration "$configuration"
-swift build --scratch-path "$output/swift" --configuration "$configuration" --product XRGSharedCore
+# Tests already build the dynamic product. A second build needlessly re-enters
+# Swift 6.4.1's planner (which has crashed in libdispatch on hosted x86_64).
+# Keep one build, then require and exercise that exact artifact below.
+swift test --scratch-path "$output/swift" --configuration "$configuration" --jobs 2
 swift_bin=$(swift build --scratch-path "$output/swift" --configuration "$configuration" --show-bin-path)
+if [[ ! -f "$swift_bin/libXRGSharedCore.so" ]]; then
+    echo "Swift tests did not produce the required shared library: $swift_bin" >&2
+    exit 1
+fi
 cc Tools/SharedABISmoke.c -I Shared/include -L "$swift_bin" -lXRGSharedCore \
     -Wl,-rpath,"$swift_bin" -o "$output/c-abi-smoke"
 "$output/c-abi-smoke"
