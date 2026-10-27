@@ -7,6 +7,21 @@ aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature and GPU activity graphs.
 This is an initial vertical slice, not feature parity with the C application.
 
+## Hardware support and feedback
+
+This port is a **best-effort attempt** across supported architectures and GPU/driver
+families. We do not own most of these platforms and cannot physically validate
+them all. The support matrix documents implemented interfaces and their limits;
+automated fixtures and native x86_64/ARM64 CI verify software behavior, while
+real-device coverage depends on available hardware and community reports.
+Physical validation of every platform is not a release prerequisite.
+
+**Feedback is welcome and encouraged.** Reports of working setups are useful too.
+Please [open an issue](https://github.com/sdelavega/XRG-ng/issues) with the app
+version/commit, distribution, kernel, CPU architecture, GPU/device model and driver,
+plus expected/observed results and relevant diagnostics. Corrections, driver details
+and contributions are welcome. See the [project support policy](../../README.md#hardware-support-and-feedback).
+
 ## Construction
 
 - **Shared Swift:** the *same source files* compile into macOS's XRGCore target and
@@ -193,8 +208,9 @@ separate from host Swift output when using a shared Docker checkout.
    window placement / keep-above APIs; supported positioning/pinning needs a
    compositor-specific implementation. No always-on-top or edge-placement promise
    is made by this initial shell.
-5. Runtime bundling, desktop integration, distribution packages and native x86_64 /
-   ARM64 hardware verification before replacing the C application's release path.
+5. Runtime bundling, desktop integration and distribution packages before replacing
+   the C application's release path. Broaden real-device coverage through community
+   feedback as hardware becomes available.
 
 GTK4 fits the rewrite: supported Rust bindings, modern scene-graph rendering and
 retained Cairo drawing through GtkDrawingArea. GTK4 does not make blocking collectors

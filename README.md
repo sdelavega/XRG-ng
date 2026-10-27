@@ -14,6 +14,24 @@ See the [new Linux build and migration status](xrg-linux/rust/README.md).
 
 Original XRG website: https://gaucho.software/xrg/
 
+## Hardware support and feedback
+
+Hardware support is a **best-effort attempt**, especially across Linux GPU families,
+sensors and driver versions. We do not have access to every platform and cannot
+physically test them all. Development uses published driver interfaces, automated
+fixtures, native architecture builds and the hardware available to us. Automated
+checks verify software behavior; real-device coverage is limited and will grow
+with community feedback. Available metrics depend on the device, kernel, driver
+and permissions.
+
+**Feedback is welcome and encouraged**, including reports of configurations that
+work well. Please [open an issue](https://github.com/sdelavega/XRG-ng/issues) with
+your XRG-ng version, distribution, kernel, CPU architecture, GPU/device model and
+driver, plus expected versus observed behavior and relevant diagnostic output.
+Bug reports, corrections and contributions help improve support for everyone.
+Physical validation of every listed platform is not a prerequisite for progress
+or releases.
+
 ## Features
 
 XRG-ng displays real-time graphs for:

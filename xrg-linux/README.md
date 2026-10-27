@@ -14,6 +14,17 @@ Port of the macOS [XRG-ng](https://github.com/marc-shade/XRG) application to Lin
 
 The Linux executable and configuration directory remain `xrg-linux` for compatibility.
 
+## Hardware support and feedback
+
+Linux hardware support is a **best-effort attempt**. We cannot physically validate
+every GPU, sensor, architecture or driver combination; coverage relies on published
+interfaces, automated tests, native builds and available hardware. Community
+feedback is welcome and encouraged, including reports of working configurations.
+Please [open an issue](https://github.com/sdelavega/XRG-ng/issues) with your app
+version, distribution/kernel, architecture, device model, driver and relevant
+observations. See the [project support policy](../README.md#hardware-support-and-feedback)
+and the [Swift/Rust backend details](rust/README.md) for current capabilities.
+
 ## Features
 
 XRG-ng for Linux displays real-time graphs for:
