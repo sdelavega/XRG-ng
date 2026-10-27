@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 3;
+    value.version = 4;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -356,8 +356,19 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     };
     expected.modules[0].visible = false;
     expected.move_module(Module::Tpu, -9);
+    for module in &mut expected.modules {
+        if matches!(module.id, Module::GpuMemory | Module::Fans) {
+            module.visible = false;
+        }
+    }
     let mut wire = serde_json::to_value(&expected).unwrap();
     let object = wire.as_object_mut().unwrap();
+    object
+        .get_mut("modules")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .truncate(10);
     object.insert("version".into(), 1.into());
     object.remove("metrics");
     object.remove("processes");
@@ -370,7 +381,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        2
+        3
     );
 }
 #[test]
@@ -434,4 +445,55 @@ fn snapshot_scope_matching_blocks_only_the_metric_whose_target_changed() {
     for module in Module::ALL.into_iter().filter(|m| *m != Module::Cpu) {
         assert!(old.matches(&selected, module));
     }
+}
+
+#[test]
+fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs_hidden() {
+    let mut old = Settings {
+        version: 2,
+        ..Default::default()
+    };
+    old.modules.truncate(10);
+    for module in &mut old.modules {
+        module.visible = false;
+    }
+    old.metrics.gpu = Some("saved-offline-gpu".into());
+    old.processes.uid = Some(1000);
+    old.processes.filter = "worker".into();
+    let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
+    assert_eq!(migrated.version, 3);
+    assert_eq!(migrated.modules.len(), 12);
+    assert!(migrated.modules.iter().all(|m| !m.visible));
+    assert_eq!(migrated.metrics, old.metrics);
+    assert_eq!(migrated.processes, old.processes);
+    assert_eq!(&migrated.modules[..10], &old.modules);
+    old.modules.pop();
+    assert!(Settings::parse(&serde_json::to_vec(&old).unwrap()).is_err());
+}
+#[test]
+fn original_module_indices_remain_stable_and_vram_tracks_the_gpu_selector() {
+    let original = [
+        Module::Cpu,
+        Module::Memory,
+        Module::Network,
+        Module::Disk,
+        Module::Battery,
+        Module::Temperature,
+        Module::Gpu,
+        Module::Ai,
+        Module::Processes,
+        Module::Tpu,
+    ];
+    for (index, module) in original.into_iter().enumerate() {
+        assert_eq!(module.index(), index);
+    }
+    assert_eq!(Module::GpuMemory.index(), 10);
+    assert_eq!(Module::Fans.index(), 11);
+    let before = xrg_ng_linux::settings::MetricSelection::default();
+    let after = xrg_ng_linux::settings::MetricSelection {
+        gpu: Some("gpu2".into()),
+        ..Default::default()
+    };
+    assert!(!before.matches(&after, Module::GpuMemory));
+    assert!(before.matches(&after, Module::Fans));
 }

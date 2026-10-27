@@ -6,6 +6,7 @@ pub mod collectors;
 pub mod command;
 pub mod engine;
 pub mod gpu;
+pub mod gpu_memory;
 pub mod hardware;
 pub mod shared;
 

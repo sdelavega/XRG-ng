@@ -5,7 +5,7 @@ in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature, GPU activity, AI token-rate, process-count and
-Coral TPU inference-rate graphs, with per-core/interface/disk/GPU selection and a
+Coral TPU inference-rate, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU selection and a
 sortable, filterable process table.
 This is an initial vertical slice, not feature parity with the C application.
 
@@ -59,8 +59,26 @@ Battery collection reads system power supplies, skips HID/HID++ names before
 opening attributes, and excludes `scope=Device` and absent batteries. Each percent
 uses a complete energy or charge pair; a bounded capacity percent is the fallback.
 Up to three batteries have separate histories keyed by device name, with status
-and available power readings in tooltips. There is no mixed-unit aggregate or
-battery time/health estimate yet. Faulty devices are reported as partial data.
+and available power readings in tooltips. There is no battery aggregate.
+Details include reported full/design capacity (which can exceed
+100%), driver health condition, cycle count and time to empty/full when available.
+Driver time values take precedence; otherwise estimates use a complete energy/power
+or charge/current pair in matching micro-units. Current magnitude is used with the
+explicit charging/discharging status. Zero/missing rates do not become infinite or
+fabricated countdowns. Full/not-charging/unknown states have no countdown. Estimates
+are instantaneous and change with load/charge rate; they are not a prediction of
+future use. Optional malformed attributes preserve capacity and are reported in
+details. No health or time values are combined across batteries.
+
+The **Fans** graph reads standard hwmon `fan*_input` RPM, plotting up to three
+channels with further readings in details. Zero is a valid stopped-fan reading;
+disabled/faulted channels are omitted rather than plotted at zero. Driver alarm
+flags are reported separately. Canonical path/channel/inode identity prevents class
+aliases duplicating a sensor and resets histories after disappearance/replacement.
+Scanning has a cooperative 100 ms / 256-channel budget, bounded directory/attribute
+reads, and explicit partial-coverage errors. Fan details are capped at 64 channels.
+Driver labels do not establish CPU/GPU ownership. PWM values are not RPM, and this
+collector never writes fan controls or guesses board-specific calibration.
 
 Temperature collection reads standard hwmon temperature channels, honors disabled
 and fault flags, and falls back to thermal zones if no hwmon values are usable.
@@ -68,13 +86,21 @@ The graph shows the maximum readable temperature; tooltips list individual senso
 Negative temperatures use a signed graph range. Channels marked as thermistors
 (`tempN_type=4`) are excluded until calibrated conversion is supported, since some
 report voltage rather than Celsius. This initial reader does not apply libsensors
-configuration/compute rules or collect fan speeds. See the kernel's
+configuration/compute rules. See the kernel's
 [power-supply ABI](https://docs.kernel.org/power/power_supply_class.html) and
 [hwmon interface](https://docs.kernel.org/hwmon/sysfs-interface.html).
 Missing optional hardware shows an explicit absence label and no fabricated zero
 series; read failures show unavailable/partial labels. Neither makes core-only
 headless or live GTK smoke checks fail on desktops/containers without that hardware.
 The graph area scrolls on small windows and exposes details to accessibility APIs.
+
+The **VRAM** graph displays the driver-reported VRAM pool used as a percentage of
+each adapter's reported total (up to three adapters). Activity and memory share one collector
+sample and the **GPU and VRAM** source selector. AMD/NVIDIA counters feed this view
+when available; activity need not be available to plot memory. Missing/invalid
+totals produce no memory series. These counters describe the driver's VRAM pool
+and do not identify the physical memory topology. Unified system memory and
+readable-client allocation totals are not used to infer VRAM capacity. Histories reset on source, capacity, driver or availability changes.
 
 GPU discovery uses DRM primary/render nodes and recognized platform GPU drivers;
 compute-only NVIDIA devices also use bound PCI discovery. Canonical platform or
@@ -295,9 +321,12 @@ palette is embedded in saved preferences, so reopening does not depend on the
 original imported file. XTF conversion and legacy C/GTK3 INI import remain follow-up
 work; the macOS application's XTF load/save behavior is unchanged.
 
-Settings use version 2 JSON in the existing `settings.conf` path. Version 1 JSON
-and the earlier Rust `theme=Ocean` format still load, preserving their theme/layout
-and using defaults for new controls. They upgrade only when preferences are next saved.
+Settings use version 3 JSON in the existing `settings.conf` path. Version 1/2 JSON
+still loads, preserving graph order/visibility, theme and existing source/process
+controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
+them in Preferences. An all-hidden layout stays hidden. New installations show all
+twelve graphs by default. The earlier Rust `theme=Ocean` format also loads with
+default controls. Formats upgrade only when preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:
@@ -455,8 +484,8 @@ Support remains best effort; device reports and feedback are welcome.
 
 ## Remaining migration
 
-1. Intel GPU PMU utilization, additional vendor counters, VRAM graphs,
-   richer battery health/time, calibrated/fan sensors and detailed process controls.
+1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
+   support, individual fan/sensor controls and detailed process controls.
 2. AI provider/model detail controls, custom data roots/endpoints, append-offset
    scanning for very large logs, optional price tables, and a weather ABI consumer.
 3. Context menus, deeper metric preferences, XTF conversion and explicit

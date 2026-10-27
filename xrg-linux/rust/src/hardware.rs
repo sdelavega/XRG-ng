@@ -2,9 +2,14 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Read-only kernel sysfs collection. Paths are injectable for hardware fixtures.
 //! Values follow the power_supply and hwmon kernel ABIs; no subprocesses are used.
+mod battery;
+mod fans;
+pub use battery::{BatteryTime, TimeSource};
+pub use fans::{Fan, fans};
 use std::{
-    fs::{self, File},
+    fs::{self, OpenOptions},
     io::{self, Read},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 
@@ -19,6 +24,11 @@ pub struct Battery {
     pub percent: f64,
     pub status: String,
     pub watts: Option<f64>,
+    pub health_percent: Option<f64>,
+    pub condition: Option<String>,
+    pub cycles: Option<u64>,
+    pub time: Option<BatteryTime>,
+    pub notes: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Temperature {
@@ -27,11 +37,18 @@ pub struct Temperature {
 }
 
 pub(crate) fn text(path: &Path) -> Result<Option<String>, String> {
-    let file = match File::open(path) {
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err(format!("{}: expected a regular attribute", path.display()));
+    }
     let mut bytes = Vec::new();
     file.take(4097)
         .read_to_end(&mut bytes)
@@ -70,54 +87,6 @@ pub(crate) fn directories(path: &Path) -> Result<Vec<PathBuf>, String> {
 pub(crate) fn short_label(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(64).collect()
 }
-fn pair(directory: &Path, prefix: &str) -> Result<Option<(i64, i64)>, String> {
-    let now = integer(&directory.join(format!("{prefix}_now")))?;
-    let full = integer(&directory.join(format!("{prefix}_full")))?;
-    match (now, full) {
-        (Some(now), Some(full)) if now >= 0 && full > 0 && now <= full => Ok(Some((now, full))),
-        (Some(_), Some(_)) => Err(format!("Invalid {prefix} counters")),
-        _ => Ok(None),
-    }
-}
-fn battery(directory: &Path, name: String) -> Result<Battery, String> {
-    // Never mix energy (uWh) and charge (uAh). Each ratio uses a complete pair.
-    let percent = if let Some((now, full)) = pair(directory, "energy")? {
-        now as f64 / full as f64 * 100.
-    } else if let Some((now, full)) = pair(directory, "charge")? {
-        now as f64 / full as f64 * 100.
-    } else {
-        let capacity = integer(&directory.join("capacity"))?.ok_or("Missing battery capacity")?;
-        if !(0..=100).contains(&capacity) {
-            return Err("Invalid battery capacity".into());
-        }
-        capacity as f64
-    };
-    let status = text(&directory.join("status"))?.unwrap_or_else(|| "Unknown".into());
-    let status = match status.as_str() {
-        "Charging" | "Discharging" | "Full" | "Not charging" => status,
-        _ => "Unknown".into(),
-    };
-    // Power is optional. A broken optional attribute does not invent a zero or
-    // discard a valid capacity. Current may be signed; status conveys direction.
-    let watts = match integer(&directory.join("power_now")) {
-        Ok(Some(value)) => Some((value as f64).abs() / 1_000_000.),
-        _ => match (
-            integer(&directory.join("current_now")),
-            integer(&directory.join("voltage_now")),
-        ) {
-            (Ok(Some(current)), Ok(Some(voltage))) if voltage > 0 => {
-                Some((current as f64).abs() * voltage as f64 / 1_000_000_000_000.)
-            }
-            _ => None,
-        },
-    };
-    Ok(Battery {
-        name,
-        percent,
-        status,
-        watts,
-    })
-}
 pub fn batteries(sys: &Path) -> Result<Readings<Battery>, String> {
     let mut result = Readings {
         values: Vec::new(),
@@ -144,7 +113,7 @@ pub fn batteries(sys: &Path) -> Result<Readings<Battery>, String> {
             if integer(&directory.join("present"))? == Some(0) {
                 return Ok(None);
             }
-            battery(&directory, short_label(&name)).map(Some)
+            battery::read(&directory, short_label(&name)).map(Some)
         };
         match read() {
             Ok(Some(value)) => result.values.push(value),

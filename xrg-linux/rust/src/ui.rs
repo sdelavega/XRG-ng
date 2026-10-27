@@ -156,7 +156,7 @@ impl Shell {
             .application(application)
             .title("XRG-ng")
             .default_width(540)
-            .default_height(if smoke { 1160 } else { 850 })
+            .default_height(if smoke { 1400 } else { 850 })
             .child(&content)
             .build();
         let paintable = gtk::WidgetPaintable::new(Some(&content));

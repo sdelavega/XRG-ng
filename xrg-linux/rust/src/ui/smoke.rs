@@ -297,7 +297,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 2 && loaded.processes.limit == 20,
+                    loaded.version == 3 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;

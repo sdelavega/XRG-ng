@@ -210,7 +210,7 @@ fn optional_hardware_does_not_fail_the_live_core_gate() {
     f.put("proc/stat", "cpu 150 0 50 840 60 0 0 0");
     let second = sampler.sample();
     assert!(second.valid);
-    assert_eq!(second.panels.len(), 10);
+    assert_eq!(second.panels.len(), 12);
     assert_eq!(second.panels[4].label, "No system battery");
     assert!(second.panels[4].series.is_empty());
     assert_eq!(second.panels[5].label, "No temperature sensors");
@@ -307,4 +307,223 @@ fn tpu_panel_keeps_producer_scope_and_omits_invalid_or_missing_series() {
     let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
     assert!(panel.series.is_empty());
     assert!(panel.detail.contains("stale"));
+}
+
+#[test]
+fn battery_energy_health_cycles_and_time_use_matching_units() {
+    use hardware::TimeSource;
+    let f = Fixture::new();
+    f.battery(
+        "BAT0",
+        &[
+            ("energy_now", "20000000"),
+            ("energy_full", "40000000"),
+            ("energy_full_design", "50000000"),
+            ("power_now", "-10000000"),
+            ("status", "Discharging"),
+            ("cycle_count", "0"),
+            ("health", "Good"),
+        ],
+    );
+    let report = hardware::batteries(&f.0).unwrap();
+    let b = &report.values[0];
+    assert_eq!(b.percent, 50.);
+    assert_eq!(b.health_percent, Some(80.));
+    assert_eq!(b.cycles, Some(0));
+    assert_eq!(b.condition.as_deref(), Some("Good"));
+    assert_eq!(b.time.unwrap().seconds, 7200.);
+    assert_eq!(b.time.unwrap().source, TimeSource::EnergyPower);
+    assert!(b.description().contains("Time to empty: 2 h 0 min"));
+    assert!(b.notes.is_empty());
+}
+#[test]
+fn charging_charge_time_does_not_require_voltage_or_mix_energy_counters() {
+    let f = Fixture::new();
+    f.battery(
+        "BAT0",
+        &[
+            ("energy_now", "900000000"),
+            ("charge_now", "1000000"),
+            ("charge_full", "3000000"),
+            ("charge_full_design", "4000000"),
+            ("current_now", "-500000"),
+            ("status", "Charging"),
+        ],
+    );
+    let b = hardware::batteries(&f.0).unwrap().values.remove(0);
+    assert_eq!(b.health_percent, Some(75.));
+    assert_eq!(b.watts, None);
+    assert_eq!(b.time.unwrap().seconds, 14400.);
+    assert_eq!(b.time.unwrap().source, hardware::TimeSource::ChargeCurrent);
+    assert!(b.description().contains("Time to full"));
+}
+#[test]
+fn driver_time_wins_and_inactive_states_do_not_invent_countdowns() {
+    let f = Fixture::new();
+    f.battery(
+        "BAT0",
+        &[
+            ("energy_now", "10000000"),
+            ("energy_full", "20000000"),
+            ("power_now", "10000000"),
+            ("status", "Discharging"),
+            ("time_to_empty_now", "1234"),
+        ],
+    );
+    let b = hardware::batteries(&f.0).unwrap().values.remove(0);
+    assert_eq!(b.time.unwrap().seconds, 1234.);
+    assert_eq!(b.time.unwrap().source, hardware::TimeSource::Driver);
+    for status in ["Full", "Not charging", "Unknown", "garbage"] {
+        f.put("class/power_supply/BAT0/status", status);
+        assert!(hardware::batteries(&f.0).unwrap().values[0].time.is_none());
+    }
+    f.put("class/power_supply/BAT0/status", "Discharging");
+    f.put("class/power_supply/BAT0/time_to_empty_now", "0");
+    assert_eq!(
+        hardware::batteries(&f.0).unwrap().values[0]
+            .time
+            .unwrap()
+            .seconds,
+        3600.
+    );
+    f.put("class/power_supply/BAT0/time_to_empty_now", "-1");
+    let b = hardware::batteries(&f.0).unwrap().values.remove(0);
+    assert!(!b.notes.is_empty());
+    assert_eq!(b.time.unwrap().source, hardware::TimeSource::EnergyPower);
+}
+#[test]
+fn incomplete_battery_units_and_missing_optional_fields_stay_unknown() {
+    let f = Fixture::new();
+    f.battery(
+        "BAT0",
+        &[
+            ("capacity", "61"),
+            ("energy_now", "9999999"),
+            ("charge_full", "3000000"),
+            ("energy_full_design", "50000000"),
+            ("power_now", "1000000"),
+            ("status", "Discharging"),
+        ],
+    );
+    let b = hardware::batteries(&f.0).unwrap().values.remove(0);
+    assert_eq!(b.percent, 61.);
+    assert!(b.health_percent.is_none() && b.time.is_none() && b.cycles.is_none());
+}
+#[test]
+fn bad_optional_battery_details_preserve_capacity_and_report_partial_data() {
+    let f = Fixture::new();
+    f.battery(
+        "BAT0",
+        &[
+            ("capacity", "40"),
+            ("power_now", "bad"),
+            ("energy_full", "20000000"),
+            ("energy_full_design", "0"),
+            ("cycle_count", "-1"),
+            ("time_to_empty_now", "bad"),
+            ("status", "Discharging"),
+        ],
+    );
+    let report = hardware::batteries(&f.0).unwrap();
+    assert!(report.errors.is_empty());
+    let b = &report.values[0];
+    assert_eq!(b.percent, 40.);
+    assert_eq!(b.watts, None);
+    assert!(b.notes.len() >= 4);
+    let mut s = Sampler::with_sources(f.sources());
+    assert!(s.sample().panels[4].label.contains("partial"));
+}
+#[test]
+fn battery_design_excess_and_zero_rates_are_not_clamped_or_infinite() {
+    let f = Fixture::new();
+    f.battery(
+        "BAT0",
+        &[
+            ("energy_now", "26000000"),
+            ("energy_full", "52000000"),
+            ("energy_full_design", "50000000"),
+            ("power_now", "0"),
+            ("current_now", "0"),
+            ("status", "Charging"),
+        ],
+    );
+    let b = hardware::batteries(&f.0).unwrap().values.remove(0);
+    assert_eq!(b.health_percent, Some(104.));
+    assert_eq!(b.watts, Some(0.));
+    assert!(b.time.is_none());
+}
+#[test]
+fn fans_keep_stopped_zero_distinct_from_disabled_faulted_and_negative() {
+    let f = Fixture::new();
+    for (channel, rpm) in [(1, "0"), (2, "1500"), (3, "1000"), (4, "2000"), (5, "-1")] {
+        f.put(&format!("class/hwmon/hwmon0/fan{channel}_input"), rpm);
+    }
+    f.put("class/hwmon/hwmon0/name", "board");
+    f.put("class/hwmon/hwmon0/fan1_label", "Chassis");
+    f.put("class/hwmon/hwmon0/fan2_alarm", "1");
+    f.put("class/hwmon/hwmon0/fan3_enable", "0");
+    f.put("class/hwmon/hwmon0/fan4_fault", "1");
+    f.put("class/hwmon/hwmon0/pwm1", "255");
+    let report = hardware::fans(&f.0).unwrap();
+    assert_eq!(report.values.len(), 2);
+    assert_eq!(report.values[0].rpm, 0);
+    assert!(report.values[0].name.contains("Chassis"));
+    assert_eq!(report.values[1].rpm, 1500);
+    assert_eq!(report.values[1].alarm, Some(true));
+    assert_eq!(report.errors.len(), 2);
+    assert_eq!(
+        fs::read_to_string(f.0.join("class/hwmon/hwmon0/pwm1")).unwrap(),
+        "255"
+    );
+}
+#[test]
+fn fan_aliases_deduplicate_and_history_resets_after_missing_or_replaced_sources() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    f.put("class/hwmon/hwmon0/name", "board");
+    f.put("class/hwmon/hwmon0/fan1_input", "1000");
+    symlink(
+        f.0.join("class/hwmon/hwmon0"),
+        f.0.join("class/hwmon/hwmon9"),
+    )
+    .unwrap();
+    assert_eq!(hardware::fans(&f.0).unwrap().values.len(), 1);
+    let mut s = Sampler::with_sources(f.sources());
+    assert_eq!(s.sample().panels[11].series[0].last(), Some(&1000.));
+    f.put("class/hwmon/hwmon0/fan1_input", "1500");
+    assert_eq!(s.sample().panels[11].series[0][118..], [1000., 1500.]);
+    fs::remove_file(f.0.join("class/hwmon/hwmon0/fan1_input")).unwrap();
+    assert!(s.sample().panels[11].series.is_empty());
+    f.put("class/hwmon/hwmon0/fan1_input", "2000");
+    let panel = s.sample().panels.remove(11);
+    assert_eq!(panel.series[0].last(), Some(&2000.));
+    assert!(panel.series[0][..119].iter().all(|v| *v == 0.));
+    assert_eq!(panel.scale, Scale::Automatic);
+}
+#[test]
+fn fan_special_files_malformed_flags_and_oversized_labels_are_bounded_errors() {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let f = Fixture::new();
+    f.put("class/hwmon/hwmon0/name", "board");
+    let fifo = f.0.join("class/hwmon/hwmon0/fan1_input");
+    let c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    f.put("class/hwmon/hwmon0/fan2_input", "1000");
+    f.put("class/hwmon/hwmon0/fan2_enable", "2");
+    f.put("class/hwmon/hwmon0/fan3_input", "2000");
+    f.put("class/hwmon/hwmon0/fan3_label", &"x".repeat(4097));
+    let report = hardware::fans(&f.0).unwrap();
+    assert!(report.values.is_empty());
+    assert_eq!(report.errors.len(), 3);
+}
+#[test]
+fn fan_scan_work_is_capped_and_reports_partial_coverage() {
+    let f = Fixture::new();
+    f.put("class/hwmon/hwmon0/name", "board");
+    for n in 1..=257 {
+        f.put(&format!("class/hwmon/hwmon0/fan{n}_input"), "1000");
+    }
+    let report = hardware::fans(&f.0).unwrap();
+    assert!(report.values.len() <= 256);
+    assert!(report.errors.iter().any(|e| e.contains("partial")));
 }

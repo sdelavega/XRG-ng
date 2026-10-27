@@ -63,7 +63,9 @@ pub struct Sampler {
     inventory: crate::metrics::Inventory,
     process_report: Result<Arc<crate::process::Report>, String>,
     battery_histories: BTreeMap<String, History>,
+    fan_histories: BTreeMap<String, History>,
     gpu: crate::gpu::GpuCollector,
+    gpu_memory: crate::gpu_memory::View,
     gpu_histories: BTreeMap<String, (bool, History)>,
     start: Instant,
     sequence: u64,
@@ -93,12 +95,14 @@ impl Sampler {
             tpu,
             tpu_history: History::new(120),
             gpu_histories: BTreeMap::new(),
+            gpu_memory: crate::gpu_memory::View::default(),
             metrics: crate::metrics::Sampler::default(),
             memory_history: History::new(120),
             temperature_history: History::new(120),
             inventory: crate::metrics::Inventory::default(),
             process_report: Err("Waiting for process sample".into()),
             battery_histories: BTreeMap::new(),
+            fan_histories: BTreeMap::new(),
             start: Instant::now(),
             sequence: 0,
         }
@@ -107,6 +111,7 @@ impl Sampler {
         selection.validate()?;
         if self.metrics.selection().gpu != selection.gpu {
             self.gpu_histories.clear();
+            self.gpu_memory.reset();
         }
         self.metrics.set_selection(selection)
     }
@@ -135,7 +140,8 @@ impl Sampler {
         let mut panels = vec![metrics.cpu, memory, metrics.network, metrics.disk];
         panels.push(self.battery_panel());
         panels.push(self.temperature_panel());
-        panels.push(self.gpu_panel());
+        let (gpu, vram) = self.gpu_panels();
+        panels.push(gpu);
         if let Some(ai) = &self.ai
             && let Some(panel) = ai.latest.lock().unwrap().take()
         {
@@ -144,6 +150,8 @@ impl Sampler {
         panels.push(self.ai_panel.clone());
         panels.push(self.process_panel());
         panels.push(self.tpu_panel());
+        panels.push(vram);
+        panels.push(self.fan_panel());
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
@@ -297,7 +305,7 @@ impl Sampler {
             scale: Scale::Automatic,
         }
     }
-    fn gpu_panel(&mut self) -> Panel {
+    fn gpu_panels(&mut self) -> (Panel, Panel) {
         let mut series = Vec::new();
         let mut result = self.gpu.sample();
         self.inventory.gpus.clear();
@@ -318,20 +326,26 @@ impl Sampler {
                 report.values.retain(|gpu| gpu.id == *selected);
                 if report.values.is_empty() {
                     self.gpu_histories.clear();
-                    return Panel {
-                        title: "GPU",
-                        label: "Selected GPU unavailable".into(),
-                        detail: format!(
-                            "GPU identity {selected} was not present in the latest sample.\n{}",
-                            report.errors.join("\n")
-                        ),
-                        series,
-                        scale: Scale::Percent,
-                    };
+                    let unavailable = "Selected GPU unavailable".to_owned();
+                    let vram = self.gpu_memory.panel(&Err(unavailable));
+                    return (
+                        Panel {
+                            title: "GPU",
+                            label: "Selected GPU unavailable".into(),
+                            detail: format!(
+                                "GPU identity {selected} was not present in the latest sample.\n{}",
+                                report.errors.join("\n")
+                            ),
+                            series,
+                            scale: Scale::Percent,
+                        },
+                        vram,
+                    );
                 }
             }
         }
 
+        let vram = self.gpu_memory.panel(&result);
         let (label, detail) = match result {
             Err(error) => ("GPU unavailable".into(), error),
             Ok(report) if report.values.is_empty() => {
@@ -435,15 +449,89 @@ impl Sampler {
                 (label, details.join("\n\n"))
             }
         };
-        Panel {
-            title: "GPU",
-            label,
-            detail,
-            series,
-            scale: Scale::Percent,
-        }
+        (
+            Panel {
+                title: "GPU",
+                label,
+                detail,
+                series,
+                scale: Scale::Percent,
+            },
+            vram,
+        )
     }
 
+    fn fan_panel(&mut self) -> Panel {
+        let mut panel = Panel {
+            title: "Fans", label: "No readable fan sensors".into(), series: Vec::new(),
+            detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership.".into(),
+            scale: Scale::Automatic,
+        };
+        match crate::hardware::fans(self.source.sys_root()) {
+            Err(error) => {
+                self.fan_histories.clear();
+                panel.label = "Fan readings unavailable".into();
+                panel.detail.push_str(&format!("\n{error}"));
+            }
+            Ok(report) => {
+                let visible: Vec<_> = report.values.iter().take(3).collect();
+                self.fan_histories
+                    .retain(|id, _| visible.iter().any(|fan| fan.id == *id));
+                let mut labels = Vec::new();
+                for fan in visible {
+                    let history = self
+                        .fan_histories
+                        .entry(fan.id.clone())
+                        .or_insert_with(|| History::new(120));
+                    history.append(fan.rpm as f64);
+                    panel.series.push(history.values());
+                    labels.push(format!(
+                        "{} {} RPM{}",
+                        fan.name,
+                        fan.rpm,
+                        if fan.alarm == Some(true) {
+                            " · alarm"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+                if !labels.is_empty() {
+                    panel.label = labels.join(" / ");
+                } else if !report.errors.is_empty() {
+                    panel.label = "Fan readings unavailable".into();
+                }
+                if report.values.len() > 3 {
+                    panel.label.push_str(" (+more)");
+                }
+                if !report.errors.is_empty() || report.values.iter().any(|f| !f.notes.is_empty()) {
+                    panel.label.push_str(" · partial");
+                }
+                for fan in report.values.iter().take(64) {
+                    panel.detail.push_str(&format!(
+                        "\n{}: {} RPM{}",
+                        fan.name,
+                        fan.rpm,
+                        match fan.alarm {
+                            Some(true) => " · driver alarm active",
+                            Some(false) => " · driver alarm clear",
+                            None => "",
+                        }
+                    ));
+                    for note in &fan.notes {
+                        panel.detail.push_str(&format!("\n{note}"));
+                    }
+                }
+                if report.values.len() > 64 {
+                    panel.detail.push_str("\nAdditional fan details omitted");
+                }
+                for error in report.errors {
+                    panel.detail.push_str(&format!("\n{error}"));
+                }
+            }
+        }
+        panel
+    }
     fn battery_panel(&mut self) -> Panel {
         let mut series = Vec::new();
         let (label, detail) = match self.source.battery() {
@@ -477,16 +565,13 @@ impl Sampler {
                 if report.values.len() > 3 {
                     label.push_str(&format!(" (+{})", report.values.len() - 3));
                 }
-                if !report.errors.is_empty() {
+                if !report.errors.is_empty() || report.values.iter().any(|v| !v.notes.is_empty()) {
                     label.push_str(" · partial");
                 }
                 let mut detail: Vec<_> = report
                     .values
                     .iter()
-                    .map(|v| {
-                        let power = v.watts.map(|w| format!(" · {w:.1} W")).unwrap_or_default();
-                        format!("{}: {:.1}% · {}{power}", v.name, v.percent, v.status)
-                    })
+                    .map(crate::hardware::Battery::description)
                     .collect();
                 detail.extend(report.errors);
                 (label, detail.join("\n"))

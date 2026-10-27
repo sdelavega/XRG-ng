@@ -33,9 +33,11 @@ pub enum Module {
     Ai,
     Processes,
     Tpu,
+    GpuMemory,
+    Fans,
 }
 impl Module {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Cpu,
         Self::Memory,
         Self::Network,
@@ -46,6 +48,8 @@ impl Module {
         Self::Ai,
         Self::Processes,
         Self::Tpu,
+        Self::GpuMemory,
+        Self::Fans,
     ];
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|m| *m == self).unwrap()
@@ -62,6 +66,8 @@ impl Module {
             Self::Ai => "AI tokens · observed rate",
             Self::Processes => "Processes · readable / running",
             Self::Tpu => "TPU · reported inference rate",
+            Self::GpuMemory => "VRAM · reported pool used",
+            Self::Fans => "Fans · RPM",
         }
     }
 }
@@ -195,7 +201,7 @@ impl MetricSelection {
             Module::Cpu => self.cpu == other.cpu,
             Module::Network => self.network == other.network,
             Module::Disk => self.disk == other.disk,
-            Module::Gpu => self.gpu == other.gpu,
+            Module::Gpu | Module::GpuMemory => self.gpu == other.gpu,
             _ => true,
         }
     }
@@ -244,7 +250,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -260,7 +266,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 2 {
+        if self.version != 3 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -301,8 +307,21 @@ impl Settings {
                 ..Self::default()
             }
         };
-        if result.version == 1 {
-            result.version = 2;
+        if result.version == 1 || result.version == 2 {
+            // Older documents must still contain exactly their original graphs.
+            // Appending hidden modules preserves order, visibility and recovery
+            // behavior, including a deliberately all-hidden layout.
+            let expected: std::collections::BTreeSet<_> =
+                Module::ALL[..10].iter().copied().collect();
+            let actual: std::collections::BTreeSet<_> =
+                result.modules.iter().map(|m| m.id).collect();
+            if result.modules.len() != 10 || actual != expected {
+                return Err("Legacy settings must contain each original graph exactly once".into());
+            }
+            result.modules.extend(
+                [Module::GpuMemory, Module::Fans].map(|id| ModuleSetting { id, visible: false }),
+            );
+            result.version = 3;
         }
         result.validate()?;
         Ok(result)

@@ -395,6 +395,11 @@ fn gpu_selection_keeps_full_inventory_but_plots_only_the_chosen_adapter() {
     ] {
         f.gpu(card, pci, "0x1002", "amdgpu");
         f.put(&format!("bus/pci/devices/{pci}/gpu_busy_percent"), value);
+        f.put(
+            &format!("bus/pci/devices/{pci}/mem_info_vram_used"),
+            if card == "card1" { "300" } else { "40" },
+        );
+        f.put(&format!("bus/pci/devices/{pci}/mem_info_vram_total"), "400");
     }
     let report = f.collector().sample().unwrap();
     let selected = report
@@ -418,6 +423,11 @@ fn gpu_selection_keeps_full_inventory_but_plots_only_the_chosen_adapter() {
     assert_eq!(gpu.series[0].last(), Some(&70.));
     assert!(gpu.detail.contains("card1"));
     assert!(!gpu.detail.contains("card0"));
+    let vram = &snapshot.panels[10];
+    assert_eq!(vram.series.len(), 1);
+    assert_eq!(vram.series[0].last(), Some(&75.));
+    assert!(vram.detail.contains("card1"));
+    assert!(!vram.detail.contains("card0"));
     sampler
         .set_selection(MetricSelection {
             gpu: Some("missing-adapter".into()),
@@ -428,6 +438,12 @@ fn gpu_selection_keeps_full_inventory_but_plots_only_the_chosen_adapter() {
     let gpu = snapshot.panels.iter().find(|p| p.title == "GPU").unwrap();
     assert!(gpu.series.is_empty());
     assert_eq!(gpu.label, "Selected GPU unavailable");
+    assert!(snapshot.panels[10].series.is_empty());
+    assert!(
+        snapshot.panels[10]
+            .detail
+            .contains("Selected GPU unavailable")
+    );
     assert_eq!(snapshot.selection.gpu.as_deref(), Some("missing-adapter"));
 }
 #[test]

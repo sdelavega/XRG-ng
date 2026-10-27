@@ -153,7 +153,7 @@ impl Targets {
             ("CPU", &cpu.widget),
             ("Network", &network.widget),
             ("Disk", &disk.widget),
-            ("GPU", &gpu.widget),
+            ("GPU and VRAM", &gpu.widget),
         ] {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let label = gtk::Label::new(Some(title));
