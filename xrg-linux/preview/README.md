@@ -16,7 +16,7 @@ On Ubuntu 24.04:
 
 ```sh
 sudo apt-get update
-sudo apt-get install libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3
+sudo apt-get install libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 curl
 ```
 
 Python 3.11+ is only used by the optional install/uninstall scripts. Running directly
@@ -39,6 +39,11 @@ Checksums detect incomplete or changed downloads; these preview artifacts are no
 signed release packages. Keep the whole extracted tree together; moving the ELF
 executable alone will lose its private libraries. The launcher also works after
 moving the extracted directory, including paths with spaces.
+
+Use **AI…** for provider totals, Ollama model inventories and saved source settings.
+The Sources tab can disable providers, override local data paths and select local
+HTTP endpoints. These controls and their limits are described in
+`share/doc/xrg-ng/DEVELOPMENT.md`.
 
 ## Optional desktop installation
 

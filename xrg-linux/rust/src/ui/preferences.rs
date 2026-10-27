@@ -34,6 +34,7 @@ pub(super) struct Dialog {
     message: gtk::Label,
     pub apply: gtk::Button,
     pub cancel: gtk::Button,
+    pub reset: gtk::Button,
     paintable: gtk::WidgetPaintable,
 }
 impl Dialog {
@@ -207,6 +208,7 @@ impl Dialog {
             message,
             apply,
             cancel,
+            reset: reset.clone(),
             paintable,
         });
         dialog.refresh();
@@ -319,7 +321,11 @@ impl Dialog {
         let weak = Rc::downgrade(&dialog);
         reset.connect_clicked(move |_| {
             if let Some(dialog) = weak.upgrade() {
-                *dialog.draft.borrow_mut() = Settings::default();
+                let ai = dialog.draft.borrow().ai.clone();
+                *dialog.draft.borrow_mut() = Settings {
+                    ai,
+                    ..Settings::default()
+                };
                 dialog.refresh();
                 dialog.set_message("Defaults restored in this draft. Apply to keep them.");
             }

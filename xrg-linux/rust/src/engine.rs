@@ -48,11 +48,13 @@ pub struct Snapshot {
     pub selection: MetricSelection,
     pub inventory: crate::metrics::Inventory,
     pub processes: Result<Arc<crate::process::Report>, String>,
+    pub ai: Option<crate::ai::Update>,
 }
 pub struct Sampler {
     source: LinuxSources,
     ai: Option<crate::ai::Worker>,
     ai_panel: Panel,
+    ai_update: Option<crate::ai::Update>,
     process: crate::process::Collector,
     process_histories: [History; 2],
     tpu: crate::tpu::Collector,
@@ -75,9 +77,15 @@ impl Sampler {
         Self::live(true)
     }
     pub fn live(ai_enabled: bool) -> Self {
+        Self::live_with_preferences(ai_enabled, crate::ai::Preferences::default())
+    }
+    pub fn live_with_preferences(ai_enabled: bool, preferences: crate::ai::Preferences) -> Self {
+        preferences.validate().expect("Validated AI preferences");
         let mut sampler = Self::with_sources(LinuxSources::live());
         if ai_enabled {
-            sampler.ai = crate::ai::Config::live().map(crate::ai::Worker::start);
+            sampler.ai = crate::ai::Config::live().map(|config| {
+                crate::ai::Worker::controlled(config, preferences, crate::ai::Control::default())
+            });
         }
         sampler
     }
@@ -89,6 +97,7 @@ impl Sampler {
             source,
             ai: None,
             ai_panel: crate::ai::waiting(),
+            ai_update: None,
             gpu,
             process,
             process_histories: array::from_fn(|_| History::new(120)),
@@ -143,9 +152,10 @@ impl Sampler {
         let (gpu, vram) = self.gpu_panels();
         panels.push(gpu);
         if let Some(ai) = &self.ai
-            && let Some(panel) = ai.latest.lock().unwrap().take()
+            && let Some(update) = ai.latest.lock().unwrap().take()
         {
-            self.ai_panel = panel;
+            self.ai_panel = update.panel.clone();
+            self.ai_update = Some(update);
         }
         panels.push(self.ai_panel.clone());
         panels.push(self.process_panel());
@@ -160,6 +170,7 @@ impl Sampler {
             selection: self.metrics.selection().clone(),
             inventory: self.inventory.clone(),
             processes: self.process_report.clone(),
+            ai: self.ai_update.clone(),
         }
     }
     fn process_panel(&mut self) -> Panel {
@@ -658,6 +669,7 @@ pub struct Worker {
     stop: Option<mpsc::Sender<()>>,
     join: Option<thread::JoinHandle<()>>,
     selection: SelectionControl,
+    ai: crate::ai::Control,
 }
 impl Worker {
     pub fn start() -> Self {
@@ -667,6 +679,16 @@ impl Worker {
         Self::start_configured(ai_enabled, MetricSelection::default())
     }
     pub fn start_configured(ai_enabled: bool, initial: MetricSelection) -> Self {
+        Self::start_with_preferences(ai_enabled, initial, crate::ai::Preferences::default())
+    }
+    pub fn start_with_preferences(
+        ai_enabled: bool,
+        initial: MetricSelection,
+        ai_preferences: crate::ai::Preferences,
+    ) -> Self {
+        ai_preferences.validate().expect("Validated AI preferences");
+        let ai = crate::ai::Control::default();
+        let ai_updates = ai.clone();
         let selection = SelectionControl(Arc::new(Mutex::new(None::<MetricSelection>)));
         let updates = selection.clone();
         let latest = Arc::new(Mutex::new(None));
@@ -674,7 +696,14 @@ impl Worker {
         let (stop, receiver) = mpsc::channel();
         let join = thread::spawn(move || {
             // Swift handles are created and destroyed on this worker only.
-            let mut sampler = Sampler::live(ai_enabled);
+            let mut sampler = Sampler::live(false);
+            if ai_enabled && let Some(config) = crate::ai::Config::live() {
+                sampler.ai = Some(crate::ai::Worker::controlled(
+                    config,
+                    ai_preferences,
+                    ai_updates,
+                ));
+            }
             sampler
                 .set_selection(initial)
                 .expect("Validated initial selection");
@@ -698,10 +727,14 @@ impl Worker {
             stop: Some(stop),
             join: Some(join),
             selection,
+            ai,
         }
     }
     pub fn selection_control(&self) -> SelectionControl {
         self.selection.clone()
+    }
+    pub fn ai_control(&self) -> crate::ai::Control {
+        self.ai.clone()
     }
     pub fn set_selection(&self, selection: MetricSelection) -> Result<(), String> {
         self.selection.set(selection)

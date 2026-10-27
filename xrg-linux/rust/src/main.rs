@@ -21,7 +21,12 @@ fn main() -> ExitCode {
             },
             _ => return usage(),
         };
-        let mut sampler = Sampler::new();
+        let (_, settings, error) =
+            xrg_ng_linux::settings::Store::open(xrg_ng_linux::settings::preferences_path());
+        if let Some(error) = error {
+            eprintln!("Preferences unavailable; using default AI sources: {error}");
+        }
+        let mut sampler = Sampler::live_with_preferences(true, settings.ai);
         let mut valid = false;
         for index in 0..count {
             let snapshot = sampler.sample();

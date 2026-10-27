@@ -15,6 +15,9 @@ Claude/Codex/Gemini/Hermes usage and Ollama model
 status; see the [new provider sources and limits](rust/README.md#ai-monitoring). The instructions below describe the existing
 C/GTK3 implementation, retained during migration.
 
+The new **AI…** window shows usage and Ollama model inventories, with saved provider
+switches, custom data paths, Claude source selection and loopback API endpoints.
+
 Installable x86_64/ARM64 preview archives are produced by the
 [Linux workflow](https://github.com/sdelavega/XRG-ng/actions/workflows/linux.yml).
 They bundle the Swift runtime and support direct launch or per-user desktop

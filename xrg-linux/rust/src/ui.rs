@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
+mod ai;
 mod preferences;
 mod processes;
 mod smoke;
@@ -35,6 +36,8 @@ struct Shell {
     state: Rc<RefCell<Option<Snapshot>>>,
     selection: crate::ui::SelectionControl,
     processes: RefCell<Option<Rc<processes::Window>>>,
+    ai_window: RefCell<Option<Rc<ai::Window>>>,
+    ai_control: xrg_ng_linux::ai::Control,
     writer: Writer,
     revision: Cell<u64>,
     saved_revision: Cell<u64>,
@@ -48,8 +51,9 @@ impl Shell {
         error: Option<String>,
         smoke: bool,
         state: Rc<RefCell<Option<Snapshot>>>,
-        selection: SelectionControl,
+        controls: (SelectionControl, xrg_ng_linux::ai::Control),
     ) -> Rc<Self> {
+        let (selection, ai_control) = controls;
         let settings = Rc::new(RefCell::new(settings));
         let theme = Rc::new(RefCell::new(
             settings
@@ -94,6 +98,9 @@ impl Shell {
         toolbar.append(&chooser);
         let process_button = gtk::Button::with_label("Processes…");
         toolbar.append(&process_button);
+        let ai_button = gtk::Button::with_label("AI…");
+        ai_button.set_tooltip_text(Some("AI usage, model inventories and sources"));
+        toolbar.append(&ai_button);
         let prefs = gtk::Button::from_icon_name("preferences-system-symbolic");
         prefs.set_tooltip_text(Some("Preferences · graphs and themes"));
         prefs.update_property(&[gtk::accessible::Property::Label("Preferences")]);
@@ -138,7 +145,7 @@ impl Shell {
                     module.title(),
                     state
                         .as_ref()
-                        .filter(|s| s.selection.matches(&settings.borrow().metrics, module))
+                        .filter(|s| snapshot_matches(s, &settings.borrow(), module))
                         .and_then(|s| s.panels.get(module.index())),
                 );
             });
@@ -155,7 +162,7 @@ impl Shell {
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("XRG-ng")
-            .default_width(540)
+            .default_width(600)
             .default_height(if smoke { 1400 } else { 850 })
             .child(&content)
             .build();
@@ -177,6 +184,8 @@ impl Shell {
             state: state.clone(),
             selection,
             processes: RefCell::new(None),
+            ai_window: RefCell::new(None),
+            ai_control,
             writer: Writer::start(store),
             revision: Cell::new(0),
             saved_revision: Cell::new(0),
@@ -220,6 +229,12 @@ impl Shell {
         process_button.connect_clicked(move |_| {
             if let Some(shell) = weak.upgrade() {
                 shell.processes();
+            }
+        });
+        let weak = Rc::downgrade(&shell);
+        ai_button.connect_clicked(move |_| {
+            if let Some(shell) = weak.upgrade() {
+                shell.ai();
             }
         });
         if let Some(error) = error {
@@ -276,6 +291,11 @@ impl Shell {
                 .expect("Validated selection");
         }
         let process_change = old.processes != settings.processes;
+        if old.ai != settings.ai {
+            self.ai_control
+                .set(settings.ai.clone())
+                .expect("Validated AI preferences");
+        }
         *self.theme.borrow_mut() = palette;
         *self.settings.borrow_mut() = settings.clone();
         if process_change && let Some(window) = self.processes.borrow().as_ref() {
@@ -305,6 +325,20 @@ impl Shell {
             .as_ref()
             .map(|s| s.inventory.clone())
             .unwrap_or_default()
+    }
+    fn ai(self: &Rc<Self>) -> Rc<ai::Window> {
+        if let Some(window) = self.ai_window.borrow().as_ref() {
+            window.window.present();
+            return window.clone();
+        }
+        let window = ai::Window::new(self);
+        window.update(
+            self.state.borrow().as_ref().and_then(|s| s.ai.as_ref()),
+            &self.settings.borrow().ai,
+        );
+        *self.ai_window.borrow_mut() = Some(window.clone());
+        window.window.present();
+        window
     }
     fn processes(self: &Rc<Self>) -> Rc<processes::Window> {
         if let Some(window) = self.processes.borrow().as_ref() {
@@ -386,8 +420,13 @@ pub fn run(smoke_mode: bool) -> bool {
             settings::preferences_path()
         };
         let (store, settings, error) = Store::open(path);
-        let monitor = Worker::start_configured(!smoke_mode, settings.metrics.clone());
+        let monitor = Worker::start_with_preferences(
+            !smoke_mode,
+            settings.metrics.clone(),
+            settings.ai.clone(),
+        );
         let selection = monitor.selection_control();
+        let ai_control = monitor.ai_control();
         let latest = monitor.latest.clone();
         *owner.borrow_mut() = Some(monitor);
         let state = Rc::new(RefCell::new(None::<Snapshot>));
@@ -398,7 +437,7 @@ pub fn run(smoke_mode: bool) -> bool {
             error,
             smoke_mode,
             state.clone(),
-            selection,
+            (selection, ai_control),
         );
         *shell_owner.borrow_mut() = Some(view.clone());
         let weak = Rc::downgrade(&view);
@@ -414,10 +453,7 @@ pub fn run(smoke_mode: bool) -> bool {
                     .into_iter()
                     .zip(shell.areas.iter().zip(&snapshot.panels))
                 {
-                    if !snapshot
-                        .selection
-                        .matches(&shell.settings.borrow().metrics, module)
-                    {
+                    if !snapshot_matches(&snapshot, &shell.settings.borrow(), module) {
                         area.set_tooltip_text(Some("Waiting for selected source…"));
                         continue;
                     }
@@ -432,6 +468,11 @@ pub fn run(smoke_mode: bool) -> bool {
                 }
                 if let Some(window) = shell.processes.borrow().as_ref() {
                     window.update(&snapshot.processes);
+                }
+                if let (Some(window), Some(update)) =
+                    (shell.ai_window.borrow().as_ref(), snapshot.ai.as_ref())
+                {
+                    window.update(Some(update), &shell.settings.borrow().ai);
                 }
                 *state.borrow_mut() = Some(snapshot);
                 for area in &shell.areas {
@@ -481,6 +522,14 @@ pub fn run(smoke_mode: bool) -> bool {
     shell.borrow_mut().take();
     worker.borrow_mut().take();
     success.get() && exit == glib::ExitCode::SUCCESS
+}
+fn snapshot_matches(snapshot: &Snapshot, settings: &Settings, module: Module) -> bool {
+    snapshot.selection.matches(&settings.metrics, module)
+        && (module != Module::Ai
+            || snapshot
+                .ai
+                .as_ref()
+                .is_some_and(|ai| ai.preferences == settings.ai))
 }
 pub(super) fn limit_dropdown(dropdown: &gtk::DropDown) {
     let factory = gtk::SignalListItemFactory::new();

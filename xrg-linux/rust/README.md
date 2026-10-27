@@ -40,7 +40,7 @@ and contributions are welcome. See the [project support policy](../../README.md#
   lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
   Rust snapshots through bounded latest-value slots; GTK touches them on its main
   thread. No shell commands, provider scans or collection run in drawing callbacks.
-- **Preferences:** graph visibility/order, height, metric sources, process filters
+- **Preferences:** graph visibility/order, height, metric sources, process filters and AI sources
   and theme colors are saved in
   `$XDG_CONFIG_HOME/xrg-ng/settings.conf` (or `~/.config/xrg-ng`). All six shared
   presets remain selectable alongside a custom palette. The editor supports
@@ -235,7 +235,11 @@ opens Preferences, tests invalid drafts/imports and Cancel/Apply, exports/reload
 a custom theme, reorders/hides graphs, recovers from an all-hidden layout and reopens
 saved settings. It also selects live metric sources, opens the process table,
 checks invalid UID handling, filters to its own process and reopens saved filters.
-It exports the main window, preferences dialog and process table as PNGs. Smoke
+The AI window checks invalid paths/URLs, applying/reopening provider settings,
+discarding drafts, stale-report suppression, and preservation of AI sources when
+restoring graph defaults. It renders a clearly labeled synthetic usage/model fixture
+without scanning provider data. The main window, preferences, process table and
+both AI tabs are exported as PNGs. Smoke
 mode uses temporary settings/theme files and never reads or writes user preferences.
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
 behavior, screen readers or physical-device collection. Linux build output is
@@ -321,11 +325,12 @@ palette is embedded in saved preferences, so reopening does not depend on the
 original imported file. XTF conversion and legacy C/GTK3 INI import remain follow-up
 work; the macOS application's XTF load/save behavior is unchanged.
 
-Settings use version 3 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 4 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
-twelve graphs by default. The earlier Rust `theme=Ocean` format also loads with
+twelve graphs by default. Version 3 layouts also load, adding default AI source
+controls. The earlier Rust `theme=Ocean` format also loads with
 default controls. Formats upgrade only when preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
@@ -344,6 +349,36 @@ when provider scans or local APIs are slow. Tooltips/accessibility details show 
 provider's locally retained token total, rate, source, recorded cost when available,
 and errors. These totals are not account billing or a billing-period summary;
 batched log writes produce bursts in the graph.
+
+**AI…** in the toolbar opens **Usage and models** plus a **Sources** tab. Usage
+shows provider totals, observed rates, selected source, recorded costs and errors,
+along with installed/loaded Ollama model names (up to 128 per list). The model lists
+are inventories, not per-model token counters. This view does not infer token
+breakdowns, model prices or account billing.
+
+Sources offers individual Claude/Codex/Gemini/Hermes switches and an independent
+Ollama inventory switch. Disabled providers do not read their logs/database or
+query their API. Override each provider's directory/database with an absolute UTF-8
+path; leave it blank for the defaults below. Paths are validated without a filesystem
+probe on GTK's thread and may point to an offline/missing location. The existing
+log filename/layout rules, symlink exclusions and budgets still apply.
+
+Claude can use **Auto**, **Logs only**, **Database only** or **Metrics only**. Auto
+uses the priority below against the configured paths. An explicitly selected source
+does not fall back when unavailable. Local endpoints accept only HTTP URLs with a
+loopback IP literal such as `127.0.0.1` or `[::1]`, without credentials, query or
+fragment. Hostnames, remote hosts and HTTPS are not supported by these local
+controls. The metrics field is a complete URL; the Ollama field is a base URL,
+optionally with a path prefix, to which `/api/tags` and `/api/ps` are appended.
+
+**Apply sources** validates the entire draft and saves it; **Close** discards unsaved
+edits. **Default sources** changes only the draft until applied. Restoring graph/theme
+defaults keeps AI source choices. Changes coalesce in a bounded slot and apply on
+the next five-second AI poll; a running scan may finish first. Rates/history reset
+when source preferences change, and the UI suppresses reports from the old
+configuration while waiting. No worker restart/join, file scan, SQLite query or
+HTTP request runs on GTK's thread. Headless diagnostics also honor saved AI source
+preferences while retaining their aggregate system metrics and fixed panel order.
 
 | Provider | Default source and behavior |
 | --- | --- |
@@ -380,7 +415,7 @@ snapshots include committed changes. Costs are unavailable if rows lack recorded
 costs; no hard-coded model prices or synthetic token splits are used.
 
 Local API reads require the **`curl` executable**. Queries disable curl config,
-proxies and redirects, use fixed loopback HTTP endpoints, and cap each child at
+proxies, redirects and URL globbing, use validated loopback HTTP endpoints, and cap each child at
 650 ms/1 MiB (curl also has its own 500 ms timeout). No prompts or transcripts
 are sent to these endpoints. SQLite is bundled through rusqlite; no sqlite CLI or
 system SQLite development package is required. Fixtures and the GTK smoke check
@@ -486,8 +521,8 @@ Support remains best effort; device reports and feedback are welcome.
 
 1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
    support, individual fan/sensor controls and detailed process controls.
-2. AI provider/model detail controls, custom data roots/endpoints, append-offset
-   scanning for very large logs, optional price tables, and a weather ABI consumer.
+2. Per-model provider token breakdowns where recorded, append-offset scanning for
+   very large logs, optional price tables, and a weather ABI consumer.
 3. Context menus, deeper metric preferences, XTF conversion and explicit
    legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global

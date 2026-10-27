@@ -306,6 +306,7 @@ fn report(total: u64, source: &str) -> Report {
             Err("missing".into()),
         ],
         ollama: "Ollama fixture".into(),
+        models: ai::Models::default(),
     }
 }
 #[test]
@@ -363,4 +364,168 @@ fn oversized_records_and_database_row_budget_fail_explicitly() {
     let c = f.db("state.db", HERMES);
     c.execute_batch("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100001) INSERT INTO sessions SELECT 'm',1,1,0,0 FROM n;").unwrap();
     assert!(ai::database::snapshot(&f.0.join("state.db"), true).is_err());
+}
+
+#[test]
+fn ai_preferences_validate_local_urls_and_absolute_paths_without_probing_them() {
+    for url in [
+        "http://127.0.0.1:18889/metrics",
+        "http://127.0.0.2/metrics",
+        "http://[::1]:11434/ollama",
+        "http://[::1]",
+    ] {
+        assert!(ai::validate_url(url).is_ok(), "{url}");
+    }
+    for url in [
+        "https://127.0.0.1/",
+        "http://example.com/",
+        "http://localhost/",
+        "file:///tmp/source",
+        "--help",
+        "http://127.0.0.1:0/",
+        "http://127.0.0.1:65536/",
+        "http://127.0.0.1@remote/",
+        "http://127.0.0.1/?key=secret",
+        "http://127.0.0.1/#x",
+        "http://127.0.0.1/\n",
+        "http://[127.0.0.1]/",
+        "http://::1/",
+        "http://[::ffff:127.0.0.1]/",
+    ] {
+        assert!(ai::validate_url(url).is_err(), "{url}");
+    }
+    let mut preferences = ai::Preferences {
+        claude_logs: Some("/not-present/custom projects".into()),
+        ..Default::default()
+    };
+    assert!(preferences.validate().is_ok());
+    preferences.claude_logs = Some("relative".into());
+    assert!(preferences.validate().is_err());
+    preferences.claude_logs = Some("/tmp/line\nbreak".into());
+    assert!(preferences.validate().is_err());
+}
+#[test]
+fn disabled_providers_do_not_open_roots_databases_or_local_endpoints() {
+    struct NoApi;
+    impl LocalApi for NoApi {
+        fn get(&mut self, _: Endpoint) -> Result<Vec<u8>, String> {
+            panic!("Disabled API was queried")
+        }
+    }
+    let f = Fixture::new();
+    f.put("logs", "not a directory");
+    f.put("database", "not SQLite");
+    let preferences = ai::Preferences {
+        enabled: [false; 4],
+        ollama: false,
+        claude_logs: Some(f.0.join("logs")),
+        claude_database: Some(f.0.join("database")),
+        codex_logs: Some(f.0.join("logs")),
+        gemini_logs: Some(f.0.join("logs")),
+        hermes_database: Some(f.0.join("database")),
+        ..Default::default()
+    };
+    let mut collector =
+        Collector::configured(Config { home: f.0.clone() }, preferences.clone()).unwrap();
+    let report = collector.sample(&mut NoApi);
+    assert!(
+        report
+            .providers
+            .iter()
+            .all(|r| r.as_ref().unwrap_err().contains("Disabled"))
+    );
+    let panel = Display::default().panel_for(report, 1., &preferences);
+    assert!(panel.series.is_empty());
+    assert_eq!(panel.label, "AI token monitoring disabled");
+}
+#[test]
+fn explicit_claude_source_selection_never_falls_back_or_adds_other_sources() {
+    let f = Fixture::new();
+    f.put("custom/p/a.jsonl", claude("custom", 10, 2));
+    let _db = f.db("custom.db", "CREATE TABLE sessions(tokens_used INTEGER,estimated_cost REAL); INSERT INTO sessions VALUES(500,1);");
+    let mut preferences = ai::Preferences {
+        enabled: [true, false, false, false],
+        ollama: false,
+        claude_source: ai::ClaudeSource::Logs,
+        claude_logs: Some(f.0.join("custom")),
+        claude_database: Some(f.0.join("custom.db")),
+        ..Default::default()
+    };
+    let mut api = Api {
+        metrics: Some("claude_code_token_usage_total{type=\"input\"} 900".into()),
+        ..Default::default()
+    };
+    let sample = |prefs: ai::Preferences, api: &mut Api| {
+        Collector::configured(Config { home: f.0.clone() }, prefs)
+            .unwrap()
+            .sample(api)
+            .providers[0]
+            .clone()
+    };
+    assert_eq!(
+        sample(preferences.clone(), &mut api).unwrap().usage.total,
+        12
+    );
+    preferences.claude_logs = Some(f.0.join("missing"));
+    assert!(sample(preferences.clone(), &mut api).is_err());
+    preferences.claude_source = ai::ClaudeSource::Database;
+    assert_eq!(
+        sample(preferences.clone(), &mut api).unwrap().usage.total,
+        500
+    );
+    preferences.claude_source = ai::ClaudeSource::Metrics;
+    assert_eq!(sample(preferences, &mut api).unwrap().usage.total, 900);
+}
+#[test]
+fn custom_provider_paths_and_ollama_inventory_keep_exact_model_names_and_partial_state() {
+    let f = Fixture::new();
+    f.put("custom-codex/rollout-custom.jsonl", codex(17));
+    let c = f.db("custom-hermes.db", HERMES);
+    c.execute_batch("INSERT INTO sessions VALUES('m',3,4,0.2,NULL);")
+        .unwrap();
+    let preferences = ai::Preferences {
+        enabled: [false, true, false, true],
+        codex_logs: Some(f.0.join("custom-codex")),
+        hermes_database: Some(f.0.join("custom-hermes.db")),
+        ..Default::default()
+    };
+    let mut collector = Collector::configured(Config { home: f.0.clone() }, preferences).unwrap();
+    let mut api = Api {
+        models: Some(r#"{"models":[{"name":"fixture-model:latest"},{"name":"other"}]}"#.into()),
+        ..Default::default()
+    };
+    let report = collector.sample(&mut api);
+    assert_eq!(report.providers[1].as_ref().unwrap().usage.total, 17);
+    assert_eq!(report.providers[3].as_ref().unwrap().usage.total, 7);
+    assert_eq!(
+        report.models.installed.as_ref().unwrap(),
+        &["fixture-model:latest", "other"]
+    );
+    assert!(report.models.running.is_err());
+    assert!(report.ollama.contains("loaded models unavailable"));
+    api.models = None;
+    api.running = Some(r#"{"models":[{"name":"loaded-only"}]}"#.into());
+    let report = collector.sample(&mut api);
+    assert!(report.models.installed.is_err());
+    assert_eq!(report.models.running.as_ref().unwrap(), &["loaded-only"]);
+    assert!(report.ollama.contains("1 loaded"));
+}
+#[test]
+fn source_configuration_changes_reset_the_graph_and_rate_baseline() {
+    let mut display = Display::default();
+    let first = ai::Preferences::default();
+    display.panel_for(report(10, "same parser"), 0., &first);
+    assert!(
+        display
+            .panel_for(report(20, "same parser"), 5., &first)
+            .series[0]
+            .last()
+            .is_some_and(|v| *v > 0.)
+    );
+    let second = ai::Preferences {
+        metrics_url: "http://127.0.0.1:18889/metrics".into(),
+        ..first
+    };
+    let changed = display.panel_for(report(1000, "same parser"), 10., &second);
+    assert!(changed.series[0].iter().all(|v| *v == 0.));
 }

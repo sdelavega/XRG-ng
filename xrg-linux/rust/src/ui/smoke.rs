@@ -7,7 +7,7 @@ use std::{
     fs,
     path::PathBuf,
     rc::Rc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use xrg_ng_linux::settings::{Module, Settings, Store, ThemeChoice, ThemeDocument};
 pub(super) struct Harness {
@@ -15,6 +15,7 @@ pub(super) struct Harness {
     stage: u8,
     dialog: Option<Rc<Dialog>>,
     process: Option<Rc<super::processes::Window>>,
+    ai: Option<Rc<super::ai::Window>>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -43,6 +44,7 @@ impl Harness {
             stage: 0,
             dialog: None,
             process: None,
+            ai: None,
             expected: None,
             since: Instant::now(),
         })
@@ -297,12 +299,121 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 3 && loaded.processes.limit == 20,
+                    loaded.version == 4 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
             }
-            12 => return Ok(true),
+            12 => {
+                let before = shell.settings.borrow().clone();
+                let window = shell.ai();
+                window.tabs.set_current_page(Some(1));
+                window.paths[0].set_text("relative-path");
+                window.apply.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before && window.status().contains("absolute"),
+                    "Invalid AI path changed preferences",
+                )?;
+                window.paths[0].set_text("");
+                window.metrics.set_text("http://example.com/metrics");
+                window.apply.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before && window.status().contains("loopback"),
+                    "Remote AI endpoint was accepted",
+                )?;
+                for check in &window.enabled {
+                    check.set_active(false);
+                }
+                window.ollama.set_active(false);
+                window.paths[0].set_text(self.root.join("custom projects").to_str().unwrap());
+                window.metrics.set_text("http://127.0.0.1:18889/metrics");
+                window.endpoint.set_text("http://[::1]:11434/ollama");
+                window.mode.set_selected(1);
+                window.apply.emit_clicked();
+                require(
+                    shell.settings.borrow().ai.enabled == [false; 4]
+                        && !shell.settings.borrow().ai.ollama,
+                    "AI provider toggles did not apply",
+                )?;
+                self.expected = Some(shell.settings.borrow().clone());
+                self.ai = Some(window);
+                self.stage = 13;
+            }
+            13 if self.since.elapsed() > Duration::from_millis(200) => {
+                let window = self.ai.as_ref().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_AI_SOURCES_IMAGE") {
+                    window.snapshot(&PathBuf::from(path))?;
+                }
+                window.tabs.set_current_page(Some(0));
+                let active = shell.settings.borrow().ai.clone();
+                let fixture = xrg_ng_linux::ai::Update {
+                    preferences: active.clone(),
+                    panel: xrg_ng_linux::ai::waiting(),
+                    report: std::sync::Arc::new(xrg_ng_linux::ai::Report {
+                        providers: std::array::from_fn(|_| Err("Disabled in preferences".into())),
+                        ollama: "Automated UI fixture".into(), models: xrg_ng_linux::ai::Models::default(),
+                    }),
+                    detail: "Automated UI fixture\n\nClaude: 42 tokens · source cost unavailable\n\nInstalled Ollama models (1):\nfixture-model\n\nLoaded Ollama models (0):\nnone\n\nModel inventories are not per-model token counters.".into(),
+                };
+                window.update(Some(&fixture), &active);
+                require(
+                    window.usage_text().contains("fixture-model"),
+                    "AI model detail did not render",
+                )?;
+                let mut stale = active.clone();
+                stale.ollama = !stale.ollama;
+                window.update(Some(&fixture), &stale);
+                require(
+                    !window.usage_text().contains("fixture-model"),
+                    "Stale AI report survived a source change",
+                )?;
+                window.update(Some(&fixture), &active);
+                self.stage = 14;
+            }
+            14 if self.since.elapsed() > Duration::from_millis(200) => {
+                let window = self.ai.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_AI_IMAGE") {
+                    window.snapshot(&PathBuf::from(path))?;
+                }
+                window.cancel.emit_clicked();
+                self.stage = 15;
+            }
+            15 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "AI sources did not persist",
+                )?;
+                let reopened = shell.ai();
+                require(
+                    !reopened.enabled[0].is_active()
+                        && reopened.metrics.text() == loaded.ai.metrics_url,
+                    "AI source controls did not reopen",
+                )?;
+                reopened.paths[0].set_text("unsaved-relative-path");
+                reopened.cancel.emit_clicked();
+                require(
+                    shell.settings.borrow().ai == loaded.ai,
+                    "Closing AI controls applied an unsaved draft",
+                )?;
+                let graphs = shell.preferences();
+                graphs.reset.emit_clicked();
+                graphs.apply.emit_clicked();
+                require(
+                    shell.settings.borrow().ai == loaded.ai,
+                    "Restoring graph defaults reset AI source preferences",
+                )?;
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 16;
+            }
+            16 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Graph defaults lost the saved AI settings",
+                )?;
+                return Ok(true);
+            }
             _ => (),
         }
         if self.stage != before {
