@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use xrg_ng_linux::settings::{Module, Settings, Store, ThemeChoice, ThemeDocument};
+const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
@@ -43,6 +44,12 @@ impl Harness {
         fs::create_dir(&root).map_err(|e| e.to_string())?;
         fs::write(root.join("settings.conf"), "theme=Midnight\n").map_err(|e| e.to_string())?;
         fs::write(root.join("invalid.json"), "{broken").map_err(|e| e.to_string())?;
+        fs::write(root.join("legacy.ini"), LEGACY_FIXTURE).map_err(|e| e.to_string())?;
+        fs::write(
+            root.join("legacy-invalid.ini"),
+            "[Modules]\nshow_network=false\nshow_cpu=maybe\n",
+        )
+        .map_err(|e| e.to_string())?;
         Ok(Self {
             root,
             stage: 0,
@@ -804,6 +811,129 @@ impl Harness {
                 require(
                     error.is_none() && loaded == *self.expected.as_ref().unwrap(),
                     "Context-menu layout changes did not persist",
+                )?;
+                let dialog = shell.preferences();
+                dialog.load_legacy(self.root.join("legacy-invalid.ini"));
+                require(
+                    dialog.is_busy()
+                        && !dialog.apply.is_sensitive()
+                        && !dialog.reset.is_sensitive(),
+                    "Import I/O did not lock draft controls",
+                )?;
+                self.dialog = Some(dialog);
+                self.stage = 24;
+            }
+            24 if self.dialog.as_ref().is_some_and(|d| !d.is_busy()) => {
+                let dialog = self.dialog.as_ref().unwrap();
+                require(
+                    dialog.review().is_none()
+                        && dialog.message().contains("expected true or false"),
+                    "Invalid legacy settings did not report failure",
+                )?;
+                require(
+                    dialog.draft() == *self.expected.as_ref().unwrap()
+                        && *shell.settings.borrow() == *self.expected.as_ref().unwrap(),
+                    "Failed import changed draft or active settings",
+                )?;
+                dialog.load_legacy(self.root.join("legacy.ini"));
+                self.stage = 25;
+            }
+            25 if self.since.elapsed() > Duration::from_millis(200)
+                && self.dialog.as_ref().is_some_and(|d| !d.is_busy()) =>
+            {
+                let dialog = self.dialog.as_ref().unwrap();
+                let review = dialog
+                    .review()
+                    .ok_or("Valid import did not open a preview")?;
+                require(
+                    review.report().contains("[Modules] show_cpu = false")
+                        && review.report().contains("[Window] opacity")
+                        && review.report().contains("[AIToken] claude_cap"),
+                    "Import preview omitted mapped values or unsupported entries",
+                )?;
+                require(
+                    dialog.draft() == *self.expected.as_ref().unwrap(),
+                    "Preview changed draft before acceptance",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_IMPORT_IMAGE") {
+                    review.snapshot(&PathBuf::from(path))?;
+                }
+                review.cancel.emit_clicked();
+                require(
+                    dialog.review().is_none() && dialog.draft() == *self.expected.as_ref().unwrap(),
+                    "Cancelling preview changed draft",
+                )?;
+                dialog.load_legacy(self.root.join("legacy.ini"));
+                self.stage = 26;
+            }
+            26 if self.dialog.as_ref().is_some_and(|d| !d.is_busy()) => {
+                let dialog = self.dialog.take().unwrap();
+                let review = dialog.review().ok_or("Second import preview missing")?;
+                review.accept.emit_clicked();
+                require(
+                    dialog.draft() != *self.expected.as_ref().unwrap()
+                        && *shell.settings.borrow() == *self.expected.as_ref().unwrap(),
+                    "Import acceptance changed active settings before Apply",
+                )?;
+                require(
+                    dialog.message().contains("Apply to use and save"),
+                    "Import draft did not explain Apply",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == *self.expected.as_ref().unwrap(),
+                    "Cancelling imported Preferences saved the draft",
+                )?;
+                let dialog = shell.preferences();
+                dialog.load_legacy(self.root.join("legacy.ini"));
+                self.dialog = Some(dialog);
+                self.stage = 27;
+            }
+            27 if self.dialog.as_ref().is_some_and(|d| !d.is_busy()) => {
+                let dialog = self.dialog.take().unwrap();
+                let review = dialog.review().ok_or("Final import preview missing")?;
+                review.accept.emit_clicked();
+                let candidate = dialog.draft();
+                require(
+                    candidate.ai == self.expected.as_ref().unwrap().ai
+                        && candidate.weather == self.expected.as_ref().unwrap().weather
+                        && candidate.metrics == self.expected.as_ref().unwrap().metrics,
+                    "Import changed current service or metric source choices",
+                )?;
+                dialog.apply.emit_clicked();
+                require(
+                    *shell.settings.borrow() == candidate,
+                    "Imported draft did not apply",
+                )?;
+                self.expected = Some(candidate);
+                self.stage = 28;
+            }
+            28 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Imported settings did not persist",
+                )?;
+                require(
+                    fs::read_to_string(self.root.join("legacy.ini")).map_err(|e| e.to_string())?
+                        == LEGACY_FIXTURE,
+                    "Import modified the original legacy file",
+                )?;
+                let dialog = shell.preferences();
+                dialog.load_legacy(self.root.join("legacy.ini"));
+                dialog.cancel.emit_clicked();
+                self.dialog = Some(dialog);
+                self.stage = 29;
+            }
+            29 if self.since.elapsed() > Duration::from_millis(300) => {
+                let dialog = self.dialog.take().unwrap();
+                require(
+                    dialog.review().is_none() && !dialog.window.is_visible(),
+                    "Import read opened a preview after Preferences closed",
+                )?;
+                require(
+                    *shell.settings.borrow() == *self.expected.as_ref().unwrap(),
+                    "Late import read changed active settings",
                 )?;
                 return Ok(true);
             }

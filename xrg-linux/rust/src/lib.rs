@@ -8,6 +8,7 @@ pub mod engine;
 pub mod gpu;
 pub mod gpu_memory;
 pub mod hardware;
+pub mod legacy;
 pub mod shared;
 pub mod weather;
 

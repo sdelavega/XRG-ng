@@ -70,6 +70,7 @@ jobs:
             ${{ steps.verify.outputs.results }}/weather-smoke.png
             ${{ steps.verify.outputs.results }}/menu-smoke.png
             ${{ steps.verify.outputs.results }}/details-smoke.png
+            ${{ steps.verify.outputs.results }}/import-smoke.png
   preview-install:
     name: ${{ matrix.runner }} clean runtime install
     needs: build-and-test

@@ -248,8 +248,10 @@ Apply/reopen, draft discard, old-station suppression and preservation when resto
 graph defaults, using an explicitly labeled fixture with no network requests.
 Graph menu checks emit GTK mouse/key signals, test live details/source guards,
 hide/reorder/show-all persistence and existing window actions, including About.
+Legacy import checks invalid input, preview cancellation, draft cancellation,
+Apply/reopen, unchanged source bytes and closing during an asynchronous read.
 The main window, preferences, process table, both AI tabs, weather window, graph
-menu and live details are
+menu, live details and legacy import preview are
 exported as PNGs. Smoke
 mode uses temporary settings/theme files and never reads or writes user preferences.
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
@@ -310,6 +312,46 @@ order and other preferences, including when every graph has been hidden. Layout
 actions use the existing asynchronous settings writer and persistence-error
 handling. Graph focus has a visible outline for keyboard navigation.
 
+## Importing legacy Linux settings
+
+Open **Preferences → Import legacy Linux settings…** and choose the C/GTK3 app's
+`settings.conf`. The chooser starts at `$XDG_CONFIG_HOME/xrg-linux/settings.conf`
+or `~/.config/xrg-linux/settings.conf`. Import is explicit; startup never reads or
+converts that file automatically.
+
+A preview lists the supported values and every entry not transferred. **Cancel**
+keeps the current draft. **Import into draft** lets you inspect/edit the result;
+the main window and saved settings change only after **Apply** in Preferences.
+Cancelling Preferences discards the import. The legacy source is read-only and
+remains available to the C app; saves use the Rust app's normal `xrg-ng` settings
+path and existing atomic/background writer and persistence-error handling.
+
+The importer transfers the ten legacy graph visibility flags and the seven global
+colors: background, graph background, three series, border and text. Imported
+colors become an embedded custom theme, retaining alpha and black/zero values.
+The legacy theme name supplies a label only; palettes are never guessed from a
+matching preset name. A name without color entries leaves the current theme intact.
+Partial files keep current draft values for missing fields. New VRAM/Fans
+visibility, graph order/height, metric sources, process filters, AI sources and
+weather remain as configured. A legacy weather visibility flag does not enable
+requests. The main window background stays opaque as with other custom themes.
+
+Window geometry/pinning/opacity, orientation, activity bars, module-specific
+colors/styles, temperature units, billing and unrecognized entries are listed as
+not transferred. Unsupported values are not echoed in the preview. Invalid
+supported booleans/colors reject the entire import and leave the draft unchanged.
+Files containing no supported visibility/color entries are rejected.
+
+Parsing follows the C writer's GLib key-file layout: UTF-8, case-sensitive grouped
+keys, `#` comments, lower-case `true`/`false`, repeated-group merging and last-key
+precedence. String escapes support `\\`, `\s`, `\n`, `\r` and `\t`. Colors accept
+the C writer's `rgba(R,G,B,A)` (RGB 0–255, alpha 0–1), `rgb(R,G,B)`, and 3/4/6/8-digit
+hexadecimal RGB/RGBA; other CSS color spellings require conversion first. Reads
+and parsing run off GTK's thread, using regular local files with final-component
+symlinks/special files rejected. Limits are 128 KiB, 4,096 lines, 8,192 bytes per
+line, 1,024 distinct entries and 128 bytes per key/group name. Closing Preferences
+while a read is in flight prevents a late preview or draft change.
+
 ## Graph and theme preferences
 
 The toolbar provides all six built-in presets and **Preferences…**. The Custom
@@ -355,8 +397,9 @@ previous values intact. Theme reads/writes run outside GTK's main thread. Files
 are limited to 128 KiB and must be regular local files without final-component
 symlinks. Built-in presets remain available after using custom colors. A custom
 palette is embedded in saved preferences, so reopening does not depend on the
-original imported file. XTF conversion and legacy C/GTK3 INI import remain follow-up
-work; the macOS application's XTF load/save behavior is unchanged.
+original imported file. XTF conversion remains follow-up work; legacy Linux import
+is available as described above. The macOS application's
+XTF load/save behavior is unchanged.
 
 Settings use version 5 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
@@ -617,8 +660,8 @@ automated tests use fixtures and make no weather requests.
    support, individual fan/sensor controls and detailed process controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
-3. Deeper metric preferences, XTF conversion and explicit
-   legacy-settings import.
+3. Deeper metric preferences, XTF conversion and broader legacy-field mappings
+   as their corresponding Rust features become available.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global
    window placement / keep-above APIs; supported positioning/pinning needs a
    compositor-specific implementation. No always-on-top or edge-placement promise

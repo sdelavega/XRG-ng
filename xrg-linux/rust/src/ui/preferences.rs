@@ -23,6 +23,8 @@ pub(super) struct Dialog {
     draft: RefCell<Settings>,
     updating: Cell<bool>,
     busy: Cell<bool>,
+    closed: Cell<bool>,
+    import_review: RefCell<Option<Rc<super::legacy_import::Review>>>,
     form: gtk::Box,
     modules: gtk::Box,
     rows: Vec<Row>,
@@ -51,6 +53,12 @@ impl Dialog {
         description.set_wrap(true);
         description.set_xalign(0.);
         form.append(&description);
+        let import = gtk::Button::with_label("Import legacy Linux settings…");
+        import.set_halign(gtk::Align::Start);
+        import.set_tooltip_text(Some(
+            "Review the C application's settings.conf before importing into this draft",
+        ));
+        form.append(&import);
         let modules = gtk::Box::new(gtk::Orientation::Vertical, 4);
         let mut rows = Vec::new();
         for id in Module::ALL {
@@ -197,6 +205,8 @@ impl Dialog {
             draft: RefCell::new(shell.settings.borrow().clone()),
             updating: Cell::new(false),
             busy: Cell::new(false),
+            closed: Cell::new(false),
+            import_review: RefCell::new(None),
             form,
             modules,
             rows,
@@ -365,11 +375,25 @@ impl Dialog {
             }
         });
         let weak_shell = Rc::downgrade(shell);
+        let weak_dialog = Rc::downgrade(&dialog);
         dialog.window.connect_close_request(move |_| {
+            if let Some(dialog) = weak_dialog.upgrade() {
+                dialog.closed.set(true);
+                let review = dialog.import_review.borrow_mut().take();
+                if let Some(review) = review {
+                    review.window.close();
+                }
+            }
             if let Some(shell) = weak_shell.upgrade() {
                 shell.dialog.borrow_mut().take();
             }
             glib::Propagation::Proceed
+        });
+        let weak = Rc::downgrade(&dialog);
+        import.connect_clicked(move |_| {
+            if let Some(dialog) = weak.upgrade() {
+                dialog.choose_legacy();
+            }
         });
         dialog
     }
@@ -525,6 +549,7 @@ impl Dialog {
         }
         self.form.set_sensitive(false);
         self.apply.set_sensitive(false);
+        self.reset.set_sensitive(false);
         self.set_message("Working with theme file…");
         true
     }
@@ -532,6 +557,93 @@ impl Dialog {
         self.busy.set(false);
         self.form.set_sensitive(true);
         self.apply.set_sensitive(true);
+        self.reset.set_sensitive(true);
+    }
+    fn choose_legacy(self: &Rc<Self>) {
+        let chooser = gtk::FileDialog::builder()
+            .title("Import legacy Linux settings")
+            .modal(true)
+            .build();
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Linux settings (*.conf, *.ini)"));
+        filter.add_pattern("*.conf");
+        filter.add_pattern("*.ini");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        chooser.set_filters(Some(&filters));
+        if let Some(path) = xrg_ng_linux::legacy::path_from(
+            std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+            std::env::var_os("HOME").as_deref(),
+        ) {
+            chooser.set_initial_file(Some(&gio::File::for_path(path)));
+        }
+        let weak = Rc::downgrade(self);
+        chooser.open(
+            Some(&self.window),
+            None::<&gio::Cancellable>,
+            move |result| {
+                let Some(dialog) = weak.upgrade().filter(|d| !d.closed.get()) else {
+                    return;
+                };
+                match result {
+                    Ok(file) => {
+                        if let Some(path) = file.path() {
+                            dialog.load_legacy(path);
+                        } else {
+                            dialog.set_message("Choose a local legacy settings file.");
+                        }
+                    }
+                    Err(error)
+                        if error.matches(gtk::DialogError::Dismissed)
+                            || error.matches(gio::IOErrorEnum::Cancelled) => {}
+                    Err(error) => {
+                        dialog.set_message(&format!("Could not choose legacy settings: {error}"))
+                    }
+                }
+            },
+        );
+    }
+    pub fn load_legacy(self: &Rc<Self>, path: PathBuf) {
+        if self.closed.get() || self.import_review.borrow().is_some() || !self.io_start() {
+            return;
+        }
+        self.set_message("Reading legacy settings…");
+        let base = self.draft.borrow().clone();
+        let task = gio::spawn_blocking(move || xrg_ng_linux::legacy::load(&path, &base));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let result = task.await;
+            let Some(dialog) = weak.upgrade().filter(|d| !d.closed.get()) else {
+                return;
+            };
+            dialog.io_finish();
+            match result {
+                Ok(Ok(import)) => {
+                    let review = super::legacy_import::Review::new(&dialog, import);
+                    *dialog.import_review.borrow_mut() = Some(review.clone());
+                    dialog.set_message("Review the import before changing this draft.");
+                    review.window.present();
+                }
+                Ok(Err(error)) => {
+                    dialog.set_message(&format!("Legacy settings could not be imported: {error}"))
+                }
+                Err(_) => dialog.set_message("Legacy settings reader stopped unexpectedly."),
+            }
+        });
+    }
+    pub fn review(&self) -> Option<Rc<super::legacy_import::Review>> {
+        self.import_review.borrow().clone()
+    }
+    pub(super) fn accept_legacy(&self, settings: Settings) {
+        if self.closed.get() {
+            return;
+        }
+        *self.draft.borrow_mut() = settings;
+        self.refresh();
+        self.set_message("Legacy settings imported into this draft. Apply to use and save them, or Cancel to discard.");
+    }
+    pub(super) fn import_closed(&self) {
+        self.import_review.borrow_mut().take();
     }
     pub fn load_theme(self: &Rc<Self>, path: PathBuf) {
         if !self.io_start() {
