@@ -1,71 +1,51 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
+mod preferences;
+mod smoke;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
-    fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
 use xrg_ng_linux::{
     engine::{Panel, Snapshot, Worker},
+    settings::{self, Module, Settings, Store, ThemeChoice, Writer},
     shared::{self, Theme},
 };
 
-fn preferences_path() -> Option<PathBuf> {
-    let root = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(root.join("xrg-ng/settings.conf"))
+struct Shell {
+    window: gtk::ApplicationWindow,
+    paintable: gtk::WidgetPaintable,
+    graphs: gtk::Box,
+    areas: Vec<gtk::DrawingArea>,
+    draws: Vec<Rc<Cell<u32>>>,
+    empty: gtk::Label,
+    status: gtk::Label,
+    chooser: gtk::DropDown,
+    theme_names: gtk::StringList,
+    updating: Cell<bool>,
+    css: gtk::CssProvider,
+    theme: Rc<RefCell<Theme>>,
+    settings: RefCell<Settings>,
+    writer: Writer,
+    revision: Cell<u64>,
+    saved_revision: Cell<u64>,
+    dialog: RefCell<Option<Rc<preferences::Dialog>>>,
 }
-fn saved_theme(themes: &[Theme]) -> usize {
-    preferences_path()
-        .and_then(|path| fs::read_to_string(path).ok())
-        .and_then(|text| {
-            text.lines()
-                .find_map(|line| line.strip_prefix("theme="))
-                .map(str::to_owned)
-        })
-        .and_then(|name| themes.iter().position(|t| t.name == name))
-        .unwrap_or(1)
-}
-fn save_theme(theme: &Theme) -> Result<(), String> {
-    let path = preferences_path().ok_or("No configuration directory")?;
-    fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-    let result = fs::write(&temporary, format!("theme={}\n", theme.name))
-        .and_then(|_| fs::rename(&temporary, &path));
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result.map_err(|e| e.to_string())
-}
-
-pub fn run(smoke: bool) -> bool {
-    let application = gtk::Application::builder()
-        .application_id("com.sdelavega.xrg-ng")
-        .build();
-    let success = Rc::new(Cell::new(!smoke));
-    let result = success.clone();
-    let worker = Rc::new(RefCell::new(None::<Worker>));
-    let owner = worker.clone();
-    application.connect_activate(move |application| {
-        if let Some(window) = application.active_window() {
-            window.present();
-            return;
-        }
-        let monitor = Worker::start_with_ai(!smoke);
-        let latest = monitor.latest.clone();
-        *owner.borrow_mut() = Some(monitor);
-        let themes = shared::themes();
-        // Automated smoke mode never reads or writes user preferences.
-        let selected = if smoke { 1 } else { saved_theme(&themes) };
-        let theme = Rc::new(RefCell::new(themes[selected].clone()));
-        let state = Rc::new(RefCell::new(None::<Snapshot>));
-        let draw_count = Rc::new(Cell::new(0u32));
+impl Shell {
+    fn build(
+        application: &gtk::Application,
+        settings: Settings,
+        store: Store,
+        error: Option<String>,
+        smoke: bool,
+        state: Rc<RefCell<Option<Snapshot>>>,
+    ) -> Rc<Self> {
+        let theme = Rc::new(RefCell::new(
+            settings.theme.palette().expect("Validated settings"),
+        ));
         let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
         content.add_css_class("xrg-shell");
         let css = gtk::CssProvider::new();
@@ -84,13 +64,34 @@ pub fn run(smoke: bool) -> bool {
         heading.set_hexpand(true);
         heading.set_halign(gtk::Align::Start);
         toolbar.append(&heading);
-        let names: Vec<_> = themes.iter().map(|t| t.name.as_str()).collect();
-        let chooser = gtk::DropDown::from_strings(&names);
-        chooser.set_selected(selected as u32);
-        chooser.set_tooltip_text(Some("Built-in theme"));
+        let names: Vec<_> = shared::themes()
+            .iter()
+            .map(|t| t.name.clone())
+            .chain(std::iter::once("Custom…".into()))
+            .collect();
+        let chooser =
+            gtk::DropDown::from_strings(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        let theme_names = chooser
+            .model()
+            .unwrap()
+            .downcast::<gtk::StringList>()
+            .unwrap();
+        chooser.set_tooltip_text(Some("Theme"));
+        chooser.update_property(&[gtk::accessible::Property::Label("Theme")]);
         toolbar.append(&chooser);
+        let prefs = gtk::Button::with_label("Preferences…");
+        prefs.set_tooltip_text(Some("Graphs and themes"));
+        toolbar.append(&prefs);
         content.append(&toolbar);
         let graphs = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let empty = gtk::Label::new(Some(
+            "All graphs are hidden. Open Preferences to show a graph.",
+        ));
+        empty.set_wrap(true);
+        empty.set_margin_top(24);
+        empty.set_margin_start(16);
+        empty.set_margin_end(16);
+        content.append(&empty);
         let scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -99,62 +100,38 @@ pub fn run(smoke: bool) -> bool {
             .build();
         content.append(&scroll);
         let mut areas = Vec::new();
-        for (index, title) in [
-            "CPU",
-            "Memory",
-            "Network · receive / send",
-            "Disk · read / write",
-            "Battery",
-            "Temperature · hottest readable sensor",
-            "GPU · activity",
-            "AI tokens · observed rate",
-            "Processes · readable / running",
-            "TPU · reported inference rate",
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        let mut draws = Vec::new();
+        for module in Module::ALL {
             let area = gtk::DrawingArea::new();
             area.set_content_width(360);
-            area.set_content_height(100);
             area.set_hexpand(true);
-            area.set_vexpand(true);
-            area.update_property(&[gtk::accessible::Property::Label(title)]);
+            area.update_property(&[gtk::accessible::Property::Label(module.title())]);
             let state = state.clone();
             let theme = theme.clone();
-            let draws = draw_count.clone();
+            let count = Rc::new(Cell::new(0u32));
+            let draw_count = count.clone();
             area.set_draw_func(move |_, context, width, height| {
-                draws.set(draws.get() + 1);
+                draw_count.set(draw_count.get() + 1);
                 let state = state.borrow();
                 draw(
                     context,
                     width,
                     height,
                     &theme.borrow(),
-                    title,
-                    state.as_ref().and_then(|s| s.panels.get(index)),
+                    module.title(),
+                    state.as_ref().and_then(|s| s.panels.get(module.index())),
                 );
             });
             graphs.append(&area);
             areas.push(area);
+            draws.push(count);
         }
         let status = gtk::Label::new(Some("Sampling on a worker · 1 second interval"));
+        status.set_wrap(true);
         status.set_margin_bottom(6);
+        status.set_margin_start(10);
+        status.set_margin_end(10);
         content.append(&status);
-        let redraw = areas.clone();
-        let palette = theme.clone();
-        chooser.connect_selected_notify(move |chooser| {
-            if let Some(selected) = themes.get(chooser.selected() as usize) {
-                *palette.borrow_mut() = selected.clone();
-                apply_shell_theme(&css, selected);
-                if !smoke && let Err(error) = save_theme(selected) {
-                    status.set_text(&format!("Could not save theme: {error}"));
-                }
-                for area in &redraw {
-                    area.queue_draw();
-                }
-            }
-        });
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("XRG-ng")
@@ -162,25 +139,206 @@ pub fn run(smoke: bool) -> bool {
             .default_height(if smoke { 1160 } else { 850 })
             .child(&content)
             .build();
-        window.present();
         let paintable = gtk::WidgetPaintable::new(Some(&content));
+        let shell = Rc::new(Self {
+            window,
+            paintable,
+            graphs,
+            areas,
+            draws,
+            empty,
+            status,
+            chooser,
+            theme_names,
+            updating: Cell::new(false),
+            css,
+            theme,
+            settings: RefCell::new(settings),
+            writer: Writer::start(store),
+            revision: Cell::new(0),
+            saved_revision: Cell::new(0),
+            dialog: RefCell::new(None),
+        });
+        shell.refresh();
+        let weak = Rc::downgrade(&shell);
+        shell.chooser.connect_selected_notify(move |chooser| {
+            let Some(shell) = weak.upgrade() else {
+                return;
+            };
+            if shell.updating.get() {
+                return;
+            }
+            if chooser.selected() == 6 {
+                if matches!(shell.settings.borrow().theme, ThemeChoice::Builtin { .. }) {
+                    shell.refresh();
+                    shell.preferences();
+                }
+                return;
+            }
+            if let Some(theme) = shared::themes().get(chooser.selected() as usize) {
+                let choice = ThemeChoice::Builtin {
+                    name: theme.name.clone(),
+                };
+                if shell.settings.borrow().theme == choice {
+                    return;
+                }
+                let mut settings = shell.settings.borrow().clone();
+                settings.theme = choice;
+                shell.apply(settings);
+            }
+        });
+        let weak = Rc::downgrade(&shell);
+        prefs.connect_clicked(move |_| {
+            if let Some(shell) = weak.upgrade() {
+                shell.preferences();
+            }
+        });
+        if let Some(error) = error {
+            shell.persistence_error(&error);
+        }
+        shell.window.present();
+        shell
+    }
+    fn refresh(&self) {
+        let settings = self.settings.borrow();
+        let mut previous = None::<gtk::DrawingArea>;
+        for module in &settings.modules {
+            let area = &self.areas[module.id.index()];
+            area.set_visible(module.visible);
+            area.set_content_height(settings.graph_height as i32);
+            self.graphs.reorder_child_after(area, previous.as_ref());
+            previous = Some(area.clone());
+        }
+        self.empty
+            .set_visible(!settings.modules.iter().any(|m| m.visible));
+        self.updating.set(true);
+        let (selected, custom_name) = match &settings.theme {
+            ThemeChoice::Builtin { name } => (
+                shared::themes()
+                    .iter()
+                    .position(|t| t.name == *name)
+                    .unwrap_or(1),
+                "Custom…".to_owned(),
+            ),
+            ThemeChoice::Custom { theme } => (6, format!("Custom · {}", theme.name)),
+        };
+        if self.theme_names.string(6).as_deref() != Some(custom_name.as_str()) {
+            self.theme_names.splice(6, 1, &[&custom_name]);
+        }
+        self.chooser.set_selected(selected as u32);
+        self.updating.set(false);
+        apply_shell_theme(&self.css, &self.theme.borrow());
+        for area in &self.areas {
+            area.queue_draw();
+        }
+    }
+    fn apply(&self, settings: Settings) {
+        let palette = match settings.validate().and_then(|_| settings.theme.palette()) {
+            Ok(palette) => palette,
+            Err(error) => {
+                self.persistence_error(&error);
+                return;
+            }
+        };
+        *self.theme.borrow_mut() = palette;
+        *self.settings.borrow_mut() = settings.clone();
+        self.refresh();
+        let revision = self.revision.get() + 1;
+        self.revision.set(revision);
+        self.writer.queue(revision, settings);
+        self.status.set_text("Saving preferences…");
+        self.status.set_tooltip_text(None);
+    }
+    fn persistence_error(&self, error: &str) {
+        self.status
+            .set_text("Changes apply for this session; preferences could not be saved.");
+        self.status.set_tooltip_text(Some(error));
+        eprintln!("Preferences: {error}");
+    }
+    fn preferences(self: &Rc<Self>) -> Rc<preferences::Dialog> {
+        if let Some(dialog) = self.dialog.borrow().as_ref() {
+            dialog.window.present();
+            return dialog.clone();
+        }
+        let dialog = preferences::Dialog::new(self);
+        *self.dialog.borrow_mut() = Some(dialog.clone());
+        dialog.window.present();
+        dialog
+    }
+    fn poll_save(&self) {
+        if let Some((revision, result)) = self.writer.latest.lock().unwrap().take() {
+            match result {
+                Ok(()) => {
+                    self.saved_revision.set(revision);
+                    if revision == self.revision.get() {
+                        self.status
+                            .set_text("Preferences saved · 1 second sampling interval");
+                        self.status.set_tooltip_text(None);
+                    }
+                }
+                Err(error) if revision == self.revision.get() => self.persistence_error(&error),
+                Err(_) => (),
+            }
+        }
+    }
+    fn snapshot(&self, path: &Path) -> Result<(), String> {
+        save_snapshot(self.window.upcast_ref(), &self.paintable, path)
+    }
+}
+
+pub fn run(smoke_mode: bool) -> bool {
+    let application = gtk::Application::builder()
+        .application_id("com.sdelavega.xrg-ng")
+        .build();
+    let success = Rc::new(Cell::new(!smoke_mode));
+    let result = success.clone();
+    let worker = Rc::new(RefCell::new(None::<Worker>));
+    let owner = worker.clone();
+    let shell = Rc::new(RefCell::new(None::<Rc<Shell>>));
+    let shell_owner = shell.clone();
+    application.connect_activate(move |application| {
+        if let Some(shell) = shell_owner.borrow().as_ref() {
+            shell.window.present();
+            return;
+        }
+        let smoke = smoke_mode.then(smoke::Harness::new).transpose();
+        let mut smoke = match smoke {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Smoke setup failed: {error}");
+                application.quit();
+                return;
+            }
+        };
+        let path = if let Some(harness) = &smoke {
+            Some(harness.preferences_path())
+        } else {
+            settings::preferences_path()
+        };
+        let (store, settings, error) = Store::open(path);
+        let monitor = Worker::start_with_ai(!smoke_mode);
+        let latest = monitor.latest.clone();
+        *owner.borrow_mut() = Some(monitor);
+        let state = Rc::new(RefCell::new(None::<Snapshot>));
+        let view = Shell::build(
+            application,
+            settings,
+            store,
+            error,
+            smoke_mode,
+            state.clone(),
+        );
+        *shell_owner.borrow_mut() = Some(view.clone());
+        let weak = Rc::downgrade(&view);
         let app = application.downgrade();
         let started = Instant::now();
         let passed = result.clone();
         glib::timeout_add_local(Duration::from_millis(100), move || {
-            let Some(app) = app.upgrade() else {
+            let (Some(app), Some(shell)) = (app.upgrade(), weak.upgrade()) else {
                 return glib::ControlFlow::Break;
             };
             if let Some(snapshot) = latest.lock().unwrap().take() {
-                if smoke {
-                    if snapshot.sequence == 2 {
-                        chooser.set_selected(4);
-                    } // Paper
-                    if snapshot.sequence == 3 {
-                        chooser.set_selected(2);
-                    } // Ocean
-                }
-                for (area, panel) in areas.iter().zip(&snapshot.panels) {
+                for (area, panel) in shell.areas.iter().zip(&snapshot.panels) {
                     area.set_tooltip_text(Some(&panel.detail));
                     area.update_property(&[
                         gtk::accessible::Property::Label(&format!(
@@ -191,38 +349,42 @@ pub fn run(smoke: bool) -> bool {
                     ]);
                 }
                 *state.borrow_mut() = Some(snapshot);
-                for area in &areas {
+                for area in &shell.areas {
                     area.queue_draw();
                 }
             }
-            if smoke {
-                let ready = state
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|s| s.sequence >= 4 && s.valid);
-                if ready && draw_count.get() >= (areas.len() * 3) as u32 {
-                    if let Some(path) = std::env::var_os("XRG_SMOKE_IMAGE")
-                        && let Err(error) = save_snapshot(&app, &paintable, PathBuf::from(path))
+            shell.poll_save();
+            if let Some(harness) = &mut smoke {
+                let sequence = state.borrow().as_ref().map_or(0, |s| s.sequence);
+                match harness.tick(&shell, sequence) {
+                    Ok(true)
+                        if state.borrow().as_ref().is_some_and(|s| s.valid)
+                            && shell.draws.iter().all(|d| d.get() >= 3) =>
                     {
-                        eprintln!("GTK screenshot failed: {error}");
+                        if let Some(path) = std::env::var_os("XRG_SMOKE_IMAGE")
+                            && let Err(error) = shell.snapshot(&PathBuf::from(path))
+                        {
+                            eprintln!("GTK screenshot failed: {error}");
+                            app.quit();
+                            return glib::ControlFlow::Break;
+                        }
+                        println!(
+                            "GTK_SMOKE_OK samples={sequence} draws={} preferences=roundtrip",
+                            shell.draws.iter().map(|d| d.get()).sum::<u32>()
+                        );
+                        passed.set(true);
                         app.quit();
                         return glib::ControlFlow::Break;
                     }
-                    println!(
-                        "GTK_SMOKE_OK samples={} draws={}",
-                        state.borrow().as_ref().unwrap().sequence,
-                        draw_count.get()
-                    );
-                    passed.set(true);
-                    app.quit();
-                    return glib::ControlFlow::Break;
+                    Err(error) => {
+                        eprintln!("GTK preferences smoke failed: {error}");
+                        app.quit();
+                        return glib::ControlFlow::Break;
+                    }
+                    _ => (),
                 }
-                if started.elapsed() > Duration::from_secs(12) {
-                    eprintln!(
-                        "GTK smoke failed: {:?}, draws={}",
-                        state.borrow().as_ref().map(|s| (s.sequence, s.valid)),
-                        draw_count.get()
-                    );
+                if started.elapsed() > Duration::from_secs(20) {
+                    eprintln!("GTK smoke timed out at sample {sequence}");
                     app.quit();
                     return glib::ControlFlow::Break;
                 }
@@ -231,10 +393,10 @@ pub fn run(smoke: bool) -> bool {
         });
     });
     let exit = application.run_with_args(&["xrg-ng-linux"]);
+    shell.borrow_mut().take();
     worker.borrow_mut().take();
     success.get() && exit == glib::ExitCode::SUCCESS
 }
-
 fn color(context: &gtk::cairo::Context, color: [f64; 4]) {
     context.set_source_rgba(color[0], color[1], color[2], color[3]);
 }
@@ -253,6 +415,15 @@ fn draw(
     color(context, theme.colors[1]);
     context.rectangle(0., 0., width as f64, height as f64);
     let _ = context.fill();
+    color(context, theme.colors[5]);
+    context.set_line_width(1.);
+    context.rectangle(
+        0.5,
+        0.5,
+        (width as f64 - 1.).max(0.),
+        (height as f64 - 1.).max(0.),
+    );
+    let _ = context.stroke();
     color(context, theme.colors[6]);
     context.select_font_face(
         "monospace",
@@ -298,11 +469,10 @@ fn draw(
 }
 
 fn save_snapshot(
-    application: &gtk::Application,
+    window: &gtk::Window,
     paintable: &gtk::WidgetPaintable,
-    path: PathBuf,
+    path: &Path,
 ) -> Result<(), String> {
-    let window = application.active_window().ok_or("No active window")?;
     let snapshot = gtk::Snapshot::new();
     paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
     let node = snapshot.to_node().ok_or("No rendered node")?;

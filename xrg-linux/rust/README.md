@@ -39,9 +39,10 @@ and contributions are welcome. See the [project support policy](../../README.md#
   lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
   Rust snapshots through bounded latest-value slots; GTK touches them on its main
   thread. No shell commands, provider scans or collection run in drawing callbacks.
-- **Themes:** all six shared presets are selectable. The new UI saves the selection
-  atomically in `$XDG_CONFIG_HOME/xrg-ng/settings.conf` (or `~/.config/xrg-ng`). It
-  does not import or modify the old C application's settings or theme files yet.
+- **Preferences:** graph visibility/order, height and theme colors are saved in
+  `$XDG_CONFIG_HOME/xrg-ng/settings.conf` (or `~/.config/xrg-ng`). All six shared
+  presets remain selectable alongside a custom palette. The editor supports
+  portable JSON theme load/save; details are below. Legacy C settings stay separate.
 
 CPU calculations exclude guest time already included in user/nice. Memory uses
 MemAvailable. Network aggregates non-loopback interfaces (bridges/VPNs may count
@@ -191,11 +192,61 @@ docker run --rm -v "$PWD:/workspace" xrg-ng-linux-dev bash Tools/ci-linux.sh rel
 
 CI runs natively on x86_64 and ARM64 Linux in Debug and Release. It runs Swift tests, a C header/ABI executable, Rust formatting/Clippy/tests, three
 live headless samples, and a GTK/Xvfb launch that requires multiple live samples
-and actual Cairo draw callbacks. The GTK check switches Paper/Ocean presets and
-exports a rendered PNG for inspection. Smoke mode does not read or write user preferences.
+and actual Cairo draw callbacks. The GTK check switches Paper/Ocean presets,
+opens Preferences, tests invalid drafts/imports and Cancel/Apply, exports/reloads
+a custom theme, reorders/hides graphs, recovers from an all-hidden layout and reopens
+saved settings. It exports the main window and preferences dialog as PNGs. Smoke
+mode uses temporary settings/theme files and never reads or writes user preferences.
 Xvfb uses Cairo, so this does not validate accelerated rendering, Wayland compositor
 behavior, screen readers or physical-device collection. Linux build output is
 separate from host Swift output when using a shared Docker checkout.
+
+## Graph and theme preferences
+
+The toolbar provides all six built-in presets and **Preferences…**. The Custom
+entry opens the editor when a built-in preset is active. In Preferences:
+
+- Check which graphs to show; use **Up/Down** to arrange them.
+- Set graph height between 64 and 240 pixels.
+- Select a preset, name a custom palette and edit its seven colors.
+- Use **Load theme…** and **Save theme…** for local portable JSON files.
+- **Apply** uses the draft and saves preferences; **Cancel** keeps the active layout
+  and colors. **Restore defaults** changes the draft until Apply is pressed.
+
+Hidden graphs continue sampling, preserving their histories. Ordering changes the
+presentation while each graph retains its original collector. An all-hidden layout
+shows a recovery message and keeps Preferences accessible. Headless diagnostics
+continue reporting all collectors independently of these presentation preferences.
+Graph height is a minimum; small windows scroll. Window placement/pinning is not
+part of these preferences.
+
+Custom theme files use the suggested `.xrg-theme.json` extension. Exporting a preset
+provides a valid starting document. The format contains `format: "xrg-ng-theme"`,
+`version: 1`, a printable name of 1–80 characters and `colors`: seven RGBA arrays in
+**background, graph background, series 1, series 2, series 3, border, text** order.
+Each component must be finite and between 0 and 1. Alpha is retained in files and
+used for graph layers; the window background stays opaque. JSON numbers preserve
+round-trip precision. Editing a theme name does not quantize untouched colors to
+the color picker's display precision.
+
+Loading validates the whole document before changing the draft; errors leave its
+previous values intact. Theme reads/writes run outside GTK's main thread. Files
+are limited to 128 KiB and must be regular local files without final-component
+symlinks. Built-in presets remain available after using custom colors. A custom
+palette is embedded in saved preferences, so reopening does not depend on the
+original imported file. XTF conversion and legacy C/GTK3 INI import remain follow-up
+work; the macOS application's XTF load/save behavior is unchanged.
+
+Settings use versioned JSON in the existing `settings.conf` path. The earlier Rust
+`theme=Ocean` format still loads and upgrades only when preferences are next saved.
+Writes use private temporary files and atomic replacement; a single background
+writer coalesces pending changes and flushes the latest value on normal shutdown.
+Invalid, unreadable or unsupported settings files are preserved for the session:
+changes can still apply in memory, and the status explains that saving failed.
+Correct or move the file and reopen the app to enable persistence. Edits made by
+another process are detected before saving and require reopening rather than
+silently replacing the external changes. No legacy C settings file is modified.
+
 
 ## AI monitoring
 
@@ -343,8 +394,8 @@ Support remains best effort; device reports and feedback are welcome.
    richer battery health/time, calibrated/fan sensors and detailed process controls.
 2. AI provider/model detail controls, custom data roots/endpoints, append-offset
    scanning for very large logs, optional price tables, and a weather ABI consumer.
-3. Per-core/interface/device selection, module visibility/order, context menus,
-   detailed preferences, custom theme load/save and explicit legacy-settings import.
+3. Per-core/interface/device selection, process tables/filters, context menus,
+   deeper metric preferences, XTF conversion and explicit legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global
    window placement / keep-above APIs; supported positioning/pinning needs a
    compositor-specific implementation. No always-on-top or edge-placement promise

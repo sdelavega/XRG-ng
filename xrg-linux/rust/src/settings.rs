@@ -1,0 +1,418 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stephen de la Vega.
+//! Versioned Linux presentation preferences. Paths are explicit for isolated tests.
+use crate::{
+    shared::{self, Theme},
+    system_file,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+};
+const LIMIT: usize = 128 * 1024;
+static NEXT: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Module {
+    Cpu,
+    Memory,
+    Network,
+    Disk,
+    Battery,
+    Temperature,
+    Gpu,
+    Ai,
+    Processes,
+    Tpu,
+}
+impl Module {
+    pub const ALL: [Self; 10] = [
+        Self::Cpu,
+        Self::Memory,
+        Self::Network,
+        Self::Disk,
+        Self::Battery,
+        Self::Temperature,
+        Self::Gpu,
+        Self::Ai,
+        Self::Processes,
+        Self::Tpu,
+    ];
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|m| *m == self).unwrap()
+    }
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Cpu => "CPU",
+            Self::Memory => "Memory",
+            Self::Network => "Network · receive / send",
+            Self::Disk => "Disk · read / write",
+            Self::Battery => "Battery",
+            Self::Temperature => "Temperature · hottest readable sensor",
+            Self::Gpu => "GPU · activity",
+            Self::Ai => "AI tokens · observed rate",
+            Self::Processes => "Processes · readable / running",
+            Self::Tpu => "TPU · reported inference rate",
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleSetting {
+    pub id: Module,
+    pub visible: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeDocument {
+    pub format: String,
+    pub version: u32,
+    pub name: String,
+    pub colors: [[f64; 4]; 7],
+}
+impl ThemeDocument {
+    pub fn new(theme: &Theme) -> Self {
+        Self {
+            format: "xrg-ng-theme".into(),
+            version: 1,
+            name: theme.name.clone(),
+            colors: theme.colors,
+        }
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self.format != "xrg-ng-theme" || self.version != 1 {
+            return Err("Unsupported theme format or version".into());
+        }
+        if self.name.trim() != self.name
+            || self.name.is_empty()
+            || self.name.chars().count() > 80
+            || self.name.chars().any(char::is_control)
+        {
+            return Err("Theme name must contain 1–80 printable characters".into());
+        }
+        if self
+            .colors
+            .iter()
+            .flatten()
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        {
+            return Err("Theme RGBA components must be finite numbers between 0 and 1".into());
+        }
+        Ok(())
+    }
+    pub fn palette(&self) -> Result<Theme, String> {
+        self.validate()?;
+        Ok(Theme {
+            name: self.name.clone(),
+            colors: self.colors,
+        })
+    }
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > LIMIT {
+            return Err("Theme file exceeds 128 KiB".into());
+        }
+        let value: Self =
+            serde_json::from_slice(bytes).map_err(|e| format!("Invalid theme: {e}"))?;
+        value.validate()?;
+        Ok(value)
+    }
+    pub fn load(path: &Path) -> Result<Self, String> {
+        Self::parse(&system_file::read(path, LIMIT).map_err(|e| e.to_string())?)
+    }
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        self.validate()?;
+        atomic_write(
+            path,
+            &serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?,
+            false,
+        )
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ThemeChoice {
+    Builtin { name: String },
+    Custom { theme: Box<ThemeDocument> },
+}
+impl ThemeChoice {
+    pub fn palette(&self) -> Result<Theme, String> {
+        match self {
+            Self::Custom { theme } => theme.palette(),
+            Self::Builtin { name } => shared::themes()
+                .into_iter()
+                .find(|t| t.name == *name)
+                .ok_or_else(|| "Unknown built-in theme".into()),
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Settings {
+    pub version: u32,
+    pub theme: ThemeChoice,
+    pub modules: Vec<ModuleSetting>,
+    pub graph_height: u32,
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            theme: ThemeChoice::Builtin {
+                name: "Midnight".into(),
+            },
+            modules: Module::ALL
+                .into_iter()
+                .map(|id| ModuleSetting { id, visible: true })
+                .collect(),
+            graph_height: 100,
+        }
+    }
+}
+impl Settings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != 1 {
+            return Err("Unsupported settings version; the existing file will be kept".into());
+        }
+        if !(64..=240).contains(&self.graph_height) {
+            return Err("Graph height must be between 64 and 240 pixels".into());
+        }
+        let ids: std::collections::BTreeSet<_> = self.modules.iter().map(|m| m.id).collect();
+        if ids.len() != Module::ALL.len() || self.modules.len() != Module::ALL.len() {
+            return Err("Settings must contain each graph exactly once".into());
+        }
+        self.theme.palette()?;
+        Ok(())
+    }
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > LIMIT {
+            return Err("Settings file exceeds 128 KiB".into());
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| "Invalid settings encoding")?;
+        let result = if text.trim_start().starts_with('{') {
+            serde_json::from_slice(bytes).map_err(|e| format!("Invalid settings: {e}"))?
+        } else {
+            // Upgrade only the exact original Rust format; never treat another
+            // application's INI or malformed JSON as an empty settings file.
+            let lines: Vec<_> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            if lines.len() != 1 {
+                return Err("Unrecognized settings format".into());
+            }
+            let name = lines[0]
+                .strip_prefix("theme=")
+                .ok_or("Unrecognized settings format")?;
+            Self {
+                theme: ThemeChoice::Builtin { name: name.into() },
+                ..Self::default()
+            }
+        };
+        result.validate()?;
+        Ok(result)
+    }
+    pub fn move_module(&mut self, id: Module, offset: isize) {
+        if let Some(index) = self.modules.iter().position(|m| m.id == id) {
+            let target = index
+                .saturating_add_signed(offset)
+                .min(self.modules.len() - 1);
+            let module = self.modules.remove(index);
+            self.modules.insert(target, module);
+        }
+    }
+}
+pub fn path_from(
+    config_home: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let config = config_home
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute());
+    let root = config.or_else(|| {
+        home.map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .map(|p| p.join(".config"))
+    })?;
+    Some(root.join("xrg-ng/settings.conf"))
+}
+pub fn preferences_path() -> Option<PathBuf> {
+    path_from(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match system_file::read(path, LIMIT) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+pub struct Store {
+    path: Option<PathBuf>,
+    expected: Option<Vec<u8>>,
+    blocked: Option<String>,
+}
+impl Store {
+    /// Invalid/unreadable files remain protected for this session. The UI may
+    /// still apply changes in memory and can explain why persistence is unavailable.
+    pub fn open(path: Option<PathBuf>) -> (Self, Settings, Option<String>) {
+        let loaded = path
+            .as_ref()
+            .ok_or_else(|| "No configuration directory available".to_owned())
+            .and_then(|p| read_optional(p));
+        match loaded {
+            Ok(expected) => match expected.as_deref().map(Settings::parse).transpose() {
+                Ok(settings) => (
+                    Self {
+                        path,
+                        expected,
+                        blocked: None,
+                    },
+                    settings.unwrap_or_default(),
+                    None,
+                ),
+                Err(error) => (
+                    Self {
+                        path,
+                        expected,
+                        blocked: Some(error.clone()),
+                    },
+                    Settings::default(),
+                    Some(error),
+                ),
+            },
+            Err(error) => (
+                Self {
+                    path,
+                    expected: None,
+                    blocked: Some(error.clone()),
+                },
+                Settings::default(),
+                Some(error),
+            ),
+        }
+    }
+    pub fn save(&mut self, settings: &Settings) -> Result<(), String> {
+        settings.validate()?;
+        if let Some(error) = &self.blocked {
+            return Err(error.clone());
+        }
+        let path = self
+            .path
+            .as_ref()
+            .ok_or("No configuration directory available")?;
+        let bytes = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
+        if read_optional(path)? != self.expected {
+            return Err("Settings changed on disk; reopen the app before saving".into());
+        }
+        atomic_write(path, &bytes, true)?;
+        self.expected = Some(bytes);
+        Ok(())
+    }
+}
+fn atomic_write(path: &Path, bytes: &[u8], create_parent: bool) -> Result<(), String> {
+    if bytes.len() > LIMIT {
+        return Err("Settings/theme file exceeds 128 KiB".into());
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    if create_parent {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && !metadata.is_file()
+    {
+        return Err("Destination must be a regular file, without symlinks".into());
+    }
+    for _ in 0..16 {
+        let temporary = parent.join(format!(
+            ".xrg-ng-{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        let result = file
+            .write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .and_then(|_| fs::rename(&temporary, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        return result.map_err(|e| e.to_string());
+    }
+    Err("Could not create a unique settings temporary file".into())
+}
+/// One worker and one pending value bound save work while users change controls.
+/// Results carry a revision so an old completion cannot mask a newer save error.
+pub type SaveResult = (u64, Result<(), String>);
+pub struct Writer {
+    pending: Arc<Mutex<Option<(u64, Settings)>>>,
+    wake: Option<mpsc::SyncSender<()>>,
+    pub latest: Arc<Mutex<Option<SaveResult>>>,
+    join: Option<thread::JoinHandle<()>>,
+}
+impl Writer {
+    pub fn start(mut store: Store) -> Self {
+        let pending = Arc::new(Mutex::new(None::<(u64, Settings)>));
+        let requests = pending.clone();
+        let latest = Arc::new(Mutex::new(None));
+        let output = latest.clone();
+        let (wake, receiver) = mpsc::sync_channel(1);
+        let join = thread::spawn(move || {
+            let save = |request: Option<(u64, Settings)>, store: &mut Store| {
+                if let Some((revision, settings)) = request {
+                    *output.lock().unwrap() = Some((revision, store.save(&settings)));
+                }
+            };
+            while receiver.recv().is_ok() {
+                let request = requests.lock().unwrap().take();
+                save(request, &mut store);
+            }
+            let request = requests.lock().unwrap().take();
+            save(request, &mut store);
+        });
+        Self {
+            pending,
+            wake: Some(wake),
+            latest,
+            join: Some(join),
+        }
+    }
+    pub fn queue(&self, revision: u64, settings: Settings) {
+        *self.pending.lock().unwrap() = Some((revision, settings));
+        if let Some(wake) = &self.wake {
+            let _ = wake.try_send(());
+        }
+    }
+}
+impl Drop for Writer {
+    fn drop(&mut self) {
+        self.wake.take();
+        if let Some(join) = self.join.take() {
+            join.join().expect("Settings writer panicked");
+        }
+    }
+}
