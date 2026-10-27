@@ -112,6 +112,7 @@ struct XRGPrefControllerTests {
         #expect(countAIButtons(f.pref.GeneralPrefView!) == 1)
         #expect(ai.target === f.graph && ai.action == #selector(XRGGraphWindow.setShowAITokenGraph(_:)))
         #expect(f.pref.ColorPrefView?.subviews.filter { $0.tag == 1010 }.count == 1)
+        #expect(f.pref.ColorPrefView?.subviews.filter { $0.tag == 1011 }.count == 1)
     }
     @Test(arguments: Array(0...9))
     func toolbarRoutesAllPanelsAndPreservesTheWindowTop(index: Int) throws {
@@ -293,6 +294,63 @@ struct XRGPrefControllerTests {
         #expect(f.pref.loadTheme(from: url) && f.graph.appSettings?.graphFG1Color.usingColorSpace(.deviceRGB)?.redComponent == 1)
         #expect(f.graph.appSettings?.graphFG1Color.alphaComponent == 0.25 && f.defaults.data(forKey: "graphFG1Color") != nil)
         #expect(!f.pref.saveTheme(to: URL(fileURLWithPath: "/does-not-exist/fixture.xtf")) && !f.inputs.errors.isEmpty)
+    }
+
+    @Test(arguments: XRGTheme.Builtin.allCases)
+    func builtinThemesApplyThroughControlsAndRoundTripExistingFiles(preset: XRGTheme.Builtin) throws {
+        let f = try PreferencesFixture(); defer { f.cleanUp() }
+        let picker = try #require(f.pref.ColorPrefView?.viewWithTag(1011) as? NSPopUpButton)
+        #expect(picker.itemTitles == ["Built-in Themes", "Classic", "Midnight", "Ocean", "Dusk", "Paper", "Phosphor"])
+        #expect(picker.isEnabled && picker.item(at: 0)?.isEnabled == true)
+        f.graph.appSettings?.graphStyle = 2
+        let font = try #require(f.graph.appSettings?.graphFont)
+        f.defaults.set(1234, forKey: "aiTokensDailyBudget")
+        f.pref.netMinGraphScaleValue?.stringValue = "unrelated invalid field"
+        picker.select(try #require(picker.itemArray.first { $0.representedObject as? String == preset.rawValue }))
+        try f.send(picker)
+        let expected = try XRGTheme(dictionary: preset.dictionary())
+        func checkApplied() throws {
+            for field in expected.fields {
+                let actual = try #require((f.graph.appSettings?.value(forKey: field.colorKey) as? NSColor)?.usingColorSpace(.sRGB))
+                let target = try #require(field.color.usingColorSpace(.sRGB))
+                let rgba = [actual.redComponent, actual.greenComponent, actual.blueComponent, actual.alphaComponent]
+                let targetRGBA = [target.redComponent, target.greenComponent, target.blueComponent, target.alphaComponent]
+                #expect(zip(rgba, targetRGBA).allSatisfy { abs($0 - $1) < 0.00001 })
+                #expect(abs(f.defaults.double(forKey: field.alphaKey) - field.alpha) < 0.00001)
+                #expect(f.defaults.data(forKey: field.colorKey) != nil)
+            }
+        }
+        try checkApplied()
+        #expect(picker.indexOfSelectedItem == 0 && f.graph.appSettings?.graphStyle == 2)
+        #expect(f.graph.appSettings?.graphFont == font && f.defaults.integer(forKey: "aiTokensDailyBudget") == 1234)
+        let exported = try f.pref.themeData()
+        let dictionary = try #require(PropertyListSerialization.propertyList(from: exported, options: [], format: nil) as? [String: Any])
+        #expect(dictionary.count == 14 && dictionary["graphStyle"] == nil && dictionary["builtinTheme"] == nil)
+        let roundTrip = try XRGTheme(dictionary: dictionary)
+        #expect(roundTrip.fields.count == 7)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("XRG-builtin-\(UUID().uuidString).xtf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(f.pref.saveTheme(to: url))
+        f.graph.appSettings?.graphFG1Color = .clear
+        #expect(f.pref.loadTheme(from: url))
+        try checkApplied()
+        #expect(f.inputs.errors.isEmpty)
+    }
+
+    @Test(arguments: XRGTheme.Builtin.allCases.filter { $0 != .classic })
+    func builtinTextRemainsReadableOverBackgroundAndGraphFills(preset: XRGTheme.Builtin) throws {
+        let theme = try XRGTheme(dictionary: preset.dictionary())
+        func luminance(_ color: NSColor) throws -> Double {
+            let color = try #require(color.usingColorSpace(.sRGB))
+            func linear(_ c: CGFloat) -> Double { c <= 0.04045 ? Double(c) / 12.92 : pow((Double(c) + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(color.redComponent) + 0.7152 * linear(color.greenComponent) + 0.0722 * linear(color.blueComponent)
+        }
+        let text = try luminance(#require(theme.fields.first { $0.colorKey == "textColor" }).color)
+        for field in theme.fields where !["textColor", "borderColor"].contains(field.colorKey) {
+            let background = try luminance(field.color)
+            #expect((max(text, background) + 0.05) / (min(text, background) + 0.05) >= 4.5)
+            #expect(field.alpha == 1)
+        }
     }
     @Test(arguments: ["empty", "badPlist", "wrongRoot", "lastColor", "readError"])
     func invalidThemesDoNotPartiallyChangeSettingsOrDefaults(failure: String) throws {

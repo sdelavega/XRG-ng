@@ -95,6 +95,17 @@ The AI Token monitor automatically detects all installed AI coding tools:
 
 For detailed documentation, see [README_AI_TOKENS.md](README_AI_TOKENS.md)
 
+## Built-in themes (macOS)
+
+Open **Preferences → Appearance → Built-in Themes** to apply **Classic**,
+**Midnight**, **Ocean**, **Dusk**, **Paper**, or **Phosphor**. Presets update colors
+and opacity immediately. Classic restores the existing palette; Paper provides a
+light background, while the other palettes offer dark alternatives.
+
+Customize any preset with the existing color wells and opacity sliders. **Load
+Theme** and **Save Theme** continue to use `.xtf` files, including existing custom
+themes. Presets keep your font, graph style, layout and monitoring settings.
+
 ## Building
 
 ### macOS
@@ -113,9 +124,9 @@ The app product and shared launch scheme are `XRG-ng`; internal `XRGCore`/`XRGTe
 
 See [the modernization review](MODERNIZATION.md) for the current baseline, fork-specific issues, and remaining work.
 
-**Tests:** Select either shared scheme (`XRG-ng` or `XRGTests`) in Xcode and choose Product → Test. The macOS-only Swift Testing suite links the same static Swift `XRGCore` framework as the app and uses temporary preferences suites. Its 837 cases across 439 test functions cover themes, settings, ring buffers, vector arithmetic, concurrent statistics, request cancellation, Claude/Codex/Gemini log parsing, Hermes/Claude SQLite snapshots, local-provider responses, stock request/response handling, scan caching, rate tracking, CPU/memory sampling, process snapshots, battery states, network sampling, GPU snapshots, and temperature/fan state. It does not launch the monitoring app or modify your XRG-ng preferences.
+**Tests:** Select either shared scheme (`XRG-ng` or `XRGTests`) in Xcode and choose Product → Test. The macOS suite links the same static Swift `XRGCore` framework as the app and uses temporary preferences suites. Coverage includes built-in theme application and file round trips, settings, collectors, provider parsers, graph rendering, native interfaces and application lifecycle.
 
-**Continuous integration:** [The macOS workflow](.github/workflows/macos.yml) builds universal Apple Silicon/Intel apps and runs the tests for both Debug and Release on pushes, pull requests, and manual dispatch. It uses Xcode 26.3 on `macos-26`, requires no signing secrets, and retains logs and test results for seven days. These are compile/test builds, not signed distribution packages.
+**Continuous integration:** [The macOS workflow](.github/workflows/macos.yml) builds universal Apple Silicon/Intel apps and runs native and Rosetta x86_64 tests for both Debug and Release on pushes, pull requests, and manual dispatch. It uses Xcode 26.6 on `macos-26`, requires no signing secrets, and retains logs and test results for seven days. Separate composition and packaged-app smoke checks use disposable preference domains. These are compile/test builds, not signed distribution packages.
 
 Run the same checks locally with your selected Xcode:
 

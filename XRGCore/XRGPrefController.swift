@@ -270,6 +270,39 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             style.addItems(withTitles: ["Normal", "Scanlines", "Pixel Grid", "Retro Dots"]); panel.addSubview(style)
         }
         popup(style, titles: nil, selected: settings?.graphStyle ?? 0, action: #selector(XRGGraphWindow.setGraphStyle(_:)))
+        setUpBuiltinThemes(in: panel)
+    }
+    private func setUpBuiltinThemes(in panel: NSView) {
+        let picker: NSPopUpButton
+        if let existing = panel.viewWithTag(1011) as? NSPopUpButton { picker = existing }
+        else {
+            let top = panel.frame.height
+            panel.setFrameSize(NSSize(width: panel.frame.width, height: top + 44))
+            let label = NSTextField(labelWithString: "Color Theme:")
+            label.frame = NSRect(x: 20, y: top + 14, width: 90, height: 17); panel.addSubview(label)
+            picker = NSPopUpButton(frame: NSRect(x: 110, y: top + 8, width: 200, height: 28), pullsDown: true)
+            picker.tag = 1011; picker.autoenablesItems = false; picker.addItem(withTitle: "Built-in Themes")
+            for theme in XRGTheme.Builtin.allCases {
+                picker.addItem(withTitle: theme.name); picker.lastItem?.representedObject = theme.rawValue
+            }
+            picker.setAccessibilityLabel("Built-in color theme")
+            picker.toolTip = "Apply preset colors and opacity, then customize them below."
+            panel.addSubview(picker)
+            let hint = NSTextField(labelWithString: "Apply a preset, then customize below.")
+            hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize); hint.textColor = .secondaryLabelColor
+            hint.frame = NSRect(x: 330, y: top + 14, width: max(0, panel.frame.width - 350), height: 17)
+            panel.addSubview(hint)
+        }
+        picker.target = self; picker.action = #selector(applyBuiltinTheme(_:))
+        picker.isEnabled = settings != nil; picker.selectItem(at: 0)
+    }
+    @IBAction public func applyBuiltinTheme(_ sender: Any?) {
+        guard let picker = sender as? NSPopUpButton, let raw = picker.selectedItem?.representedObject as? String,
+              let preset = XRGTheme.Builtin(rawValue: raw), let settings else { return }
+        do {
+            try settings.applyThemeDictionary(preset.dictionary(), defaults: defaults)
+            setUpColorPanel(); redrawGraphs()
+        } catch { errorNotice("Could not apply the built-in theme.", window) }
     }
     public func setUpWell(_ well: NSColorWell?, withTransparency slider: NSSlider?) {
         guard let well else { return }

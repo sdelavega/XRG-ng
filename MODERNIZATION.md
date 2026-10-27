@@ -1012,3 +1012,36 @@ This adds translated x86_64 runtime evidence on ARM. Physical Intel CPU/GPU/SMC
 behavior, full VoiceOver usage and the existing hardware/distribution checks
 remain separate validation. Production sources and the two Objective-C hardware
 boundaries are unchanged in this step.
+
+## Built-in color themes (2026-10-27)
+
+Appearance now offers Classic, Midnight, Ocean, Dusk, Paper and Phosphor through a
+Built-in Themes menu. Classic matches the existing palette; Paper supplies a light
+alternative, and the other presets provide dark palettes. Selecting a preset
+applies colors and opacity immediately and refreshes the existing wells, sliders
+and graphs. The menu is an apply action rather than a saved theme-name setting,
+so later custom edits or imported files cannot leave a misleading preset label.
+
+Presets produce the same fourteen-field dictionary validated by XRGTheme and use
+XRGSettings.applyThemeDictionary for atomic application and persistence. Load Theme
+and Save Theme retain their original selectors, native dialogs and .xtf format.
+Presets can be edited with the existing controls and exported as ordinary theme
+files. Font, graph style, layout and monitoring settings are independent. Opening
+Appearance adds controls once without applying a preset or changing the original
+nib resources.
+
+Parameterized tests apply every preset through its real control action and check
+settings/defaults, unchanged font/style/budget, and file export/import. They retain
+existing malformed-theme, failed-write and cancelled-dialog tests. The five new
+palettes also require opaque fills and a text contrast ratio of at least 4.5 over
+each background/graph fill. Repeated configuration must not duplicate the menu or
+grow the panel.
+
+Complete local Debug and Release runs passed 447 test functions covering 857 cases
+on native ARM and Rosetta x86_64, plus both packaged smoke modes and composition.
+Live UI checks inspected Appearance layout, Paper/Ocean graph rendering, export of
+Paper through Save Theme and restoration through Load Theme. The Release menu
+applied Midnight, and its colors survived a normal quit/relaunch. A visual check
+caught disabled-looking header text in the pull-down; its title now stays enabled.
+Disposable preferences and launch registrations were removed after verification.
+README documents the preset menu and the retained file controls.

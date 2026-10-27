@@ -336,6 +336,11 @@ gboolean preferences_get_bool(const char *key, gboolean default_value) {
   fixtures exercise both forms of the historical UI resources.
 - Keep bundle identifier `com.sdelavega.xrg`, internal module names, defaults keys
   and saved settings formats stable across the XRG-ng product rename.
+- Built-in color presets live in `XRGTheme.Builtin` and use the same fourteen-field
+  theme dictionary as `.xtf` files. Appearance's preset menu applies colors/opacity
+  through `applyThemeDictionary`, then refreshes controls and graphs. Keep file
+  load/save, fonts, graph style and monitoring preferences independent of presets;
+  opening Appearance must not automatically apply a preset.
 - Keep the 26.0 deployment target and both supported executable slices. Inspect
   `Tools/ci-macos.sh` before changing required runtime classes or metadata.
 - Most `.h` files are compatibility imports for generated Swift interfaces.
