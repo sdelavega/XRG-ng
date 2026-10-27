@@ -56,7 +56,7 @@ pub struct Sampler {
     histories: [History; 7],
     battery_histories: BTreeMap<String, History>,
     gpu: crate::gpu::GpuCollector,
-    gpu_histories: BTreeMap<String, History>,
+    gpu_histories: BTreeMap<String, (bool, History)>,
     start: Instant,
     sequence: u64,
 }
@@ -169,19 +169,30 @@ impl Sampler {
                 let supported: Vec<_> = report
                     .values
                     .iter()
-                    .filter(|g| g.utilization.is_some())
+                    .filter(|g| g.utilization.or(g.client_activity).is_some())
                     .collect();
                 let partial =
                     !report.errors.is_empty() || report.values.iter().any(|g| !g.notes.is_empty());
                 for gpu in supported.iter().take(3) {
-                    let value = gpu.utilization.expect("filtered utilization");
+                    let value = gpu
+                        .utilization
+                        .or(gpu.client_activity)
+                        .expect("filtered activity");
+                    let device_counter = gpu.utilization.is_some();
                     let history = self
                         .gpu_histories
                         .entry(gpu.id.clone())
-                        .or_insert_with(|| History::new(120));
-                    history.append(value);
-                    series.push(history.values());
-                    labels.push(format!("{} {value:.0}%", gpu.label));
+                        .or_insert_with(|| (device_counter, History::new(120)));
+                    if history.0 != device_counter {
+                        *history = (device_counter, History::new(120));
+                    }
+                    history.1.append(value);
+                    series.push(history.1.values());
+                    labels.push(format!(
+                        "{} {value:.0}%{}",
+                        gpu.label,
+                        if device_counter { "" } else { " clients" }
+                    ));
                 }
                 for gpu in &report.values {
                     let mut fields = vec![
@@ -189,8 +200,19 @@ impl Sampler {
                         format!("Driver: {}", gpu.driver),
                         gpu.utilization
                             .map(|v| format!("Utilization: {v:.1}%"))
-                            .unwrap_or_else(|| "Utilization unavailable".into()),
+                            .unwrap_or_else(|| "Device-wide utilization unavailable".into()),
                     ];
+                    if let Some(value) = gpu.client_activity {
+                        fields.push(format!(
+                            "Readable-client busiest-engine activity: {value:.1}%"
+                        ));
+                    }
+                    if let Some(count) = gpu.visible_clients {
+                        fields.push(format!("Readable DRM clients: {count}"));
+                    }
+                    if let Some(value) = gpu.client_resident_bytes {
+                        fields.push(format!("Readable-client resident allocations: {:.1} MiB (shared buffers may count per client)", value as f64 / 1_048_576.));
+                    }
                     if let Some(value) = gpu.memory_used {
                         fields.push(format!("VRAM used: {:.1} MiB", value as f64 / 1_048_576.));
                     }
@@ -201,7 +223,7 @@ impl Sampler {
                         fields.push(format!("Temperature: {value:.1} °C"));
                     }
                     if let Some(value) = gpu.frequency_mhz {
-                        fields.push(format!("Clock: {value:.0} MHz"));
+                        fields.push(format!("Reported clock: {value:.0} MHz"));
                     }
                     if let Some(value) = gpu.power_watts {
                         fields.push(format!("Reported power: {value:.1} W (may include SoC)"));

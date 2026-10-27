@@ -1200,3 +1200,46 @@ and C ABI checks, strict formatting/Clippy, live core collection and GTK checks
 reaching four samples / 28 draw callbacks. The seven-panel PNG was visually
 inspected. The container has no GPU, so physical AMD/Intel/NVIDIA readings and
 accelerated rendering remain unverified. No macOS production source changed.
+
+## Linux ARM GPU support (2026-10-27)
+
+GPU discovery now supports non-PCI platform GPUs and render-only DRM nodes. It
+recognizes Mali panfrost/panthor/lima/vendor bindings, Adreno MSM/KGSL, Apple AGX
+Asahi, Broadcom V3D, Vivante etnaviv and PowerVR bindings. Canonical platform paths
+provide identity, device-tree compatibles provide model hints, and aliases are
+deduplicated. The former PCI-vendor-file requirement no longer hides ARM GPUs.
+Owned devfreq clocks and GPU hwmon readings are collected where exposed. Vendor
+Adreno KGSL uses its published busy/total interval and Hz clock, including the
+class-device attribute layout. MSM's DRM master and separate Adreno binding merge
+only for a unique pair; a display master's clocks and sensors are excluded.
+
+Readable DRM-client fdinfo adds per-client engine activity and resident allocation
+accounting where the kernel provides it. Duplicate FDs across processes count once
+per device/client ID. Capacity-normalized engine deltas produce the busiest observed
+engine, not a falsely labeled whole-device utilization value. The graph labels this
+source with 'clients', details describe partial visibility, and histories reset if
+the counter source changes. Resident allocations have a separate shared-memory
+field; they do not populate VRAM totals or treat system RAM as dedicated GPU memory.
+Counter regressions retain the larger baseline as the DRM ABI requires. New,
+changed-capacity, missing or inconsistent/delayed intervals remain unavailable.
+
+The read-only scan has a 50 ms cooperative budget, finite process/FD limits and a
+64 KiB record cap. No commands, render-device opens, profiling changes or clock /
+governor writes are needed. Panfrost/Panthor activity requires already enabled job
+profiling; otherwise disabled counters cannot produce a fake idle graph. Apple
+Asahi discovery and available telemetry are supported, but kernels without published
+activity counters still report activity unavailable. This is interface-dependent
+support, not a claim of identical counters across all ARM drivers.
+
+Twenty-two ARM fixture tests cover non-PCI/render/platform discovery, clock ownership,
+DRM aliases, inherited client FD deduplication, memory units/sum overflow, engine
+capacity and overlapping engines, profiler flags, multiple GPUs with identical
+client IDs, monotonic regressions, stale clients, malformed records, Apple unavailable
+telemetry, KGSL intervals, MSM/Adreno association and display-clock exclusions,
+suspension, scope-labeled graph data and history resets. All 57 Rust tests pass on
+macOS and ARM64 Linux; complete local Debug/Release scripts also pass shared Swift,
+C ABI, strict Clippy, live collection and GTK checks (four samples / 28 draws).
+Linux CI now runs both configurations on native ubuntu-24.04 and ubuntu-24.04-arm
+runners, with distinct artifacts per runner/configuration. Physical Mali, Adreno,
+Apple/Asahi and other ARM GPU validation remains open; fixtures and ARM64 builds
+are not evidence of physical GPU behavior. macOS production sources are unchanged.

@@ -106,7 +106,7 @@ pub fn run(smoke: bool) -> bool {
             "Disk · read / write",
             "Battery",
             "Temperature · hottest readable sensor",
-            "GPU · utilization",
+            "GPU · activity",
         ]
         .into_iter()
         .enumerate()

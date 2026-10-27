@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
+mod arm;
 use crate::hardware::{self, Readings};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,6 +18,9 @@ pub struct Gpu {
     pub utilization: Option<f64>,
     pub memory_used: Option<u64>,
     pub memory_total: Option<u64>,
+    pub client_activity: Option<f64>,
+    pub client_resident_bytes: Option<u64>,
+    pub visible_clients: Option<usize>,
     pub temperature: Option<f64>,
     pub power_watts: Option<f64>,
     pub frequency_mhz: Option<f64>,
@@ -30,6 +34,8 @@ struct Device {
     card: Option<PathBuf>,
     suspended: bool,
     vendor: String,
+    nodes: BTreeSet<String>,
+    metrics_paths: Vec<PathBuf>,
 }
 
 pub fn pci_id(value: &str) -> Option<String> {
@@ -70,12 +76,25 @@ fn device(path: PathBuf, card: Option<PathBuf>, vendor: &str) -> Result<Device, 
         "0x1002" => "AMD",
         "0x8086" => "Intel",
         "0x10de" => "NVIDIA",
-        _ => "GPU",
+        _ => arm::family(&driver).map(|f| f.name()).unwrap_or("GPU"),
     };
     let name = hardware::text(&path.join("product_name"))?
         .map(|s| hardware::short_label(&s))
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("{vendor_name} ({driver})"));
+        .unwrap_or_else(|| {
+            let compatible = hardware::text(&path.join("of_node/compatible"))
+                .ok()
+                .flatten()
+                .and_then(|s| {
+                    s.split('\0')
+                        .find(|s| !s.is_empty())
+                        .map(hardware::short_label)
+                });
+            compatible
+                .filter(|_| vendor.is_empty())
+                .map(|s| format!("{vendor_name} · {s}"))
+                .unwrap_or_else(|| format!("{vendor_name} ({driver})"))
+        });
     let label = card
         .as_ref()
         .and_then(|p| p.file_name())
@@ -83,7 +102,16 @@ fn device(path: PathBuf, card: Option<PathBuf>, vendor: &str) -> Result<Device, 
         .unwrap_or_else(|| basename.into_owned());
     let suspended =
         hardware::text(&path.join("power/runtime_status"))?.as_deref() == Some("suspended");
+    let nodes = card
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
+    let metrics_paths = vec![path.clone()];
     Ok(Device {
+        nodes,
+        metrics_paths,
         gpu: Gpu {
             id,
             label,
@@ -97,32 +125,44 @@ fn device(path: PathBuf, card: Option<PathBuf>, vendor: &str) -> Result<Device, 
         vendor: vendor.to_owned(),
     })
 }
+fn insert_device(devices: &mut BTreeMap<String, Device>, incoming: Device) {
+    if let Some(existing) = devices.get_mut(&incoming.gpu.id) {
+        existing.nodes.extend(incoming.nodes);
+        for path in incoming.metrics_paths {
+            if !existing.metrics_paths.contains(&path) {
+                existing.metrics_paths.push(path);
+            }
+        }
+    } else {
+        devices.insert(incoming.gpu.id.clone(), incoming);
+    }
+}
+fn drm_node(name: &str) -> bool {
+    name.strip_prefix("card")
+        .or_else(|| name.strip_prefix("renderD"))
+        .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+}
 fn discover(sys: &Path) -> Result<(Vec<Device>, Vec<String>), String> {
     let mut devices = BTreeMap::new();
     let mut errors = Vec::new();
     for card in hardware::directories(&sys.join("class/drm"))? {
         let name = card.file_name().unwrap_or_default().to_string_lossy();
-        if !name
-            .strip_prefix("card")
-            .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-        {
+        if !drm_node(&name) {
             continue;
         }
         let path = card.join("device");
         let read = || -> Result<Option<Device>, String> {
-            let Some(vendor) = hardware::text(&path.join("vendor"))? else {
+            let vendor = hardware::text(&path.join("vendor"))?
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if vendor.is_empty() && arm::family(&driver(&path)?).is_none() {
                 return Ok(None);
-            };
-            device(
-                path.clone(),
-                Some(card.clone()),
-                &vendor.to_ascii_lowercase(),
-            )
-            .map(Some)
+            }
+            device(path.clone(), Some(card.clone()), &vendor).map(Some)
         };
         match read() {
             Ok(Some(device)) => {
-                devices.entry(device.gpu.id.clone()).or_insert(device);
+                insert_device(&mut devices, device);
             }
             Ok(None) => (),
             Err(e) => errors.push(format!("{name}: {e}")),
@@ -138,7 +178,7 @@ fn discover(sys: &Path) -> Result<(Vec<Device>, Vec<String>), String> {
             Ok(Some(vendor)) if vendor.eq_ignore_ascii_case("0x10de") => {
                 match device(path, None, "0x10de") {
                     Ok(device) => {
-                        devices.entry(device.gpu.id.clone()).or_insert(device);
+                        insert_device(&mut devices, device);
                     }
                     Err(e) => errors.push(e),
                 }
@@ -147,6 +187,7 @@ fn discover(sys: &Path) -> Result<(Vec<Device>, Vec<String>), String> {
             _ => (),
         }
     }
+    arm::discover(sys, &mut devices, &mut errors);
     Ok((devices.into_values().collect(), errors))
 }
 fn unsigned(path: &Path, notes: &mut Vec<String>) -> Option<u64> {
@@ -360,6 +401,7 @@ pub struct GpuCollector {
     last_error: String,
     #[cfg(unix)]
     command: crate::command::BoundedCommand,
+    arm: arm::ArmCollector,
 }
 impl GpuCollector {
     /// Custom roots do not execute commands unless a program is explicitly supplied.
@@ -371,9 +413,17 @@ impl GpuCollector {
             last_error: String::new(),
             #[cfg(unix)]
             command: crate::command::BoundedCommand::default(),
+            arm: arm::ArmCollector::default(),
         }
     }
+    pub fn with_proc_root(mut self, proc: impl Into<PathBuf>) -> Self {
+        self.arm.proc = Some(proc.into());
+        self
+    }
     pub fn sample(&mut self) -> Result<Readings<Gpu>, String> {
+        self.sample_at(Instant::now())
+    }
+    pub fn sample_at(&mut self, time: Instant) -> Result<Readings<Gpu>, String> {
         let (mut devices, mut errors) = discover(&self.sys)?;
         let mut ids = Vec::new();
         for device in &mut devices {
@@ -398,13 +448,14 @@ impl GpuCollector {
                 ("0x1002", "amdgpu") | ("0x8086", "i915" | "xe")
             ) {
                 sysfs_metrics(device);
-            } else {
+            } else if arm::family(&device.gpu.driver).is_none() {
                 device
                     .gpu
                     .notes
                     .push("Telemetry unsupported for this driver".into());
             }
         }
+        self.arm.collect(&self.sys, &mut devices, time);
         if !ids.is_empty() {
             let response = self.nvidia(&ids);
             match response {

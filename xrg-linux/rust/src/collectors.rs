@@ -144,6 +144,7 @@ impl LinuxSources {
                 None
             },
         )
+        .with_proc_root(self.proc.clone())
     }
     pub fn live() -> Self {
         Self {

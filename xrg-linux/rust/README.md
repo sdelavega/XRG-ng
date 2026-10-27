@@ -4,7 +4,7 @@ This is the GTK 4 replacement in progress. It runs alongside the C/GTK3 applicat
 in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
-battery capacity, temperature and GPU utilization graphs.
+battery capacity, temperature and GPU activity graphs.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Construction
@@ -56,10 +56,11 @@ series; read failures show unavailable/partial labels. Neither makes core-only
 headless or live GTK smoke checks fail on desktops/containers without that hardware.
 The graph area scrolls on small windows and exposes details to accessibility APIs.
 
-GPU discovery uses DRM primary cards and, for compute-only NVIDIA installations,
-PCI devices actually bound to the NVIDIA driver. PCI identity keeps histories
-stable when `cardN` numbering changes; connector/render nodes and aliases are
-excluded. Up to three adapters with supported utilization readings are graphed.
+GPU discovery uses DRM primary/render nodes and recognized platform GPU drivers;
+compute-only NVIDIA devices also use bound PCI discovery. Canonical platform or
+PCI identity keeps histories stable when node numbering changes. Connector nodes
+are excluded and primary/render/platform aliases are deduplicated. Up to three
+adapters with supported activity readings are graphed.
 Memory, clock, temperature, power and fan readings appear in accessible tooltips
 when available. Power reported by hwmon may cover a whole SoC, including its CPU.
 
@@ -69,6 +70,12 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | NVIDIA nvidia | One bounded `nvidia-smi` query, matched by PCI address |
 | Intel i915 | Reported clock and available hwmon telemetry; utilization unavailable |
 | Intel xe | Available hwmon telemetry; utilization unavailable |
+| Mali panfrost / panthor | Owned devfreq clocks, readable DRM-client activity and resident allocations when exposed; profiling must already be enabled |
+| Mali lima / vendor Mali | Identification, owned devfreq/hwmon, readable DRM-client stats where the driver exports them |
+| Adreno mainline MSM | Owned GPU devfreq/hwmon and readable DRM-client engine stats |
+| Adreno vendor KGSL | `gpubusy` busy/total interval and `gpuclk` Hz, including KGSL class-device layout |
+| Apple AGX / Asahi | Platform/render-node discovery and available devfreq/hwmon/client stats; unexposed utilization stays unavailable |
+| Broadcom V3D / Vivante etnaviv / PowerVR | Platform/render-node discovery and available devfreq/hwmon/client stats |
 | nouveau / other drivers | Identification; unsupported counters remain unavailable |
 | Runtime-suspended adapters | Identification only; telemetry reads/commands are skipped |
 
@@ -77,6 +84,34 @@ is never converted into an estimated busy percentage. There is no simulated GPU
 fallback. Actual zero utilization is retained; unsupported, malformed or absent
 values create no synthetic idle samples. NVIDIA `N/A` fields remain unavailable,
 and duplicate/invalid PCI rows cannot attach telemetry to another adapter.
+
+ARM platform GPUs do not need a PCI vendor file or a primary DRM card. Device-tree
+compatibles identify the GPU model when supplied. MSM display masters are linked
+to separately bound Adreno GPUs only for an unambiguous one-to-one pair; display
+controller clocks/sensors are never treated as GPU telemetry. Devfreq aliases are
+read only when their canonical owner belongs to that GPU. Clock frequency never
+becomes a utilization estimate. KGSL intervals require `0 <= busy <= total` and a
+nonzero total; `0 0` means no measurement.
+
+DRM fdinfo is **per-client accounting**, not a global device utilization counter.
+The scanner reads permitted `/proc/<pid>/fdinfo` records associated with known GPU
+nodes, deduplicates inherited/shared FDs by device and DRM client ID, and computes
+the busiest observed engine after normalizing its declared capacity. The UI marks
+those graph values with `clients`; counter-source changes reset the history rather
+than splice different quantities. First observations, temporary counter regressions,
+inconsistent capacity and delayed intervals above elapsed capacity do not produce
+invented load. Resident allocations are separately labeled readable-client data;
+shared buffers can count once per client. System RAM is never reported as dedicated
+VRAM. Protected/exiting clients and short-lived workloads can be missed.
+
+The proc scan has a 50 ms cooperative budget, 4096 directory-entry / 8192 FD limits
+and 64 KiB record cap. Permissions, transient failures and budget truncation are
+reported as partial coverage. Like other kernel reads, an individual fdinfo callback
+cannot be hard-cancelled by this userspace budget. Mali Panfrost needs profiling
+set to 1; Panthor needs timestamp bit 2. XRG-ng only reads these controls and does
+not enable profiling or change governors, clocks or power state. Without suitable
+published counters (including on current Asahi configurations), the adapter is
+identified while unavailable statistics remain explicitly unavailable.
 
 NVIDIA requires both its PCI vendor ID and the bound `nvidia` driver before any
 command runs. This includes NVIDIA's open kernel module, whose driver name is also
@@ -89,7 +124,11 @@ Failures back off for 30 seconds. Custom fixture roots never execute system comm
 unless an explicit test executable is supplied to GpuCollector. These limits cover
 the external query, not arbitrary stalled kernel sysfs reads.
 
-Sources: [AMDGPU monitoring ABI](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.html),
+Sources: [DRM client accounting](https://docs.kernel.org/gpu/drm-usage-stats.html),
+[Panfrost profiling](https://docs.kernel.org/gpu/panfrost.html),
+[Panthor profiling](https://docs.kernel.org/gpu/panthor.html),
+[Asahi driver](https://github.com/AsahiLinux/linux/blob/asahi/drivers/gpu/drm/asahi/driver.rs),
+[AMDGPU monitoring ABI](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.html),
 [NVIDIA query documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
 
 ## Build and run
@@ -128,7 +167,7 @@ docker run --rm -v "$PWD:/workspace" xrg-ng-linux-dev
 docker run --rm -v "$PWD:/workspace" xrg-ng-linux-dev bash Tools/ci-linux.sh release
 ```
 
-CI runs Swift tests, a C header/ABI executable, Rust formatting/Clippy/tests, three
+CI runs natively on x86_64 and ARM64 Linux in Debug and Release. It runs Swift tests, a C header/ABI executable, Rust formatting/Clippy/tests, three
 live headless samples, and a GTK/Xvfb launch that requires multiple live samples
 and actual Cairo draw callbacks. The GTK check switches Paper/Ocean presets and
 exports a rendered PNG for inspection. Smoke mode does not read or write user preferences.
@@ -138,7 +177,7 @@ separate from host Swift output when using a shared Docker checkout.
 
 ## Remaining migration
 
-1. Rust process and TPU collectors; Intel GPU PMU utilization, other GPU backends,
+1. Rust process and TPU collectors; Intel GPU PMU utilization, additional vendor counters,
    VRAM graphs/device selection, richer battery health/time and calibrated/fan sensors.
 2. Connect the shared provider parsers to incremental Rust log/SQLite/network
    acquisition; expose Claude/Gemini and weather through the ABI when consumers land.
