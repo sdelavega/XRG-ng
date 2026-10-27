@@ -31,6 +31,21 @@ trap 'exit 143' TERM
 phase() {
     echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" | tee "$output/phase.log"
 }
+validate_test_results() {
+    xcrun xcresulttool get test-results summary --path "$1" > "$2"
+    python3 - "$2" <<'PYRESULTS'
+import json
+import sys
+
+with open(sys.argv[1]) as source:
+    summary = json.load(source)
+passed = summary.get("passedTests", 0)
+failed = summary.get("failedTests", 0)
+if passed < 1 or failed != 0:
+    raise SystemExit(f"Expected passing tests; passed={passed}, failed={failed}")
+print(f"Verified {passed} passing tests, {failed} failures")
+PYRESULTS
+}
 phase "Universal $configuration app build"
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     bash Tools/ci-macos-diagnostics.sh "$output" &
@@ -104,22 +119,27 @@ xcodebuild -project XRG-ng.xcodeproj -scheme XRGTests \
 
 phase "Test result validation"
 # A scheme that accidentally loses its tests must not produce a green CI run.
-xcrun xcresulttool get test-results summary --path "$output/Tests.xcresult" > "$output/summary.json"
-python3 - "$output/summary.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1]) as source:
-    summary = json.load(source)
-passed = summary.get("passedTests", 0)
-failed = summary.get("failedTests", 0)
-if passed < 1 or failed != 0:
-    raise SystemExit(f"Expected passing tests; passed={passed}, failed={failed}")
-print(f"Verified {passed} passing tests, {failed} failures")
-PY
+validate_test_results "$output/Tests.xcresult" "$output/summary.json"
 phase "Isolated AppKit launch and restore smoke check"
 python3 Tools/smoke-macos.py --configuration "$configuration" \
     --products "$output/DerivedData/Build/Products/$configuration" --results "$output/Smoke"
 phase "Packaged entry point and original nib check"
 python3 Tools/packaged-smoke-macos.py --app "$app" --results "$output/PackagedSmoke"
+if [[ "$(uname -m)" == "arm64" ]]; then
+    phase "x86_64 runtime availability (Rosetta required)"
+    /usr/bin/arch -x86_64 /usr/bin/true
+    phase "x86_64 $configuration test build and execution"
+    xcodebuild -project XRG-ng.xcodeproj -scheme XRGTests \
+        -configuration "$configuration" -destination 'platform=macOS,arch=x86_64' \
+        -derivedDataPath "$output/X86DerivedData" -resultBundlePath "$output/X86Tests.xcresult" \
+        CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES ONLY_ACTIVE_ARCH=YES ARCHS=x86_64 \
+        test 2>&1 | tee "$output/x86-tests.log"
+    phase "x86_64 test result validation"
+    x86_test_binary="$output/X86DerivedData/Build/Products/$configuration/XRGTests.xctest/Contents/MacOS/XRGTests"
+    [[ "$(xcrun lipo -archs "$x86_test_binary")" == "x86_64" ]] || { echo "Expected a thin x86_64 test executable" >&2; exit 1; }
+    validate_test_results "$output/X86Tests.xcresult" "$output/x86-summary.json"
+    phase "x86_64 packaged entry point and original nib check"
+    python3 Tools/packaged-smoke-macos.py --app "$app" --architecture x86_64 \
+        --results "$output/PackagedSmoke-x86_64"
+fi
 phase "Validation complete"

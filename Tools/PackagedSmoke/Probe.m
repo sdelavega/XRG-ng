@@ -12,6 +12,9 @@ int main(void) {
     @autoreleasepool {
         int (*ready)(void) = dlsym(RTLD_DEFAULT, "XRGPackagedSmokeInstalled");
         if (!ready || ready() != 1) { fprintf(stderr, "Injection preflight failed\n"); return 2; }
+        const char *(*architecture)(void) = dlsym(RTLD_DEFAULT, "XRGPackagedSmokeArchitecture");
+        int (*translated)(void) = dlsym(RTLD_DEFAULT, "XRGPackagedSmokeTranslated");
+        if (!architecture || !translated || translated() < 0) return 11;
         if (NSApplication.sharedApplication.activationPolicy != NSApplicationActivationPolicyProhibited) return 3;
         if ([NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"].count) return 9;
         [NSApp activate];
@@ -36,6 +39,10 @@ int main(void) {
             close(sock);
             if (result == 0 || (saved != EPERM && saved != EACCES)) { fprintf(stderr, "Network was not denied\n"); return 7; }
         } else if (errno != EPERM && errno != EACCES) return 8;
+        NSDictionary *report = @{@"architecture": @(architecture()), @"translated": translated() == 1 ? @YES : @NO, @"guardChecksPassed": @YES};
+        NSString *output = NSProcessInfo.processInfo.environment[@"XRG_PACKAGED_SMOKE_RESULTS"];
+        NSData *json = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:NULL];
+        if (!json || ![json writeToFile:[output stringByAppendingPathComponent:@"preflight.json"] options:NSDataWritingAtomic error:NULL]) return 12;
         puts("PASS: injection, prohibited activation, private preferences, denied home read and denied network");
         return 0;
     }

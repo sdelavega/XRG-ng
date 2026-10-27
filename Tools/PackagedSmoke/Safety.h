@@ -4,4 +4,6 @@
 int XRGPackagedSmokeInstalled(void);
 int XRGPackagedSmokeActivations(void);
 int XRGPackagedSmokeOrdering(void);
+const char * _Nonnull XRGPackagedSmokeArchitecture(void);
+int XRGPackagedSmokeTranslated(void);
 void XRGPackagedInstallTerminationHook(NSObject * _Nonnull delegate);

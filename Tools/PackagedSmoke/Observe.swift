@@ -94,6 +94,8 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
     try send(background, "minimizeWindow")
     stoppingTimers = timers
     pendingReport = ["phase": phase, "orientation": orientation, "pid": getpid(), "moduleCount": modules.count,
+                               "architecture": String(cString: XRGPackagedSmokeArchitecture()),
+                               "translated": XRGPackagedSmokeTranslated() == 1,
                                "mainMenuConnected": true, "productionClassImages": true,
                                "shippingPriority": true, "runtimeTimersAdvanced": true,
                                "preferencesNibLoaded": true, "sensorsNibLoaded": true,

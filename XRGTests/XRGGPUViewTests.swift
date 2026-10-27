@@ -78,6 +78,22 @@ struct XRGGPUViewTests {
                    miner: miner, settings: settings, defaults: defaults)
     }
 
+    private func checkDecodedLabelOwnership(_ view: XRGGPUView) throws {
+        // Decoded production views discover the host's GPUs; their count is not a fixture.
+        let groups = view.cardLabels
+        #expect(!groups.isEmpty)
+        let labels = groups.flatMap { [$0.leftLabel, $0.centerLabel, $0.rightLabel] }
+        let identities = Set(labels.map(ObjectIdentifier.init))
+        #expect(identities.count == groups.count * 3)
+        #expect(view.subviews.count == labels.count)
+        #expect(Set(view.subviews.map(ObjectIdentifier.init)) == identities)
+        view.awakeFromNib(); view.awakeFromNib(); view.setFrameSize(view.frame.size)
+        #expect(view.cardLabels.count == groups.count)
+        #expect(zip(view.cardLabels, groups).allSatisfy { $0 === $1 })
+        #expect(view.subviews.count == labels.count)
+        #expect(Set(view.subviews.map(ObjectIdentifier.init)) == identities)
+    }
+
     @Test func nibRegistrationIsIdempotentAndDetachRemovesItsModule() throws {
         try withFixture { settings, defaults in
             let host = GPUHost(settings: settings)
@@ -218,7 +234,7 @@ struct XRGGPUViewTests {
             var objects: NSArray?
             #expect(nib.instantiate(withOwner: nil, topLevelObjects: &objects))
             let view = try #require(objects?.compactMap { $0 as? XRGGPUView }.first)
-            #expect(view.subviews.count == 3)
+            try checkDecodedLabelOwnership(view)
             #expect(view.module == nil)
             #expect(view.frame.size == NSSize(width: 76, height: 76))
             #expect(NSClassFromString("XRGGPUView") === XRGGPUView.self)
@@ -232,7 +248,7 @@ struct XRGGPUViewTests {
             var objects: NSArray?
             #expect(nib.instantiate(withOwner: GPUNibOwner(), topLevelObjects: &objects))
             let view = try #require(objects?.compactMap { $0 as? XRGGPUView }.first)
-            #expect(view.subviews.count == 3)
+            try checkDecodedLabelOwnership(view)
             #expect(view.module == nil)
             #expect(view.frame.size == NSSize(width: 76, height: 76))
             withExtendedLifetime(objects) {}

@@ -75,6 +75,11 @@ The script builds both architectures, verifies product metadata, bundled notices
 minimum OS and required runtime symbols, then runs XRGTests on the host architecture.
 It prints a unique directory containing build logs, an xcresult bundle and JSON
 summary. Tests use injected transports, fixture archives and private defaults.
+On an ARM host the script also requires an available Rosetta runtime, builds a
+separate thin x86_64 test bundle and runs the complete suite at an x86_64 test
+destination. It validates that bundle's architecture and result summary, then runs
+the packaged smoke check with `--architecture x86_64`. Missing Rosetta fails the
+phase; the script does not install it or silently skip translated execution.
 On GitHub Actions, a background sampler records the current phase, selected process
 statistics and brief ibtool/ibtoold/xctest stack samples every five minutes. These
 diagnostic logs are uploaded with the results; they omit process arguments and
@@ -103,6 +108,11 @@ permits only the disposable preference file plus necessary parent metadata for
 home-directory reads. External-provider graphs/update checks stay disabled. Native
 read-only system collectors run, but their readings and screenshots are not
 included in reports. Reports/logs are in `PackagedSmoke/`; binaries are not uploaded.
+Use `--architecture arm64` or `--architecture x86_64` to select the app slice.
+The preflight executable matches the app's slice set. It and every app process
+must report the requested compiled architecture and expected `sysctl.proc_translated`
+state. Constructor checks reject mismatches before main. Translated reports/logs
+go in `PackagedSmoke-x86_64/` when run by CI.
 For a visible Finder launch and UI check, `Tools/interactive-smoke-macos.py` prepares
 a disposable app with private preferences, verifies expected saved values after
 quit, and cleans up its LaunchServices registration and private home artifacts.
@@ -110,6 +120,8 @@ This manual copy has no injected hooks or sandbox; keep provider tracking disabl
 Do not count that workflow as automated CI coverage or complete accessibility QA.
 Do not replace these checks with a build alone or claim Intel runtime coverage
 from an arm64 host's universal build.
+Rosetta execution validates the x86_64 slice on ARM; it does not establish physical
+Intel hardware behavior or Intel sensor/GPU accuracy.
 
 ### Linux Build Commands
 

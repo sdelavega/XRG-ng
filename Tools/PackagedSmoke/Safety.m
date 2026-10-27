@@ -9,6 +9,8 @@
 #import <stdlib.h>
 #import <string.h>
 #import <unistd.h>
+#import <sys/sysctl.h>
+#import <errno.h>
 #import "Safety.h"
 
 extern void XRGPackagedSmokeStart(void);
@@ -58,6 +60,21 @@ static NSModalResponse preventAlert(id object, SEL selector) { fail("unexpected 
 int XRGPackagedSmokeInstalled(void) { return atomic_load(&installed); }
 int XRGPackagedSmokeActivations(void) { return atomic_load(&activations); }
 int XRGPackagedSmokeOrdering(void) { return atomic_load(&ordering); }
+const char *XRGPackagedSmokeArchitecture(void) {
+#if defined(__arm64__)
+    return "arm64";
+#elif defined(__x86_64__)
+    return "x86_64";
+#else
+    return "unsupported";
+#endif
+}
+int XRGPackagedSmokeTranslated(void) {
+    int translated = 0;
+    size_t size = sizeof(translated);
+    if (sysctlbyname("sysctl.proc_translated", &translated, &size, NULL, 0)) return errno == ENOENT ? 0 : -1;
+    return size == sizeof(translated) && (translated == 0 || translated == 1) ? translated : -1;
+}
 static void finishedTermination(id object, SEL selector, NSNotification *notification) {
     terminateDelegate(object, selector, notification);
     XRGPackagedSmokeFinished();
@@ -74,6 +91,10 @@ __attribute__((constructor)) static void install(void) {
         if (!root.length || ![domain hasPrefix:prefix]) fail("private environment");
         if (![[NSUUID alloc] initWithUUIDString:[domain substringFromIndex:prefix.length]]) fail("private UUID");
         if (![NSBundle.mainBundle.bundleIdentifier isEqual:domain]) fail("bundle identifier does not match private domain");
+        NSString *architecture = NSProcessInfo.processInfo.environment[@"XRG_PACKAGED_SMOKE_ARCH"];
+        NSString *translated = NSProcessInfo.processInfo.environment[@"XRG_PACKAGED_SMOKE_TRANSLATED"];
+        if (![architecture isEqualToString:@(XRGPackagedSmokeArchitecture())]) fail("unexpected process architecture");
+        if (![@[@"0", @"1"] containsObject:translated] || XRGPackagedSmokeTranslated() != translated.intValue) fail("unexpected translation status");
         char image[PATH_MAX], resolvedImage[PATH_MAX], resolvedRoot[PATH_MAX];
         uint32_t imageSize = sizeof(image);
         if (_NSGetExecutablePath(image, &imageSize) || !realpath(image, resolvedImage) || !realpath(root.fileSystemRepresentation, resolvedRoot) ||

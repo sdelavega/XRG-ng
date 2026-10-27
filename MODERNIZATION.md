@@ -961,3 +961,54 @@ This verifies the native accessibility interface and targeted interactions. A fu
 VoiceOver session, physical Intel execution and the previously listed hardware and
 distribution checks remain separate work. The two production Objective-C hardware
 boundaries and original nib resources are unchanged.
+
+## x86_64 execution under Rosetta (2026-10-27)
+
+Hosted run 40500225182 passed the previous accessibility changes in both
+configurations. The local ARM host has Rosetta available, enabling an additional
+execution check of the shipped x86_64 slice rather than relying on universal
+compilation and symbol checks alone.
+
+Tools/packaged-smoke-macos.py now accepts --architecture arm64 or x86_64, defaulting
+to its runner architecture. It confirms the requested slice exists and can run,
+compiles matching test instrumentation, and builds its harmless preflight probe
+with the same slice set as the app. The launcher explicitly selects the requested
+architecture. Before main, the injected constructor checks its compiled
+architecture and sysctl.proc_translated against the requested architecture and
+host capability. Preflight and every app process report and revalidate those
+values. Wrong architecture, wrong translation state and missing injection were
+each rejected before AppKit startup in isolated negative checks.
+
+Both Debug and Release packaged checks passed four distinct x86_64 processes with
+translation confirmed: seed/restore in both orientations, original entry point and
+nibs, ten modules, real timers, normal AppKit termination and private cleanup.
+The native arm64 check also passed with translation false. Existing executable
+text/entry/MainMenu identity checks, hidden windows, denied networking/home-data
+reads, private preferences and report restrictions remain enforced.
+
+The first complete translated Debug suite exposed two GPU nib tests assuming
+exactly one GPU's three labels. Both decoded views actually contained two managed
+label groups. The nib tests now require exactly three unique labels per group,
+exact ownership of every subview, and identity preservation through repeated
+awakening and layout. Strict one- and multi-GPU fixture assertions remain intact;
+no production GPU collector or layout logic changes.
+
+Complete x86_64 Debug and Release suites subsequently passed 445 test functions
+covering 846 cases each. Their test executables are thin x86_64, so an ARM test
+host cannot load them as a native fallback. The revised GPU suite also passed
+under native Release. A complete run of the updated Debug CI script passed native
+and translated suites, native composition, both packaged modes and cleanup on the
+local Xcode 27.2 ARM host.
+
+On ARM, the CI script now requires Rosetta availability and uses a separate
+X86DerivedData directory and X86Tests.xcresult bundle for the x86_64 suite. The
+same result gate applies to both suites; the translated test executable must be
+thin x86_64. Both existing workflow configurations run the extra phases. CI adds
+translated logs/JSON and the test result bundle to artifacts, without uploading
+temporary apps or instrumentation binaries. The hosted Xcode 26.6 pin, universal
+app checks, deployment floor and timeout are unchanged.
+
+This adds translated x86_64 runtime evidence on ARM. Physical Intel CPU/GPU/SMC
+behavior, full VoiceOver usage and the existing hardware/distribution checks
+remain separate validation. Production sources and the two Objective-C hardware
+boundaries are unchanged in this step.
