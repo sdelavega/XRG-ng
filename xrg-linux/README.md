@@ -15,7 +15,8 @@ Claude/Codex/Gemini/Hermes usage and Ollama model
 status; see the [new provider sources and limits](rust/README.md#ai-monitoring). The instructions below describe the existing
 C/GTK3 implementation, retained during migration.
 
-The new **AI…** window shows usage and Ollama model inventories, with saved provider
+The new **AI…** window shows usage, recorded Claude/Gemini/Hermes token totals by
+model and Ollama model inventories, with saved provider
 switches, custom data paths, Claude source selection and loopback API endpoints.
 The toolbar's sun icon opens the opt-in **Weather** window, with shared Swift
 METAR decoding, saved station/units/refresh settings and explicit observation age

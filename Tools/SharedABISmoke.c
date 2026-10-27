@@ -55,6 +55,15 @@ int main(void) {
     assert(xrg_provider_usage_parse((const uint8_t *)record, strlen(record), 0,
         &input, &output, &total, name, sizeof(name)) == 2);
     assert(input == 7 && output == 3 && total == 10 && name[0] == 'm' && name[1] == '1');
+    uint8_t details[4096] = {42};
+    assert(xrg_provider_details_parse((const uint8_t *)record, strlen(record), 0, details, 1) == -2);
+    assert(details[0] == 42);
+    int32_t details_count = xrg_provider_details_parse((const uint8_t *)record, strlen(record), 0, details, sizeof(details) - 1);
+    assert(details_count > 0 && details_count < sizeof(details) - 1);
+    details[details_count] = 0;
+    assert(strstr((const char *)details, "\"models\"") && strstr((const char *)details, "\"identity\":\"m1\""));
+    details[0] = 42;
+    assert(xrg_provider_details_parse((const uint8_t *)record, strlen(record), 99, details, sizeof(details)) == -1 && details[0] == 42);
     const char *models = "{\"models\":[{\"name\":\"test\"}]}";
     assert(xrg_model_names_parse((const uint8_t *)models, strlen(models), name, sizeof(name)) == 4);
     const char *metrics = "claude_code_token_usage_total{type=\"input\"} 0\n";

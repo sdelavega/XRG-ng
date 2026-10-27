@@ -37,7 +37,7 @@ and contributions are welcome. See the [project support policy](../../README.md#
   `Shared/include/xrg_shared.h` documents ownership and capacities. No C
   implementation or shared Swift/Rust object layout is required. The first ABI
   exposes histories, rates, themes, provider usage records, local metrics and model
-  inventories, station validation and dated METAR observations. Missing weather
+  inventories, model-attributed usage records, station validation and dated METAR observations. Missing weather
   values have explicit validity flags, so a valid zero is not treated as absent.
 - **Rust:** owns `/proc` and `/sys` collection, GTK4/Cairo drawing, configuration and
   lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
@@ -241,7 +241,9 @@ checks invalid UID handling, filters to its own process and reopens saved filter
 The AI window checks invalid paths/URLs, applying/reopening provider settings,
 discarding drafts, stale-report suppression, and preservation of AI sources when
 restoring graph defaults. It renders a clearly labeled synthetic usage/model fixture
-without scanning provider data. Weather checks invalid station rejection, normalized
+without scanning provider data. The model fixture exercises the production detail
+formatter, including unattributed tokens, recorded Hermes costs and unsupported
+attribution. Weather checks invalid station rejection, normalized
 Apply/reopen, draft discard, old-station suppression and preservation when restoring
 graph defaults, using an explicitly labeled fixture with no network requests.
 The main window, preferences, process table, both AI tabs and weather window are
@@ -358,10 +360,32 @@ and errors. These totals are not account billing or a billing-period summary;
 batched log writes produce bursts in the graph.
 
 **AI…** in the toolbar opens **Usage and models** plus a **Sources** tab. Usage
-shows provider totals, observed rates, selected source, recorded costs and errors,
-along with installed/loaded Ollama model names (up to 128 per list). The model lists
-are inventories, not per-model token counters. This view does not infer token
-breakdowns, model prices or account billing.
+shows provider totals, observed rates, selected source, recorded costs and errors.
+It also shows **token totals by model** for Claude logs, Gemini logs and Hermes
+sessions, plus installed/loaded Ollama model names (up to 128 per list). Ollama
+lists remain inventories; they do not supply token counts.
+
+Claude model attribution follows the same message-ID replacement and cross-file
+deduplication as its provider total. A replacement changes the count and model
+together. Gemini uses each message's recorded model, falling back to the legacy
+session-level model when absent. Its explicit total is preserved even when it
+differs from input plus output. Missing, blank, control-containing or overlong
+model names keep their tokens in **Unattributed**. Valid names retain their exact
+case and spelling; model names are quoted in the detail view.
+
+Hermes groups the existing nonempty-model session rows, keeping actual-cost
+precedence over estimated cost, including valid zero cost. A model's cost is
+unavailable if any of its rows lacks a recorded cost, independently of other
+models. No model prices are applied. Claude custom SQLite/OTel and Codex cumulative
+session totals currently show **per-model token attribution unavailable**. The
+port does not assign a whole cumulative Codex session to its most recent model.
+
+Model rows are sorted by total tokens, then name. Each provider is bounded to
+256 model groups including Unattributed; exceeding this limit fails the complete
+snapshot rather than publishing a partial breakdown. The window displays up to
+128 rows per provider and reports omitted rows; provider totals still include all
+groups. Failed or disabled sources do not display previous model rows as current.
+These breakdowns add no new polling, persistent data or changes to rate baselines.
 
 Sources offers individual Claude/Codex/Gemini/Hermes switches and an independent
 Ollama inventory switch. Disabled providers do not read their logs/database or
@@ -566,8 +590,8 @@ automated tests use fixtures and make no weather requests.
 
 1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
    support, individual fan/sensor controls and detailed process controls.
-2. Per-model provider token breakdowns where recorded, append-offset scanning for
-   very large logs and optional price tables.
+2. Safe Codex model attribution where cumulative records permit it, append-offset
+   scanning for very large logs and optional price tables.
 3. Context menus, deeper metric preferences, XTF conversion and explicit
    legacy-settings import.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global

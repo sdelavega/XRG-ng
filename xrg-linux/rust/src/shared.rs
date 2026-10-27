@@ -3,6 +3,13 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_provider_details_parse(
+        bytes: *const u8,
+        length: u32,
+        kind: u32,
+        output: *mut u8,
+        capacity: u32,
+    ) -> i32;
     fn xrg_shared_abi_version() -> u32;
     fn xrg_metar_station(bytes: *const u8, length: u32, output: *mut u8, capacity: u32) -> i32;
     fn xrg_metar_latest_parse(
@@ -287,7 +294,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
@@ -300,6 +307,41 @@ impl Usage {
             output: self.output.checked_add(other.output)?,
             total: self.total.checked_add(other.total)?,
         })
+    }
+}
+#[derive(serde::Deserialize)]
+pub struct ProviderUsage {
+    #[serde(flatten)]
+    pub usage: Usage,
+    pub identity: String,
+    pub model: Option<String>,
+}
+#[derive(serde::Deserialize)]
+pub struct UsageDetails {
+    pub record: ProviderUsage,
+    pub models: Vec<ProviderUsage>,
+}
+pub fn provider_details(bytes: &[u8], kind: u32) -> Option<UsageDetails> {
+    let length = u32::try_from(bytes.len()).ok()?;
+    let mut output = vec![0u8; 2048];
+    loop {
+        let count = unsafe {
+            xrg_provider_details_parse(
+                bytes.as_ptr(),
+                length,
+                kind,
+                output.as_mut_ptr(),
+                output.len() as u32,
+            )
+        };
+        if count == -2 && output.len() == 2048 {
+            output.resize(524_288, 0);
+            continue;
+        }
+        if count < 0 || count as usize > output.len() {
+            return None;
+        }
+        return serde_json::from_slice(&output[..count as usize]).ok();
     }
 }
 pub fn provider_usage(bytes: &[u8], kind: u32) -> Option<(Usage, String)> {

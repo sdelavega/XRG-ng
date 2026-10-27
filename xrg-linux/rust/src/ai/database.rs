@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use super::Reading;
+use super::{
+    ModelUsage, Reading,
+    models::{Totals, model_name},
+};
 use crate::shared::Usage;
 use rusqlite::{Connection, OpenFlags};
 use std::{
@@ -24,7 +27,7 @@ pub fn snapshot(path: &Path, hermes: bool) -> Result<Reading, String> {
     conn.progress_handler(1000, Some(move || Instant::now() >= deadline))
         .map_err(|e| e.to_string())?;
     let sql = if hermes {
-        "SELECT COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(actual_cost_usd,estimated_cost_usd) FROM sessions WHERE model IS NOT NULL AND model != ''"
+        "SELECT COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(actual_cost_usd,estimated_cost_usd), CASE WHEN length(CAST(model AS BLOB)) <= 1024 THEN model ELSE NULL END FROM sessions WHERE model IS NOT NULL AND model != ''"
     } else {
         "SELECT tokens_used, 0, estimated_cost FROM sessions WHERE tokens_used > 0"
     };
@@ -34,6 +37,7 @@ pub fn snapshot(path: &Path, hermes: bool) -> Result<Reading, String> {
     let mut cost = 0.0;
     let mut cost_known = true;
     let mut count = 0;
+    let mut models = Totals::default();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         count += 1;
         if count > 100_000 || Instant::now() >= deadline {
@@ -48,6 +52,18 @@ pub fn snapshot(path: &Path, hermes: bool) -> Result<Reading, String> {
         let total = (input as u64)
             .checked_add(output as u64)
             .ok_or("Token overflow")?;
+        if hermes {
+            let model: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+            models.add(ModelUsage {
+                model: model_name(model),
+                usage: Usage {
+                    input: input as u64,
+                    output: output as u64,
+                    total,
+                },
+                cost: value,
+            })?;
+        }
         usage = usage
             .checked_add(Usage {
                 input: input as u64,
@@ -73,5 +89,6 @@ pub fn snapshot(path: &Path, hermes: bool) -> Result<Reading, String> {
             "Claude custom SQLite (estimated cost)"
         }
         .into(),
+        models: hermes.then(|| models.finish()),
     })
 }

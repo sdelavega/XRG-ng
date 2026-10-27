@@ -4,12 +4,14 @@
 //! from delaying system collection or GTK. Tests inject roots and API responses.
 pub mod database;
 pub mod logs;
+mod models;
 mod preferences;
 use crate::{
     command::BoundedCommand,
     engine::{Panel, Scale},
     shared::{self, History, Rates, Usage},
 };
+pub use models::ModelUsage;
 pub use preferences::{ClaudeSource, Preferences, validate_url};
 use std::{
     path::{Path, PathBuf},
@@ -23,6 +25,7 @@ pub struct Reading {
     pub usage: Usage,
     pub cost: Option<f64>,
     pub source: String,
+    pub models: Option<Vec<ModelUsage>>,
 }
 #[derive(Clone, Debug)]
 pub struct Report {
@@ -189,6 +192,7 @@ impl Collector {
                     },
                     cost,
                     source: "Claude local OTel metrics".into(),
+                    models: None,
                 })
             })
         };
@@ -243,8 +247,9 @@ impl Collector {
         }
     }
     fn logs(&mut self, index: usize, source: &str) -> Result<Reading, String> {
-        self.scans[index].scan().map(|usage| Reading {
-            usage,
+        self.scans[index].scan_details().map(|scan| Reading {
+            usage: scan.usage,
+            models: scan.models,
             cost: None,
             source: source.into(),
         })
@@ -396,8 +401,60 @@ pub struct Update {
     pub report: Arc<Report>,
     pub detail: String,
 }
+impl Update {
+    pub fn new(preferences: Preferences, panel: Panel, report: Report) -> Self {
+        let detail = report_detail(&report, &preferences, &panel);
+        Self {
+            preferences,
+            panel,
+            detail,
+            report: Arc::new(report),
+        }
+    }
+}
 fn report_detail(report: &Report, preferences: &Preferences, panel: &Panel) -> String {
     let mut text = vec![panel.detail.clone()];
+    for (index, name) in ["Claude", "Codex", "Gemini", "Hermes"].iter().enumerate() {
+        if !preferences.enabled[index] {
+            continue;
+        }
+        let Ok(reading) = &report.providers[index] else {
+            continue;
+        };
+        match &reading.models {
+            None => text.push(format!(
+                "{name}: per-model token attribution unavailable for this source."
+            )),
+            Some(rows) => {
+                let mut lines = vec![format!("{name} token totals by model ({}):", rows.len())];
+                if rows.is_empty() {
+                    lines.push("No recorded model usage.".into());
+                }
+                for row in rows.iter().take(128) {
+                    let name = row
+                        .model
+                        .as_ref()
+                        .map(|m| format!("{m:?}"))
+                        .unwrap_or_else(|| "Unattributed (model not recorded or invalid)".into());
+                    let cost = row
+                        .cost
+                        .map(|v| format!("source cost ${v:.4}"))
+                        .unwrap_or_else(|| "cost unavailable".into());
+                    lines.push(format!(
+                        "{name}: {} total · {} input · {} output · {cost}",
+                        row.usage.total, row.usage.input, row.usage.output
+                    ));
+                }
+                if rows.len() > 128 {
+                    lines.push(format!(
+                        "Additional model rows omitted: {}. Provider totals include all models.",
+                        rows.len() - 128
+                    ));
+                }
+                text.push(lines.join("\n"));
+            }
+        }
+    }
     if preferences.ollama {
         for (title, models) in [
             ("Installed Ollama models", &report.models.installed),
@@ -490,13 +547,8 @@ impl Worker {
                 let report = collector.sample(&mut api);
                 let panel =
                     display.panel_for(report.clone(), start.elapsed().as_secs_f64(), &preferences);
-                let detail = report_detail(&report, &preferences, &panel);
-                *output.lock().unwrap() = Some(Update {
-                    preferences: preferences.clone(),
-                    panel,
-                    detail,
-                    report: Arc::new(report),
-                });
+                let update = Update::new(preferences.clone(), panel, report);
+                *output.lock().unwrap() = Some(update);
                 match receiver.recv_timeout(next.saturating_duration_since(Instant::now())) {
                     Err(mpsc::RecvTimeoutError::Timeout) => (),
                     _ => break,

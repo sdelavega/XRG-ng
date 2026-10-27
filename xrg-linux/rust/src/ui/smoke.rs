@@ -347,26 +347,94 @@ impl Harness {
                     window.snapshot(&PathBuf::from(path))?;
                 }
                 window.tabs.set_current_page(Some(0));
-                let active = shell.settings.borrow().ai.clone();
-                let fixture = xrg_ng_linux::ai::Update {
-                    preferences: active.clone(),
-                    panel: xrg_ng_linux::ai::waiting(),
-                    report: std::sync::Arc::new(xrg_ng_linux::ai::Report {
-                        providers: std::array::from_fn(|_| Err("Disabled in preferences".into())),
-                        ollama: "Automated UI fixture".into(), models: xrg_ng_linux::ai::Models::default(),
-                    }),
-                    detail: "Automated UI fixture\n\nClaude: 42 tokens · source cost unavailable\n\nInstalled Ollama models (1):\nfixture-model\n\nLoaded Ollama models (0):\nnone\n\nModel inventories are not per-model token counters.".into(),
+                // Inject only copied fixture snapshots; external workers stay disabled.
+                let mut active = shell.settings.borrow().ai.clone();
+                active.enabled = [true; 4];
+                active.ollama = true;
+                use xrg_ng_linux::{
+                    ai::{ModelUsage, Models, Reading, Report, Update},
+                    shared::Usage,
                 };
+                let known = Usage {
+                    input: 10,
+                    output: 2,
+                    total: 12,
+                };
+                let unknown = Usage {
+                    input: 30,
+                    output: 0,
+                    total: 30,
+                };
+                let report = Report {
+                    providers: [
+                        Ok(Reading {
+                            usage: Usage {
+                                input: 40,
+                                output: 2,
+                                total: 42,
+                            },
+                            cost: None,
+                            source: "Automated UI fixture".into(),
+                            models: Some(vec![
+                                ModelUsage {
+                                    model: None,
+                                    usage: unknown,
+                                    cost: None,
+                                },
+                                ModelUsage {
+                                    model: Some("fixture-claude".into()),
+                                    usage: known,
+                                    cost: None,
+                                },
+                            ]),
+                        }),
+                        Ok(Reading {
+                            usage: known,
+                            cost: None,
+                            source: "Fixture cumulative session".into(),
+                            models: None,
+                        }),
+                        Err("Fixture provider unavailable".into()),
+                        Ok(Reading {
+                            usage: known,
+                            cost: Some(0.25),
+                            source: "Fixture Hermes SQLite".into(),
+                            models: Some(vec![ModelUsage {
+                                model: Some("fixture-hermes".into()),
+                                usage: known,
+                                cost: Some(0.25),
+                            }]),
+                        }),
+                    ],
+                    ollama: "Automated UI fixture".into(),
+                    models: Models {
+                        installed: Ok(vec!["fixture-model".into()]),
+                        running: Ok(vec![]),
+                    },
+                };
+                let mut panel = xrg_ng_linux::ai::waiting();
+                panel.detail = "Automated UI fixture — not live usage\n\nRetained token totals by recorded model.".into();
+                let fixture = Update::new(active.clone(), panel, report);
                 window.update(Some(&fixture), &active);
                 require(
-                    window.usage_text().contains("fixture-model"),
+                    window.usage_text().contains("fixture-model")
+                        && window.usage_text().contains("fixture-claude")
+                        && window.usage_text().contains("Unattributed")
+                        && window.usage_text().contains("10 input")
+                        && window.usage_text().contains("source cost $0.2500")
+                        && window
+                            .usage_text()
+                            .contains("per-model token attribution unavailable"),
                     "AI model detail did not render",
                 )?;
                 let mut stale = active.clone();
                 stale.ollama = !stale.ollama;
                 window.update(Some(&fixture), &stale);
                 require(
-                    !window.usage_text().contains("fixture-model"),
+                    !window.usage_text().contains("fixture-model")
+                        && !window.usage_text().contains("fixture-claude")
+                        && !window.usage_text().contains("Unattributed")
+                        && window.usage_text().contains("Waiting for the AI worker"),
                     "Stale AI report survived a source change",
                 )?;
                 window.update(Some(&fixture), &active);

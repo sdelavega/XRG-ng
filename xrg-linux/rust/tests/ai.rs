@@ -300,6 +300,7 @@ fn report(total: u64, source: &str) -> Report {
                 },
                 cost: None,
                 source: source.into(),
+                models: None,
             }),
             Err("missing".into()),
             Err("missing".into()),
@@ -528,4 +529,227 @@ fn source_configuration_changes_reset_the_graph_and_rate_baseline() {
     };
     let changed = display.panel_for(report(1000, "same parser"), 10., &second);
     assert!(changed.series[0].iter().all(|v| *v == 0.));
+}
+
+fn by_model<'a>(rows: &'a [ai::ModelUsage], name: Option<&str>) -> &'a ai::ModelUsage {
+    rows.iter().find(|r| r.model.as_deref() == name).unwrap()
+}
+#[test]
+fn model_attribution_follows_deduplicated_messages_and_newest_file_snapshot() {
+    let f = Fixture::new();
+    let model = |id: &str, name: &str, n: u64| {
+        format!(r#"{{"message":{{"id":"{id}","model":"{name}","usage":{{"input_tokens":{n}}}}}}}"#)
+    };
+    f.put(
+        "logs/a.jsonl",
+        format!(
+            "{}\n{}\n{}",
+            model("one", "old", 5),
+            model("one", "new", 9),
+            claude("two", 3, 0)
+        ),
+    );
+    f.put("logs/copy.jsonl", model("one", "copy-newest", 12));
+    for (name, seconds) in [("a.jsonl", 100), ("copy.jsonl", 200)] {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        fs::File::open(f.0.join("logs").join(name))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(time))
+            .unwrap();
+    }
+    let mut scan = LogScan::new(f.0.join("logs"), Layout::Claude);
+    let reading = scan.scan_details().unwrap();
+    let rows = reading.models.unwrap();
+    assert_eq!(reading.usage.total, 15);
+    assert_eq!(by_model(&rows, Some("copy-newest")).usage.total, 12);
+    assert_eq!(by_model(&rows, None).usage.total, 3);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(scan.scan_details().unwrap().models.unwrap(), rows);
+    fs::remove_file(f.0.join("logs/copy.jsonl")).unwrap();
+    let reading = scan.scan_details().unwrap();
+    assert_eq!(reading.usage.total, 12);
+    assert_eq!(
+        by_model(&reading.models.unwrap(), Some("new")).usage.total,
+        9
+    );
+}
+#[test]
+fn gemini_model_groups_preserve_explicit_totals_overrides_and_unknown_metadata() {
+    let f = Fixture::new();
+    f.put("tmp/hash/chats/session-a.json", r#"{"model":"session","messages":[{"model":"override","tokens":{"input":2,"output":1,"total":7}},{"tokens":{"input":3}},{"model":"bad\nname","tokens":{"input":4}}]}"#);
+    f.put("tmp/hash/chats/session-b.jsonl", "{\"model\":\"override\",\"tokens\":{\"input\":1,\"output\":1}}\n{\"tokens\":{\"total\":0}}\n{broken");
+    let reading = LogScan::new(f.0.join("tmp"), Layout::Gemini)
+        .scan_details()
+        .unwrap();
+    let rows = reading.models.unwrap();
+    assert_eq!(
+        reading.usage,
+        Usage {
+            input: 10,
+            output: 2,
+            total: 16
+        }
+    );
+    assert_eq!(by_model(&rows, Some("override")).usage.total, 9);
+    assert_eq!(by_model(&rows, Some("session")).usage.total, 3);
+    assert_eq!(by_model(&rows, None).usage.total, 4);
+    assert_eq!(
+        rows.iter().map(|r| r.usage.total).sum::<u64>(),
+        reading.usage.total
+    );
+}
+#[test]
+fn details_ffi_preserves_large_integers_and_grows_its_output_buffer() {
+    let value = serde_json::json!({"message":{"id":"id","model":"exact","usage":{"input_tokens":u64::MAX}}});
+    let details = shared::provider_details(&serde_json::to_vec(&value).unwrap(), 0).unwrap();
+    assert_eq!(details.record.usage.total, u64::MAX);
+    assert_eq!(details.models[0].usage.total, u64::MAX);
+    assert_eq!(details.record.identity, "id");
+    let messages: Vec<_> = (0..4).map(|n| serde_json::json!({"model":format!("{}-{n}", "a".repeat(1000)),"tokens":{"total":n}})).collect();
+    let input = serde_json::to_vec(&serde_json::json!({"messages":messages})).unwrap();
+    let details = shared::provider_details(&input, 2).unwrap();
+    assert_eq!(details.models.len(), 4);
+    assert_eq!(details.record.usage.total, 6);
+    assert!(shared::provider_details(b"{}", 99).is_none());
+}
+#[test]
+fn invalid_model_names_keep_tokens_in_the_unattributed_bucket() {
+    let f = Fixture::new();
+    let records: Vec<_> = ["", " ", "bad\nname", &"a".repeat(1025)]
+        .into_iter()
+        .map(|model| {
+            serde_json::json!({"message":{"model":model,"usage":{"input_tokens":1}}}).to_string()
+        })
+        .collect();
+    f.put("logs/a.jsonl", records.join("\n"));
+    let reading = LogScan::new(f.0.join("logs"), Layout::Claude)
+        .scan_details()
+        .unwrap();
+    let rows = reading.models.unwrap();
+    assert_eq!(reading.usage.total, 4);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].model, None);
+    assert_eq!(rows[0].usage.total, 4);
+}
+#[test]
+fn hermes_model_totals_sort_and_preserve_per_model_cost_completeness() {
+    let f = Fixture::new();
+    let c = f.db("state.db", HERMES);
+    c.execute_batch("INSERT INTO sessions VALUES('a',10,2,0,9),('a',3,0,NULL,NULL),('b',1,1,NULL,0.5),('bad'||char(10)||'name',0,0,0,NULL);").unwrap();
+    let reading = ai::database::snapshot(&f.0.join("state.db"), true).unwrap();
+    assert_eq!(reading.usage.total, 17);
+    assert_eq!(reading.cost, None);
+    let rows = reading.models.unwrap();
+    assert_eq!(rows[0].model.as_deref(), Some("a"));
+    assert_eq!(by_model(&rows, Some("a")).cost, None);
+    assert_eq!(by_model(&rows, Some("b")).cost, Some(0.5));
+    assert_eq!(by_model(&rows, None).cost, Some(0.));
+    assert_eq!(rows.iter().map(|r| r.usage.total).sum::<u64>(), 17);
+}
+#[test]
+fn excess_models_fail_the_whole_snapshot_and_recover_after_removal() {
+    let f = Fixture::new();
+    let records: Vec<_> = (0..256).map(|n| serde_json::json!({"message":{"id":n.to_string(),"model":format!("m{n}"),"usage":{"input_tokens":1}}}).to_string()).collect();
+    f.put("logs/a.jsonl", records.join("\n"));
+    let mut scan = LogScan::new(f.0.join("logs"), Layout::Claude);
+    assert_eq!(scan.scan_details().unwrap().models.unwrap().len(), 256);
+    f.put(
+        "logs/b.jsonl",
+        r#"{"message":{"model":"excess","usage":{"input_tokens":1}}}"#,
+    );
+    assert!(scan.scan_details().err().unwrap().contains("model limit"));
+    fs::remove_file(f.0.join("logs/b.jsonl")).unwrap();
+    assert_eq!(scan.scan_details().unwrap().usage.total, 256);
+    let c = f.db("state.db", HERMES);
+    for n in 0..257 {
+        c.execute("INSERT INTO sessions VALUES(?1,1,0,0,0)", [format!("m{n}")])
+            .unwrap();
+    }
+    assert!(
+        ai::database::snapshot(&f.0.join("state.db"), true)
+            .unwrap_err()
+            .contains("model limit")
+    );
+}
+#[test]
+fn model_details_never_infer_codex_or_metrics_attribution_and_hide_disabled_or_failed_sources() {
+    let f = Fixture::new();
+    f.put(
+        "logs/rollout-a.jsonl",
+        format!(
+            "{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"new-model\"}}}}\n{}",
+            codex(42)
+        ),
+    );
+    assert!(
+        LogScan::new(f.0.join("logs"), Layout::Codex)
+            .scan_details()
+            .unwrap()
+            .models
+            .is_none()
+    );
+    let r = report(42, "cumulative fixture");
+    let mut display = Display::default();
+    let panel = display.panel(r.clone(), 1.);
+    let update = ai::Update::new(ai::Preferences::default(), panel, r);
+    assert!(
+        update
+            .detail
+            .contains("per-model token attribution unavailable")
+    );
+    let mut r = report(42, "log fixture");
+    r.providers[0].as_mut().unwrap().models = Some(vec![ai::ModelUsage {
+        model: Some("secret-model".into()),
+        usage: Usage {
+            total: 42,
+            ..Default::default()
+        },
+        cost: None,
+    }]);
+    let panel = display.panel(r.clone(), 2.);
+    let update = ai::Update::new(ai::Preferences::default(), panel, r.clone());
+    assert!(update.detail.contains("secret-model") && update.detail.contains("42 total"));
+    let preferences = ai::Preferences {
+        enabled: [false; 4],
+        ..Default::default()
+    };
+    let update = ai::Update::new(
+        preferences.clone(),
+        display.panel_for(r.clone(), 3., &preferences),
+        r,
+    );
+    assert!(!update.detail.contains("secret-model"));
+    let r = Report {
+        providers: std::array::from_fn(|_| Err("fixture offline".into())),
+        ..report(0, "unused")
+    };
+    let panel = display.panel(r.clone(), 4.);
+    let update = ai::Update::new(ai::Preferences::default(), panel, r);
+    assert!(!update.detail.contains("secret-model"));
+}
+
+#[test]
+fn model_display_limit_reports_omissions_without_losing_provider_totals() {
+    let f = Fixture::new();
+    let records: Vec<_> = (0..129)
+        .map(|n| {
+            serde_json::json!({"message":{"model":format!("m{n:03}"),"usage":{"input_tokens":1}}})
+                .to_string()
+        })
+        .collect();
+    f.put(".claude/projects/a.jsonl", records.join("\n"));
+    let report = f.collector().sample(&mut Api::default());
+    assert_eq!(report.providers[0].as_ref().unwrap().usage.total, 129);
+    let mut display = Display::default();
+    let panel = display.panel(report.clone(), 1.);
+    let update = ai::Update::new(ai::Preferences::default(), panel, report);
+    assert!(
+        update.detail.contains("129 tokens")
+            && update.detail.contains("Additional model rows omitted: 1.")
+    );
+    assert!(
+        update.detail.contains("m000")
+            && update.detail.contains("m127")
+            && !update.detail.contains("m128")
+    );
 }

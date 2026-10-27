@@ -40,7 +40,8 @@ signed release packages. Keep the whole extracted tree together; moving the ELF
 executable alone will lose its private libraries. The launcher also works after
 moving the extracted directory, including paths with spaces.
 
-Use **AI…** for provider totals, Ollama model inventories and saved source settings.
+Use **AI…** for provider totals, recorded Claude/Gemini/Hermes token breakdowns by
+model, Ollama inventories and saved source settings.
 The Sources tab can disable providers, override local data paths and select local
 HTTP endpoints. These controls and their limits are described in
 `share/doc/xrg-ng/DEVELOPMENT.md`.

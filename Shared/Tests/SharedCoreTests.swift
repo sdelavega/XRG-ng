@@ -98,6 +98,26 @@ struct SharedCoreTests {
         let kmh = try #require(XRGWeatherReport.reports(in: "KSEA 271200Z 09020KMH", station: "KSEA").first)
         #expect(abs((kmh.windKnots ?? 0) * 1.852 - 20) < 0.000001)
     }
+    @Test func modelDetailsRespectGeminiMessageOverridesAndUnknownNames() throws {
+        let data = Data(#"{"model":"session","messages":[{"model":"message","tokens":{"input":1,"output":2,"total":7}},{"tokens":{"input":3}},{"model":"bad\nname","tokens":{"input":4}}]}"#.utf8)
+        let details = try #require(XRGProviderLogParser.usageDetails(from: data, kind: 2))
+        #expect(details.record.total == 14 && details.record.input == 8 && details.record.output == 2)
+        #expect(details.models.first(where: { $0.model == "message" })?.total == 7)
+        #expect(details.models.first(where: { $0.model == "session" })?.total == 3)
+        #expect(details.models.first(where: { $0.model == nil })?.total == 4)
+        #expect(details.models.reduce(UInt64(0)) { $0 + $1.total } == details.record.total)
+    }
+    @Test func modelDetailsBridgePreservesUInt64AndRejectsShortBuffers() throws {
+        let data = Data(#"{"message":{"id":"m","model":"model","usage":{"input_tokens":18446744073709551615}}}"#.utf8)
+        let details = try #require(XRGProviderLogParser.usageDetails(from: data, kind: 0))
+        #expect(details.record.total == UInt64.max && details.models.first?.total == UInt64.max)
+        var output = [UInt8](repeating: 42, count: 8)
+        let status = data.withUnsafeBytes { bytes in
+            providerDetailsParse(bytes.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(data.count), 0, &output, 1)
+        }
+        #expect(status == -2 && output == Array(repeating: 42, count: 8))
+        #expect(XRGProviderLogParser.usageDetails(from: Data(#"{"message":{"usage":{"input_tokens":18446744073709551615,"output_tokens":1}}}"#.utf8), kind: 0) == nil)
+    }
     @Test(arguments: XRGBuiltinTheme.allCases) func palettesKeepSevenBoundedColors(_ theme: XRGBuiltinTheme) {
         #expect(theme.rgba.count == 7)
         #expect(theme.rgba.allSatisfy { $0.count == 4 && $0.allSatisfy { $0.isFinite && (0...1).contains($0) } })

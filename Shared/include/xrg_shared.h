@@ -49,6 +49,14 @@ int32_t xrg_codex_record_parse(const uint8_t *bytes, uint32_t length, uint64_t *
  * insufficient identity capacity. All outputs remain untouched on failure. */
 int32_t xrg_provider_usage_parse(const uint8_t *bytes, uint32_t length, uint32_t kind,
     uint64_t *input, uint64_t *output, uint64_t *total, uint8_t *identity, uint32_t capacity);
+/* Additive ABI v1 details: kind as above. UTF-8 JSON (no NUL), <=512 KiB:
+ * {"record":{input,output,total,identity,model?},"models":[same fields...]}
+ * Counts are exact unsigned 64-bit JSON integers. At most 256 model rows;
+ * names/identity <=1024 bytes; missing/invalid model names are unattributed.
+ * Returns byte count, -1 invalid/nonmatching input, -2 insufficient capacity.
+ * Output remains untouched on failure. Input <=8 MiB. */
+int32_t xrg_provider_details_parse(const uint8_t *bytes, uint32_t length, uint32_t kind,
+    uint8_t *output, uint32_t capacity);
 /* Newline-delimited model names; returns byte count or -1. */
 int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *output, uint32_t capacity);
 #ifdef __cplusplus

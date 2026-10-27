@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Metadata-cached bounded scans. Only a complete provider sweep is published.
+use super::{ModelUsage, models::Totals};
 use crate::shared::{self, Usage};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,10 +41,19 @@ impl Stamp {
         }
     }
 }
+struct Recorded {
+    usage: Usage,
+    models: Vec<ModelUsage>,
+}
 struct Entry {
     stamp: Stamp,
     anonymous: Usage,
-    identified: BTreeMap<String, Usage>,
+    anonymous_models: Totals,
+    identified: BTreeMap<String, Recorded>,
+}
+pub struct Scan {
+    pub usage: Usage,
+    pub models: Option<Vec<ModelUsage>>,
 }
 pub struct LogScan {
     root: PathBuf,
@@ -59,6 +69,9 @@ impl LogScan {
         }
     }
     pub fn scan(&mut self) -> Result<Usage, String> {
+        self.scan_details().map(|s| s.usage)
+    }
+    pub fn scan_details(&mut self) -> Result<Scan, String> {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut paths = Vec::new();
         let mut visited = 0;
@@ -127,27 +140,39 @@ impl LogScan {
             self.cache.insert(path.clone(), entry);
         }
         let mut total = Usage::default();
+        let mut models = Totals::default();
         // Claude IDs are global, so copied/subagent transcripts cannot count the
         // same assistant message twice. Newest file snapshot wins deterministically.
         let mut identified = BTreeMap::new();
         for entry in self.cache.values() {
             check(deadline)?;
             total = add(total, entry.anonymous)?;
+            for row in entry.anonymous_models.rows() {
+                models.add(row.clone())?;
+            }
             for (id, usage) in &entry.identified {
+                check(deadline)?;
                 if identified.len() >= USAGE_LIMIT && !identified.contains_key(id) {
                     return Err("Provider message identity limit exceeded".into());
                 }
                 let stamp = (entry.stamp.seconds, entry.stamp.nanos);
-                let value = identified.entry(id).or_insert((stamp, *usage));
+                let value = identified.entry(id).or_insert((stamp, usage));
                 if stamp >= value.0 {
-                    *value = (stamp, *usage);
+                    *value = (stamp, usage);
                 }
             }
         }
         for (_, usage) in identified.values() {
-            total = add(total, *usage)?;
+            check(deadline)?;
+            total = add(total, usage.usage)?;
+            for row in &usage.models {
+                models.add(row.clone())?;
+            }
         }
-        Ok(total)
+        Ok(Scan {
+            usage: total,
+            models: (!matches!(self.layout, Layout::Codex)).then(|| models.finish()),
+        })
     }
 }
 fn add(a: Usage, b: Usage) -> Result<Usage, String> {
@@ -228,15 +253,23 @@ fn parse(
     let mut entry = Entry {
         stamp,
         anonymous: Usage::default(),
+        anonymous_models: Totals::default(),
         identified: BTreeMap::new(),
     };
     if matches!(layout, Layout::Gemini) && session {
         if bytes.len() > RECORD_LIMIT {
             return Err("Gemini session exceeds 8 MiB".into());
         }
-        entry.anonymous = shared::provider_usage(bytes, 2)
-            .ok_or("Invalid Gemini session")?
-            .0;
+        let details =
+            shared::provider_details(bytes, 2).ok_or("Invalid or over-limit Gemini session")?;
+        entry.anonymous = details.record.usage;
+        for row in details.models {
+            entry.anonymous_models.add(ModelUsage {
+                model: row.model,
+                usage: row.usage,
+                cost: None,
+            })?;
+        }
         return Ok(entry);
     }
     for line in bytes.split(|b| *b == b'\n') {
@@ -249,7 +282,7 @@ fn parse(
                 // Each event is a cumulative session snapshot, never an increment.
                 entry.anonymous.total = total;
             }
-        } else if let Some((usage, id)) = shared::provider_usage(
+        } else if let Some(details) = shared::provider_details(
             line,
             if matches!(layout, Layout::Claude) {
                 0
@@ -257,13 +290,27 @@ fn parse(
                 1
             },
         ) {
+            let usage = details.record.usage;
+            let id = details.record.identity;
+            let models: Vec<_> = details
+                .models
+                .into_iter()
+                .map(|row| ModelUsage {
+                    model: row.model,
+                    usage: row.usage,
+                    cost: None,
+                })
+                .collect();
             if id.is_empty() {
                 entry.anonymous = add(entry.anonymous, usage)?;
+                for row in models {
+                    entry.anonymous_models.add(row)?;
+                }
             } else {
                 if entry.identified.len() >= USAGE_LIMIT && !entry.identified.contains_key(&id) {
                     return Err("Message identity limit exceeded".into());
                 }
-                entry.identified.insert(id, usage);
+                entry.identified.insert(id, Recorded { usage, models });
             }
         }
     }

@@ -146,6 +146,18 @@ import Foundation
     return Int32(name.count)
 }
 
+// Additive ABI v1: bounded JSON keeps strings and UInt64 values intact without
+// exporting Swift layouts. Existing scalar entry points remain available.
+@c(xrg_provider_details_parse) public func providerDetailsParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ kind: UInt32, _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
+    guard length <= 8_388_608, let bytes, let output,
+          let details = XRGProviderLogParser.usageDetails(from: Data(bytes: bytes, count: Int(length)), kind: kind),
+          let encoded = try? JSONEncoder().encode(details), encoded.count <= 524_288 else { return -1 }
+    guard encoded.count <= capacity else { return -2 }
+    for (index, byte) in encoded.enumerated() { output[index] = byte }
+    return Int32(encoded.count)
+}
+
 // Model names are newline-delimited UTF-8. Reject embedded newlines and bound
 // names before crossing the ABI. No model inventory is interpreted as token usage.
 @c(xrg_model_names_parse) public func modelNamesParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,

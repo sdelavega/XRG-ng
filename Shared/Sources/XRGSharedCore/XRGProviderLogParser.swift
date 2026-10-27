@@ -108,11 +108,12 @@ public final class XRGProviderLogParser: NSObject {
 
     /// A single bounded record, used by the Linux acquisition layer. Identity lets
     /// the caller replace repeated Claude assistant snapshots instead of summing them.
-    public struct UsageRecord {
+    public struct UsageRecord: Encodable {
         public let input: UInt64
         public let output: UInt64
         public let total: UInt64
         public let identity: String
+        public var model: String? = nil
     }
 
     public static func claudeRecord(from data: Data) -> UsageRecord? {
@@ -121,7 +122,7 @@ public final class XRGProviderLogParser: NSObject {
               let input = sum(usage.input ?? 0, usage.cacheCreation ?? 0, usage.cacheRead ?? 0),
               let total = sum(input, usage.output ?? 0) else { return nil }
         return UsageRecord(input: input, output: usage.output ?? 0, total: total,
-                           identity: message.id ?? "")
+                           identity: message.id ?? "", model: modelName(message.model))
     }
 
     public static func geminiRecord(from data: Data) -> UsageRecord? {
@@ -130,7 +131,51 @@ public final class XRGProviderLogParser: NSObject {
         let input = tokens.input ?? 0
         let output = tokens.output ?? 0
         guard let total = (tokens.total ?? 0) == 0 ? sum(input, output) : tokens.total else { return nil }
-        return UsageRecord(input: input, output: output, total: total, identity: "")
+        return UsageRecord(input: input, output: output, total: total, identity: "", model: modelName(message.model))
+    }
+
+    /// Optional model metadata must not discard otherwise valid token counts.
+    private static func modelName(_ value: String?) -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              value.utf8.count <= 1024,
+              value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        return value
+    }
+
+    public struct UsageDetails: Encodable {
+        public let record: UsageRecord
+        public let models: [UsageRecord]
+    }
+
+    /// Bounded model attribution for Linux. Per-message Gemini metadata takes
+    /// precedence over the legacy session-level model; missing names stay unknown.
+    public static func usageDetails(from data: Data, kind: UInt32) -> UsageDetails? {
+        if kind == 0 || kind == 1 {
+            guard let record = kind == 0 ? claudeRecord(from: data) : geminiRecord(from: data),
+                  record.identity.utf8.count <= 1024 else { return nil }
+            return UsageDetails(record: record, models: [record])
+        }
+        guard kind == 2, let session = try? JSONDecoder().decode(GeminiSession.self, from: data),
+              let messages = session.messages else { return nil }
+        let total = XRGTokenTotals()
+        var groups: [String: XRGTokenTotals] = [:]
+        for message in messages {
+            guard let value = message.value, let tokens = value.tokens else { continue }
+            let input = tokens.input ?? 0, output = tokens.output ?? 0
+            guard let count = (tokens.total ?? 0) == 0 ? sum(input, output) : tokens.total,
+                  total.add(input: input, output: output, total: count) else { return nil }
+            let model = modelName(value.model ?? session.model) ?? ""
+            if groups[model] == nil {
+                guard groups.count < 256 else { return nil }
+                groups[model] = XRGTokenTotals()
+            }
+            guard groups[model]!.add(input: input, output: output, total: count) else { return nil }
+        }
+        return UsageDetails(record: UsageRecord(input: total.input, output: total.output, total: total.total, identity: ""),
+            models: groups.keys.sorted().map { model in
+                let usage = groups[model]!
+                return UsageRecord(input: usage.input, output: usage.output, total: usage.total, identity: "", model: model.isEmpty ? nil : model)
+            })
     }
 
     public static func geminiSession(from data: Data) -> UsageRecord? {

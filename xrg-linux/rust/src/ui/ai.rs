@@ -131,7 +131,7 @@ impl Window {
         tabs.append_page(&scroll, Some(&gtk::Label::new(Some("Sources"))));
         content.append(&tabs);
         let status = gtk::Label::new(Some(
-            "Usage follows locally retained records, not account billing. Model lists do not expose per-model token totals.",
+            "Usage follows locally retained records, not account billing. Token breakdowns use recorded model names; Ollama lists are inventories, not token counters.",
         ));
         status.set_xalign(0.);
         status.set_wrap(true);
