@@ -235,6 +235,13 @@ impl ProcessView {
         Ok(())
     }
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Layout {
+    #[default]
+    Vertical,
+    Horizontal,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -242,6 +249,10 @@ pub struct Settings {
     pub theme: ThemeChoice,
     pub modules: Vec<ModuleSetting>,
     pub graph_height: u32,
+    #[serde(default)]
+    pub layout: Layout,
+    #[serde(default)]
+    pub temperature_units: crate::temperature::Units,
     #[serde(default)]
     pub metrics: MetricSelection,
     #[serde(default)]
@@ -254,7 +265,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 5,
+            version: 6,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -263,6 +274,8 @@ impl Default for Settings {
                 .map(|id| ModuleSetting { id, visible: true })
                 .collect(),
             graph_height: 100,
+            layout: Layout::default(),
+            temperature_units: crate::temperature::Units::default(),
             metrics: MetricSelection::default(),
             processes: ProcessView::default(),
             ai: crate::ai::Preferences::default(),
@@ -272,7 +285,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 5 {
+        if self.version != 6 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -333,6 +346,9 @@ impl Settings {
         }
         if result.version == 3 || result.version == 4 {
             result.version = 5;
+        }
+        if result.version == 5 {
+            result.version = 6;
         }
         result.validate()?;
         Ok(result)

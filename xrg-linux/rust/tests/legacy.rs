@@ -48,6 +48,38 @@ fn rich_base() -> Settings {
     base.validate().unwrap();
     base
 }
+
+#[test]
+fn display_only_imports_map_legacy_enums_and_reject_invalid_values_atomically() {
+    use xrg_ng_linux::{settings::Layout, temperature::Units};
+    let base = rich_base();
+    let report = legacy::parse(
+        b"[Display]\nlayout_orientation=1\n[Temperature]\nunits=1\n",
+        &base,
+    )
+    .unwrap();
+    let mut expected = base.clone();
+    expected.layout = Layout::Horizontal;
+    expected.temperature_units = Units::Fahrenheit;
+    assert_eq!(report.settings, expected);
+    assert_eq!(report.imported.len(), 2);
+    assert!(report.skipped.is_empty());
+    let report = legacy::parse(
+        b"[Display]\nlayout_orientation=0\n[Temperature]\nunits=0\n",
+        &expected,
+    )
+    .unwrap();
+    assert_eq!(report.settings, base);
+    for value in ["2", "-1", "vertical", "1.0", "", "true"] {
+        for (group, key) in [("Display", "layout_orientation"), ("Temperature", "units")] {
+            let bytes = format!("[Modules]\nshow_cpu=false\n[{group}]\n{key}={value}");
+            assert!(legacy::parse(bytes.as_bytes(), &base).is_err());
+        }
+    }
+    assert_eq!(base, rich_base());
+    let report = legacy::parse(b"[Display]\nlayout_orientation=0\n", &expected).unwrap();
+    assert_eq!(report.settings.temperature_units, Units::Fahrenheit);
+}
 #[test]
 fn imports_visibility_and_global_colors_without_changing_other_choices() {
     let base = rich_base();

@@ -103,6 +103,7 @@ impl IoHistory {
                 label,
                 series,
                 scale: Scale::Automatic,
+                temperature_text: None,
                 detail,
             },
             valid,
@@ -165,6 +166,7 @@ impl Sampler {
                 detail: "Invalid sample time".into(),
                 series: Vec::new(),
                 scale: Scale::Automatic,
+                temperature_text: None,
             };
             return Sample {
                 cpu: panel("CPU"),
@@ -238,6 +240,7 @@ impl Sampler {
             label,
             series,
             scale: Scale::Percent,
+            temperature_text: None,
         };
         let (network, valid_network, names) = self.network.panel(
             "Network",

@@ -7,8 +7,9 @@ use std::{
     path::{Path, PathBuf},
     rc::{Rc, Weak},
 };
-use xrg_ng_linux::settings::{Module, Settings, ThemeChoice, ThemeDocument};
+use xrg_ng_linux::settings::{Layout, Module, Settings, ThemeChoice, ThemeDocument};
 use xrg_ng_linux::shared;
+use xrg_ng_linux::temperature::Units;
 struct Row {
     id: Module,
     widget: gtk::Box,
@@ -29,6 +30,8 @@ pub(super) struct Dialog {
     modules: gtk::Box,
     rows: Vec<Row>,
     pub height: gtk::SpinButton,
+    pub layout: gtk::DropDown,
+    pub temperature_units: gtk::DropDown,
     pub name: gtk::Entry,
     pub colors: Vec<gtk::ColorDialogButton>,
     preset: gtk::DropDown,
@@ -48,7 +51,7 @@ impl Dialog {
         content.set_margin_end(16);
         let form = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let description = gtk::Label::new(Some(
-            "Choose which graphs to show and arrange them with Up and Down. Hidden graphs continue sampling.",
+            "Choose which graphs to show and arrange their order. Hidden graphs continue sampling.",
         ));
         description.set_wrap(true);
         description.set_xalign(0.);
@@ -99,6 +102,21 @@ impl Dialog {
         height.update_property(&[gtk::accessible::Property::Label("Graph height in pixels")]);
         graph_row.append(&height);
         form.append(&graph_row);
+        let layout = gtk::DropDown::from_strings(&["Vertical", "Horizontal"]);
+        let temperature_units = gtk::DropDown::from_strings(&["Celsius (°C)", "Fahrenheit (°F)"]);
+        for (title, control) in [
+            ("Graph layout", &layout),
+            ("System temperature units", &temperature_units),
+        ] {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let label = gtk::Label::new(Some(title));
+            label.set_xalign(0.);
+            label.set_hexpand(true);
+            row.append(&label);
+            control.update_property(&[gtk::accessible::Property::Label(title)]);
+            row.append(control);
+            form.append(&row);
+        }
         let targets = Rc::new(super::targets::Targets::new(
             &shell.inventory(),
             &shell.settings.borrow().metrics,
@@ -211,6 +229,8 @@ impl Dialog {
             modules,
             rows,
             height,
+            layout,
+            temperature_units,
             name,
             colors,
             preset,
@@ -256,6 +276,33 @@ impl Dialog {
                 dialog.draft.borrow_mut().graph_height = height.value_as_int() as u32;
             }
         });
+        let weak = Rc::downgrade(&dialog);
+        dialog.layout.connect_selected_notify(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().layout = if control.selected() == 1 {
+                    Layout::Horizontal
+                } else {
+                    Layout::Vertical
+                };
+                dialog.refresh();
+            }
+        });
+        let weak = Rc::downgrade(&dialog);
+        dialog
+            .temperature_units
+            .connect_selected_notify(move |control| {
+                if let Some(dialog) = weak.upgrade()
+                    && !dialog.updating.get()
+                {
+                    dialog.draft.borrow_mut().temperature_units = if control.selected() == 1 {
+                        Units::Fahrenheit
+                    } else {
+                        Units::Celsius
+                    };
+                }
+            });
         let weak = Rc::downgrade(&dialog);
         dialog.name.connect_changed(move |_| {
             if let Some(dialog) = weak.upgrade()
@@ -422,9 +469,22 @@ impl Dialog {
     fn refresh(&self) {
         self.updating.set(true);
         let settings = self.draft.borrow();
+        let horizontal = settings.layout == Layout::Horizontal;
+        self.layout.set_selected(u32::from(horizontal));
+        self.temperature_units
+            .set_selected(u32::from(settings.temperature_units == Units::Fahrenheit));
         let mut previous = None::<gtk::Box>;
         for (index, module) in settings.modules.iter().enumerate() {
             let row = &self.rows[module.id.index()];
+            for (button, direction) in [
+                (&row.up, if horizontal { "Left" } else { "Up" }),
+                (&row.down, if horizontal { "Right" } else { "Down" }),
+            ] {
+                button.set_label(direction);
+                let label = format!("Move {} {}", row.id.title(), direction.to_lowercase());
+                button.set_tooltip_text(Some(&label));
+                button.update_property(&[gtk::accessible::Property::Label(&label)]);
+            }
             row.check.set_active(module.visible);
             row.up.set_sensitive(index > 0);
             row.down.set_sensitive(index + 1 < settings.modules.len());

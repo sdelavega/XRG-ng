@@ -249,11 +249,27 @@ fn temperature_graph_uses_maximum_and_keeps_signed_scale() {
     let next = sampler.sample();
     assert_eq!(next.panels[5].series[0].last(), Some(&75.));
     assert!(next.panels[5].detail.contains("55.0 °C"));
+    use xrg_ng_linux::temperature::Units;
+    let panel = &next.panels[5];
+    let history = panel.series.clone();
+    assert!(
+        panel
+            .display_label(Units::Fahrenheit)
+            .starts_with("167.0 °F max")
+    );
+    assert!(panel.display_detail(Units::Fahrenheit).contains("131.0 °F"));
+    assert_eq!(panel.display_label(Units::Celsius), panel.label);
+    assert_eq!(panel.series, history);
     f.put("class/hwmon/hwmon0/temp1_input", "-25000");
     f.put("class/hwmon/hwmon0/temp2_input", "bad");
     let next = sampler.sample();
     assert!(next.panels[5].label.contains("partial"));
     assert_eq!(next.panels[5].series[0].last(), Some(&-25.));
+    assert!(
+        next.panels[5]
+            .display_label(Units::Fahrenheit)
+            .starts_with("-13.0 °F max")
+    );
     assert_eq!(
         next.panels[5].scale.bounds(&next.panels[5].series),
         (-30., 120.)
@@ -290,11 +306,14 @@ fn tpu_panel_keeps_producer_scope_and_omits_invalid_or_missing_series() {
     f.core();
     f.put(
         "stats.json",
-        "{\"total_inferences\":5,\"last_latency_ms\":2.5}",
+        "{\"total_inferences\":5,\"last_latency_ms\":2.5,\"temperature\":-10,\"model_name\":\"Model 25.0 °C\"}",
     );
     let mut sampler = Sampler::with_sources(f.sources().with_tpu_stats(f.0.join("stats.json")));
     let snapshot = sampler.sample();
     let panel = snapshot.panels.iter().find(|p| p.title == "TPU").unwrap();
+    let fahrenheit = panel.display_detail(xrg_ng_linux::temperature::Units::Fahrenheit);
+    assert!(fahrenheit.contains("Producer-reported temperature: 14.0 °F (unscoped)"));
+    assert!(fahrenheit.contains("Model: Model 25.0 °C"));
     assert!(panel.label.contains("hardware unverified"));
     assert!(panel.detail.contains("2.50 ms"));
     assert!(panel.series.is_empty());

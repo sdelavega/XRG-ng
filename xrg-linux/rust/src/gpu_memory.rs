@@ -24,6 +24,7 @@ impl View {
             detail: String::new(),
             series: Vec::new(),
             scale: Scale::Percent,
+            temperature_text: None,
         };
         let report = match report {
             Ok(report) => report,

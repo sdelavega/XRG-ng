@@ -327,7 +327,9 @@ remains available to the C app; saves use the Rust app's normal `xrg-ng` setting
 path and existing atomic/background writer and persistence-error handling.
 
 The importer transfers the ten legacy graph visibility flags and the seven global
-colors: background, graph background, three series, border and text. Imported
+colors: background, graph background, three series, border and text. It also
+transfers `[Display] layout_orientation` (0 vertical, 1 horizontal) and
+`[Temperature] units` (0 Celsius, 1 Fahrenheit). Imported
 colors become an embedded custom theme, retaining alpha and black/zero values.
 The legacy theme name supplies a label only; palettes are never guessed from a
 matching preset name. A name without color entries leaves the current theme intact.
@@ -336,11 +338,12 @@ visibility, graph order/height, metric sources, process filters, AI sources and
 weather remain as configured. A legacy weather visibility flag does not enable
 requests. The main window background stays opaque as with other custom themes.
 
-Window geometry/pinning/opacity, orientation, activity bars, module-specific
-colors/styles, temperature units, billing and unrecognized entries are listed as
+Window geometry/pinning/opacity, activity bars, module-specific
+colors/styles, billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
-supported booleans/colors reject the entire import and leave the draft unchanged.
-Files containing no supported visibility/color entries are rejected.
+supported booleans, colors, layout or unit values reject the entire import and
+leave the draft unchanged.
+Files containing no supported visibility/color/layout/unit entries are rejected.
 
 Parsing follows the C writer's GLib key-file layout: UTF-8, case-sensitive grouped
 keys, `#` comments, lower-case `true`/`false`, repeated-group merging and last-key
@@ -359,6 +362,12 @@ entry opens the editor when a built-in preset is active. In Preferences:
 
 - Check which graphs to show; use **Up/Down** to arrange them.
 - Set graph height between 64 and 240 pixels.
+- Choose **Vertical** (stacked) or **Horizontal** (side by side) layout. Ordering
+  controls become Left/Right horizontally; graph menus use the same order.
+- Choose **Celsius** or **Fahrenheit** for system sensor, GPU and TPU temperatures.
+  Graph labels, tooltips, accessibility text and open live details update together.
+  Collector/history values stay Celsius; unit changes preserve history and graph
+  shape. Missing readings stay unavailable. Weather has its own units setting.
 - Choose aggregate or individual CPU, network, disk and GPU sources. **Refresh
   source lists** uses the latest collector inventory without discarding the draft.
 - Select a preset, name a custom palette and edit its seven colors.
@@ -370,8 +379,9 @@ Hidden graphs continue sampling, preserving their histories. Ordering changes th
 presentation while each graph retains its original collector. An all-hidden layout
 shows a recovery message and keeps Preferences accessible. Headless diagnostics
 continue reporting all collectors independently of these presentation preferences.
-Graph height is a minimum; small windows scroll. Window placement/pinning is not
-part of these preferences.
+Graph height is a minimum; small windows scroll. Horizontal graphs retain at
+least 360 pixels each and scroll sideways, with vertical scrolling when needed.
+Window placement/pinning is not part of these preferences.
 
 CPU choices use logical core IDs. Network choices include loopback, while the
 default aggregate excludes it. Individual disks include partitions and stacked
@@ -401,13 +411,15 @@ original imported file. XTF conversion remains follow-up work; legacy Linux impo
 is available as described above. The macOS application's
 XTF load/save behavior is unchanged.
 
-Settings use version 5 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 6 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
 twelve graphs by default. Version 3 layouts also load, adding default AI source
 controls. Versions 1–4 gain weather settings with requests **disabled**. Existing
-AI sources, layouts and themes are preserved. The earlier Rust `theme=Ocean` format also loads with
+AI sources, layouts and themes are preserved. Versions 1–5 gain vertical layout
+and Celsius defaults; existing settings are upgraded without immediate writes.
+The earlier Rust `theme=Ocean` format also loads with
 default controls. Formats upgrade only when preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.

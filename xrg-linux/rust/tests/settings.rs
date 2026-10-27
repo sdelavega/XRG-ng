@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 6;
+    value.version = 7;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -381,7 +381,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        5
+        6
     );
 }
 #[test]
@@ -461,7 +461,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 5);
+    assert_eq!(migrated.version, 6);
     assert_eq!(migrated.modules.len(), 12);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -546,4 +546,38 @@ fn version_four_keeps_ai_and_layout_and_adds_opt_in_weather_without_writing() {
     let (_, reopened, error) = Store::open(Some(f.path()));
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
+}
+
+#[test]
+fn version_five_adds_display_defaults_without_writes_and_new_choices_persist() {
+    use xrg_ng_linux::{settings::Layout, temperature::Units};
+    let f = Fixture::new();
+    let mut expected = Settings::default();
+    expected.move_module(Module::Fans, -11);
+    expected.modules[0].visible = false;
+    expected.graph_height = 180;
+    expected.metrics.cpu = Some(3);
+    expected.ai.enabled = [false; 4];
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 5.into();
+    for field in ["layout", "temperature_units"] {
+        wire.as_object_mut().unwrap().remove(field);
+    }
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.layout = Layout::Horizontal;
+    loaded.temperature_units = Units::Fahrenheit;
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+    for (field, value) in [("layout", "diagonal"), ("temperature_units", "kelvin")] {
+        let mut invalid = serde_json::to_value(&loaded).unwrap();
+        invalid[field] = value.into();
+        assert!(Settings::parse(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
 }

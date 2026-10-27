@@ -10,6 +10,7 @@ pub mod gpu_memory;
 pub mod hardware;
 pub mod legacy;
 pub mod shared;
+pub mod temperature;
 pub mod weather;
 
 pub mod process;

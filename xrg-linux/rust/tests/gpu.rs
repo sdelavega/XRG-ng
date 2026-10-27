@@ -96,6 +96,16 @@ fn amd_metrics_have_correct_units_and_zero_is_real() {
     assert_eq!(gpu.frequency_mhz, Some(1200.));
     assert_eq!(gpu.fan_rpm, Some(1500));
     assert_eq!(gpu.fan_percent, None);
+    f.core();
+    let mut sampler = Sampler::with_sources(LinuxSources::with_roots(f.0.join("proc"), &f.0));
+    let snapshot = sampler.sample();
+    let panel = &snapshot.panels[6];
+    assert!(
+        panel
+            .display_detail(xrg_ng_linux::temperature::Units::Fahrenheit)
+            .contains("Temperature: 129.2 °F")
+    );
+    assert!(panel.detail.contains("Temperature: 54.0 °C"));
 }
 #[test]
 fn intel_clock_is_not_fabricated_utilization() {

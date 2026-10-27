@@ -381,6 +381,7 @@ impl Display {
                 vec![self.history.values()]
             },
             scale: Scale::Automatic,
+            temperature_text: None,
             detail: detail.join("\n\n"),
         }
     }
@@ -503,6 +504,7 @@ pub fn waiting() -> Panel {
         label: "Waiting for AI sources".into(),
         series: Vec::new(),
         scale: Scale::Automatic,
+        temperature_text: None,
         detail: "AI usage collection runs independently of system collection.".into(),
     }
 }

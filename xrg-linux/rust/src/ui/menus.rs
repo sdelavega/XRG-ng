@@ -221,7 +221,10 @@ pub(super) fn popup(shell: &Rc<Shell>, module: Module, x: f64, y: f64) -> gtk::P
         .as_ref()
         .filter(|s| snapshot_matches(s, &shell.settings.borrow(), module))
         .and_then(|s| s.panels.get(module.index()))
-        .map(|p| p.label.clone())
+        .map(|p| {
+            p.display_label(shell.settings.borrow().temperature_units)
+                .into_owned()
+        })
         .unwrap_or_else(|| "Waiting for active source".into());
     let summary = if summary.chars().count() > 80 {
         format!("{}…", summary.chars().take(80).collect::<String>())
@@ -242,10 +245,28 @@ pub(super) fn popup(shell: &Rc<Shell>, module: Module, x: f64, y: f64) -> gtk::P
     let settings = shell.settings.borrow();
     if let Some(index) = settings.modules.iter().position(|m| m.id == module) {
         if index > 0 {
-            item(&layout, "Move up", "win.graph-up", module);
+            item(
+                &layout,
+                if settings.layout == xrg_ng_linux::settings::Layout::Horizontal {
+                    "Move left"
+                } else {
+                    "Move up"
+                },
+                "win.graph-up",
+                module,
+            );
         }
         if index + 1 < settings.modules.len() {
-            item(&layout, "Move down", "win.graph-down", module);
+            item(
+                &layout,
+                if settings.layout == xrg_ng_linux::settings::Layout::Horizontal {
+                    "Move right"
+                } else {
+                    "Move down"
+                },
+                "win.graph-down",
+                module,
+            );
         }
     }
     item(&layout, "Hide graph", "win.graph-hide", module);
@@ -339,10 +360,12 @@ impl Details {
             .filter(|s| snapshot_matches(s, settings, self.module))
             .and_then(|s| s.panels.get(self.module.index()))
             .map(|p| {
-                if p.detail.starts_with(&p.label) {
-                    format!("{}\n{}", self.module.title(), p.detail)
+                let label = p.display_label(settings.temperature_units);
+                let detail = p.display_detail(settings.temperature_units);
+                if detail.starts_with(label.as_ref()) {
+                    format!("{}\n{}", self.module.title(), detail)
                 } else {
-                    format!("{}\n{}\n\n{}", self.module.title(), p.label, p.detail)
+                    format!("{}\n{}\n\n{}", self.module.title(), label, detail)
                 }
             })
             .unwrap_or_else(|| {

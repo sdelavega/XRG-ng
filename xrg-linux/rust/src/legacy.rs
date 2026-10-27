@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Explicit, read-only import of the C application's GLib key-file settings.
 use crate::{
-    settings::{Module, Settings, ThemeChoice, ThemeDocument},
+    settings::{Layout, Module, Settings, ThemeChoice, ThemeDocument},
     system_file,
+    temperature::Units,
 };
 use std::{
     collections::BTreeMap,
@@ -22,7 +23,7 @@ pub struct Import {
 impl Import {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph order/height, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
+            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Layout and system temperature units transfer when present. Graph order/height, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
             self.imported.len(),
             self.skipped.len(),
             self.imported.join("\n")
@@ -149,6 +150,20 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 .expect("Validated module set")
                 .visible = visible;
             imported.push(format!("{label} = {visible}"));
+        } else if group == "Display" && key == "layout_orientation" {
+            settings.layout = match value.parse::<i32>() {
+                Ok(0) => Layout::Vertical,
+                Ok(1) => Layout::Horizontal,
+                _ => return Err(format!("{label}: expected 0 (vertical) or 1 (horizontal)")),
+            };
+            imported.push(format!("{label} = {:?}", settings.layout));
+        } else if group == "Temperature" && key == "units" {
+            settings.temperature_units = match value.parse::<i32>() {
+                Ok(0) => Units::Celsius,
+                Ok(1) => Units::Fahrenheit,
+                _ => return Err(format!("{label}: expected 0 (Celsius) or 1 (Fahrenheit)")),
+            };
+            imported.push(format!("{label} = {:?}", settings.temperature_units));
         } else if group == "Colors"
             && let Some(index) = color_keys.iter().position(|k| k == key)
         {
@@ -168,7 +183,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         }
     }
     if imported.is_empty() {
-        return Err("No supported legacy graph visibility or global color entries found".into());
+        return Err("No supported legacy visibility, global color, layout or temperature-unit entries found".into());
     }
     if has_colors {
         let name = entries

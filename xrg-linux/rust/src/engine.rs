@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
+use crate::temperature::Text;
 use crate::{collectors::LinuxSources, settings::MetricSelection, shared::History};
 use std::{
     array,
@@ -16,6 +17,35 @@ pub struct Panel {
     pub series: Vec<Vec<f64>>,
     pub scale: Scale,
     pub detail: String,
+    pub temperature_text: Option<(crate::temperature::Text, crate::temperature::Text)>,
+}
+impl Panel {
+    fn with_temperature_text(
+        mut self,
+        label: crate::temperature::Text,
+        detail: crate::temperature::Text,
+    ) -> Self {
+        self.label = label
+            .render(crate::temperature::Units::Celsius)
+            .into_owned();
+        self.detail = detail
+            .render(crate::temperature::Units::Celsius)
+            .into_owned();
+        self.temperature_text = Some((label, detail));
+        self
+    }
+    pub fn display_label(&self, units: crate::temperature::Units) -> std::borrow::Cow<'_, str> {
+        self.temperature_text.as_ref().map_or_else(
+            || self.label.as_str().into(),
+            |(label, _)| label.render(units),
+        )
+    }
+    pub fn display_detail(&self, units: crate::temperature::Units) -> std::borrow::Cow<'_, str> {
+        self.temperature_text.as_ref().map_or_else(
+            || self.detail.as_str().into(),
+            |(_, detail)| detail.render(units),
+        )
+    }
 }
 /// Temperature uses a signed range; missing data is represented by no series.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -165,6 +195,7 @@ impl Sampler {
             label,
             series,
             scale: Scale::Percent,
+            temperature_text: None,
         };
         let mut panels = vec![metrics.cpu, memory, metrics.network, metrics.disk];
         panels.push(self.battery_panel());
@@ -250,17 +281,18 @@ impl Sampler {
             detail,
             series,
             scale: Scale::Automatic,
+            temperature_text: None,
         }
     }
     fn tpu_panel(&mut self) -> Panel {
         let report = self.tpu.sample();
-        let mut details = vec!["Coral discovery is read-only and does not prove the device can run inference. Graph: observed producer-counter change per second, not TPU utilization. Producer statistics are unscoped and are not assigned to individual adapters.".into()];
+        let mut details: Vec<Text> = vec!["Coral discovery is read-only and does not prove the device can run inference. Graph: observed producer-counter change per second, not TPU utilization. Producer statistics are unscoped and are not assigned to individual adapters.".into()];
         let mut devices = 0;
         let detection_error;
         match report.devices {
             Err(error) => {
                 detection_error = true;
-                details.push(error);
+                details.push(error.into());
             }
             Ok(readings) => {
                 devices = readings.values.len();
@@ -273,19 +305,22 @@ impl Sampler {
                     } else {
                         "USB firmware or PCIe driver not initialized"
                     };
-                    let temp = device
-                        .temperature_c
-                        .map(|v| format!(" · {v:.1} °C"))
-                        .unwrap_or_default();
-                    details.push(format!("{} · {state}{temp}\n{}", device.label, device.id));
+                    let prefix = format!("{} · {state}", device.label);
+                    let text = match device.temperature_c {
+                        Some(v) => {
+                            Text::reading(&format!("{prefix} · "), v, &format!("\n{}", device.id))
+                        }
+                        None => format!("{prefix}\n{}", device.id).into(),
+                    };
+                    details.push(text);
                 }
-                details.extend(readings.errors);
+                details.extend(readings.errors.into_iter().map(Text::from));
             }
         }
         let mut series = Vec::new();
         let label = match report.inference {
             Err(error) => {
-                details.push(error);
+                details.push(error.into());
                 if devices > 0 {
                     format!("{devices} Coral detected · statistics unavailable")
                 } else if detection_error {
@@ -296,26 +331,31 @@ impl Sampler {
             }
             Ok(inference) => {
                 let stats = inference.stats;
-                details.push(format!(
-                    "Producer total: {} · report age {:.1} s",
-                    stats.total_inferences, inference.age_seconds
-                ));
+                details.push(
+                    format!(
+                        "Producer total: {} · report age {:.1} s",
+                        stats.total_inferences, inference.age_seconds
+                    )
+                    .into(),
+                );
                 if let Some(model) = stats.model_name {
-                    details.push(format!("Model: {model}"));
+                    details.push(format!("Model: {model}").into());
                 }
                 if let Some(v) = stats.last_latency_ms {
-                    details.push(format!("Last reported latency: {v:.2} ms"));
+                    details.push(format!("Last reported latency: {v:.2} ms").into());
                 }
                 if let Some(v) = stats.avg_latency_ms {
-                    details.push(format!("Average reported latency: {v:.2} ms"));
+                    details.push(format!("Average reported latency: {v:.2} ms").into());
                 }
                 if let Some(v) = stats.temperature {
-                    details.push(format!(
-                        "Producer-reported temperature: {v:.1} °C (unscoped)"
+                    details.push(Text::reading(
+                        "Producer-reported temperature: ",
+                        v,
+                        " (unscoped)",
                     ));
                 }
                 if let Some(c) = stats.by_category {
-                    details.push(format!("Reported categories: direct {} · hooked {} · logged {} · warming {} (not assumed exclusive)",c.direct.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.hooked.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.logged.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.warming.map_or_else(|| "unavailable".into(), |v|v.to_string())));
+                    details.push(format!("Reported categories: direct {} · hooked {} · logged {} · warming {} (not assumed exclusive)",c.direct.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.hooked.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.logged.map_or_else(|| "unavailable".into(), |v|v.to_string()), c.warming.map_or_else(|| "unavailable".into(), |v|v.to_string())).into());
                 }
                 let rate = if let Some(rate) = inference.rate {
                     self.tpu_history.append(rate);
@@ -336,11 +376,13 @@ impl Sampler {
         };
         Panel {
             title: "TPU",
-            label,
-            detail: details.join("\n\n"),
+            label: String::new(),
+            detail: String::new(),
             series,
             scale: Scale::Automatic,
+            temperature_text: None,
         }
+        .with_temperature_text(label.into(), Text::join(details, "\n\n"))
     }
     fn gpu_panels(&mut self) -> (Panel, Panel) {
         let mut series = Vec::new();
@@ -375,6 +417,7 @@ impl Sampler {
                             ),
                             series,
                             scale: Scale::Percent,
+                            temperature_text: None,
                         },
                         vram,
                     );
@@ -383,8 +426,8 @@ impl Sampler {
         }
 
         let vram = self.gpu_memory.panel(&result);
-        let (label, detail) = match result {
-            Err(error) => ("GPU unavailable".into(), error),
+        let (label, detail): (String, Text) = match result {
+            Err(error) => ("GPU unavailable".into(), error.into()),
             Ok(report) if report.values.is_empty() => {
                 if report.errors.is_empty() {
                     self.gpu_histories.clear();
@@ -393,14 +436,14 @@ impl Sampler {
                         "No supported GPU adapter detected".into(),
                     )
                 } else {
-                    ("GPU unavailable".into(), report.errors.join("\n"))
+                    ("GPU unavailable".into(), report.errors.join("\n").into())
                 }
             }
             Ok(report) => {
                 self.gpu_histories
                     .retain(|id, _| report.values.iter().any(|v| v.id == *id));
                 let mut labels = Vec::new();
-                let mut details = Vec::new();
+                let mut details: Vec<Text> = Vec::new();
                 let supported: Vec<_> = report
                     .values
                     .iter()
@@ -430,49 +473,55 @@ impl Sampler {
                     ));
                 }
                 for gpu in &report.values {
-                    let mut fields = vec![
-                        format!("{} · {} · {}", gpu.label, gpu.name, gpu.id),
-                        format!("Driver: {}", gpu.driver),
+                    let mut fields: Vec<Text> = vec![
+                        format!("{} · {} · {}", gpu.label, gpu.name, gpu.id).into(),
+                        format!("Driver: {}", gpu.driver).into(),
                         gpu.utilization
                             .map(|v| format!("Utilization: {v:.1}%"))
-                            .unwrap_or_else(|| "Device-wide utilization unavailable".into()),
+                            .unwrap_or_else(|| "Device-wide utilization unavailable".into())
+                            .into(),
                     ];
                     if let Some(value) = gpu.client_activity {
-                        fields.push(format!(
-                            "Readable-client busiest-engine activity: {value:.1}%"
-                        ));
+                        fields.push(
+                            format!("Readable-client busiest-engine activity: {value:.1}%").into(),
+                        );
                     }
                     if let Some(count) = gpu.visible_clients {
-                        fields.push(format!("Readable DRM clients: {count}"));
+                        fields.push(format!("Readable DRM clients: {count}").into());
                     }
                     if let Some(value) = gpu.client_resident_bytes {
-                        fields.push(format!("Readable-client resident allocations: {:.1} MiB (shared buffers may count per client)", value as f64 / 1_048_576.));
+                        fields.push(format!("Readable-client resident allocations: {:.1} MiB (shared buffers may count per client)", value as f64 / 1_048_576.).into());
                     }
                     if let Some(value) = gpu.memory_used {
-                        fields.push(format!("VRAM used: {:.1} MiB", value as f64 / 1_048_576.));
+                        fields.push(
+                            format!("VRAM used: {:.1} MiB", value as f64 / 1_048_576.).into(),
+                        );
                     }
                     if let Some(value) = gpu.memory_total {
-                        fields.push(format!("VRAM total: {:.1} MiB", value as f64 / 1_048_576.));
+                        fields.push(
+                            format!("VRAM total: {:.1} MiB", value as f64 / 1_048_576.).into(),
+                        );
                     }
                     if let Some(value) = gpu.temperature {
-                        fields.push(format!("Temperature: {value:.1} °C"));
+                        fields.push(Text::reading("Temperature: ", value, ""));
                     }
                     if let Some(value) = gpu.frequency_mhz {
-                        fields.push(format!("Reported clock: {value:.0} MHz"));
+                        fields.push(format!("Reported clock: {value:.0} MHz").into());
                     }
                     if let Some(value) = gpu.power_watts {
-                        fields.push(format!("Reported power: {value:.1} W (may include SoC)"));
+                        fields
+                            .push(format!("Reported power: {value:.1} W (may include SoC)").into());
                     }
                     if let Some(value) = gpu.fan_rpm {
-                        fields.push(format!("Fan: {value} RPM"));
+                        fields.push(format!("Fan: {value} RPM").into());
                     }
                     if let Some(value) = gpu.fan_percent {
-                        fields.push(format!("Fan: {value:.0}%"));
+                        fields.push(format!("Fan: {value:.0}%").into());
                     }
-                    fields.extend(gpu.notes.clone());
-                    details.push(fields.join("\n"));
+                    fields.extend(gpu.notes.iter().cloned().map(Text::from));
+                    details.push(Text::join(fields, "\n"));
                 }
-                details.extend(report.errors);
+                details.extend(report.errors.into_iter().map(Text::from));
                 let label = if labels.is_empty() {
                     "GPU utilization unavailable".into()
                 } else {
@@ -483,17 +532,19 @@ impl Sampler {
                         if partial { " · partial" } else { "" }
                     )
                 };
-                (label, details.join("\n\n"))
+                (label, Text::join(details, "\n\n"))
             }
         };
         (
             Panel {
                 title: "GPU",
-                label,
-                detail,
+                label: String::new(),
+                detail: String::new(),
                 series,
                 scale: Scale::Percent,
-            },
+                temperature_text: None,
+            }
+            .with_temperature_text(label.into(), detail),
             vram,
         )
     }
@@ -503,6 +554,7 @@ impl Sampler {
             title: "Fans", label: "No readable fan sensors".into(), series: Vec::new(),
             detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership.".into(),
             scale: Scale::Automatic,
+            temperature_text: None,
         };
         match crate::hardware::fans(self.source.sys_root()) {
             Err(error) => {
@@ -620,12 +672,13 @@ impl Sampler {
             detail,
             series,
             scale: Scale::Percent,
+            temperature_text: None,
         }
     }
     fn temperature_panel(&mut self) -> Panel {
         let mut series = Vec::new();
-        let (label, detail) = match self.source.temperatures() {
-            Err(error) => ("Temperature unavailable".into(), error),
+        let (label, detail): (Text, Text) = match self.source.temperatures() {
+            Err(error) => ("Temperature unavailable".into(), error.into()),
             Ok(report) if report.values.is_empty() => {
                 if report.errors.is_empty() {
                     self.temperature_history = History::new(120);
@@ -634,7 +687,10 @@ impl Sampler {
                         "No readable hwmon or thermal-zone temperature detected".into(),
                     )
                 } else {
-                    ("Temperature unavailable".into(), report.errors.join("\n"))
+                    (
+                        "Temperature unavailable".into(),
+                        report.errors.join("\n").into(),
+                    )
                 }
             }
             Ok(report) => {
@@ -652,23 +708,25 @@ impl Sampler {
                 };
                 let count = report.values.len();
                 let noun = if count == 1 { "sensor" } else { "sensors" };
-                let label = format!("{maximum:.1} °C max · {count} {noun}{partial}");
-                let mut detail: Vec<_> = report
+                let label = Text::reading("", maximum, &format!(" max · {count} {noun}{partial}"));
+                let mut detail: Vec<Text> = report
                     .values
                     .iter()
-                    .map(|v| format!("{}: {:.1} °C", v.name, v.celsius))
+                    .map(|v| Text::reading(&format!("{}: ", v.name), v.celsius, ""))
                     .collect();
-                detail.extend(report.errors);
-                (label, detail.join("\n"))
+                detail.extend(report.errors.into_iter().map(Text::from));
+                (label, Text::join(detail, "\n"))
             }
         };
         Panel {
             title: "Temperature",
-            label,
-            detail,
+            label: String::new(),
+            detail: String::new(),
             series,
             scale: Scale::Celsius,
+            temperature_text: None,
         }
+        .with_temperature_text(label, detail)
     }
 }
 pub(crate) fn bytes_per_second(value: f64) -> String {

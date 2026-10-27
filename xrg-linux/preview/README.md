@@ -59,7 +59,8 @@ restores visibility, keeping saved order, themes and data sources.
 
 Use **Preferences → Import legacy Linux settings…** to review the C app's
 `xrg-linux/settings.conf`. Supported visibility flags and global colors can be
-imported into the draft; **Apply** saves them in the new app. Unsupported fields
+imported into the draft; **Apply** saves them in the new app. Layout orientation
+and system temperature units also transfer. Unsupported fields
 are listed, and the original file stays unchanged.
 
 ## Optional desktop installation

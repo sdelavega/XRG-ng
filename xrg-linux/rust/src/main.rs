@@ -33,7 +33,11 @@ fn main() -> ExitCode {
             valid = snapshot.valid;
             println!("sample={} valid={}", snapshot.sequence, snapshot.valid);
             for panel in snapshot.panels {
-                println!("{}: {}", panel.title, panel.label);
+                println!(
+                    "{}: {}",
+                    panel.title,
+                    panel.display_label(settings.temperature_units)
+                );
             }
             if let Some(weather) = snapshot.weather {
                 println!("Weather: {}", weather.summary);

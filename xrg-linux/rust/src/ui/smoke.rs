@@ -9,8 +9,9 @@ use std::{
     rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use xrg_ng_linux::settings::{Module, Settings, Store, ThemeChoice, ThemeDocument};
-const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
+use xrg_ng_linux::settings::{Layout, Module, Settings, Store, ThemeChoice, ThemeDocument};
+use xrg_ng_linux::temperature::{Text, Units};
+const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\n[Temperature]\nunits=1\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
@@ -314,7 +315,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 5 && loaded.processes.limit == 20,
+                    loaded.version == 6 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -934,6 +935,137 @@ impl Harness {
                 require(
                     *shell.settings.borrow() == *self.expected.as_ref().unwrap(),
                     "Late import read changed active settings",
+                )?;
+                // Display changes are drafts until Apply, including a cancelled
+                // attempt to switch back from the imported horizontal layout.
+                let before = shell.settings.borrow().clone();
+                let dialog = shell.preferences();
+                dialog.layout.set_selected(0);
+                dialog.temperature_units.set_selected(0);
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelled display preferences changed active settings",
+                )?;
+                let dialog = shell.preferences();
+                dialog.layout.set_selected(1);
+                dialog.temperature_units.set_selected(1);
+                dialog.height.set_value(136.);
+                for module in Module::ALL {
+                    dialog.check(module).set_active(matches!(
+                        module,
+                        Module::Cpu | Module::Temperature | Module::Gpu | Module::Tpu
+                    ));
+                }
+                for _ in 0..12 {
+                    dialog.move_up(Module::Temperature);
+                }
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 30;
+            }
+            30 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Display preferences did not persist",
+                )?;
+                require(
+                    loaded.layout == Layout::Horizontal
+                        && loaded.temperature_units == Units::Fahrenheit,
+                    "Display choices did not apply",
+                )?;
+                require(
+                    shell.graphs.orientation() == gtk::Orientation::Horizontal
+                        && shell.scroll.hscrollbar_policy() == gtk::PolicyType::Automatic,
+                    "Horizontal layout did not enable side scrolling",
+                )?;
+                let adjustment = shell.scroll.hadjustment();
+                require(
+                    adjustment.upper() > adjustment.page_size(),
+                    "Horizontal graphs are clipped without scroll range",
+                )?;
+                let area = &shell.areas[Module::Temperature.index()];
+                require(
+                    area.width() >= 360 && area.height() == 136,
+                    "Horizontal graph dimensions were not preserved",
+                )?;
+                // Fixture replaces only one copied panel; no hardware required.
+                let mut state = shell.state.borrow_mut();
+                let panel = &mut state.as_mut().unwrap().panels[Module::Temperature.index()];
+                let label = Text::reading("", -25., " max · fixture");
+                let detail = Text::reading("Sensor named 25.0 °C: ", -25., "");
+                panel.label = label.render(Units::Celsius).into_owned();
+                panel.detail = detail.render(Units::Celsius).into_owned();
+                panel.temperature_text = Some((label, detail));
+                panel.series = vec![vec![-40., 0., -25.]];
+                drop(state);
+                shell.refresh();
+                require(
+                    area.tooltip_text()
+                        .is_some_and(|s| s == "Sensor named 25.0 °C: -13.0 °F"),
+                    "Tooltip did not convert only the typed temperature",
+                )?;
+                let details = shell.details(Module::Temperature);
+                require(
+                    details.text().contains("-13.0 °F max")
+                        && details.text().contains("Sensor named 25.0 °C: -13.0 °F"),
+                    "Live details did not use Fahrenheit",
+                )?;
+                let mut changed = loaded.clone();
+                changed.temperature_units = Units::Celsius;
+                shell.apply(changed);
+                require(
+                    details.text().contains("-25.0 °C max") && !details.text().contains("°F"),
+                    "Unit switch did not immediately refresh open details",
+                )?;
+                require(
+                    shell.state.borrow().as_ref().unwrap().panels[Module::Temperature.index()]
+                        .series[0]
+                        == [-40., 0., -25.],
+                    "Unit change reset or converted collector history",
+                )?;
+                shell.apply(loaded);
+                details.window.close();
+                self.stage = 31;
+            }
+            31 if self.since.elapsed() > Duration::from_millis(300) => {
+                if let Some(path) = std::env::var_os("XRG_SMOKE_LAYOUT_IMAGE") {
+                    shell.snapshot(&PathBuf::from(path))?;
+                }
+                let dialog = shell.preferences();
+                require(
+                    dialog.layout.selected() == 1 && dialog.temperature_units.selected() == 1,
+                    "Reopened display controls lost active choices",
+                )?;
+                dialog.reset.emit_clicked();
+                require(
+                    dialog.layout.selected() == 0 && dialog.temperature_units.selected() == 0,
+                    "Restore defaults did not reset display draft",
+                )?;
+                require(
+                    shell.settings.borrow().layout == Layout::Horizontal,
+                    "Restore defaults applied before Apply",
+                )?;
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 32;
+            }
+            32 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && loaded == *self.expected.as_ref().unwrap(),
+                    "Reset display preferences did not persist",
+                )?;
+                require(
+                    shell.graphs.orientation() == gtk::Orientation::Vertical
+                        && shell.scroll.hscrollbar_policy() == gtk::PolicyType::Never
+                        && loaded.temperature_units == Units::Celsius,
+                    "Switching back to vertical/Celsius failed",
                 )?;
                 return Ok(true);
             }

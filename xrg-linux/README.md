@@ -6,7 +6,8 @@ The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rus
 It currently provides CPU, memory, network, disk, battery, temperature, GPU, AI
 token-rate, process-count and Coral TPU inference-rate graphs, with shared macOS Swift histories, rate tracking, provider parsers
 and themes. The new Preferences editor saves graph visibility/order/height and
-custom colors, with built-in presets and JSON theme load/save.
+custom colors, with built-in presets and JSON theme load/save. Layout can be
+vertical or horizontal, with Celsius/Fahrenheit system temperature display.
 Per-core/interface/disk/GPU selectors and a sortable process table with name/UID
 filters are available in the new UI.
 Driver-reported VRAM and fan RPM graphs, plus battery health/time details, use available
@@ -25,7 +26,7 @@ Right-click a graph (or use Shift+F10) for live details, settings and hide/reord
 actions. The application menu can show all graphs again without resetting sources
 or themes; see [graph actions](rust/README.md#graph-actions-and-live-details).
 Preferences also offers a reviewed, read-only [legacy settings import](rust/README.md#importing-legacy-linux-settings)
-for the C app's graph visibility and global colors. Unsupported entries are listed;
+for the C app's graph visibility, global colors, layout and temperature units. Unsupported entries are listed;
 the old configuration is preserved.
 
 Installable x86_64/ARM64 preview archives are produced by the

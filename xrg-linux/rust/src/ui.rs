@@ -19,7 +19,7 @@ use std::{
 use xrg_ng_linux::{
     engine::{Panel, SelectionControl, Snapshot, Worker},
     metrics::Inventory,
-    settings::{self, Module, ProcessView, Settings, Store, ThemeChoice, Writer},
+    settings::{self, Layout, Module, ProcessView, Settings, Store, ThemeChoice, Writer},
     shared::{self, Theme},
 };
 
@@ -27,6 +27,7 @@ struct Shell {
     window: gtk::ApplicationWindow,
     paintable: gtk::WidgetPaintable,
     graphs: gtk::Box,
+    scroll: gtk::ScrolledWindow,
     areas: Vec<gtk::DrawingArea>,
     draws: Vec<Rc<Cell<u32>>>,
     empty: gtk::Label,
@@ -163,6 +164,7 @@ impl Shell {
                         .as_ref()
                         .filter(|s| snapshot_matches(s, &settings.borrow(), module))
                         .and_then(|s| s.panels.get(module.index())),
+                    settings.borrow().temperature_units,
                 );
             });
             graphs.append(&area);
@@ -187,6 +189,7 @@ impl Shell {
             window,
             paintable,
             graphs,
+            scroll,
             areas,
             draws,
             empty,
@@ -271,11 +274,27 @@ impl Shell {
     }
     fn refresh(&self) {
         let settings = self.settings.borrow();
+        let horizontal = settings.layout == Layout::Horizontal;
+        self.graphs.set_orientation(if horizontal {
+            gtk::Orientation::Horizontal
+        } else {
+            gtk::Orientation::Vertical
+        });
+        self.graphs.set_valign(gtk::Align::Start);
+        self.scroll.set_policy(
+            if horizontal {
+                gtk::PolicyType::Automatic
+            } else {
+                gtk::PolicyType::Never
+            },
+            gtk::PolicyType::Automatic,
+        );
         let mut previous = None::<gtk::DrawingArea>;
         for module in &settings.modules {
             let area = &self.areas[module.id.index()];
             area.set_visible(module.visible);
             area.set_content_height(settings.graph_height as i32);
+            area.set_vexpand(false);
             self.graphs.reorder_child_after(area, previous.as_ref());
             previous = Some(area.clone());
         }
@@ -300,6 +319,33 @@ impl Shell {
         apply_shell_theme(&self.css, &self.theme.borrow());
         for area in &self.areas {
             area.queue_draw();
+        }
+        self.update_panel_text();
+    }
+    fn update_panel_text(&self) {
+        let state = self.state.borrow();
+        let settings = self.settings.borrow();
+        for module in Module::ALL {
+            let area = &self.areas[module.index()];
+            let Some(panel) = state
+                .as_ref()
+                .filter(|s| snapshot_matches(s, &settings, module))
+                .and_then(|s| s.panels.get(module.index()))
+            else {
+                area.set_tooltip_text(Some("Waiting for selected source…"));
+                area.update_property(&[
+                    gtk::accessible::Property::Label(module.title()),
+                    gtk::accessible::Property::Description("Waiting for selected source…"),
+                ]);
+                continue;
+            };
+            let label = panel.display_label(settings.temperature_units);
+            let detail = panel.display_detail(settings.temperature_units);
+            area.set_tooltip_text(Some(&detail));
+            area.update_property(&[
+                gtk::accessible::Property::Label(&format!("{}: {}", panel.title, label)),
+                gtk::accessible::Property::Description(&detail),
+            ]);
         }
     }
     fn apply(&self, settings: Settings) {
@@ -516,23 +562,6 @@ pub fn run(smoke_mode: bool) -> bool {
                 return glib::ControlFlow::Break;
             };
             if let Some(snapshot) = latest.lock().unwrap().take() {
-                for (module, (area, panel)) in Module::ALL
-                    .into_iter()
-                    .zip(shell.areas.iter().zip(&snapshot.panels))
-                {
-                    if !snapshot_matches(&snapshot, &shell.settings.borrow(), module) {
-                        area.set_tooltip_text(Some("Waiting for selected source…"));
-                        continue;
-                    }
-                    area.set_tooltip_text(Some(&panel.detail));
-                    area.update_property(&[
-                        gtk::accessible::Property::Label(&format!(
-                            "{}: {}",
-                            panel.title, panel.label
-                        )),
-                        gtk::accessible::Property::Description(&panel.detail),
-                    ]);
-                }
                 if let Some(window) = shell.processes.borrow().as_ref() {
                     window.update(&snapshot.processes);
                 }
@@ -542,6 +571,7 @@ pub fn run(smoke_mode: bool) -> bool {
                     window.update(Some(update), &shell.settings.borrow().ai);
                 }
                 *state.borrow_mut() = Some(snapshot);
+                shell.update_panel_text();
                 shell.update_details();
                 if let (Some(window), Some(update)) = (
                     shell.weather_window.borrow().as_ref(),
@@ -636,6 +666,7 @@ fn draw(
     theme: &Theme,
     title: &str,
     panel: Option<&Panel>,
+    units: xrg_ng_linux::temperature::Units,
 ) {
     // Compose translucent Classic colors over an opaque base; repainting never
     // accumulates alpha from previous frames.
@@ -666,8 +697,9 @@ fn draw(
     context.set_font_size(12.);
     let _ = context.show_text(
         panel
-            .map(|p| p.label.as_str())
-            .unwrap_or("Waiting for sample…"),
+            .map(|p| p.display_label(units))
+            .unwrap_or_else(|| "Waiting for sample…".into())
+            .as_ref(),
     );
     let Some(panel) = panel else {
         return;
