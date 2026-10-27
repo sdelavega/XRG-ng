@@ -117,12 +117,14 @@ pub fn disk(text: &str, devices: &BTreeSet<String>) -> Result<[u64; 2], String> 
 pub struct LinuxSources {
     proc: PathBuf,
     sys: PathBuf,
+    allow_commands: bool,
 }
 impl LinuxSources {
     pub fn with_roots(proc: impl Into<PathBuf>, sys: impl Into<PathBuf>) -> Self {
         Self {
             proc: proc.into(),
             sys: sys.into(),
+            allow_commands: false,
         }
     }
     pub fn battery(&self) -> Result<crate::hardware::Readings<crate::hardware::Battery>, String> {
@@ -133,10 +135,21 @@ impl LinuxSources {
     ) -> Result<crate::hardware::Readings<crate::hardware::Temperature>, String> {
         crate::hardware::temperatures(&self.sys)
     }
+    pub fn gpu_collector(&self) -> crate::gpu::GpuCollector {
+        crate::gpu::GpuCollector::new(
+            self.sys.clone(),
+            if self.allow_commands {
+                crate::gpu::find_nvidia_smi()
+            } else {
+                None
+            },
+        )
+    }
     pub fn live() -> Self {
         Self {
             proc: "/proc".into(),
             sys: "/sys".into(),
+            allow_commands: true,
         }
     }
     fn read(root: &Path, file: &str) -> Result<String, String> {

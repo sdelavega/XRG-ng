@@ -55,6 +55,8 @@ pub struct Sampler {
     rates: Rates,
     histories: [History; 7],
     battery_histories: BTreeMap<String, History>,
+    gpu: crate::gpu::GpuCollector,
+    gpu_histories: BTreeMap<String, History>,
     start: Instant,
     sequence: u64,
 }
@@ -63,8 +65,11 @@ impl Sampler {
         Self::with_sources(LinuxSources::live())
     }
     pub fn with_sources(source: LinuxSources) -> Self {
+        let gpu = source.gpu_collector();
         Self {
             source,
+            gpu,
+            gpu_histories: BTreeMap::new(),
             previous_cpu: None,
             rates: Rates::new(),
             histories: array::from_fn(|_| History::new(120)),
@@ -133,6 +138,7 @@ impl Sampler {
         }
         panels.push(self.battery_panel());
         panels.push(self.temperature_panel());
+        panels.push(self.gpu_panel());
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
@@ -140,6 +146,98 @@ impl Sampler {
             valid,
         }
     }
+    fn gpu_panel(&mut self) -> Panel {
+        let mut series = Vec::new();
+        let (label, detail) = match self.gpu.sample() {
+            Err(error) => ("GPU unavailable".into(), error),
+            Ok(report) if report.values.is_empty() => {
+                if report.errors.is_empty() {
+                    self.gpu_histories.clear();
+                    (
+                        "No GPU detected".into(),
+                        "No supported GPU adapter detected".into(),
+                    )
+                } else {
+                    ("GPU unavailable".into(), report.errors.join("\n"))
+                }
+            }
+            Ok(report) => {
+                self.gpu_histories
+                    .retain(|id, _| report.values.iter().any(|v| v.id == *id));
+                let mut labels = Vec::new();
+                let mut details = Vec::new();
+                let supported: Vec<_> = report
+                    .values
+                    .iter()
+                    .filter(|g| g.utilization.is_some())
+                    .collect();
+                let partial =
+                    !report.errors.is_empty() || report.values.iter().any(|g| !g.notes.is_empty());
+                for gpu in supported.iter().take(3) {
+                    let value = gpu.utilization.expect("filtered utilization");
+                    let history = self
+                        .gpu_histories
+                        .entry(gpu.id.clone())
+                        .or_insert_with(|| History::new(120));
+                    history.append(value);
+                    series.push(history.values());
+                    labels.push(format!("{} {value:.0}%", gpu.label));
+                }
+                for gpu in &report.values {
+                    let mut fields = vec![
+                        format!("{} · {} · {}", gpu.label, gpu.name, gpu.id),
+                        format!("Driver: {}", gpu.driver),
+                        gpu.utilization
+                            .map(|v| format!("Utilization: {v:.1}%"))
+                            .unwrap_or_else(|| "Utilization unavailable".into()),
+                    ];
+                    if let Some(value) = gpu.memory_used {
+                        fields.push(format!("VRAM used: {:.1} MiB", value as f64 / 1_048_576.));
+                    }
+                    if let Some(value) = gpu.memory_total {
+                        fields.push(format!("VRAM total: {:.1} MiB", value as f64 / 1_048_576.));
+                    }
+                    if let Some(value) = gpu.temperature {
+                        fields.push(format!("Temperature: {value:.1} °C"));
+                    }
+                    if let Some(value) = gpu.frequency_mhz {
+                        fields.push(format!("Clock: {value:.0} MHz"));
+                    }
+                    if let Some(value) = gpu.power_watts {
+                        fields.push(format!("Reported power: {value:.1} W (may include SoC)"));
+                    }
+                    if let Some(value) = gpu.fan_rpm {
+                        fields.push(format!("Fan: {value} RPM"));
+                    }
+                    if let Some(value) = gpu.fan_percent {
+                        fields.push(format!("Fan: {value:.0}%"));
+                    }
+                    fields.extend(gpu.notes.clone());
+                    details.push(fields.join("\n"));
+                }
+                details.extend(report.errors);
+                let label = if labels.is_empty() {
+                    "GPU utilization unavailable".into()
+                } else {
+                    format!(
+                        "{}{}{}",
+                        labels.join(" / "),
+                        if supported.len() > 3 { " (+more)" } else { "" },
+                        if partial { " · partial" } else { "" }
+                    )
+                };
+                (label, details.join("\n\n"))
+            }
+        };
+        Panel {
+            title: "GPU",
+            label,
+            detail,
+            series,
+            scale: Scale::Percent,
+        }
+    }
+
     fn battery_panel(&mut self) -> Panel {
         let mut series = Vec::new();
         let (label, detail) = match self.source.battery() {
@@ -269,9 +367,10 @@ impl Worker {
             // Swift handles are created and destroyed on this worker only.
             let mut sampler = Sampler::new();
             loop {
+                let next_sample = Instant::now() + Duration::from_secs(1);
                 *output.lock().unwrap() = Some(sampler.sample());
                 // One latest-value slot bounds memory if drawing is slow or hidden.
-                match receiver.recv_timeout(Duration::from_secs(1)) {
+                match receiver.recv_timeout(next_sample.saturating_duration_since(Instant::now())) {
                     Err(mpsc::RecvTimeoutError::Timeout) => (),
                     _ => break,
                 }

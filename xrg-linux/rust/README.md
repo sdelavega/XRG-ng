@@ -4,7 +4,7 @@ This is the GTK 4 replacement in progress. It runs alongside the C/GTK3 applicat
 in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
-battery capacity and temperature graphs.
+battery capacity, temperature and GPU utilization graphs.
 This is an initial vertical slice, not feature parity with the C application.
 
 ## Construction
@@ -56,6 +56,42 @@ series; read failures show unavailable/partial labels. Neither makes core-only
 headless or live GTK smoke checks fail on desktops/containers without that hardware.
 The graph area scrolls on small windows and exposes details to accessibility APIs.
 
+GPU discovery uses DRM primary cards and, for compute-only NVIDIA installations,
+PCI devices actually bound to the NVIDIA driver. PCI identity keeps histories
+stable when `cardN` numbering changes; connector/render nodes and aliases are
+excluded. Up to three adapters with supported utilization readings are graphed.
+Memory, clock, temperature, power and fan readings appear in accessible tooltips
+when available. Power reported by hwmon may cover a whole SoC, including its CPU.
+
+| Backend | Available acquisition |
+| --- | --- |
+| AMD amdgpu | Documented busy percentage, VRAM bytes, GPU hwmon telemetry |
+| NVIDIA nvidia | One bounded `nvidia-smi` query, matched by PCI address |
+| Intel i915 | Reported clock and available hwmon telemetry; utilization unavailable |
+| Intel xe | Available hwmon telemetry; utilization unavailable |
+| nouveau / other drivers | Identification; unsupported counters remain unavailable |
+| Runtime-suspended adapters | Identification only; telemetry reads/commands are skipped |
+
+Intel utilization needs a future PMU/performance-counter backend. Clock frequency
+is never converted into an estimated busy percentage. There is no simulated GPU
+fallback. Actual zero utilization is retained; unsupported, malformed or absent
+values create no synthetic idle samples. NVIDIA `N/A` fields remain unavailable,
+and duplicate/invalid PCI rows cannot attach telemetry to another adapter.
+
+NVIDIA requires both its PCI vendor ID and the bound `nvidia` driver before any
+command runs. This includes NVIDIA's open kernel module, whose driver name is also
+`nvidia`; nouveau never launches SMI. The executable is resolved from absolute PATH
+entries. Queries use fixed arguments without a shell, a 750 ms deadline, a 64 KiB
+stdout limit, nonblocking pipes and process-group termination. A 25 ms bounded reap
+poll handles normal killed children. An uninterruptible child is retained for later
+reaping and prevents replacements; final cleanup does not block application exit.
+Failures back off for 30 seconds. Custom fixture roots never execute system commands
+unless an explicit test executable is supplied to GpuCollector. These limits cover
+the external query, not arbitrary stalled kernel sysfs reads.
+
+Sources: [AMDGPU monitoring ABI](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.html),
+[NVIDIA query documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
+
 ## Build and run
 
 On Linux install **Swift 6.3+** (CI: 6.4.1), **Rust 1.99.1**, pkg-config, a C compiler
@@ -102,8 +138,8 @@ separate from host Swift output when using a shared Docker checkout.
 
 ## Remaining migration
 
-1. Rust GPU, process and TPU collectors, with bounded optional external commands
-   and hardware fixtures; richer battery health/time and calibrated/fan sensors.
+1. Rust process and TPU collectors; Intel GPU PMU utilization, other GPU backends,
+   VRAM graphs/device selection, richer battery health/time and calibrated/fan sensors.
 2. Connect the shared provider parsers to incremental Rust log/SQLite/network
    acquisition; expose Claude/Gemini and weather through the ABI when consumers land.
 3. Per-core/interface/device selection, module visibility/order, context menus,

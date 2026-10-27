@@ -1160,3 +1160,43 @@ physical hardware remain unverified. No macOS production source changed here.
 The preceding CI correction (644f39a) passed both hosted x86_64 Linux Debug/Release
 jobs. macOS hosted runners were still queued when checked; local macOS Debug and
 Release suites passed at the initial shared-source extraction.
+
+## Linux Rust GPU collection (2026-10-27)
+
+The GTK4 monitor now has a seventh, GPU utilization panel. DRM primary-node
+scanning deduplicates device aliases and excludes connector/render nodes. PCI
+identities key Swift-backed histories so card renumbering cannot splice different
+adapters' data. Compute-only NVIDIA installations are also discovered through
+bound PCI devices. Up to three available utilization series are drawn; accessible
+tooltips show supported memory, clock, temperature, power and fan telemetry.
+
+AMDGPU uses its documented busy percentage and VRAM byte counters plus hwmon.
+NVIDIA uses one query for the discovered active adapters, matched by normalized PCI
+addresses rather than output order. Vendor and actual driver binding gate all
+queries. Suspended devices remain asleep, nouveau never starts SMI, and fixture
+roots cannot accidentally start the host's SMI executable. Intel i915 clock and
+available i915/xe hwmon telemetry are shown without inventing utilization: a PMU
+backend remains future work. Other driver counters and NVIDIA N/A remain absent.
+Fan RPM and NVIDIA fan percentage retain separate units; reported SoC power is not
+presented as necessarily GPU-only power. No simulated readings are emitted.
+
+The shell-free query runner bounds stdout to 64 KiB and runs with a 750 ms deadline.
+Nonblocking pipes prevent a descendant holding stdout from escaping that deadline;
+failed queries terminate their own process group. Reaping uses a bounded poll and
+retains a killed-but-uninterruptible child rather than spawning replacements or
+blocking in wait. A 30-second failure cooldown limits repeated driver failures.
+Final cleanup cannot block normal application shutdown on that child. Sampling
+now schedules its one-second cadence around collection time, preventing normal
+query latency from extending every interval. Sysfs kernel calls themselves do not
+have a userspace cancellation guarantee.
+
+Fourteen GPU/command fixture tests cover units, genuine idle samples, invalid data,
+Intel unavailable utilization, alias filtering, vendor/driver/suspend gates,
+compute-only devices, quoted CSV/N/A, invalid/duplicate PCI rows, output ordering,
+timeouts/cooldown, bounded output, spawn/exit failures, descendant-held pipes and
+PCI-keyed history through card renumbering and failures. All 35 Rust tests passed
+on macOS and ARM64 Linux. Complete Linux Debug/Release scripts passed shared Swift
+and C ABI checks, strict formatting/Clippy, live core collection and GTK checks
+reaching four samples / 28 draw callbacks. The seven-panel PNG was visually
+inspected. The container has no GPU, so physical AMD/Intel/NVIDIA readings and
+accelerated rendering remain unverified. No macOS production source changed.

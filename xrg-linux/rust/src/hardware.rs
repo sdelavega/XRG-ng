@@ -26,7 +26,7 @@ pub struct Temperature {
     pub celsius: f64,
 }
 
-fn text(path: &Path) -> Result<Option<String>, String> {
+pub(crate) fn text(path: &Path) -> Result<Option<String>, String> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -43,7 +43,7 @@ fn text(path: &Path) -> Result<Option<String>, String> {
         .map(|s| Some(s.trim().to_owned()))
         .map_err(|_| format!("{}: invalid UTF-8", path.display()))
 }
-fn integer(path: &Path) -> Result<Option<i64>, String> {
+pub(crate) fn integer(path: &Path) -> Result<Option<i64>, String> {
     text(path)?
         .map(|s| {
             s.parse()
@@ -51,7 +51,7 @@ fn integer(path: &Path) -> Result<Option<i64>, String> {
         })
         .transpose()
 }
-fn directories(path: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn directories(path: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -67,7 +67,7 @@ fn directories(path: &Path) -> Result<Vec<PathBuf>, String> {
     paths.sort();
     Ok(paths)
 }
-fn short_label(text: &str) -> String {
+pub(crate) fn short_label(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(64).collect()
 }
 fn pair(directory: &Path, prefix: &str) -> Result<Option<(i64, i64)>, String> {
@@ -154,7 +154,7 @@ pub fn batteries(sys: &Path) -> Result<Readings<Battery>, String> {
     }
     Ok(result)
 }
-fn celsius(value: i64) -> Result<f64, String> {
+pub(crate) fn celsius(value: i64) -> Result<f64, String> {
     // Reject physically impossible values/sentinels; zero and negative readings
     // are valid. Kernel hwmon/thermal temperature inputs are millidegrees Celsius.
     if !(-273_150..=1_000_000).contains(&value) {

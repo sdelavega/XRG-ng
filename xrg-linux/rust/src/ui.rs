@@ -106,6 +106,7 @@ pub fn run(smoke: bool) -> bool {
             "Disk · read / write",
             "Battery",
             "Temperature · hottest readable sensor",
+            "GPU · utilization",
         ]
         .into_iter()
         .enumerate()
@@ -155,7 +156,7 @@ pub fn run(smoke: bool) -> bool {
             .application(application)
             .title("XRG-ng")
             .default_width(460)
-            .default_height(740)
+            .default_height(850)
             .child(&content)
             .build();
         window.present();

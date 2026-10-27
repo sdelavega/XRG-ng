@@ -3,7 +3,7 @@
 A real-time system resource monitor for Linux with customizable floating graphs.
 
 The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rust/README.md).
-It currently provides CPU, memory, network, disk, battery and temperature graphs
+It currently provides CPU, memory, network, disk, battery, temperature and GPU graphs
 with shared macOS Swift
 histories, rate tracking and themes. The instructions below describe the existing
 C/GTK3 implementation, retained during migration.
