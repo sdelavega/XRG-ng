@@ -2,10 +2,14 @@
 // Copyright (C) 2026 Stephen de la Vega.
 #![cfg(unix)]
 use std::{
+    cell::RefCell,
     fs,
     os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use xrg_ng_linux::{
@@ -15,7 +19,11 @@ use xrg_ng_linux::{
     gpu::{GpuCollector, parse_nvidia, pci_id},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+// A concurrent spawn can inherit another test's still-open script writer until
+// exec closes CLOEXEC descriptors. Linux then rejects that script with ETXTBSY.
+// Isolate executable creation AND use; production queries never write programs.
+static EXECUTABLE_FIXTURES: Mutex<()> = Mutex::new(());
+struct Fixture(PathBuf, RefCell<Option<MutexGuard<'static, ()>>>);
 impl Fixture {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
@@ -24,7 +32,7 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
-        Self(path)
+        Self(path, RefCell::new(None))
     }
     fn put(&self, path: &str, value: &str) {
         let path = self.0.join(path);
@@ -47,6 +55,12 @@ impl Fixture {
         }
     }
     fn program(&self, name: &str, code: &str) -> PathBuf {
+        if self.1.borrow().is_none() {
+            let guard = EXECUTABLE_FIXTURES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *self.1.borrow_mut() = Some(guard);
+        }
         self.put(name, &format!("#!/bin/sh\n{code}\n"));
         let path = self.0.join(name);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
@@ -200,7 +214,7 @@ fn compute_only_nvidia_and_csv_pci_mapping_work() {
     );
     let report = GpuCollector::new(&f.0, Some(program)).sample().unwrap();
     assert_eq!(report.values[0].id, "0000:03:00.0");
-    assert_eq!(report.values[0].utilization, Some(37.));
+    assert_eq!(report.values[0].utilization, Some(37.), "{report:?}");
     assert_eq!(report.values[0].memory_total, Some(8192 * 1048576));
     assert_eq!(report.values[0].fan_percent, Some(20.));
     assert_eq!(report.values[0].fan_rpm, None);
@@ -483,4 +497,27 @@ fn rejected_selection_does_not_mutate_existing_gpu_history() {
     let gpu = snapshot.panels.iter().find(|p| p.title == "GPU").unwrap();
     assert_eq!(&gpu.series[0][117..], [10., 20., 30.]);
     assert_eq!(snapshot.selection, MetricSelection::default());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_writer_reports_busy_and_runs_only_after_the_writer_is_closed() {
+    let f = Fixture::new();
+    let program = f.program("writer-held", "printf ready");
+    let writer = fs::OpenOptions::new().write(true).open(&program).unwrap();
+    let mut command = BoundedCommand::default();
+    let error = command
+        .output(&program, &[], Duration::from_secs(1), 100)
+        .unwrap_err();
+    assert!(
+        error.contains("Cannot start query") && error.contains("os error 26"),
+        "{error}"
+    );
+    drop(writer);
+    assert_eq!(
+        command
+            .output(&program, &[], Duration::from_secs(1), 100)
+            .unwrap(),
+        b"ready"
+    );
 }
