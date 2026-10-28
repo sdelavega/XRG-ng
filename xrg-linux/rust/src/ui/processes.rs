@@ -48,6 +48,8 @@ pub(super) struct Window {
     selecting: Cell<bool>,
     action_busy: Cell<bool>,
     pub actions: [gtk::Button; 4],
+    pub details_button: gtk::Button,
+    details: RefCell<Vec<Rc<super::process_details::Window>>>,
     selection: gtk::Label,
     action_status: gtk::Label,
     context: RefCell<Option<gtk::PopoverMenu>>,
@@ -148,6 +150,9 @@ impl Window {
             action_row.append(&button);
             button
         });
+        let details_button = gtk::Button::with_label("Details…");
+        details_button.set_sensitive(false);
+        action_row.prepend(&details_button);
         content.append(&action_row);
         let action_status = gtk::Label::new(None);
         action_status.set_xalign(0.);
@@ -202,6 +207,8 @@ impl Window {
             selecting: Cell::new(false),
             action_busy: Cell::new(false),
             actions,
+            details_button,
+            details: RefCell::new(Vec::new()),
             selection,
             action_status,
             context: RefCell::new(None),
@@ -216,6 +223,24 @@ impl Window {
                 *window.selected.borrow_mut() =
                     row.and_then(|r| window.displayed.borrow().get(r.index() as usize).cloned());
                 window.update_actions();
+            }
+        });
+        let weak = Rc::downgrade(&result);
+        result.details_button.connect_clicked(move |_| {
+            if let Some(window) = weak.upgrade() {
+                let process = window.selected.borrow().clone();
+                if let Some(process) = process {
+                    window.open_details(process);
+                }
+            }
+        });
+        let weak = Rc::downgrade(&result);
+        result.list.connect_row_activated(move |_, row| {
+            if let Some(window) = weak.upgrade() {
+                let process = window.displayed.borrow().get(row.index() as usize).cloned();
+                if let Some(process) = process {
+                    window.open_details(process);
+                }
             }
         });
         for (button, action) in result.actions.iter().zip(Action::ALL) {
@@ -291,6 +316,10 @@ impl Window {
             if let Some(window) = weak.upgrade() {
                 window.closed.set(true);
                 window.close_context();
+                let details = window.details.borrow().clone();
+                for detail in details {
+                    detail.window.close();
+                }
                 let pending = window.pending.borrow().clone();
                 if let Some(dialog) = pending {
                     dialog.window.close();
@@ -360,6 +389,9 @@ impl Window {
         }
     }
     pub fn update(self: &Rc<Self>, report: &Result<Arc<Report>, String>) {
+        for detail in self.details.borrow().iter() {
+            detail.update(report);
+        }
         match report {
             Ok(report) => {
                 *self.source.borrow_mut() = Some(report.clone());
@@ -447,7 +479,7 @@ impl Window {
         let mut rows = self.rows.borrow_mut();
         while rows.len() < processes.len() {
             let widget = gtk::ListBoxRow::new();
-            widget.set_activatable(false);
+            widget.set_activatable(true);
             widget.set_selectable(true);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             row.set_margin_top(4);
@@ -521,6 +553,7 @@ impl Window {
     }
     fn update_actions(&self) {
         let selected = self.selected.borrow();
+        self.details_button.set_sensitive(selected.is_some());
         for (button, action) in self.actions.iter().zip(Action::ALL) {
             button.set_sensitive(
                 !self.action_busy.get() && selected.as_ref().is_some_and(|p| action.enabled(p)),
@@ -610,6 +643,16 @@ impl Window {
         };
         let group = gio::SimpleActionGroup::new();
         let entries = gio::Menu::new();
+        let details_action = gio::SimpleAction::new("details", None);
+        let weak = Rc::downgrade(self);
+        let captured = process.clone();
+        details_action.connect_activate(move |_, _| {
+            if let Some(window) = weak.upgrade() {
+                window.open_details(captured.clone());
+            }
+        });
+        group.add_action(&details_action);
+        entries.append(Some("Details…"), Some("process.details"));
         for action in Action::ALL {
             let item = gio::SimpleAction::new(action.id(), None);
             item.set_enabled(!self.action_busy.get() && action.enabled(&process));
@@ -659,6 +702,64 @@ impl Window {
         popover.present();
         *self.context_paintable.borrow_mut() = Some(gtk::WidgetPaintable::new(Some(&popover)));
         *self.context.borrow_mut() = Some(popover);
+    }
+    pub fn open_details(
+        self: &Rc<Self>,
+        process: Process,
+    ) -> Option<Rc<super::process_details::Window>> {
+        if self.closed.get() {
+            return None;
+        }
+        if let Some(detail) = self
+            .details
+            .borrow()
+            .iter()
+            .find(|d| d.matches(&process))
+            .cloned()
+        {
+            detail.window.present();
+            return Some(detail);
+        }
+        if self.details.borrow().len() >= 8 {
+            self.action_status
+                .set_text("Close a process details window before opening another (maximum eight).");
+            self.action_status.set_visible(true);
+            return None;
+        }
+        let detail = super::process_details::Window::new(&self.window, process);
+        let report = self
+            .source
+            .borrow()
+            .clone()
+            .ok_or_else(|| "Waiting for process data".to_owned());
+        detail.update(&report);
+        self.details.borrow_mut().push(detail.clone());
+        let weak = Rc::downgrade(self);
+        let child = Rc::downgrade(&detail);
+        detail.window.connect_close_request(move |_| {
+            if let Some(window) = weak.upgrade()
+                && let Some(child) = child.upgrade()
+            {
+                window
+                    .details
+                    .borrow_mut()
+                    .retain(|d| !Rc::ptr_eq(d, &child));
+            }
+            glib::Propagation::Proceed
+        });
+        detail.window.present();
+        Some(detail)
+    }
+    pub fn detail_windows(&self) -> Vec<Rc<super::process_details::Window>> {
+        self.details.borrow().clone()
+    }
+    pub fn activate_context_details(&self) -> Result<(), String> {
+        self.context
+            .borrow()
+            .as_ref()
+            .ok_or("Process menu missing")?
+            .activate_action("process.details", None)
+            .map_err(|e| e.to_string())
     }
     pub fn activate_context(&self, action: Action) -> Result<(), String> {
         self.context

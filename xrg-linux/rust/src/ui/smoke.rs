@@ -17,6 +17,7 @@ const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
+    process_details: Option<super::process_details_smoke::Harness>,
     weather_graph: Option<super::weather_graph_smoke::Harness>,
     process_actions: Option<super::process_actions_smoke::Harness>,
     dialog: Option<Rc<Dialog>>,
@@ -91,6 +92,8 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            process_details: (std::env::var("XRG_SMOKE_PROCESS_DETAILS").as_deref() == Ok("1"))
+                .then(super::process_details_smoke::Harness::new),
             weather_graph: (std::env::var("XRG_SMOKE_WEATHER_GRAPH").as_deref() == Ok("1"))
                 .then(super::weather_graph_smoke::Harness::new),
             process_actions: if std::env::var("XRG_SMOKE_PROCESS_ACTIONS").as_deref() == Ok("1") {
@@ -266,6 +269,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if self.process_details.is_some() {
+            return "process-details=identity-and-freshness";
+        }
         if self.weather_graph.is_some() {
             return "weather-graph=fixture-no-network";
         }
@@ -279,6 +285,9 @@ impl Harness {
         }
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.process_details {
+            return harness.tick(shell, sequence);
+        }
         if let Some(harness) = &mut self.weather_graph {
             return harness.tick(shell, sequence);
         }

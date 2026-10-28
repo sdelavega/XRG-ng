@@ -351,6 +351,10 @@ own unchanged twenty-second deadline and targets only disposable child processes
 It checks row/action state, a frozen context-menu target, cancel, pause/resume,
 selection through sorting, parent-close cancellation, terminate and force kill.
 Its process-menu, confirmation and controls screenshots are exported separately.
+An independent process-details GTK gate checks button/row/menu entry points,
+frozen menu targets, filtering, partial/failed scans, PID reuse, delayed reports
+and parent-close cleanup, using explicitly labeled copied report fixtures without
+sending signals. Inspector screenshots are exported separately.
 A separate weather-graph smoke invocation uses a visibly labeled fixture with
 network workers disabled. It checks visibility drafts, saved controls, unit and
 station guards, stale gaps, disabling, and compact drawing; fresh/stale screenshots
@@ -745,13 +749,13 @@ and may change; feedback and sample schemas with private content removed are wel
 
 ## Processes
 
-The ninth panel graphs the number of **readable / running processes** in the current
+The process panel graphs the number of **readable / running processes** in the current
 PID namespace. Running counts mean process leaders whose stat state is `R`;
 threads doing work under a sleeping leader do not increment that count. Its
 tooltip and accessibility details list the top ten processes by
 CPU and RSS, with PID, name, real UID when readable, threads, state and nice value.
 Names come from `/proc/PID/stat`; command-line arguments and environments are not
-read. **Processes…** in the toolbar opens a selectable table with PID, name, real
+read. **Processes…** in the title-band menu opens a selectable table with PID, name, real
 UID, CPU percentage, resident MiB, threads and state. Sort by CPU or RSS descending,
 PID ascending or name A–Z; filter by case-insensitive name substring and numeric
 real UID, with **My UID** as a shortcut. Filters apply before the 10–200 row limit.
@@ -805,6 +809,39 @@ group, escalates privileges, invokes a shell or retries with a stronger signal.
 See the Linux [pidfd_open](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)
 and [pidfd_send_signal](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html)
 manuals and the kernel's [proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
+
+
+**Details…**, row double-click/Enter and the process context menu open a read-only
+inspector for the chosen process instance. It shows PID/parent PID, real UID,
+start ticks, state, threads, CPU percent, accumulated CPU time, user/kernel ticks,
+resident/virtual memory, RAM share, nice and raw kernel priority. These fields
+come from the [kernel’s proc interface](https://docs.kernel.org/filesystems/proc.html).
+CPU time uses the collector’s `_SC_CLK_TCK` with integer conversion; it excludes
+waited-for child CPU time, does not add guest time twice and can exceed elapsed
+wall time for multithreaded work. Missing clock/CPU/memory values remain
+unavailable; measured zeros remain zero. Raw priority is displayed separately
+from nice and is not an editable priority control.
+
+Details consume the existing complete background reports, adding no file reads,
+commands, command-line/environment collection or user-database lookups. Table
+filtering, sorting and limits do not change their target or stop updates. Name
+changes within the same instance update the readings. Missing/partial/failed
+scans keep explicitly marked last-observed values rather than claiming the
+process exited. A PID/start-time, ownership or source-identity change stops updates
+permanently in that inspector; a delayed earlier report cannot reactivate it.
+Open a new inspector to view a replacement process. Own/PID 1 inspection stays
+available even when process signal controls are disabled. Up to eight inspectors
+can be open; reopening the same instance reuses its window. Closing the process
+table closes its inspectors. Freshness stays visible above the scrollable details;
+updates preserve the reading position. The inspector GTK gate treats native
+cleanup diagnostics as failures.
+
+[Process inspector fixture](../../screenshots/linux-process-details-fixture.png) ·
+[Identity-change fixture](../../screenshots/linux-process-identity-fixture.png).
+These GTK4 Release captures use explicitly labeled copied test reports; the
+identity-change condition is synthesized and no signals are sent.
+
+
 
 ## TPU / NPU neural accelerators
 
@@ -989,7 +1026,7 @@ automated tests use fixtures and make no weather requests.
 ## Remaining migration
 
 1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
-   support and optional process priority/detail controls.
+   support and optional process priority controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
 3. Deeper metric preferences, XTF conversion and broader legacy-field mappings

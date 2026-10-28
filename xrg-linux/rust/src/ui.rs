@@ -9,6 +9,8 @@ mod menus;
 mod preferences;
 mod process_actions;
 mod process_actions_smoke;
+mod process_details;
+mod process_details_smoke;
 mod processes;
 mod smoke;
 mod targets;

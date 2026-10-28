@@ -301,3 +301,26 @@ fn process_table_queries_reject_invalid_limits_and_filters() {
         .unwrap();
     assert_eq!(uid.matched, 0);
 }
+
+#[test]
+fn lifetime_cpu_time_uses_the_collectors_clock_without_float_rounding_or_child_time() {
+    let f = Fixture::new();
+    f.put(7, &stat(7, "worker", "S", 625, 1, 1), None);
+    let mut collector = Collector::with_parameters(f.0.clone(), 100, 4096);
+    assert_eq!(
+        collector.sample_at(1.).unwrap().processes[0].cpu_time,
+        Some(std::time::Duration::from_millis(6250))
+    );
+    f.put(7, &stat(7, "worker", "S", 1, 1, 1), None);
+    let mut collector = Collector::with_parameters(f.0.clone(), 1024, 4096);
+    assert_eq!(
+        collector.sample_at(1.).unwrap().processes[0].cpu_time,
+        Some(std::time::Duration::from_nanos(976562))
+    );
+    f.put(7, &stat(7, "worker", "S", u64::MAX, 1, 1), None);
+    let mut collector = Collector::with_parameters(f.0.clone(), 1, 4096);
+    assert_eq!(
+        collector.sample_at(1.).unwrap().processes[0].cpu_time,
+        Some(std::time::Duration::from_secs(u64::MAX))
+    );
+}

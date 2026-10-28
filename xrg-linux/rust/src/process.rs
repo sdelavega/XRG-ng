@@ -4,6 +4,7 @@
 //! environments, NSS lookups or subprocesses. Acquisition remains read-only;
 //! explicit signal delivery is isolated in control.
 pub mod control;
+pub mod details;
 use crate::{hardware::short_label, system_file};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,6 +19,13 @@ const SCAN_BUDGET: Duration = Duration::from_millis(100);
 pub struct Process {
     pub pid: u32,
     pub start_ticks: u64,
+    pub parent_pid: u32,
+    /// Raw signed scheduling priority reported by /proc/PID/stat.
+    pub priority: i64,
+    pub user_ticks: u64,
+    pub system_ticks: u64,
+    /// Lifetime user + kernel CPU time, converted using this collector’s clock.
+    pub cpu_time: Option<Duration>,
     pub name: String,
     pub state: char,
     pub cpu_ticks: u64,
@@ -253,6 +261,7 @@ impl Collector {
             self.cursor = pid;
             match read_process(&self.root, pid, self.page_size) {
                 Ok(mut process) => {
+                    process.cpu_time = cpu_time(process.cpu_ticks, self.ticks_per_second);
                     process.memory_percent =
                         memory.map(|total| 100. * process.rss_bytes as f64 / total as f64);
                     let next = Baseline {
@@ -297,6 +306,15 @@ impl Collector {
         Ok(report)
     }
 }
+fn cpu_time(ticks: u64, hertz: u64) -> Option<Duration> {
+    if hertz == 0 {
+        return None;
+    }
+    Some(Duration::new(
+        ticks / hertz,
+        ((ticks % hertz) as u128 * 1_000_000_000 / hertz as u128) as u32,
+    ))
+}
 fn memory_bytes(bytes: &[u8]) -> Option<u64> {
     let text = std::str::from_utf8(bytes).ok()?;
     let line = text.lines().find(|l| l.starts_with("MemTotal:"))?;
@@ -328,8 +346,10 @@ pub fn parse_stat(bytes: &[u8], expected_pid: u32, page_size: u64) -> Result<Pro
             .parse::<u64>()
             .map_err(|_| "Invalid process counter".to_owned())
     };
-    let ticks = number(11)?
-        .checked_add(number(12)?)
+    let user_ticks = number(11)?;
+    let system_ticks = number(12)?;
+    let ticks = user_ticks
+        .checked_add(system_ticks)
         .ok_or("Process tick overflow")?;
     let rss: i64 = fields[21].parse().map_err(|_| "Invalid signed RSS")?;
     let rss_bytes = u64::try_from(rss)
@@ -339,6 +359,16 @@ pub fn parse_stat(bytes: &[u8], expected_pid: u32, page_size: u64) -> Result<Pro
     Ok(Process {
         pid: expected_pid,
         start_ticks: number(19)?,
+        parent_pid: u32::try_from(number(1)?)
+            .ok()
+            .filter(|pid| *pid <= i32::MAX as u32)
+            .ok_or("Invalid parent PID")?,
+        priority: fields[15]
+            .parse()
+            .map_err(|_| "Invalid scheduling priority")?,
+        user_ticks,
+        system_ticks,
+        cpu_time: None,
         name: short_label(&rest[..end]),
         state,
         cpu_ticks: ticks,

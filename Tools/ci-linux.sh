@@ -50,3 +50,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
 fi
 XRG_SMOKE_WEATHER_GRAPH=1 XRG_SMOKE_WEATHER_GRAPH_IMAGE="$output/weather-graph.png" XRG_SMOKE_WEATHER_STALE_IMAGE="$output/weather-stale.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
+# Separate read-only inspector gate, consuming copied reports; no process signals.
+G_DEBUG=fatal-criticals XRG_SMOKE_PROCESS_DETAILS=1 XRG_SMOKE_PROCESS_DETAILS_IMAGE="$output/process-details.png" XRG_SMOKE_PROCESS_DETAILS_STALE_IMAGE="$output/process-details-stale.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    cargo run "${cargo_options[@]}" -- --smoke-test
