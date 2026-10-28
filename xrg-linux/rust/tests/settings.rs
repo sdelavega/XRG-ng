@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 20;
+    value.version = 21;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -386,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        19
+        20
     );
 }
 #[test]
@@ -469,7 +469,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 19);
+    assert_eq!(migrated.version, 20);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -628,7 +628,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        19
+        20
     );
 }
 
@@ -937,5 +937,68 @@ fn window_size_rejects_duplicate_dimensions() {
         r#"{"width":600,"height":450,"height":500}"#,
     ] {
         assert!(serde_json::from_str::<WindowSize>(text).is_err());
+    }
+}
+
+#[test]
+fn version_nineteen_network_scale_migrates_without_a_write_or_other_changes() {
+    let f = Fixture::new();
+    let expected = Settings {
+        graph_width: 360,
+        window_opacity: 0.8,
+        ..Settings::default()
+    };
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 19.into();
+    wire.as_object_mut().unwrap().remove("network_min_scale");
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(loaded.network_min_scale, 0);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.network_min_scale = 4096;
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+    let imported = xrg_ng_linux::legacy::parse(
+        b"[Modules]\nshow_cpu=true\n[Network]\nminimum_scale=1024\n",
+        &loaded,
+    )
+    .unwrap();
+    assert_eq!(imported.settings, loaded);
+    assert_eq!(imported.skipped, ["[Network] minimum_scale"]);
+}
+
+#[test]
+fn invalid_network_floors_do_not_replace_saved_preferences() {
+    use xrg_ng_linux::settings::network_scale::MAX;
+    let f = Fixture::new();
+    let value = Settings {
+        network_min_scale: MAX,
+        ..Settings::default()
+    };
+    let (mut store, _, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    store.save(&value).unwrap();
+    let original = fs::read(f.path()).unwrap();
+    let mut invalid = value.clone();
+    invalid.network_min_scale = MAX + 1;
+    assert!(invalid.validate().is_err());
+    assert!(store.save(&invalid).is_err());
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+    for bad in [
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!("1024"),
+        serde_json::json!(true),
+        serde_json::json!(null),
+        serde_json::json!(MAX + 1),
+    ] {
+        let mut wire = serde_json::to_value(&value).unwrap();
+        wire["network_min_scale"] = bad;
+        assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
     }
 }

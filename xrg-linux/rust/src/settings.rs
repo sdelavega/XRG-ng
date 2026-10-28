@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Versioned Linux presentation preferences. Paths are explicit for isolated tests.
+pub mod network_scale;
 mod window_size;
 mod xtf;
 use crate::{
@@ -424,6 +425,8 @@ pub struct Settings {
     #[serde(default)]
     pub window_size: Option<WindowSize>,
     #[serde(default)]
+    pub network_min_scale: u64,
+    #[serde(default)]
     pub activity_bars: ActivityBars,
     #[serde(default)]
     pub layout: Layout,
@@ -452,7 +455,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 19,
+            version: 20,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -474,6 +477,7 @@ impl Default for Settings {
             sampling_interval_ms: crate::sampling::default_interval(),
             window_opacity: default_window_opacity(),
             window_size: None,
+            network_min_scale: 0,
             activity_bars: ActivityBars {
                 visible: true,
                 use_series_colors: true,
@@ -520,13 +524,14 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 19 {
+        if self.version != 20 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
             return Err("Graph height must be between 64 and 240 pixels".into());
         }
         crate::sampling::interval(self.sampling_interval_ms)?;
+        network_scale::validate(self.network_min_scale)?;
         if let Some(size) = self.window_size {
             size.validate()?;
         }
@@ -676,8 +681,18 @@ impl Settings {
         if result.version == 18 {
             result.version = 19;
         }
+        if result.version == 19 {
+            result.version = 20;
+        }
         result.validate()?;
         Ok(result)
+    }
+    pub fn minimum_scale(&self, module: Module) -> u64 {
+        if module == Module::Network {
+            self.network_min_scale
+        } else {
+            0
+        }
     }
     pub fn move_module(&mut self, id: Module, offset: isize) {
         if let Some(index) = self.modules.iter().position(|m| m.id == id) {

@@ -7,6 +7,8 @@ mod graph_colors;
 mod graph_heights;
 mod legacy_import;
 mod menus;
+mod network_scale;
+mod network_scale_smoke;
 mod opacity_smoke;
 mod preferences;
 mod process_actions;
@@ -175,7 +177,11 @@ impl Shell {
                         .filter(|s| snapshot_matches(s, &active, module))
                         .and_then(|s| s.panels.get(module.index())),
                     active.temperature_units,
-                    (appearance.style, &active.activity_bars),
+                    (
+                        appearance.style,
+                        &active.activity_bars,
+                        active.minimum_scale(module),
+                    ),
                 );
             });
             graphs.append(&area);
@@ -385,8 +391,17 @@ impl Shell {
                         ));
                     }
                 } else {
-                    detail.push_str(&panel.activity_description(settings.temperature_units));
+                    detail.push_str(&panel.activity_description_with_minimum(
+                        settings.temperature_units,
+                        settings.minimum_scale(module),
+                    ));
                 }
+            }
+            if module == Module::Network {
+                detail.push_str(&network_scale::description(
+                    panel,
+                    settings.network_min_scale,
+                ));
             }
             area.set_tooltip_text(Some(&detail));
             area.update_property(&[
@@ -774,7 +789,7 @@ fn draw(
     title: &str,
     panel: Option<&Panel>,
     units: xrg_ng_linux::temperature::Units,
-    appearance: (GraphStyle, &settings::ActivityBars),
+    appearance: (GraphStyle, &settings::ActivityBars, u64),
 ) {
     dashboard::draw(context, size, theme, title, panel, units, appearance);
 }

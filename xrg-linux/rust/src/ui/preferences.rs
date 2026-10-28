@@ -36,6 +36,7 @@ pub(super) struct Dialog {
     pub sampling: gtk::SpinButton,
     pub opacity: gtk::SpinButton,
     pub window_size: super::window_size::Editor,
+    pub network_scale: super::network_scale::Editor,
     pub graph_heights: super::graph_heights::Editor,
     pub activity: gtk::Expander,
     pub activity_visible: gtk::CheckButton,
@@ -175,6 +176,8 @@ impl Dialog {
         form.append(&opacity_row);
         let window_size = super::window_size::Editor::new(shell);
         form.append(&window_size.widget);
+        let network_scale = super::network_scale::Editor::new();
+        form.append(&network_scale.widget);
         let activity_content = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let activity_description = gtk::Label::new(Some(
             "CPU shows up to 64 logical-core bars. Other graphs show one current-value bar per series, on the graph’s axis. Rate/count bars scale to recent history, not capacity. Temperature bars show a display range, not a thermal limit. Missing readings stay blank; measured zero has an empty track.",
@@ -349,6 +352,7 @@ impl Dialog {
             sampling,
             opacity,
             window_size,
+            network_scale,
             graph_heights,
             activity,
             activity_visible,
@@ -370,6 +374,15 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.network_scale.connect(Rc::new(move || {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+                && let Ok(value) = dialog.network_scale.value()
+            {
+                dialog.draft.borrow_mut().network_min_scale = value;
+            }
+        }));
         let weak = Rc::downgrade(&dialog);
         dialog.window_size.connect(Rc::new(move || {
             if let Some(dialog) = weak.upgrade()
@@ -640,6 +653,13 @@ impl Dialog {
         let weak = Rc::downgrade(&dialog);
         dialog.apply.connect_clicked(move |_| {
             if let Some(dialog) = weak.upgrade() {
+                match dialog.network_scale.value() {
+                    Ok(value) => dialog.draft.borrow_mut().network_min_scale = value,
+                    Err(error) => {
+                        dialog.set_message(&error);
+                        return;
+                    }
+                }
                 let settings = dialog.draft.borrow().clone();
                 if let Err(error) = settings.validate() {
                     dialog.set_message(&error);
@@ -721,6 +741,17 @@ impl Dialog {
         }
         self.targets.temperature_extra[0].widget.grab_focus();
     }
+    pub fn reveal_network_scale(&self) {
+        self.network_scale.widget.set_expanded(true);
+        if let Some(point) = self
+            .network_scale
+            .widget
+            .compute_point(&self.form, &gtk::graphene::Point::new(0., 0.))
+        {
+            self.scroll.vadjustment().set_value(point.y() as f64);
+        }
+        self.network_scale.value.grab_focus();
+    }
     pub fn message(&self) -> String {
         self.message.text().to_string()
     }
@@ -731,6 +762,7 @@ impl Dialog {
     fn refresh(&self) {
         self.updating.set(true);
         let settings = self.draft.borrow();
+        self.network_scale.refresh(settings.network_min_scale);
         self.opacity.set_value(settings.window_opacity * 100.);
         self.window_size.refresh(settings.window_size);
         self.sampling

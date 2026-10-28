@@ -377,7 +377,13 @@ impl Details {
             .and_then(|s| s.panels.get(self.module.index()))
             .map(|p| {
                 let label = p.display_label(settings.temperature_units);
-                let detail = p.display_detail(settings.temperature_units);
+                let mut detail = p.display_detail(settings.temperature_units).into_owned();
+                if self.module == Module::Network {
+                    detail.push_str(&super::network_scale::description(
+                        p,
+                        settings.network_min_scale,
+                    ));
+                }
                 if detail.starts_with(label.as_ref()) {
                     format!("{}\n{}", self.module.title(), detail)
                 } else {

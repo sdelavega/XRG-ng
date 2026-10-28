@@ -623,6 +623,16 @@ entry opens the editor when a built-in preset is active. In Preferences:
   and are spaced by sample order, so a cadence change is not a uniform time axis.
   AI still collects every five seconds, and weather keeps its own refresh policy.
   Their latest cached views reach the window at the system snapshot cadence.
+- Expand **Network graph scale** to set a minimum upper bound in **B/s**,
+  **KiB/s** or **MiB/s**. Zero (the default) keeps existing automatic scaling.
+  Enter a nonnegative whole number; binary units convert exactly to bytes/s.
+  The stored maximum is 9,007,199,254,740,991 bytes/s. The Network graph and its
+  current-value bars share this floor, and the axis still grows when recent
+  traffic exceeds it. This is a display range, not link speed or device capacity.
+  Apply rescales the cached history and updates details/accessibility text
+  immediately; source selection, rate baselines, counters, readouts and other
+  graphs are unchanged. Cancel discards the draft; Restore defaults puts zero in
+  the draft. Theme load/save and legacy Linux import preserve this preference.
 - Expand **Dashboard window size** to enable **Remember dashboard window size**
   and choose width/height in **logical pixels** (100–8192). Apply sets the requested
   size independently of graph widths/heights. Subsequent dashboard resizing is
@@ -783,7 +793,7 @@ events; XRG-ng enforces these limits while building values.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 19 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 20 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show nine
@@ -852,6 +862,14 @@ Restore defaults, Apply, resize capture through the real close-request handler,
 persistence, reopening, and returning to automatic mode. It uses GTK normal-size
 requests under Xvfb, rather than physical pointer dragging or a particular window
 manager. Desktop-specific geometry behavior remains best effort; feedback is welcome.
+Version 20 adds `network_min_scale`, a bounded whole-number byte/s floor stored
+independently of graph style, source selection and themes. Older settings retain
+zero without a write until save. Invalid values reject the entire document.
+The dedicated GTK gate uses a labeled copied traffic fixture and verifies unit
+conversion, rejected input, Cancel, draft-only defaults, exact persistence,
+reopening, instant cached graph/bar/detail updates and retained rate history.
+It then restores automatic scaling; no live throughput or physical link speed
+is inferred from this fixture.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

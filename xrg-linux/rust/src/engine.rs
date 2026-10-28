@@ -22,8 +22,15 @@ pub struct Panel {
 }
 impl Panel {
     pub fn activity_description(&self, units: crate::temperature::Units) -> String {
+        self.activity_description_with_minimum(units, 0)
+    }
+    pub fn activity_description_with_minimum(
+        &self,
+        units: crate::temperature::Units,
+        minimum: u64,
+    ) -> String {
         let units = self.scale.temperature_units(units);
-        let (lower, upper) = self.scale.bounds(&self.series);
+        let (lower, upper) = self.scale.bounds_with_minimum(&self.series, minimum);
         let axis = match self.scale {
             Scale::Percent => "0–100%".into(),
             Scale::Automatic => format!(
@@ -94,11 +101,14 @@ impl Scale {
         }
     }
     pub fn bounds(self, series: &[Vec<f64>]) -> (f64, f64) {
+        self.bounds_with_minimum(series, 0)
+    }
+    pub fn bounds_with_minimum(self, series: &[Vec<f64>], minimum: u64) -> (f64, f64) {
         match self {
             Self::Percent => (0., 100.),
             Self::Automatic => (
                 0.,
-                series.iter().flatten().copied().fold(1.0, f64::max) * 1.1,
+                (series.iter().flatten().copied().fold(1.0, f64::max) * 1.1).max(minimum as f64),
             ),
             Self::Weather(_) => {
                 let mut values = series.iter().flatten().copied().filter(|v| v.is_finite());

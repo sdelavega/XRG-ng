@@ -22,6 +22,7 @@ pub(super) struct Harness {
     sampling: Option<super::sampling_smoke::Harness>,
     opacity: Option<super::opacity_smoke::Harness>,
     window_size: Option<super::window_size_smoke::Harness>,
+    network_scale: Option<super::network_scale_smoke::Harness>,
     process_details: Option<super::process_details_smoke::Harness>,
     weather_graph: Option<super::weather_graph_smoke::Harness>,
     process_actions: Option<super::process_actions_smoke::Harness>,
@@ -87,6 +88,13 @@ impl Harness {
             )
             .map_err(|e| e.to_string())?;
         }
+        if std::env::var("XRG_SMOKE_NETWORK_SCALE").as_deref() == Ok("1") {
+            fs::write(
+                root.join("settings.conf"),
+                serde_json::to_vec(&Settings::default()).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         if std::env::var("XRG_SMOKE_WINDOW_SIZE").as_deref() == Ok("1") {
             let settings = Settings {
                 window_size: Some(xrg_ng_linux::settings::WindowSize {
@@ -133,6 +141,8 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            network_scale: (std::env::var("XRG_SMOKE_NETWORK_SCALE").as_deref() == Ok("1"))
+                .then(super::network_scale_smoke::Harness::new),
             window_size: (std::env::var("XRG_SMOKE_WINDOW_SIZE").as_deref() == Ok("1"))
                 .then(super::window_size_smoke::Harness::new),
             opacity: (std::env::var("XRG_SMOKE_OPACITY").as_deref() == Ok("1"))
@@ -320,6 +330,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if self.network_scale.is_some() {
+            return "network-scale=cached-axis-history-cancel-apply-persist";
+        }
         if self.window_size.is_some() {
             return "window-size=startup-cancel-apply-capture-auto";
         }
@@ -351,6 +364,16 @@ impl Harness {
         }
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.network_scale {
+            let finished = harness.tick(shell, sequence, &self.root)?;
+            if finished {
+                require(
+                    harness.tick(shell, sequence, &self.root)?,
+                    "Network scale completion was not stable",
+                )?;
+            }
+            return Ok(finished);
+        }
         if let Some(harness) = &mut self.window_size {
             let finished = harness.tick(shell, sequence, &self.root)?;
             if finished {
@@ -702,7 +725,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 19 && loaded.processes.limit == 20,
+                    loaded.version == 20 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1842,7 +1865,7 @@ impl Harness {
                             &title,
                             Some(&panel),
                             Units::Celsius,
-                            (style, &Default::default()),
+                            (style, &Default::default(), 0),
                         )
                     });
                     content.append(&area);
@@ -2058,7 +2081,7 @@ impl Harness {
                             title,
                             Some(&panel),
                             Units::Celsius,
-                            (style, &Default::default()),
+                            (style, &Default::default(), 0),
                         )
                     });
                     content.append(&area);
@@ -2417,7 +2440,7 @@ impl Harness {
                             title,
                             Some(&panel),
                             Units::Celsius,
-                            (GraphStyle::Hollow, &bars),
+                            (GraphStyle::Hollow, &bars, 0),
                         );
                     });
                     content.append(&area);
@@ -2489,7 +2512,7 @@ impl Harness {
                             title,
                             Some(&panel),
                             units,
-                            (GraphStyle::Hollow, &bars),
+                            (GraphStyle::Hollow, &bars, 0),
                         );
                     });
                     content.append(&area);

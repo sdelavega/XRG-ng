@@ -59,7 +59,7 @@ pub(super) fn draw(
     title: &str,
     panel: Option<&Panel>,
     units: Units,
-    (style, bars): (GraphStyle, &ActivityBars),
+    (style, bars, minimum): (GraphStyle, &ActivityBars, u64),
 ) {
     let units = panel.map_or(units, |p| p.scale.temperature_units(units));
     let (w, h) = (width as f64, height as f64);
@@ -82,7 +82,7 @@ pub(super) fn draw(
         0.
     };
     if let Some(p) = panel {
-        let (lower, upper) = p.scale.bounds(&p.series);
+        let (lower, upper) = p.scale.bounds_with_minimum(&p.series, minimum);
         let bottom = if has_cores { h - 18. } else { h };
         let plot = Plot {
             left: 0.,
@@ -266,6 +266,7 @@ mod tests {
                     use_series_colors: true,
                     ..Default::default()
                 },
+                0,
             ),
         );
         assert_eq!(c.line_width(), 7.);
@@ -279,5 +280,61 @@ mod tests {
         assert!(data[85 * stride + 3 * 4 + 2] > 128);
         assert_eq!(data[85 * stride + 2], 0);
         assert_eq!(data[100 * stride + 160 * 4 + 3], 0);
+    }
+    #[test]
+    fn network_floor_rescales_both_the_graph_fill_and_current_value_bar() {
+        let render = |minimum| {
+            let mut surface = ImageSurface::create(Format::ARgb32, 200, 100).unwrap();
+            let c = Context::new(&surface).unwrap();
+            let mut colors = [[0., 0., 0., 1.]; 7];
+            colors[2] = [1., 0., 0., 1.];
+            colors[5] = [0., 0., 1., 1.];
+            let theme = Theme {
+                name: "Fixture".into(),
+                colors,
+            };
+            let panel = Panel {
+                title: "",
+                label: String::new(),
+                detail: String::new(),
+                series: vec![vec![100., 100.]],
+                scale: xrg_ng_linux::engine::Scale::Automatic,
+                temperature_text: None,
+                readout: Default::default(),
+            };
+            draw(
+                &c,
+                (200, 100),
+                &theme,
+                "",
+                Some(&panel),
+                Units::Celsius,
+                (
+                    GraphStyle::Solid,
+                    &ActivityBars {
+                        visible: true,
+                        use_series_colors: true,
+                        ..Default::default()
+                    },
+                    minimum,
+                ),
+            );
+            drop(c);
+            let stride = surface.stride() as usize;
+            let data = surface.data().unwrap();
+            [
+                data[50 * stride + 80 * 4 + 2],
+                data[95 * stride + 80 * 4 + 2],
+                data[50 * stride + 193 * 4 + 2],
+                data[95 * stride + 193 * 4 + 2],
+            ]
+        };
+        let automatic = render(0);
+        let floor = render(1000);
+        // The same 100 B/s sample fills most of the automatic axis, but only
+        // the bottom tenth of a 1000 B/s axis, on both graph and 'now' bar.
+        assert!(automatic.iter().all(|v| *v > 128));
+        assert_eq!((floor[0], floor[2]), (0, 0));
+        assert!(floor[1] > 128 && floor[3] > 128);
     }
 }
