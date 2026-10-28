@@ -132,6 +132,23 @@ pub struct Snapshot {
     pub ai: Option<crate::ai::Update>,
     pub weather: Option<crate::weather::Update>,
 }
+struct GpuHistory {
+    observed: usize,
+    source: crate::gpu::ActivitySource,
+    driver: String,
+    history: History,
+}
+impl GpuHistory {
+    fn new(source: crate::gpu::ActivitySource, driver: &str) -> Self {
+        let history = History::new(120);
+        Self {
+            observed: 0,
+            source,
+            driver: driver.into(),
+            history,
+        }
+    }
+}
 pub struct Sampler {
     source: LinuxSources,
     ai: Option<crate::ai::Worker>,
@@ -154,7 +171,7 @@ pub struct Sampler {
     battery_histories: BTreeMap<String, History>,
     gpu: crate::gpu::GpuCollector,
     gpu_memory: crate::gpu_memory::View,
-    gpu_histories: BTreeMap<String, (bool, History)>,
+    gpu_histories: BTreeMap<String, GpuHistory>,
     start: Instant,
     sequence: u64,
 }
@@ -555,8 +572,12 @@ impl Sampler {
 
         let vram = self.gpu_memory.panel(&result);
         let (label, detail): (String, Text) = match result {
-            Err(error) => ("GPU unavailable".into(), error.into()),
+            Err(error) => {
+                self.gpu_histories.clear();
+                ("GPU unavailable".into(), error.into())
+            }
             Ok(report) if report.values.is_empty() => {
+                self.gpu_histories.clear();
                 if report.errors.is_empty() {
                     self.gpu_histories.clear();
                     (
@@ -568,45 +589,32 @@ impl Sampler {
                 }
             }
             Ok(report) => {
-                self.gpu_histories
-                    .retain(|id, _| report.values.iter().any(|v| v.id == *id));
+                self.gpu_histories.retain(|id, _| {
+                    report
+                        .values
+                        .iter()
+                        .any(|v| v.id == *id && v.activity().is_some())
+                });
                 let mut labels = Vec::new();
                 let mut details: Vec<Text> = Vec::new();
                 let supported: Vec<_> = report
                     .values
                     .iter()
-                    .filter(|g| g.utilization.or(g.client_activity).is_some())
+                    .filter(|g| g.activity().is_some())
                     .collect();
                 let partial =
                     !report.errors.is_empty() || report.values.iter().any(|g| !g.notes.is_empty());
                 for gpu in supported.iter().take(3) {
-                    let value = gpu
-                        .utilization
-                        .or(gpu.client_activity)
-                        .expect("filtered activity");
-                    let device_counter = gpu.utilization.is_some();
-                    let history = self
-                        .gpu_histories
-                        .entry(gpu.id.clone())
-                        .or_insert_with(|| (device_counter, History::new(120)));
-                    if history.0 != device_counter {
-                        *history = (device_counter, History::new(120));
-                    }
-                    history.1.append(value);
-                    series.push(history.1.values());
-                    labels.push(format!(
-                        "{} {value:.0}%{}",
-                        gpu.label,
-                        if device_counter { "" } else { " clients" }
-                    ));
+                    let (source, value) = gpu.activity().expect("filtered activity");
+                    series.push(self.gpu_curve(gpu).expect("filtered activity"));
+                    labels.push(format!("{} {value:.0}%{}", gpu.label, source.suffix()));
                 }
                 readout.top.push(crate::dashboard::Row::new("GPU", ""));
                 for gpu in report.values.iter().take(3) {
                     readout.top.push(crate::dashboard::Row::new(
                         &gpu.name,
-                        gpu.utilization
-                            .map(|v| format!("{v:.0}%"))
-                            .or_else(|| gpu.client_activity.map(|v| format!("{v:.0}% clients")))
+                        gpu.activity()
+                            .map(|(source, value)| format!("{value:.0}%{}", source.suffix()))
                             .unwrap_or_else(|| "n/a".into()),
                     ));
                     if let Some(used) = gpu.memory_used {
@@ -625,6 +633,22 @@ impl Sampler {
                             .unwrap_or_else(|| "Device-wide utilization unavailable".into())
                             .into(),
                     ];
+                    if let Some(activity) = &gpu.engine_activity {
+                        fields.push(format!("i915 PMU busiest-engine activity: {:.1}% (system-wide engines, not whole-GPU capacity)",activity.percent).into());
+                        fields.push(
+                            format!(
+                                "PMU busy engines: {}",
+                                activity
+                                    .engines
+                                    .iter()
+                                    .map(|(name, value)| format!("{name} {value:.1}%"))
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            )
+                            .into(),
+                        );
+                        fields.push("The maximum busy-engine percentage is plotted; engines are not summed. PMU permissions are unchanged; incomplete or multiplexed intervals stay unavailable.".into());
+                    }
                     if let Some(value) = gpu.client_activity {
                         fields.push(
                             format!("Readable-client busiest-engine activity: {value:.1}%").into(),
@@ -694,6 +718,25 @@ impl Sampler {
         )
     }
 
+    fn gpu_curve(&mut self, gpu: &crate::gpu::Gpu) -> Option<Vec<f64>> {
+        let Some((source, value)) = gpu.activity() else {
+            self.gpu_histories.remove(&gpu.id);
+            return None;
+        };
+        let state = self
+            .gpu_histories
+            .entry(gpu.id.clone())
+            .or_insert_with(|| GpuHistory::new(source, &gpu.driver));
+        if state.source != source || state.driver != gpu.driver {
+            *state = GpuHistory::new(source, &gpu.driver);
+        }
+        state.history.append(value);
+        let mut values = state.history.values();
+        state.observed = (state.observed + 1).min(values.len());
+        let missing = values.len() - state.observed;
+        values[..missing].fill(f64::NAN);
+        Some(values)
+    }
     fn fan_panel(&mut self) -> Panel {
         let (panel, inventory) = self.sensors.fans(
             crate::hardware::fans(self.source.sys_root()),
@@ -905,5 +948,67 @@ impl Drop for Worker {
 impl Default for Sampler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod gpu_activity_tests {
+    use super::*;
+    use crate::gpu::{EngineActivity, Gpu};
+    fn observed(values: Option<Vec<f64>>) -> Option<Vec<f64>> {
+        values.map(|v| v.into_iter().filter(|v| v.is_finite()).collect())
+    }
+    #[test]
+    fn device_engine_client_and_driver_changes_do_not_mix_history_scopes() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let mut gpu = Gpu {
+            id: "adapter".into(),
+            driver: "i915".into(),
+            engine_activity: Some(EngineActivity {
+                percent: 50.,
+                engines: vec![("rcs0".into(), 50.)],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(observed(sampler.gpu_curve(&gpu)), Some(vec![50.]));
+        gpu.engine_activity.as_mut().unwrap().percent = 25.;
+        assert_eq!(observed(sampler.gpu_curve(&gpu)), Some(vec![50., 25.]));
+        gpu.engine_activity = None;
+        gpu.client_activity = Some(75.);
+        assert_eq!(observed(sampler.gpu_curve(&gpu)), Some(vec![75.]));
+        gpu.utilization = Some(0.);
+        assert_eq!(observed(sampler.gpu_curve(&gpu)), Some(vec![0.]));
+        gpu.driver = "another-driver".into();
+        assert_eq!(observed(sampler.gpu_curve(&gpu)), Some(vec![0.]));
+        gpu.utilization = None;
+        gpu.client_activity = None;
+        assert!(sampler.gpu_curve(&gpu).is_none());
+        gpu.utilization = Some(10.);
+        assert_eq!(observed(sampler.gpu_curve(&gpu)), Some(vec![10.]));
+    }
+}
+
+#[cfg(test)]
+mod gpu_activity_validation_tests {
+    use crate::gpu::{ActivitySource, EngineActivity, Gpu};
+    #[test]
+    fn malformed_activity_never_reaches_the_finite_only_swift_history() {
+        let mut gpu = Gpu {
+            utilization: Some(f64::NAN),
+            engine_activity: Some(EngineActivity {
+                percent: 25.,
+                engines: vec![("rcs0".into(), 25.)],
+            }),
+            client_activity: Some(0.),
+            ..Default::default()
+        };
+        assert_eq!(gpu.activity(), Some((ActivitySource::Engines, 25.)));
+        gpu.engine_activity.as_mut().unwrap().percent = 101.;
+        assert_eq!(gpu.activity(), Some((ActivitySource::Clients, 0.)));
+        gpu.client_activity = Some(f64::INFINITY);
+        assert!(gpu.activity().is_none());
     }
 }

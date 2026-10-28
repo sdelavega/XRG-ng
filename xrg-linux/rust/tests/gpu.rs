@@ -384,15 +384,16 @@ fn gpu_histories_follow_pci_identity_across_card_renumbering() {
     );
     f.put(busy, "0");
     let next = sampler.sample();
-    assert_eq!(
-        &next
-            .panels
-            .iter()
-            .find(|p| p.title == "GPU")
-            .unwrap()
-            .series[0][118..],
-        [40., 0.]
-    );
+    let values = &next
+        .panels
+        .iter()
+        .find(|p| p.title == "GPU")
+        .unwrap()
+        .series[0];
+    // Renumbering keeps valid history; an unavailable interval starts a fresh
+    // curve instead of connecting the old reading through missing telemetry.
+    assert!(values[..119].iter().all(|v| v.is_nan()));
+    assert_eq!(values[119], 0.);
     fs::remove_dir_all(f.0.join("class/drm/card2")).unwrap();
     let next = sampler.sample();
     assert!(

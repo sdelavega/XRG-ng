@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod arm;
+mod intel;
 use crate::hardware::{self, Readings};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -9,6 +10,26 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Clone, Debug)]
+pub struct EngineActivity {
+    pub percent: f64,
+    pub engines: Vec<(String, f64)>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivitySource {
+    Device,
+    Engines,
+    Clients,
+}
+impl ActivitySource {
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Device => "",
+            Self::Engines => " PMU",
+            Self::Clients => " clients",
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct Gpu {
     pub id: String,
@@ -16,6 +37,7 @@ pub struct Gpu {
     pub name: String,
     pub driver: String,
     pub utilization: Option<f64>,
+    pub engine_activity: Option<EngineActivity>,
     pub memory_used: Option<u64>,
     pub memory_total: Option<u64>,
     pub client_activity: Option<f64>,
@@ -27,6 +49,24 @@ pub struct Gpu {
     pub fan_rpm: Option<u64>,
     pub fan_percent: Option<f64>,
     pub notes: Vec<String>,
+}
+impl Gpu {
+    pub fn activity(&self) -> Option<(ActivitySource, f64)> {
+        self.utilization
+            .filter(|v| v.is_finite() && (0.0..=100.0).contains(v))
+            .map(|v| (ActivitySource::Device, v))
+            .or_else(|| {
+                self.engine_activity
+                    .as_ref()
+                    .filter(|v| v.percent.is_finite() && (0.0..=100.0).contains(&v.percent))
+                    .map(|v| (ActivitySource::Engines, v.percent))
+            })
+            .or_else(|| {
+                self.client_activity
+                    .filter(|v| v.is_finite() && (0.0..=100.0).contains(v))
+                    .map(|v| (ActivitySource::Clients, v))
+            })
+    }
 }
 struct Device {
     gpu: Gpu,
@@ -402,12 +442,16 @@ pub struct GpuCollector {
     #[cfg(unix)]
     command: crate::command::BoundedCommand,
     arm: arm::ArmCollector,
+    intel: intel::Collector,
 }
 impl GpuCollector {
     /// Custom roots do not execute commands unless a program is explicitly supplied.
     pub fn new(sys: impl Into<PathBuf>, nvidia_program: Option<PathBuf>) -> Self {
+        let sys = sys.into();
+        let intel = intel::Collector::new(&sys);
         Self {
-            sys: sys.into(),
+            sys,
+            intel,
             program: nvidia_program,
             retry_at: Instant::now(),
             last_error: String::new(),
@@ -424,7 +468,13 @@ impl GpuCollector {
         self.sample_at(Instant::now())
     }
     pub fn sample_at(&mut self, time: Instant) -> Result<Readings<Gpu>, String> {
-        let (mut devices, mut errors) = discover(&self.sys)?;
+        let (mut devices, mut errors) = match discover(&self.sys) {
+            Ok(value) => value,
+            Err(error) => {
+                self.intel.clear();
+                return Err(error);
+            }
+        };
         let mut ids = Vec::new();
         for device in &mut devices {
             if device.suspended {
@@ -456,6 +506,7 @@ impl GpuCollector {
             }
         }
         self.arm.collect(&self.sys, &mut devices, time);
+        self.intel.collect(&self.sys, &mut devices, time);
         if !ids.is_empty() {
             let response = self.nvidia(&ids);
             match response {

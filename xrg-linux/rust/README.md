@@ -206,7 +206,7 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | --- | --- |
 | AMD amdgpu | Documented busy percentage, VRAM bytes, GPU hwmon telemetry |
 | NVIDIA nvidia | One bounded `nvidia-smi` query, matched by PCI address |
-| Intel i915 | Reported clock and available hwmon telemetry; utilization unavailable |
+| Intel i915 | Kernel PMU busiest-engine activity where permitted; reported clock and hwmon |
 | Intel xe | Available hwmon telemetry; utilization unavailable |
 | Mali panfrost / panthor | Owned devfreq clocks/load when provided, readable DRM-client activity and resident allocations; client activity needs profiling |
 | Mali lima / vendor Mali | Identification, owned devfreq/hwmon, vendor devfreq load where provided, readable DRM-client stats where exported |
@@ -217,11 +217,52 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | nouveau / other drivers | Identification; unsupported counters remain unavailable |
 | Runtime-suspended adapters | Identification only; telemetry reads/commands are skipped |
 
-Intel utilization needs a future PMU/performance-counter backend. Clock frequency
+Intel `i915` engine activity uses the native backend described below; `xe` PMU
+activity remains future work. Clock frequency
 is never converted into an estimated busy percentage. There is no simulated GPU
 fallback. Actual zero utilization is retained; unsupported, malformed or absent
 values create no synthetic idle samples. NVIDIA `N/A` fields remain unavailable,
 and duplicate/invalid PCI rows cannot attach telemetry to another adapter.
+
+The **i915 PMU** backend reads exported `*-busy` events in nanoseconds using
+`perf_event_open`, with no helper process, privilege elevation or permission
+changes. The GPU graph shows **PMU** next to these readings. This is the **maximum
+busy percentage of the exported engines**, covering system-wide engine activity;
+it is not a sum, GPU-wide busy union, compute capacity or readable-client usage.
+Per-engine readings and source semantics remain in Live details/accessibility.
+Driver busy accounting can include waiting, rather than only executed work.
+Device utilization, PMU engines and readable-client activity use separate history
+scopes; source/driver changes and unavailable telemetry start fresh curves.
+Unobserved GPU history is blank, while a measured zero remains zero.
+
+PMU names containing a PCI address map directly to that adapter. The legacy
+unqualified `i915` PMU is used only when bound PCI inventory leaves exactly one
+unmatched i915 device. Ambiguous, malformed or inaccessible mappings stay
+unavailable. Reader CPUs follow an exported PMU cpumask and online CPUs; kernels
+without that legacy cpumask use the first online CPU. Device/PMU identity, event
+inventory, counter type and reader changes recreate handles and baselines.
+Only busy-event configs with `ns` units and an absent scale or a scale of 1
+are accepted.
+
+The first valid read establishes a baseline. Failed/short reads, regressions,
+zero running time, incomplete/multiplexed intervals and implausible busy deltas
+produce no idle sample. Small accounting overshoots (up to 5%) clamp to 100%;
+larger ones are rejected. Delayed intervals over five minutes and regressed sample
+times establish fresh baselines. Permission/read failures back off for 30 seconds;
+suspend, disappearance and discovery failures close counters. Enumeration is
+bounded to 4,096 PCI entries, 1,024 event-directory entries, 64 engines per adapter and 256 live
+counter handles, with bounded metadata and counting-only 24-byte records.
+Custom sysfs roots never open host perf events; fixture readers are internal to
+the tests. `i915` PMU data is **best effort and not physically validated on Intel
+hardware here**. Reports from real hardware are welcome under the support policy.
+
+The ABI follows the kernel’s [i915 PMU implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/i915/i915_pmu.c),
+[engine-event definitions](https://github.com/torvalds/linux/blob/master/include/uapi/drm/i915_drm.h)
+and [perf-event interface](https://github.com/torvalds/linux/blob/master/include/uapi/linux/perf_event.h).
+Software-counter ABI tests either verify a native record or explicitly observe
+kernel refusal; this does not establish Intel hardware behavior. Fixtures cover
+mapping, units, CPU changes, warm-up, zero/busy readings, counter failures, resets,
+permission backoff and handle cleanup.
 
 ARM platform GPUs do not need a PCI vendor file or a primary DRM card. Device-tree
 compatibles identify the GPU model when supplied. MSM display masters are linked
@@ -1025,7 +1066,7 @@ automated tests use fixtures and make no weather requests.
 
 ## Remaining migration
 
-1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
+1. Xe PMU activity, additional vendor counters, calibrated thermistor
    support and optional process priority controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
