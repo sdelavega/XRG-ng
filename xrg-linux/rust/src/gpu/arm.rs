@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-mod clients;
 use super::{Device, device, driver, insert_device, sysfs_metrics, unsigned};
 use crate::hardware;
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-    time::Instant,
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Family {
@@ -145,12 +139,9 @@ pub(super) fn discover(
 }
 
 #[derive(Default)]
-pub(super) struct ArmCollector {
-    pub(super) proc: Option<PathBuf>,
-    clients: clients::ClientCollector,
-}
+pub(super) struct ArmCollector;
 impl ArmCollector {
-    pub(super) fn collect(&mut self, sys: &Path, devices: &mut [Device], time: Instant) {
+    pub(super) fn collect(&mut self, sys: &Path, devices: &mut [Device]) {
         for device in devices
             .iter_mut()
             .filter(|d| !d.suspended && family(&d.gpu.driver).is_some())
@@ -170,9 +161,6 @@ impl ArmCollector {
             if matches!(device.gpu.driver.as_str(), "kgsl" | "kgsl-3d" | "kgsl-3d0") {
                 kgsl(device);
             }
-        }
-        if let Some(proc) = &self.proc {
-            self.clients.collect(proc, devices, time);
         }
     }
 }

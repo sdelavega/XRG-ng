@@ -206,8 +206,8 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | --- | --- |
 | AMD amdgpu | Documented busy percentage, VRAM bytes, GPU hwmon telemetry |
 | NVIDIA nvidia | One bounded `nvidia-smi` query, matched by PCI address |
-| Intel i915 | Kernel PMU busiest-engine activity where permitted; reported clock and hwmon |
-| Intel xe | Available hwmon telemetry; utilization unavailable |
+| Intel i915 | Kernel PMU busiest-engine activity where permitted; readable DRM-client engine times/allocations, reported clock and hwmon |
+| Intel xe | Readable DRM-client busy/total cycle activity and resident allocations; available hwmon telemetry |
 | Mali panfrost / panthor | Owned devfreq clocks/load when provided, readable DRM-client activity and resident allocations; client activity needs profiling |
 | Mali lima / vendor Mali | Identification, owned devfreq/hwmon, vendor devfreq load where provided, readable DRM-client stats where exported |
 | Adreno mainline MSM | Owned GPU devfreq/hwmon and readable DRM-client engine stats |
@@ -217,7 +217,8 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | nouveau / other drivers | Identification; unsupported counters remain unavailable |
 | Runtime-suspended adapters | Identification only; telemetry reads/commands are skipped |
 
-Intel `i915` engine activity uses the native backend described below; `xe` PMU
+Intel `i915` engine activity uses the native backend described below, with readable
+client accounting as a fallback. Xe uses client accounting; system-wide Xe PMU
 activity remains future work. Clock frequency
 is never converted into an estimated busy percentage. There is no simulated GPU
 fallback. Actual zero utilization is retained; unsupported, malformed or absent
@@ -288,12 +289,40 @@ invented load. Resident allocations are separately labeled readable-client data;
 shared buffers can count once per client. System RAM is never reported as dedicated
 VRAM. Protected/exiting clients and short-lived workloads can be missed.
 
+Intel i915 client activity uses the exported nanosecond engine counters. Xe uses
+`100 × Δbusy-cycles / Δtotal-cycles / engine-capacity` for each readable client,
+sums clients within each engine class, and plots the busiest class. Xe's GPU
+timestamp is the denominator, never the CPU polling interval or a clock-frequency
+estimate. Missing/zero/regressed total-cycle intervals are unavailable. Xe SR-IOV
+virtual functions currently omit these optional cycle counters in the upstream
+driver and therefore do not supply an activity reading. PCI client records must
+match the discovered adapter's `drm-pdev` and driver. Baselines reset on device or
+driver replacement, suspend, disappearing clients, capacity changes, backward
+sample times and intervals longer than five minutes. Busy-counter regressions
+retain the preceding larger baseline until catch-up. Missing resident regions
+remain unavailable; readable resident regions are summed separately from VRAM
+capacity and can include system/GTT memory.
+
+Xe fdinfo collection opens no DRM device or perf counter. The kernel's fdinfo
+callback may temporarily wake the GPU during a read; runtime-suspended adapters
+are skipped before scanning. Persistent Xe PMU collection is deferred because
+upstream holds runtime-PM/forcewake references for the lifetime of each engine
+event. An explicit power-policy choice is needed before using that interface in
+a background monitor. See the kernel's
+[Xe client implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/xe/xe_drm_client.c),
+[i915 client implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/i915/i915_drm_client.c)
+and [Xe PMU implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/xe/xe_pmu.c).
+Intel client support is **best effort and has not been physically validated here**;
+real-device feedback is welcome. Fixtures exercise cycle/time units, capacity,
+zero/busy values, resets, duplicate FDs, multiple GPUs, PCI/driver mismatches,
+suspend/removal and rejected symlinks/FIFOs. Existing ARM client tests remain gates.
+
 The proc scan has a 50 ms cooperative budget, 4096 directory-entry / 8192 FD limits
 and 64 KiB record cap. Permissions, transient failures and budget truncation are
 reported as partial coverage. Like other kernel reads, an individual fdinfo callback
 cannot be hard-cancelled by this userspace budget. Mali Panfrost needs profiling
 set to 1; Panthor needs timestamp bit 2. XRG-ng only reads these controls and does
-not enable profiling or change governors, clocks or power state. Without suitable
+not enable profiling or write governors, clocks or power controls. Without suitable
 published counters (including on current Asahi configurations), the adapter is
 identified while unavailable statistics remain explicitly unavailable.
 

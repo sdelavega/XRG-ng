@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod arm;
+mod clients;
 mod intel;
 use crate::hardware::{self, Readings};
 use std::{
@@ -443,6 +444,8 @@ pub struct GpuCollector {
     command: crate::command::BoundedCommand,
     arm: arm::ArmCollector,
     intel: intel::Collector,
+    proc: Option<PathBuf>,
+    clients: clients::ClientCollector,
 }
 impl GpuCollector {
     /// Custom roots do not execute commands unless a program is explicitly supplied.
@@ -457,11 +460,13 @@ impl GpuCollector {
             last_error: String::new(),
             #[cfg(unix)]
             command: crate::command::BoundedCommand::default(),
-            arm: arm::ArmCollector::default(),
+            arm: arm::ArmCollector,
+            proc: None,
+            clients: clients::ClientCollector::default(),
         }
     }
     pub fn with_proc_root(mut self, proc: impl Into<PathBuf>) -> Self {
-        self.arm.proc = Some(proc.into());
+        self.proc = Some(proc.into());
         self
     }
     pub fn sample(&mut self) -> Result<Readings<Gpu>, String> {
@@ -472,6 +477,7 @@ impl GpuCollector {
             Ok(value) => value,
             Err(error) => {
                 self.intel.clear();
+                self.clients.clear();
                 return Err(error);
             }
         };
@@ -505,7 +511,10 @@ impl GpuCollector {
                     .push("Telemetry unsupported for this driver".into());
             }
         }
-        self.arm.collect(&self.sys, &mut devices, time);
+        self.arm.collect(&self.sys, &mut devices);
+        if let Some(proc) = &self.proc {
+            self.clients.collect(proc, &mut devices, time);
+        }
         self.intel.collect(&self.sys, &mut devices, time);
         if !ids.is_empty() {
             let response = self.nvidia(&ids);

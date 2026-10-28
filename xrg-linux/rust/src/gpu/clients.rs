@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Readable DRM-client activity, not a device-wide utilization estimate.
-use super::{family, profiling, same_driver};
+use super::arm::{family, profiling, same_driver};
 use crate::gpu::Device;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    io::{self, Read},
+    fs, io,
+    os::unix::fs::MetadataExt,
     path::Path,
     time::{Duration, Instant},
 };
@@ -15,9 +15,44 @@ use std::{
 struct Client {
     driver: String,
     id: u64,
-    engines: BTreeMap<String, (u64, u64)>,
+    engines: BTreeMap<String, (Counter, u64)>,
     resident: Option<u64>,
     frequency: Option<u64>,
+}
+#[derive(Clone, Copy, Debug)]
+enum Counter {
+    Nanoseconds(u64),
+    Cycles { busy: u64, total: u64 },
+}
+impl Counter {
+    fn busy(self) -> u64 {
+        match self {
+            Self::Nanoseconds(value) | Self::Cycles { busy: value, .. } => value,
+        }
+    }
+    fn same_kind(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Nanoseconds(_), Self::Nanoseconds(_))
+                | (Self::Cycles { .. }, Self::Cycles { .. })
+        )
+    }
+    fn percent(self, previous: Self, elapsed: Duration, capacity: u64) -> Option<f64> {
+        let busy = self.busy().checked_sub(previous.busy())?;
+        let denominator = match (self, previous) {
+            (Self::Nanoseconds(_), Self::Nanoseconds(_)) => elapsed.as_secs_f64() * 1_000_000_000.,
+            (Self::Cycles { total, .. }, Self::Cycles { total: old, .. }) => {
+                total.checked_sub(old)? as f64
+            }
+            _ => return None,
+        };
+        (denominator > 0.).then(|| 100. * busy as f64 / denominator / capacity as f64)
+    }
+}
+fn eligible(device: &Device) -> bool {
+    !device.suspended
+        && (family(&device.gpu.driver).is_some()
+            || device.vendor == "0x8086" && matches!(device.gpu.driver.as_str(), "i915" | "xe"))
 }
 fn quantity(text: &str, kind: &str) -> Result<u64, String> {
     let parts: Vec<_> = text.split_whitespace().collect();
@@ -41,7 +76,7 @@ fn quantity(text: &str, kind: &str) -> Result<u64, String> {
         .checked_mul(multiplier)
         .ok_or_else(|| "Client counter overflow".into())
 }
-fn parse(text: &str) -> Result<Client, String> {
+fn parse(text: &str, gpu_id: &str) -> Result<Client, String> {
     let mut fields = BTreeMap::new();
     for line in text.lines() {
         let Some((key, value)) = line.split_once(':') else {
@@ -55,6 +90,12 @@ fn parse(text: &str) -> Result<Client, String> {
         .get("drm-driver")
         .ok_or("Missing DRM driver")?
         .to_string();
+    if let Some(expected) = crate::gpu::pci_id(gpu_id) {
+        let reported = fields.get("drm-pdev").and_then(|v| crate::gpu::pci_id(v));
+        if reported.as_ref() != Some(&expected) {
+            return Err("DRM client PCI identity does not match device".into());
+        }
+    }
     let id = quantity(
         fields
             .get("drm-client-id")
@@ -67,10 +108,17 @@ fn parse(text: &str) -> Result<Client, String> {
         if key.starts_with("drm-engine-capacity-") {
             continue;
         }
-        if let Some(name) = key.strip_prefix("drm-engine-") {
+        // Xe exports busy and total cycles, not elapsed nanoseconds. Never
+        // substitute current/max clocks or the CPU polling interval for total.
+        let name = if driver == "xe" {
+            key.strip_prefix("drm-cycles-")
+        } else {
+            key.strip_prefix("drm-engine-")
+        };
+        if let Some(name) = name {
             if name.is_empty()
                 || name.len() > 64
-                || name.chars().any(char::is_whitespace)
+                || name.chars().any(|c| c.is_whitespace() || c.is_control())
                 || engines.len() >= 64
             {
                 return Err("Invalid DRM engine identity".into());
@@ -83,17 +131,45 @@ fn parse(text: &str) -> Result<Client, String> {
             if capacity == 0 {
                 return Err("Zero DRM engine capacity".into());
             }
-            engines.insert(name.to_owned(), (quantity(value, "ns")?, capacity));
+            let counter = if driver == "xe" {
+                let total = fields
+                    .get(format!("drm-total-cycles-{name}").as_str())
+                    .ok_or("Missing DRM total cycle counter")?;
+                if fields.contains_key(format!("drm-maxfreq-{name}").as_str()) {
+                    return Err("Conflicting DRM cycle denominator".into());
+                }
+                Counter::Cycles {
+                    busy: quantity(value, "integer")?,
+                    total: quantity(total, "integer")?,
+                }
+            } else {
+                Counter::Nanoseconds(quantity(value, "ns")?)
+            };
+            engines.insert(name.to_owned(), (counter, capacity));
         }
         if key.starts_with("drm-curfreq-") {
             let hz = quantity(value, "Hz")?;
             frequency = Some(frequency.unwrap_or(0).max(hz));
         }
     }
-    let resident = fields
-        .get("drm-resident-memory")
-        .map(|s| quantity(s, "bytes"))
-        .transpose()?;
+    let mut resident = None::<u64>;
+    for (key, value) in &fields {
+        if let Some(region) = key.strip_prefix("drm-resident-") {
+            if region.is_empty()
+                || region.len() > 64
+                || region.chars().any(|c| c.is_whitespace() || c.is_control())
+            {
+                return Err("Invalid DRM memory region".into());
+            }
+            let bytes = quantity(value, "bytes")?;
+            resident = Some(
+                resident
+                    .unwrap_or(0)
+                    .checked_add(bytes)
+                    .ok_or("Client resident allocation overflow")?,
+            );
+        }
+    }
     Ok(Client {
         driver,
         id,
@@ -174,19 +250,19 @@ fn scan(proc: &Path, nodes: &BTreeMap<String, (String, String)>) -> Result<Scan,
                 continue;
             };
             let read = || -> Result<Client, String> {
-                let mut bytes = Vec::new();
-                File::open(file.path())
-                    .map_err(|e| e.to_string())?
-                    .take(65_537)
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| e.to_string())?;
-                if bytes.len() > 65_536 {
-                    return Err("Oversized DRM client record".into());
-                }
+                let bytes =
+                    crate::system_file::read(&file.path(), 65_536).map_err(|e| e.to_string())?;
                 let text = String::from_utf8(bytes).map_err(|_| "Invalid DRM client encoding")?;
-                let client = parse(&text)?;
+                let client = parse(&text, gpu_id)?;
                 if !same_driver(expected_driver, &client.driver) {
                     return Err("DRM client driver does not match device".into());
+                }
+                if fs::read_link(entry.path().join("fd").join(&name))
+                    .ok()
+                    .as_ref()
+                    != Some(&link)
+                {
+                    return Err("DRM descriptor changed during read".into());
                 }
                 Ok(client)
             };
@@ -205,13 +281,32 @@ fn scan(proc: &Path, nodes: &BTreeMap<String, (String, String)>) -> Result<Scan,
 }
 #[derive(Default)]
 pub(super) struct ClientCollector {
-    previous: BTreeMap<(String, u64, String), (u64, u64, Instant)>,
+    previous: BTreeMap<(String, u64, String), (Counter, u64, Instant)>,
+    owners: BTreeMap<String, (String, u64, u64)>,
 }
 impl ClientCollector {
+    pub(super) fn clear(&mut self) {
+        self.previous.clear();
+        self.owners.clear();
+    }
     pub(super) fn collect(&mut self, proc: &Path, devices: &mut [Device], time: Instant) {
+        let owners: BTreeMap<_, _> = devices
+            .iter()
+            .filter(|d| eligible(d))
+            .filter_map(|d| {
+                let m = fs::metadata(&d.path).ok()?;
+                Some((d.gpu.id.clone(), (d.gpu.driver.clone(), m.dev(), m.ino())))
+            })
+            .collect();
+        self.previous.retain(|(id, _, _), _| {
+            owners
+                .get(id)
+                .is_some_and(|owner| self.owners.get(id) == Some(owner))
+        });
+        self.owners = owners;
         let nodes: BTreeMap<_, _> = devices
             .iter()
-            .filter(|d| !d.suspended && family(&d.gpu.driver).is_some())
+            .filter(|d| eligible(d))
             .flat_map(|d| {
                 d.nodes
                     .iter()
@@ -225,10 +320,7 @@ impl ClientCollector {
         let report = match scan(proc, &nodes) {
             Ok(report) => report,
             Err(_) => {
-                for d in devices
-                    .iter_mut()
-                    .filter(|d| !d.suspended && family(&d.gpu.driver).is_some())
-                {
+                for d in devices.iter_mut().filter(|d| eligible(d)) {
                     d.gpu.notes.push("DRM client stats unreadable".into());
                 }
                 self.previous.clear();
@@ -236,10 +328,19 @@ impl ClientCollector {
             }
         };
         let mut seen = BTreeSet::new();
-        for device in devices
-            .iter_mut()
-            .filter(|d| !d.suspended && family(&d.gpu.driver).is_some())
-        {
+        for device in devices.iter_mut().filter(|d| eligible(d)) {
+            let identity = fs::metadata(&device.path)
+                .ok()
+                .map(|m| (device.gpu.driver.clone(), m.dev(), m.ino()));
+            if identity.as_ref() != self.owners.get(&device.gpu.id)
+                || super::driver(&device.path).ok().as_deref() != Some(&device.gpu.driver)
+            {
+                device
+                    .gpu
+                    .notes
+                    .push("DRM device changed during client scan".into());
+                continue;
+            }
             let profiling = profiling(device);
             let clients: Vec<_> = report
                 .values
@@ -265,7 +366,7 @@ impl ClientCollector {
                 device
                     .gpu
                     .notes
-                    .push("Driver reports no readable client engine-time counters".into());
+                    .push("Driver reports no readable client engine activity counters".into());
             }
             if device.gpu.frequency_mhz.is_none() {
                 device.gpu.frequency_mhz = clients
@@ -302,7 +403,12 @@ impl ClientCollector {
                     if let Some(&(previous, old_capacity, old_time)) = self.previous.get(&key) {
                         // The DRM ABI permits temporary regressions. Keep the
                         // larger baseline until the counter catches up.
-                        if counter < previous {
+                        if capacity != old_capacity || !counter.same_kind(previous) {
+                            warmup = true;
+                            self.previous.insert(key, (counter, capacity, time));
+                            continue;
+                        }
+                        if counter.busy() < previous.busy() {
                             warmup = true;
                             continue;
                         }
@@ -310,24 +416,27 @@ impl ClientCollector {
                             .checked_duration_since(old_time)
                             .filter(|d| !d.is_zero())
                         {
-                            if capacity == old_capacity {
-                                let rate = (counter - previous) as f64
-                                    / elapsed.as_secs_f64()
-                                    / 1_000_000_000.
-                                    / capacity as f64
-                                    * 100.;
-                                let entry = engines.entry(engine.clone()).or_insert((capacity, 0.));
-                                if entry.0 == capacity {
-                                    entry.1 += rate;
+                            if elapsed <= Duration::from_secs(300) {
+                                if let Some(rate) = counter.percent(previous, elapsed, capacity) {
+                                    let entry =
+                                        engines.entry(engine.clone()).or_insert((capacity, 0.));
+                                    if entry.0 == capacity {
+                                        entry.1 += rate;
+                                    } else {
+                                        invalid_engines.insert(engine.clone());
+                                    }
                                 } else {
-                                    invalid_engines.insert(engine.clone());
+                                    warmup = true;
                                 }
                             } else {
                                 warmup = true;
                             }
-                        } else {
+                        } else if time == old_time {
                             warmup = true;
                             continue;
+                        } else {
+                            // A regressed caller clock starts a fresh interval.
+                            warmup = true;
                         }
                     } else {
                         warmup = true;
