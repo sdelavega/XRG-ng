@@ -753,7 +753,11 @@ lists remain inventories; they do not supply token counts.
 
 Claude model attribution follows the same message-ID replacement and cross-file
 deduplication as its provider total. A replacement changes the count and model
-together. Gemini uses each message's recorded model, falling back to the legacy
+together. Across copied files, the newest modification time wins; equal timestamps
+use stable path order (the lexicographically later path wins), independent of file
+creation/discovery order and cache warmth. An append within the same filesystem
+timestamp tick does not establish which copy is newer. Gemini uses each message's
+recorded model, falling back to the legacy
 session-level model when absent. Its explicit total is preserved even when it
 differs from input plus output. Missing, blank, control-containing or overlong
 model names keep their tokens in **Unattributed**. Valid names retain their exact

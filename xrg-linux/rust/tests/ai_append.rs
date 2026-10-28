@@ -35,6 +35,13 @@ impl Fixture {
     fn scan(&self, layout: Layout) -> LogScan {
         LogScan::new(self.0.clone(), layout)
     }
+    fn modified(&self, path: &str, seconds: u64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        fs::File::open(self.0.join(path))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(time))
+            .unwrap();
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -84,14 +91,57 @@ fn appended_message_replacements_update_model_and_copied_id_deduplication() {
     let f = Fixture::new();
     f.put("a.jsonl", &format!("{}\n", claude(Some("id"), "old", 10)));
     f.put("copy.jsonl", &claude(Some("id"), "old", 10));
+    f.modified("a.jsonl", 100);
+    f.modified("copy.jsonl", 200);
     let mut scan = f.scan(Layout::Claude);
     assert_eq!(scan.scan().unwrap().total, 10);
     f.append("a.jsonl", &claude(Some("id"), "new", 20));
+    // Do not assume writes within one filesystem clock tick get distinct mtimes.
+    f.modified("a.jsonl", 300);
     let details = scan.scan_details().unwrap();
     assert_eq!(details.usage.total, 20);
     let models = details.models.unwrap();
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].model.as_deref(), Some("new"));
+}
+#[test]
+fn tied_copy_timestamps_use_stable_path_order_until_one_snapshot_is_newer() {
+    for reverse in [false, true] {
+        let f = Fixture::new();
+        let mut records = [
+            ("a.jsonl", claude(Some("id"), "a-model", 20)),
+            ("copy.jsonl", claude(Some("id"), "copy-model", 10)),
+        ];
+        if reverse {
+            records.reverse();
+        }
+        for (path, record) in records {
+            f.put(path, &record);
+            f.modified(path, 100);
+        }
+        let mut scan = f.scan(Layout::Claude);
+        // Discovery order and cache warmth must not affect an equal-mtime tie.
+        for _ in 0..2 {
+            let details = scan.scan_details().unwrap();
+            assert_eq!(details.usage.total, 10);
+            let models = details.models.unwrap();
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].model.as_deref(), Some("copy-model"));
+        }
+        f.append(
+            "a.jsonl",
+            &format!("\n{}", claude(Some("id"), "appended", 30)),
+        );
+        f.modified("a.jsonl", 100);
+        assert_eq!(scan.scan().unwrap().total, 10);
+        // Advancing mtime without changing bytes still changes the winning copy.
+        f.modified("a.jsonl", 200);
+        let details = scan.scan_details().unwrap();
+        assert_eq!(details.usage.total, 30);
+        let models = details.models.unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model.as_deref(), Some("appended"));
+    }
 }
 #[test]
 fn a_growing_file_with_a_rewritten_middle_discards_old_prefix_counts() {
