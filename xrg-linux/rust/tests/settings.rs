@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 18;
+    value.version = 19;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -386,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        17
+        18
     );
 }
 #[test]
@@ -469,7 +469,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 17);
+    assert_eq!(migrated.version, 18);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -628,7 +628,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        17
+        18
     );
 }
 
@@ -782,5 +782,67 @@ fn sampling_target_upgrade_is_read_only_and_invalid_periods_do_not_replace_saved
     ] {
         wire["sampling_interval_ms"] = invalid;
         assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn version_seventeen_keeps_appearance_and_migrates_opacity_only_on_save() {
+    let f = Fixture::new();
+    let mut original = Settings {
+        graph_width: 380,
+        ..Settings::default()
+    };
+    original.module_mut(Module::Cpu).visible = false;
+    original.move_module(Module::Tpu, -2);
+    let mut json = serde_json::to_value(&original).unwrap();
+    json["version"] = 17.into();
+    json.as_object_mut().unwrap().remove("window_opacity");
+    let bytes = serde_json::to_vec(&json).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, original);
+    assert_eq!(loaded.window_opacity, 1.);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.window_opacity = 0.425;
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+}
+
+#[test]
+fn window_opacity_requires_finite_visible_range_and_json_numbers() {
+    let mut value = Settings::default();
+    for opacity in [0.1, 0.425, 0.9, 1.] {
+        value.window_opacity = opacity;
+        value.validate().unwrap();
+        assert_eq!(
+            Settings::parse(&serde_json::to_vec(&value).unwrap()).unwrap(),
+            value
+        );
+    }
+    for opacity in [
+        0.,
+        -1.,
+        0.0999,
+        1.0001,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        value.window_opacity = opacity;
+        assert!(value.validate().is_err(), "accepted {opacity}");
+    }
+    let mut json = serde_json::to_value(Settings::default()).unwrap();
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!("0.5"),
+        serde_json::json!(false),
+        serde_json::json!(0.09),
+        serde_json::json!(2),
+    ] {
+        json["window_opacity"] = invalid;
+        assert!(Settings::parse(&serde_json::to_vec(&json).unwrap()).is_err());
     }
 }

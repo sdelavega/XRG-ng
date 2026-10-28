@@ -7,6 +7,7 @@ mod graph_colors;
 mod graph_heights;
 mod legacy_import;
 mod menus;
+mod opacity_smoke;
 mod preferences;
 mod process_actions;
 mod process_actions_smoke;
@@ -194,6 +195,7 @@ impl Shell {
             .default_height(850)
             .child(&content)
             .build();
+        window.set_opacity(settings.borrow().window_opacity);
         let paintable = gtk::WidgetPaintable::new(Some(&content));
         let shell = Rc::new(Self {
             window,
@@ -411,6 +413,7 @@ impl Shell {
                 .set(settings.weather.clone())
                 .expect("Validated weather preferences");
         }
+        self.window.set_opacity(settings.window_opacity);
         *self.settings.borrow_mut() = settings.clone();
         if process_change && let Some(window) = self.processes.borrow().as_ref() {
             window.set_view(settings.processes.clone());

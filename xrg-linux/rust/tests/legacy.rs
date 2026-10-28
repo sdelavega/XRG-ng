@@ -93,6 +93,7 @@ fn imports_visibility_and_global_colors_without_changing_other_choices() {
         .unwrap()
         .visible = false;
     expected.theme = report.settings.theme.clone();
+    expected.window_opacity = 0.8;
     expected
         .modules
         .iter_mut()
@@ -108,7 +109,7 @@ fn imports_visibility_and_global_colors_without_changing_other_choices() {
         [17. / 255., 34. / 255., 51. / 255., 68. / 255.]
     );
     assert_eq!(palette.colors[0], base.theme.palette().unwrap().colors[0]);
-    assert_eq!(report.imported.len(), 6);
+    assert_eq!(report.imported.len(), 7);
     assert!(report.skipped.contains(&"[Modules] show_weather".into()));
     assert!(
         report
@@ -370,4 +371,42 @@ fn model_breakdown_import_is_display_only_and_rejects_invalid_booleans_atomicall
     let report = legacy::parse(source, &base).unwrap();
     assert!(report.settings.ai_show_model_breakdown);
     assert_eq!(report.repeated_keys, 1);
+}
+
+#[test]
+fn legacy_window_opacity_import_is_explicit_bounded_and_preserves_source() {
+    let f = Fixture::new();
+    let base = rich_base();
+    for opacity in [0.1, 0.425, 0.9, 1.] {
+        let bytes = format!("[Window]\nopacity={opacity}\nx=123\nalways_on_top=true\n");
+        fs::write(f.source(), &bytes).unwrap();
+        let report = legacy::load(&f.source(), &base).unwrap();
+        let mut expected = base.clone();
+        expected.window_opacity = opacity;
+        assert_eq!(report.settings, expected);
+        assert_eq!(report.imported, [format!("[Window] opacity = {opacity}")]);
+        assert_eq!(report.skipped, ["[Window] always_on_top", "[Window] x"]);
+        assert_eq!(fs::read_to_string(f.source()).unwrap(), bytes);
+    }
+    for invalid in [
+        "", "NaN", "inf", "-inf", "true", "0", "0.099", "1.001", "50%", "0,5",
+    ] {
+        let bytes = format!("[Modules]\nshow_cpu=false\n[Window]\nopacity={invalid}\n");
+        fs::write(f.source(), &bytes).unwrap();
+        assert!(
+            legacy::load(&f.source(), &base)
+                .unwrap_err()
+                .contains("[Window] opacity")
+        );
+        assert_eq!(fs::read_to_string(f.source()).unwrap(), bytes);
+        assert_eq!(base, rich_base());
+    }
+    let mut draft = base.clone();
+    draft.window_opacity = 0.7;
+    assert_eq!(
+        legacy::parse(b"[Modules]\nshow_cpu=true\n[Window]\nx=5\n", &draft)
+            .unwrap()
+            .settings,
+        draft
+    );
 }

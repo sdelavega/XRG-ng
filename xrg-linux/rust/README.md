@@ -551,7 +551,7 @@ settings reject the entire import. A bar-only color import keeps the global them
 Partial files keep current draft values for missing fields. New VRAM/Fans
 visibility, graph order/height, metric sources, process filters, AI sources and
 weather remain as configured. A legacy weather visibility flag does not enable
-requests. The main window background stays opaque as with other custom themes.
+requests. Theme background alpha is separate from whole-window opacity.
 The C writer does not save its update-interval fields; import preserves the Rust
 system sampling target instead of guessing it from unrelated keys or window data.
 
@@ -560,7 +560,11 @@ system sampling target instead of guessing it from unrelated keys or window data
 provider totals. Missing values preserve the draft choice, and malformed booleans
 reject the entire import. This does not alter AI sources or their histories.
 
-Window geometry/pinning/opacity, billing and unrecognized entries are listed as
+`[Window] opacity` transfers as a fraction from 0.1 to 1.0. Missing values keep
+current draft opacity; invalid/non-finite values reject the whole import. The
+preview and Preferences stay opaque, and transparency changes only after Apply.
+
+Window geometry/pinning, billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
 supported booleans, colors, layout or unit values reject the entire import and
 leave the draft unchanged.
@@ -614,6 +618,15 @@ entry opens the editor when a built-in preset is active. In Preferences:
   and are spaced by sample order, so a cadence change is not a uniform time axis.
   AI still collects every five seconds, and weather keeps its own refresh policy.
   Their latest cached views reach the window at the system snapshot cadence.
+- Set **Main window opacity (%)** between **10% and 100%**. New installations,
+  existing Rust settings and Restore defaults use **100%**. This affects the entire
+  dashboard, including text and graphs; Preferences, details and other windows
+  stay opaque. Apply changes and saves it; Cancel discards the draft. Theme
+  load/save continues to exchange colors independently of window opacity.
+  [GTK requires X11 compositing for this effect](https://docs.gtk.org/gtk4/method.Widget.set_opacity.html);
+  Wayland supports it, but live changes can flicker on some windowing systems.
+  The automated Xvfb gate checks GTK's property and preference lifecycle; physical
+  compositor behavior remains best effort and feedback is welcome.
 - Expand **Activity bars** to show/hide the compact current-value indicators and choose
   their independent Solid/Pixel/Dot/Hollow style and RGBA color, or inherit graph
   series colors (the new default). Up to three bars
@@ -693,7 +706,8 @@ provides a valid starting document. The format contains `format: "xrg-ng-theme"`
 `version: 1`, a printable name of 1–80 characters and `colors`: seven RGBA arrays in
 **background, graph background, series 1, series 2, series 3, border, text** order.
 Each component must be finite and between 0 and 1. Alpha is retained in files and
-used for graph layers; the window background stays opaque. JSON numbers preserve
+used for graph layers; theme alpha does not control whole-window transparency.
+Use the separate Main window opacity preference for that. JSON numbers preserve
 round-trip precision. Editing a theme name does not quantize untouched colors to
 the color picker's display precision.
 
@@ -753,7 +767,7 @@ events; XRG-ng enforces these limits while building values.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 17 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 18 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show nine
@@ -809,6 +823,11 @@ files. Out-of-range, non-integer and malformed intervals reject the whole file;
 migration writes only on explicit save. Worker timing and overrun handling have
 deterministic schedule tests; a separate GTK gate starts at ten seconds, applies
 a faster interval and checks cancellation, defaults, persistence and reopening.
+Version 18 adds `window_opacity` as a finite fraction from 0.1 to 1.0. Older
+settings default to 1.0, preserving their appearance without a write until save.
+Invalid values reject the entire document. A dedicated GTK gate starts from saved
+transparency and checks cancellation, draft-only defaults, minimum and fractional
+opacity, fully opaque Preferences, persistence, reopening and applied defaults.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

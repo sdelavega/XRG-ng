@@ -23,7 +23,7 @@ pub struct Import {
 impl Import {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout, system temperature units and per-model token display transfer when present. Graph order/sizes, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
+            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout, main window opacity, system temperature units and per-model token display transfer when present. Graph order/sizes, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha. Window opacity affects the whole dashboard and requires X11 compositing or Wayland.\n\nReady to import:\n{}",
             self.imported.len(),
             self.skipped.len(),
             self.imported.join("\n")
@@ -176,6 +176,14 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 .expect("Validated module set")
                 .visible = visible;
             imported.push(format!("{label} = {visible}"));
+        } else if group == "Window" && key == "opacity" {
+            let opacity = value
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && (0.1..=1.0).contains(v))
+                .ok_or_else(|| format!("{label}: expected an opacity between 0.1 and 1.0"))?;
+            settings.window_opacity = opacity;
+            imported.push(format!("{label} = {opacity}"));
         } else if group == "Display" && key == "layout_orientation" {
             settings.layout = match value.parse::<i32>() {
                 Ok(0) => Layout::Vertical,
@@ -264,7 +272,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         }
     }
     if imported.is_empty() {
-        return Err("No supported legacy visibility, color, layout, graph-style, activity-bar, model-breakdown or temperature-unit entries found".into());
+        return Err("No supported legacy visibility, color, layout, opacity, graph-style, activity-bar, model-breakdown or temperature-unit entries found".into());
     }
     if has_colors {
         let name = entries

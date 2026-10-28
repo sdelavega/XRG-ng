@@ -34,6 +34,7 @@ pub(super) struct Dialog {
     pub height: gtk::SpinButton,
     pub width: gtk::SpinButton,
     pub sampling: gtk::SpinButton,
+    pub opacity: gtk::SpinButton,
     pub graph_heights: super::graph_heights::Editor,
     pub activity: gtk::Expander,
     pub activity_visible: gtk::CheckButton,
@@ -157,6 +158,19 @@ impl Dialog {
         sampling_row.append(&sampling_label);
         sampling_row.append(&sampling);
         form.append(&sampling_row);
+        let opacity_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let opacity_label = gtk::Label::new(Some("Main window opacity (%)"));
+        opacity_label.set_hexpand(true);
+        opacity_label.set_xalign(0.);
+        let opacity = gtk::SpinButton::with_range(10., 100., 5.);
+        opacity.set_digits(1);
+        opacity.update_property(&[gtk::accessible::Property::Label(
+            "Main window opacity percent",
+        )]);
+        opacity.set_tooltip_text(Some("Applies to the entire dashboard. Preferences and other windows stay opaque. X11 requires a compositing manager; Wayland supports transparency."));
+        opacity_row.append(&opacity_label);
+        opacity_row.append(&opacity);
+        form.append(&opacity_row);
         let activity_content = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let activity_description = gtk::Label::new(Some(
             "CPU shows up to 64 logical-core bars. Other graphs show one current-value bar per series, on the graph’s axis. Rate/count bars scale to recent history, not capacity. Temperature bars show a display range, not a thermal limit. Missing readings stay blank; measured zero has an empty track.",
@@ -329,6 +343,7 @@ impl Dialog {
             height,
             width,
             sampling,
+            opacity,
             graph_heights,
             activity,
             activity_visible,
@@ -350,6 +365,14 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.opacity.connect_value_changed(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().window_opacity = control.value() / 100.;
+            }
+        });
         let weak = Rc::downgrade(&dialog);
         dialog.sampling.connect_value_changed(move |control| {
             if let Some(dialog) = weak.upgrade()
@@ -694,6 +717,7 @@ impl Dialog {
     fn refresh(&self) {
         self.updating.set(true);
         let settings = self.draft.borrow();
+        self.opacity.set_value(settings.window_opacity * 100.);
         self.sampling
             .set_value(f64::from(settings.sampling_interval_ms));
         let horizontal = settings.layout == Layout::Horizontal;
