@@ -270,7 +270,7 @@ mod tests {
         let themes = themes();
         assert_eq!(themes.len(), 6);
         assert_eq!(themes[4].name, "Paper");
-        assert_eq!(themes[0].colors[5], [0.5, 0., 0.5, 0.4]);
+        assert_eq!(themes[0].colors[5], [0., 0., 0., 0.4]);
         assert_eq!(
             metrics("tokens_input_total 123\nrequest_cost 0.25\n"),
             Some((123, 0.25))

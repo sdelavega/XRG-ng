@@ -35,13 +35,6 @@ public final class XRGWindowPreferences: NSObject {
     }
     @nonobjc static func defaultValues(metric: Bool, screen: NSRect) -> [String: Any] {
         var values: [String: Any] = [
-            "backgroundTransparency": "0.9",
-            "graphBGTransparency": "0.9",
-            "graphFG1Transparency": "1.0",
-            "graphFG2Transparency": "1.0",
-            "graphFG3Transparency": "1.0",
-            "borderTransparency": "0.4",
-            "textTransparency": "1.0",
             "windowWidth": "140",
             "windowHeight": "700",
             "borderWidth": "4",
@@ -102,15 +95,11 @@ public final class XRGWindowPreferences: NSObject {
         values["temperatureUnits"] = metric ? 1 : 0
         values["distanceUnits"] = metric ? 1 : 0
         values["pressureUnits"] = metric ? 1 : 0
-        let colors: [(String, NSColor)] = [
-            ("backgroundColor", NSColor(deviceRed: 0.05, green: 0.02, blue: 0.08, alpha: 0.95)),
-            ("graphBGColor", NSColor(deviceRed: 0.08, green: 0.04, blue: 0.12, alpha: 0.9)),
-            ("graphFG1Color", NSColor(deviceRed: 1, green: 0, blue: 0.6, alpha: 1)),
-            ("graphFG2Color", NSColor(deviceRed: 0, green: 1, blue: 1, alpha: 1)),
-            ("graphFG3Color", NSColor(deviceRed: 0.2, green: 1, blue: 0.2, alpha: 1)),
-            ("borderColor", NSColor(deviceRed: 0.5, green: 0, blue: 0.5, alpha: 0.5)),
-            ("textColor", NSColor(deviceRed: 0.6, green: 1, blue: 1, alpha: 1))]
-        for (key, color) in colors { values[key] = try? NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: true) }
+        for (name, rgba) in zip(XRGTheme.colorNames, XRGTheme.Builtin.classic.rgba) {
+            let color = NSColor(deviceRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+            values[name + "Color"] = try? NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: true)
+            values[name + "Transparency"] = String(rgba[3])
+        }
         values["graphFont"] = try? NSKeyedArchiver.archivedData(withRootObject: NSFont.systemFont(ofSize: 10), requiringSecureCoding: true)
         let x = screen.origin.x + screen.width * 0.5 - 70, y = screen.maxY - 750
         values["windowOriginX"] = x.isFinite && abs(x) < Double(Int32.max) ? Int(x) : 0

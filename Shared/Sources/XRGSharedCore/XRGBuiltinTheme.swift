@@ -8,14 +8,15 @@ public enum XRGBuiltinTheme: String, CaseIterable, Sendable {
 
     public var name: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
 
-    /// macOS retains the original device-RGB color space for Classic.
+    /// Classic's colored graph fills use the original export's device-RGB space.
     public var usesDeviceRGB: Bool { self == .classic }
 
     public var rgba: [[Double]] {
         if self == .classic {
-            return [[0.05, 0.02, 0.08, 0.9], [0.08, 0.04, 0.12, 0.9],
-                    [1, 0, 0.6, 1], [0, 1, 1, 1], [0.2, 1, 0.2, 1],
-                    [0.5, 0, 0.5, 0.4], [0.6, 1, 1, 1]]
+            // Original XRG "My Theme.xtf": blue, gold and red on black.
+            return [[0, 0, 0, 0.9], [0, 0, 0, 0.9],
+                    [0.165, 0.224, 0.773, 1], [0.922, 0.667, 0.337, 1], [0.690, 0.102, 0.102, 1],
+                    [0, 0, 0, 0.4], [1, 1, 1, 1]]
         }
         let palette: [UInt32] = switch self {
         case .midnight: [0x0B1220, 0x111B2B, 0x1D4ED8, 0x0F766E, 0x6D28D9, 0x334155, 0xE5EEFC]

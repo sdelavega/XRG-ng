@@ -38,16 +38,15 @@ struct XRGWindowPreferencesTests {
         defer { defaults.removePersistentDomain(forName: domain) }
         try body(XRGSettings(defaults: defaults), defaults)
     }
-    @Test func defaultsMatchThePreMigrationObjectiveCSnapshot() throws {
+    @Test func nonColorDefaultsMatchThePreMigrationObjectiveCSnapshot() throws {
         let legacy = try legacyDefaults()
         let current = XRGWindowPreferences.defaultValues(metric: false, screen: NSRect(x: 0, y: 0, width: 1920, height: 1080))
         #expect(current.count == legacy.count + 1)
         #expect(current["showNPUGraph"] as? String == (XRGNPUReader.isAppleSilicon() ? "YES" : "NO"))
         for key in legacy.allKeys.compactMap({ $0 as? String }) {
             if ["backgroundColor", "graphBGColor", "graphFG1Color", "graphFG2Color", "graphFG3Color", "borderColor", "textColor"].contains(key) {
-                let old = try NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: try #require(legacy[key] as? Data))
-                let new = try NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: try #require(current[key] as? Data))
-                #expect(old == new)
+                // Color defaults now follow the original XRG export, checked below.
+                continue
             } else if key == "graphFont" {
                 let old = try NSKeyedUnarchiver.unarchivedObject(ofClass: NSFont.self, from: try #require(legacy[key] as? Data))
                 let new = try NSKeyedUnarchiver.unarchivedObject(ofClass: NSFont.self, from: try #require(current[key] as? Data))
@@ -55,6 +54,28 @@ struct XRGWindowPreferencesTests {
             } else { #expect((current[key] as? NSObject) == (legacy[key] as? NSObject)) }
         }
         #expect(current["icao"] as? String == "KMOP" && current["ICAO"] == nil)
+    }
+    @Test func classicAndFreshDefaultsMatchTheOriginalXRGThemeExport() throws {
+        let url = try #require(Bundle(for: WindowPreferencesFixtureOwner.self).url(forResource: "ClassicTheme", withExtension: "xtf"))
+        let original = try XRGTheme(dictionary: PropertyListSerialization.propertyList(from: Data(contentsOf: url), options: [], format: nil))
+        let preset = try XRGTheme(dictionary: XRGTheme.Builtin.classic.dictionary())
+        let values = XRGWindowPreferences.defaultValues(metric: false, screen: .zero)
+        #expect(XRGTheme.Builtin.classic.name == "Classic")
+        try settings { settings, defaults in
+            let before = defaults.dictionaryRepresentation()
+            _ = XRGWindowPreferences.apply([:], to: settings, fallback: values)
+            for (expected, selected) in zip(original.fields, preset.fields) {
+                let target = try #require(expected.color.usingColorSpace(.deviceRGB))
+                let colors = [selected.color, try #require(settings.value(forKey: expected.colorKey) as? NSColor)]
+                for color in colors {
+                    let actual = try #require(color.usingColorSpace(.deviceRGB))
+                    #expect(zip([actual.redComponent, actual.greenComponent, actual.blueComponent, actual.alphaComponent],
+                                [target.redComponent, target.greenComponent, target.blueComponent, target.alphaComponent])
+                        .allSatisfy { abs($0 - $1) < 0.000001 })
+                }
+            }
+            #expect(NSDictionary(dictionary: defaults.dictionaryRepresentation()).isEqual(to: before))
+        }
     }
     @Test(arguments: [true, false])
     func metricDefaultsAndNegativeScreenCoordinates(metric: Bool) throws {

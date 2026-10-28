@@ -177,8 +177,10 @@ For detailed documentation, see [README_AI_TOKENS.md](README_AI_TOKENS.md)
 
 Open **Preferences → Appearance → Built-in Themes** to apply **Classic**,
 **Midnight**, **Ocean**, **Dusk**, **Paper**, or **Phosphor**. Presets update colors
-and opacity immediately. Classic restores the existing palette; Paper provides a
-light background, while the other palettes offer dark alternatives.
+and opacity immediately. **Classic** is the default macOS palette: the original
+XRG theme's blue, gold and red graphs on black, with white text. Paper provides a
+light background, while the other palettes offer dark alternatives. Existing
+saved appearances keep their colors; choose Classic to apply it to an existing setup.
 
 Customize any preset with the existing color wells and opacity sliders. **Load
 Theme** and **Save Theme** continue to use `.xtf` files, including existing custom
