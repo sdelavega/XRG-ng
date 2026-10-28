@@ -4,6 +4,7 @@ use plist::{Dictionary, Uid, Value};
 use std::{
     fs,
     io::Cursor,
+    path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
 use xrg_ng_linux::{
@@ -11,6 +12,16 @@ use xrg_ng_linux::{
     shared,
 };
 const CLASSIC: &[u8] = include_bytes!("../../../XRGTests/Fixtures/ClassicTheme.xtf");
+const SRGB: &[u8] = include_bytes!("fixtures/ModernSRGB.xtf");
+const SRGB_COLORS: [[f64; 4]; 7] = [
+    [0., 0., 0., 0.75],
+    [1., 1., 1., 0.4],
+    [0.2, 0.4, 0.8, 0.5],
+    [1., 0., 0., 0.6],
+    [0., 1., 0., 0.7],
+    [0., 0., 1., 0.8],
+    [0.5, 0.5, 0.5, 0.9],
+];
 static NEXT: AtomicU64 = AtomicU64::new(0);
 fn fixture() -> Value {
     Value::from_reader(Cursor::new(CLASSIC)).unwrap()
@@ -111,6 +122,118 @@ fn device_grayscale_expands_to_rgb_and_retains_transparency() {
     );
 }
 #[test]
+fn appkit_srgb_uses_original_components_and_separate_alpha() {
+    let theme = ThemeDocument::parse(SRGB).unwrap();
+    assert_eq!(theme.colors, SRGB_COLORS);
+    assert_eq!(
+        ThemeDocument::parse(&serde_json::to_vec(&theme).unwrap()).unwrap(),
+        theme
+    );
+    // Optional local evidence from the generator's unmodified AppKit archive.
+    // System ICC bytes are not redistributed with the checked-in fixture.
+    if let Some(path) = std::env::var_os("XRG_TEST_APPKIT_SRGB") {
+        assert_eq!(ThemeDocument::load(Path::new(&path)).unwrap(), theme);
+        let mut value = Value::from_reader(Cursor::new(fs::read(path).unwrap())).unwrap();
+        archive(&mut value, |objects| {
+            let bytes = objects
+                .iter_mut()
+                .find_map(|value| match value {
+                    Value::Data(bytes) => Some(bytes),
+                    _ => None,
+                })
+                .unwrap();
+            let index = bytes.len() / 2;
+            bytes[index] ^= 1;
+        });
+        assert!(
+            ThemeDocument::parse(&xml(&value))
+                .unwrap_err()
+                .contains("ICC")
+        );
+    }
+    let mut binary = Vec::new();
+    srgb_fixture().to_writer_binary(&mut binary).unwrap();
+    assert_eq!(ThemeDocument::parse(&binary).unwrap(), theme);
+}
+fn srgb_fixture() -> Value {
+    Value::from_reader(Cursor::new(SRGB)).unwrap()
+}
+#[test]
+fn srgb_does_not_use_the_calibrated_fallback_or_require_exposure_metadata() {
+    let mut value = srgb_fixture();
+    archive(&mut value, |objects| {
+        let root = objects[1].as_dictionary_mut().unwrap();
+        root.remove("NSLinearExposure");
+        root.insert("NSRGB".into(), Value::Data(b"-0.1 1.2 0 1\0".to_vec()));
+    });
+    assert_eq!(
+        ThemeDocument::parse(&xml(&value)).unwrap().colors,
+        SRGB_COLORS
+    );
+}
+#[test]
+fn srgb_rejects_unknown_spaces_profiles_and_space_classes() {
+    for edit in 0..5 {
+        let mut value = srgb_fixture();
+        archive(&mut value, |objects| {
+            let index = objects
+                .iter()
+                .position(|v| v.as_dictionary().is_some_and(|d| d.contains_key("NSID")))
+                .unwrap();
+            let space = objects[index].as_dictionary_mut().unwrap();
+            match edit {
+                0 => {
+                    space.insert("NSID".into(), Value::from(12u64));
+                }
+                1 => {
+                    space.insert("NSICC".into(), Value::Uid(Uid::new(0)));
+                }
+                2 => {
+                    space.insert("NSICC".into(), Value::Uid(Uid::new(3)));
+                    objects[3] = Value::Data(vec![0; 3144]);
+                }
+                3 => {
+                    space.insert("$class".into(), Value::Uid(Uid::new(1)));
+                }
+                4 => {
+                    space.insert("NSSpaceID".into(), Value::from(12u64));
+                }
+                _ => unreachable!(),
+            }
+        });
+        assert!(ThemeDocument::parse(&xml(&value)).is_err(), "case {edit}");
+    }
+}
+#[test]
+fn srgb_rejects_exposure_invalid_components_and_conflicting_fields() {
+    for (field, invalid) in [
+        ("NSLinearExposure", Value::Data(b"1".to_vec())),
+        ("NSLinearExposure", Value::from(0u64)),
+        ("NSComponents", Value::Data(b"0.2 NaN 0.8 1".to_vec())),
+        ("NSComponents", Value::Data(b"-0.2 0.4 0.8 1".to_vec())),
+        ("NSComponents", Value::Data(b"0.2 0.4 1.1 1".to_vec())),
+        ("NSComponents", Value::Data(b"0.2 0.4".to_vec())),
+        ("NSWhite", Value::Data(b"0.5".to_vec())),
+        ("NSColorSpace", Value::from(2u64)),
+    ] {
+        let mut value = srgb_fixture();
+        archive(&mut value, |objects| {
+            objects[1]
+                .as_dictionary_mut()
+                .unwrap()
+                .insert(field.into(), invalid);
+        });
+        assert!(ThemeDocument::parse(&xml(&value)).is_err(), "{field}");
+    }
+    for field in ["NSComponents", "NSCustomColorSpace"] {
+        let mut value = srgb_fixture();
+        archive(&mut value, |objects| {
+            objects[1].as_dictionary_mut().unwrap().remove(field);
+        });
+        assert!(ThemeDocument::parse(&xml(&value)).is_err(), "{field}");
+    }
+}
+#[test]
 fn boolean_nan_out_of_range_and_missing_transparency_reject_the_entire_theme() {
     for invalid in [
         Value::Boolean(true),
@@ -187,11 +310,7 @@ fn custom_profiles_pattern_spaces_and_arbitrary_classes_are_never_unarchived() {
             .unwrap()
             .insert("NSCustomColorSpace".into(), Value::Uid(Uid::new(2)));
     });
-    assert!(
-        ThemeDocument::parse(&xml(&value))
-            .unwrap_err()
-            .contains("ICC")
-    );
+    assert!(ThemeDocument::parse(&xml(&value)).is_err());
     let mut value = fixture();
     archive(&mut value, |objects| {
         objects[2]

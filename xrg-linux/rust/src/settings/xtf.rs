@@ -146,6 +146,74 @@ fn components(value: Option<&Value>, count: usize) -> Result<Vec<f64>, String> {
     }
     Ok(values)
 }
+fn class(value: &Value, objects: &[Value], name: &str) -> Result<(), String> {
+    let value = dictionary(value)?;
+    let class = dictionary(object(value.get("$class"), objects)?)?;
+    keys(class, &["$classname", "$classes"])?;
+    let classes = class
+        .get("$classes")
+        .and_then(Value::as_array)
+        .ok_or("Missing XTF class hierarchy")?;
+    if class.get("$classname").and_then(Value::as_string) != Some(name)
+        || classes.len() != 2
+        || classes[0].as_string() != Some(name)
+        || classes[1].as_string() != Some("NSObject")
+    {
+        return Err(format!("Only plain {name} archives are supported"));
+    }
+    Ok(())
+}
+fn srgb(root: &Dictionary, objects: &[Value]) -> Result<[f64; 3], String> {
+    keys(
+        root,
+        &[
+            "$class",
+            "NSColorSpace",
+            "NSRGB",
+            "NSComponents",
+            "NSCustomColorSpace",
+            "NSLinearExposure",
+        ],
+    )?;
+    if root
+        .get("NSColorSpace")
+        .and_then(Value::as_unsigned_integer)
+        != Some(1)
+    {
+        return Err("Unsupported XTF custom color space".into());
+    }
+    let space = object(root.get("NSCustomColorSpace"), objects)?;
+    class(space, objects, "NSColorSpace")?;
+    let space = dictionary(space)?;
+    keys(space, &["$class", "NSID", "NSICC"])?;
+    if space.get("NSID").and_then(Value::as_unsigned_integer) != Some(7) {
+        return Err("Unsupported XTF custom color space; only standard sRGB is supported".into());
+    }
+    if let Some(profile) = space.get("NSICC") {
+        let profile = object(Some(profile), objects)?
+            .as_data()
+            .ok_or("Invalid XTF ICC profile")?;
+        // AppKit's sRGB IEC61966-2.1 profile, verified from a real archive.
+        // NSID alone must not override an arbitrary embedded ICC profile.
+        if profile.len() != 3144
+            || blake3::hash(profile).to_hex().as_str()
+                != "584d7f5ba6f0afe67a1bba04b2a12d5e336e9721b198d6c98ee20b1a6e5759fc"
+        {
+            return Err(
+                "Unsupported XTF ICC profile; export standard sRGB without a custom profile".into(),
+            );
+        }
+    }
+    if let Some(exposure) = root.get("NSLinearExposure")
+        && exposure.as_data() != Some(b"0".as_slice())
+    {
+        return Err("Nonzero or malformed XTF linear exposure is unsupported".into());
+    }
+    // NSRGB is a legacy calibrated fallback. AppKit's archived values differ
+    // from the original sRGB channels, which NSComponents preserves.
+    let v = components(root.get("NSComponents"), 3)?;
+    Ok([v[0], v[1], v[2]])
+}
 fn color(bytes: &[u8]) -> Result<[f64; 3], String> {
     if bytes.len() > 64 * 1024 {
         return Err("XTF color archive exceeds 64 KiB".into());
@@ -165,26 +233,13 @@ fn color(bytes: &[u8]) -> Result<[f64; 3], String> {
         .ok_or("Invalid XTF archive object table")?;
     let top = dictionary(archive.get("$top").ok_or("Missing XTF archive root")?)?;
     keys(top, &["root"])?;
-    let root = dictionary(object(top.get("root"), objects)?)?;
+    let root = object(top.get("root"), objects)?;
+    class(root, objects, "NSColor")?;
+    let root = dictionary(root)?;
     if root.contains_key("NSCustomColorSpace") || root.contains_key("NSComponents") {
-        return Err(
-            "Custom/ICC color spaces are unsupported; export device RGB or grayscale colors".into(),
-        );
+        return srgb(root, objects);
     }
     keys(root, &["$class", "NSColorSpace", "NSRGB", "NSWhite"])?;
-    let class = dictionary(object(root.get("$class"), objects)?)?;
-    keys(class, &["$classname", "$classes"])?;
-    let classes = class
-        .get("$classes")
-        .and_then(Value::as_array)
-        .ok_or("Missing XTF color class hierarchy")?;
-    if class.get("$classname").and_then(Value::as_string) != Some("NSColor")
-        || classes.len() != 2
-        || classes[0].as_string() != Some("NSColor")
-        || classes[1].as_string() != Some("NSObject")
-    {
-        return Err("Only plain NSColor archives are supported".into());
-    }
     match root
         .get("NSColorSpace")
         .and_then(Value::as_unsigned_integer)

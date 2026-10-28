@@ -6,6 +6,7 @@ use gtk::prelude::*;
 use std::{fs, path::Path, rc::Rc};
 use xrg_ng_linux::settings::{Settings, Store, ThemeChoice, ThemeDocument};
 const CLASSIC: &[u8] = include_bytes!("../../../../XRGTests/Fixtures/ClassicTheme.xtf");
+const SRGB: &[u8] = include_bytes!("../../tests/fixtures/ModernSRGB.xtf");
 pub(super) struct Harness {
     stage: u8,
     dialog: Option<Rc<Dialog>>,
@@ -32,6 +33,7 @@ impl Harness {
         match self.stage {
             0 if sequence >= 2 => {
                 fs::write(root.join("Classic.xtf"), CLASSIC).map_err(|e| e.to_string())?;
+                fs::write(root.join("ModernSRGB.xtf"), SRGB).map_err(|e| e.to_string())?;
                 fs::write(root.join("broken.xtf"), b"bplist00broken").map_err(|e| e.to_string())?;
                 self.original = Some(shell.settings.borrow().clone());
                 let dialog = shell.preferences();
@@ -60,7 +62,12 @@ impl Harness {
                     "XTF Cancel changed active settings",
                 )?;
                 let dialog = shell.preferences();
-                dialog.load_theme(root.join("Classic.xtf"));
+                let mut expected = dialog.draft();
+                expected.theme = ThemeChoice::Custom {
+                    theme: Box::new(ThemeDocument::parse(SRGB)?),
+                };
+                self.expected = Some(expected);
+                dialog.load_theme(root.join("ModernSRGB.xtf"));
                 self.dialog = Some(dialog);
                 self.stage = 2;
             }
@@ -68,7 +75,7 @@ impl Harness {
                 let dialog = self.dialog.as_ref().unwrap();
                 require(
                     dialog.draft() == *self.expected.as_ref().unwrap(),
-                    "XTF reload differs",
+                    "Modern sRGB XTF import differs",
                 )?;
                 dialog.save_theme(root.join("converted.xrg-theme.json"));
                 self.stage = 3;
@@ -77,7 +84,7 @@ impl Harness {
                 let dialog = self.dialog.take().unwrap();
                 require(
                     ThemeDocument::load(&root.join("converted.xrg-theme.json"))?
-                        == ThemeDocument::parse(CLASSIC)?,
+                        == ThemeDocument::parse(SRGB)?,
                     "XTF JSON export changed colors or alpha",
                 )?;
                 dialog.apply.emit_clicked();
@@ -112,6 +119,10 @@ impl Harness {
                 require(
                     fs::read(root.join("Classic.xtf")).map_err(|e| e.to_string())? == CLASSIC,
                     "XTF import changed its source file",
+                )?;
+                require(
+                    fs::read(root.join("ModernSRGB.xtf")).map_err(|e| e.to_string())? == SRGB,
+                    "Modern sRGB import changed its source file",
                 )?;
                 dialog.cancel.emit_clicked();
                 return Ok(true);

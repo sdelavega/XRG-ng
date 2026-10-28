@@ -682,6 +682,11 @@ Original macOS XTF import accepts XML and binary property lists containing the
 seven `*Color` archives and separate `*Transparency` numbers used by XRG. It reads
 plain NSColor RGB (device/calibrated) and grayscale components as palette values;
 it does not instantiate archived classes or call an Objective-C unarchiver.
+Modern AppKit standard sRGB archives use their original `NSComponents`, not the
+legacy calibrated `NSRGB` fallback. Their space must identify standard sRGB
+(`NSID = 7`) with no embedded ICC data, or with the exact verified 3,144-byte
+sRGB IEC61966-2.1 profile. A claimed sRGB ID never overrides an unknown profile.
+Absent or zero linear exposure is supported; other exposure is rejected.
 Separate transparency overrides archived alpha, matching the macOS loader, and
 must be a finite number between 0 and 1 (a boolean is not a number here). The
 original `ClassicTheme.xtf` fixture is checked against the shared Classic preset.
@@ -689,10 +694,16 @@ Imported palettes are named **Imported macOS**, editable before Apply. Cancel an
 failed imports retain the previous settings. Saving converts the palette to JSON;
 it does not rewrite the original XTF or export macOS archives.
 
-This is component conversion, not display-profile/colorimetric matching. Custom
-ICC/profile-based colors (including newer AppKit sRGB archives carrying a custom
-space), named/system colors, patterns and CMYK are rejected with a clear error;
-export device RGB/grayscale colors or use JSON instead. All seven fields must be
+This is component conversion, not display-profile/colorimetric matching. Other
+ICC/profile-based colors (including Display P3 and extended-range channels),
+named/system colors, patterns and CMYK are rejected with a clear error;
+export standard sRGB, device RGB/grayscale colors or use JSON instead. A different
+version of the embedded sRGB profile also needs verification before acceptance.
+The modern fixture comes from AppKit and is round-tripped through its unarchiver
+by the [fixture generator](../../Tools/generate-srgb-xtf-fixture.swift); full
+system-profile bytes stay local rather than being redistributed in the fixture.
+The GTK gate checks Classic cancellation, modern sRGB Apply/persistence and JSON
+export, and rejection without changing the draft. All seven fields must be
 supported before any draft change. Per-graph overrides, layout and metric choices
 are preserved. Decoder bounds include 128 KiB per file, 64 KiB per color archive,
 64 archive objects, 12 collection nesting levels, 2,048 events and 256 KiB expanded
