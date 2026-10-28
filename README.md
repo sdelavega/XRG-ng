@@ -54,6 +54,14 @@ energy-counter changes over elapsed monotonic time, and **n/a%**. **Pwr↑** mar
 an energy increase: an inferred activity signal, not a utilization percentage.
 The fallback scale follows observed watts. A zero energy delta means only that
 the counter reported no increase; it does **not** prove the NPU was idle.
+Where macOS exposes ANE fabric sampling, a narrow secondary-color **traffic band**
+also marks observed transfers. **Traffic** / **No bus** describe those reports;
+they do not claim compute occupancy or idle. The band follows the rate of positive
+bandwidth-bin reports, with its own observed scale. It is not a percent meter,
+bytes/sec or an inference count. Background/housekeeping traffic can appear too.
+This path was exercised against controlled ANE evaluation calls on an M4 Pro and
+M5, including runs where the energy counter stayed unchanged. Watts and **n/a%**
+remain visible when direct active-time telemetry is unavailable.
 Tooltips/context menu and accessibility text include the last detected activity
 and its source, endpoint identity, core count/architecture and firmware state.
 Detection, firmware presence and open client connections do not prove execution.
@@ -61,9 +69,9 @@ Detection, firmware presence and open client connections do not prove execution.
 Acquisition is read-only, runs on a serial background queue and coalesces requests
 to at most one per second. It opens no accelerator user client, loads no models,
 and needs no root helper, `powermetrics`, network service or extra dependency.
-The optional private IOReport symbols are resolved at runtime. Residency and
-energy use independent subscriptions; unavailable power does not hide valid
-active-time readings. State intervals use `IOReportCreateSamplesDelta`, reject
+The optional private IOReport symbols are resolved at runtime. Residency,
+energy and traffic use independent subscriptions; unavailable power does not hide
+valid activity readings. State intervals use `IOReportCreateSamplesDelta`, reject
 counter resets and unknown state layouts, and require positive total residency
 before reporting even 0%. Only recognized ANE channels/units are used; energy
 aggregates take precedence over their indexed components and counter identities

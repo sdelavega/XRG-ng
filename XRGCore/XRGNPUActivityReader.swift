@@ -38,7 +38,7 @@ struct XRGNPUActivityInterval: Sendable {
 /// Serial-worker-only, optional private IOReport subscription. Kept independent
 /// of energy acquisition so a missing power rail cannot hide active residency.
 final class XRGNPUActivityReader {
-    private final class API {
+    fileprivate final class API {
         typealias Copy = @convention(c) (CFString?, CFString?, UInt64, UInt64, UInt64) -> Unmanaged<CFMutableDictionary>?
         typealias Subscribe = @convention(c) (CFAllocator?, CFMutableDictionary, UnsafeMutablePointer<Unmanaged<CFMutableDictionary>?>?, UInt64, UnsafeMutableRawPointer?) -> Unmanaged<CFTypeRef>?
         typealias Sample = @convention(c) (CFTypeRef, CFMutableDictionary, UnsafeMutableRawPointer?) -> Unmanaged<CFDictionary>?
@@ -48,7 +48,7 @@ final class XRGNPUActivityReader {
         typealias StateName = @convention(c) (CFDictionary, Int32) -> Unmanaged<CFString>?
         typealias Residency = @convention(c) (CFDictionary, Int32) -> UInt64
         let handle: UnsafeMutableRawPointer
-        let copy: Copy, subscribe: Subscribe, sample: Sample, delta: Delta, name: Label
+        let copy: Copy, subscribe: Subscribe, sample: Sample, delta: Delta, name: Label, unit: Label
         let format: Count, count: Count, stateName: StateName, residency: Residency
         init?() {
             guard let handle = dlopen("/usr/lib/libIOReport.dylib", RTLD_LAZY | RTLD_LOCAL) else { return nil }
@@ -58,12 +58,13 @@ final class XRGNPUActivityReader {
                   let sample = load("IOReportCreateSamples", Sample.self),
                   let delta = load("IOReportCreateSamplesDelta", Delta.self),
                   let name = load("IOReportChannelGetChannelName", Label.self),
+                  let unit = load("IOReportChannelGetUnitLabel", Label.self),
                   let format = load("IOReportChannelGetFormat", Count.self),
                   let count = load("IOReportStateGetCount", Count.self),
                   let stateName = load("IOReportStateGetNameForIndex", StateName.self),
                   let residency = load("IOReportStateGetResidency", Residency.self) else { dlclose(handle); return nil }
             self.handle = handle; self.copy = copy; self.subscribe = subscribe; self.sample = sample
-            self.delta = delta; self.name = name; self.format = format; self.count = count
+            self.delta = delta; self.name = name; self.unit = unit; self.format = format; self.count = count
             self.stateName = stateName; self.residency = residency
         }
         deinit { dlclose(handle) }
@@ -145,5 +146,135 @@ final class XRGNPUActivityReader {
             let values = clusters(delta, api: api) else { return nil }
         let interval = XRGNPUActivityInterval(start: before.time, end: end, clusters: values)
         return interval.activeFraction == nil ? nil : interval
+    }
+}
+
+struct XRGNPUTrafficChannel: Sendable {
+    let id: String
+    let states: [String: UInt64]
+
+    /// Counts of positive bandwidth-bin observations, not bytes or inferences.
+    var observations: UInt64? {
+        guard !states.isEmpty, states.count <= 64 else { return nil }
+        var sum: UInt64 = 0
+        for (name, value) in states {
+            let label = name.trimmingCharacters(in: .whitespaces)
+            guard label.hasSuffix("GB/s"), let bandwidth = Double(label.dropLast(4)),
+                  bandwidth.isFinite, (0...1_000_000).contains(bandwidth), value <= UInt64(Int64.max) else { return nil }
+            if bandwidth > 0 {
+                let (next, overflow) = sum.addingReportingOverflow(value)
+                guard !overflow, next <= UInt64(Int64.max) else { return nil }
+                sum = next
+            }
+        }
+        return sum
+    }
+}
+
+struct XRGNPUTrafficInterval: Sendable {
+    let start: TimeInterval
+    let end: TimeInterval
+    let channels: [XRGNPUTrafficChannel]
+    var observations: UInt64? {
+        guard start.isFinite, end.isFinite, start >= 0, end > start, end - start <= 300,
+              !channels.isEmpty, channels.count <= 16,
+              Set(channels.map(\.id)).count == channels.count else { return nil }
+        var sum: UInt64 = 0
+        for channel in channels {
+            guard let value = channel.observations else { return nil }
+            let (next, overflow) = sum.addingReportingOverflow(value)
+            guard !overflow, next <= UInt64(Int64.max) else { return nil }
+            sum = next
+        }
+        return sum
+    }
+}
+
+/// An independently sampled fabric-traffic signal for systems whose ANE energy
+/// is latched and dedicated ACT residency is absent. This is never occupancy.
+final class XRGNPUTrafficReader {
+    private typealias API = XRGNPUActivityReader.API
+    private var api: API?
+    private var subscription: CFTypeRef?
+    private var channels: CFMutableDictionary?
+    private var previous: (sample: CFDictionary, time: TimeInterval, channels: [XRGNPUTrafficChannel])?
+    private var nextAttempt: TimeInterval = 0
+    private var deviceIDs: [UInt64] = []
+    deinit { previous = nil; subscription = nil; channels = nil; api = nil }
+
+    static func isTrafficChannel(_ name: String) -> Bool {
+        name.range(of: "^SOC-NI[0-9]+ ANE UP$", options: .regularExpression) != nil
+    }
+    private func entries(_ dictionary: CFDictionary) -> [NSDictionary]? {
+        guard let rows = (dictionary as NSDictionary)["IOReportChannels"] as? [NSDictionary], rows.count <= 1024 else { return nil }
+        return rows
+    }
+    private func connect(_ now: TimeInterval) -> Bool {
+        guard now >= nextAttempt else { return false }
+        nextAttempt = now + 30
+        guard let api = API() else { return false }
+        // Group aliases can describe the same endpoint. Select one provider;
+        // never add PMP and PMP0/PMP1 copies of the same observations together.
+        for group in ["PMP", "PMP0", "PMP1"] {
+            guard let all = api.copy(group as CFString, "SOC-NI Util BW" as CFString, 0, 0, 0)?.takeRetainedValue(),
+                  let rows = entries(all) else { continue }
+            let selected = rows.filter {
+                api.format($0 as CFDictionary) == 2 && Self.isTrafficChannel(api.name($0 as CFDictionary)?.takeUnretainedValue() as String? ?? "")
+            }
+            guard !selected.isEmpty, selected.count <= 16 else { continue }
+            let chosen = (all as NSDictionary).mutableCopy() as! NSMutableDictionary
+            chosen["IOReportChannels"] = selected
+            var actual: Unmanaged<CFMutableDictionary>?
+            guard let sub = api.subscribe(nil, chosen as CFMutableDictionary, &actual, 0, nil)?.takeRetainedValue() else { continue }
+            self.api = api; subscription = sub; channels = actual?.takeRetainedValue() ?? chosen as CFMutableDictionary
+            return true
+        }
+        return false
+    }
+    private func counters(_ sample: CFDictionary, api: API) -> [XRGNPUTrafficChannel]? {
+        guard let rows = entries(sample), !rows.isEmpty, rows.count <= 16 else { return nil }
+        var result: [XRGNPUTrafficChannel] = [], ids = Set<String>()
+        for row in rows {
+            let d = row as CFDictionary
+            let name = api.name(d)?.takeUnretainedValue() as String? ?? ""
+            guard Self.isTrafficChannel(name), api.format(d) == 2,
+                  api.unit(d)?.takeUnretainedValue() as String? == "events",
+                  let driver = row["DriverID"] as? NSNumber, CFGetTypeID(driver) != CFBooleanGetTypeID(),
+                  (1...64).contains(api.count(d)) else { return nil }
+            let id = "\(driver.stringValue):\(name)"
+            guard ids.insert(id).inserted else { return nil }
+            var states: [String: UInt64] = [:]
+            for index in 0..<api.count(d) {
+                guard let key = api.stateName(d, index)?.takeUnretainedValue() as String?, states[key] == nil else { return nil }
+                states[key] = api.residency(d, index)
+            }
+            let counter = XRGNPUTrafficChannel(id: id, states: states)
+            guard counter.observations != nil else { return nil }
+            result.append(counter)
+        }
+        return result
+    }
+    func sample(deviceIDs: [UInt64]) -> XRGNPUTrafficInterval? {
+        let ids = deviceIDs.sorted(), now = ProcessInfo.processInfo.systemUptime
+        if ids != self.deviceIDs {
+            previous = nil; subscription = nil; channels = nil; nextAttempt = 0; self.deviceIDs = ids
+        }
+        guard !ids.isEmpty, subscription != nil || connect(now), let api, let subscription, let channels,
+              let current = api.sample(subscription, channels, nil)?.takeRetainedValue(),
+              let raw = counters(current, api: api) else {
+            previous = nil; self.subscription = nil; self.channels = nil; return nil
+        }
+        let end = ProcessInfo.processInfo.systemUptime, before = previous
+        previous = (current, end, raw)
+        guard let before, end > before.time, end - before.time <= 300,
+              Set(before.channels.map(\.id)) == Set(raw.map(\.id)) else { return nil }
+        let old = Dictionary(uniqueKeysWithValues: before.channels.map { ($0.id, $0.states) })
+        guard raw.allSatisfy({ channel in
+            guard let old = old[channel.id], Set(old.keys) == Set(channel.states.keys) else { return false }
+            return channel.states.allSatisfy { $0.value >= old[$0.key]! }
+        }), let delta = api.delta(before.sample, current, nil)?.takeRetainedValue(),
+            let values = counters(delta, api: api) else { return nil }
+        let interval = XRGNPUTrafficInterval(start: before.time, end: end, channels: values)
+        return interval.observations == nil ? nil : interval
     }
 }

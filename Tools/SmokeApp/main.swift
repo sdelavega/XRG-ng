@@ -72,6 +72,13 @@ import Darwin
                             try png.write(to: output.appendingPathComponent("\(phase).png"))
                         }
                     }
+                    try scene.showNPUTrafficFixture()
+                    if let view = scene.window.npuView {
+                        let size = view.frame.size
+                        view.setFrameSize(NSSize(width: 86, height: 90))
+                        try capture(view, "npu-traffic-\(phase).png")
+                        view.setFrameSize(size)
+                    }
                     scene.background.minimizeWindow()
                 } catch { failure = error }
                 app.stop(nil)

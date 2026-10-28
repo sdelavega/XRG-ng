@@ -151,9 +151,69 @@ import Testing
         for name in ["ANE","ANE0","ANE12","ANE0_1","DIE0 ANE0","DIE_1_ANE0","DIE1_ANE0"] {
             #expect(XRGNPUActivityReader.isClusterChannel(name))
         }
-        for name in ["ANEX","LANE0","ANE SRAM","ANE0 RD","ANE_THROTTLE_PPT_TRIG","ANE²","DIE0 GPU0"] {
+        for name in ["ANEX","LANE0","ANE SRAM","ANE0 RD","ANE_THROTTLE_PPT_TRIG","ANE²","DIE0 GPU0","PACC1_ANE","SOC-NI4 ANE UP"] {
             #expect(!XRGNPUActivityReader.isClusterChannel(name))
         }
+    }
+    @Test func trafficBinsArePresenceReportsAndSharedPowerDomainsAreNotANEUtilization() {
+        for name in ["SOC-NI3 ANE UP","SOC-NI4 ANE UP","SOC-NI12 ANE UP"] { #expect(XRGNPUTrafficReader.isTrafficChannel(name)) }
+        for name in ["PACC1_ANE","SOC-NI5 ANEXL U","ANE0 L0 RD+WR","SOC-NI4 GPU UP","SOC-NI² ANE UP"] { #expect(!XRGNPUTrafficReader.isTrafficChannel(name)) }
+        #expect(XRGNPUTrafficChannel(id:"a",states:["  2GB/s":4,"  4GB/s":8]).observations == 12)
+        #expect(XRGNPUTrafficChannel(id:"a",states:["0GB/s":100,"2GB/s":0]).observations == 0)
+        for states: [String:UInt64] in [[:],["ACT":100],["NaNGB/s":1],["-2GB/s":1],["2GB/s":UInt64.max],
+                                      ["2GB/s":UInt64(Int64.max),"4GB/s":1]] {
+            #expect(XRGNPUTrafficChannel(id:"a",states:states).observations == nil)
+        }
+        let channel=XRGNPUTrafficChannel(id:"a",states:["2GB/s":10])
+        for frame in [XRGNPUTrafficInterval(start:1,end:1,channels:[channel]),
+                      .init(start:.nan,end:2,channels:[channel]),.init(start:1,end:302,channels:[channel]),
+                      .init(start:1,end:2,channels:[]),.init(start:1,end:2,channels:[channel,channel])] {
+            #expect(frame.observations == nil)
+        }
+    }
+    @Test func trafficActivitySurvivesFrozenEnergyAndMissingResidencyWithoutInventingPercent() {
+        var now=1.0,sample=reading(1,1000)
+        let miner=XRGNPUMiner(source:{sample},clock:{now});miner.setDataSize(4)
+        now=2;sample=reading(2,1000)
+        sample.traffic = .init(start:1,end:2,channels:[.init(id:"a",states:["2GB/s":4000])])
+        miner.getLatestNPUInfo()
+        #expect(miner.powerWatts == 0 && miner.activeFraction == nil && miner.trafficObserved == true)
+        #expect(miner.trafficDataSet.orderedValues.last == 4000)
+        #expect(miner.trafficReportsPerSecond == 4000)
+        #expect(miner.fullReading().contains("ANE fabric traffic observed; utilization unknown"))
+        #expect(miner.fullReading().contains("ANE fabric traffic (observed)"))
+        now=3;sample=reading(3,1000)
+        sample.traffic = .init(start:2,end:3,channels:[.init(id:"a",states:["2GB/s":0])]);miner.getLatestNPUInfo()
+        #expect(miner.trafficObserved == false && miner.secondsSinceActivity == 1)
+        #expect(miner.fullReading().contains("does not prove idle"))
+        now=4;sample=reading(4,nil)
+        sample.traffic = .init(start:3,end:4,channels:[.init(id:"replacement",states:["2GB/s":1])]);miner.getLatestNPUInfo()
+        #expect(miner.trafficObserved == true && miner.powerWatts == nil)
+        #expect(Array(miner.trafficDataSet.orderedValues.suffix(2)) == [-1000,1])
+        now=5;sample=reading(5,nil)
+        sample.traffic = .init(start:3,end:5,channels:[.init(id:"replacement",states:["2GB/s":1])]);miner.getLatestNPUInfo()
+        #expect(miner.trafficObserved == nil)
+        #expect(miner.trafficDataSet.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        now=6;sample=reading(6,nil)
+        sample.traffic = .init(start:5,end:8,channels:[.init(id:"replacement",states:["2GB/s":1])]);miner.getLatestNPUInfo()
+        #expect(miner.trafficObserved == nil)
+    }
+    @Test func trafficMarkerUsesASeparateBandAndDoesNotLabelItAsPercent() throws {
+        let domain="XRG.npu.traffic.\(UUID().uuidString)",defaults=try #require(UserDefaults(suiteName:domain))
+        defer { defaults.removePersistentDomain(forName:domain) }
+        let settings=XRGSettings(defaults:defaults)
+        var now=2.0,sample=reading(2,0)
+        sample.traffic = .init(start:1,end:2,channels:[.init(id:"a",states:["1GB/s":1])])
+        let miner=XRGNPUMiner(source:{sample},clock:{now})
+        let view=XRGNPUView(frame:NSRect(x:0,y:0,width:86,height:90),miner:miner,settings:settings,defaults:defaults)
+        #expect(view.labels.leftLabel.stringValue == "NPU\nTraffic")
+        #expect(view.labels.rightLabel.stringValue == "n/a\nn/a%")
+        now=3;sample=reading(3,0)
+        sample.traffic = .init(start:2,end:3,channels:[.init(id:"a",states:["1GB/s":0])]);view.graphUpdate(nil)
+        #expect(view.labels.leftLabel.stringValue == "NPU\nNo bus")
+        #expect(view.labels.rightLabel.stringValue == "0.0W\nn/a%")
+        now=9;sample=reading(.nan,nil);view.graphUpdate(nil)
+        #expect(miner.trafficObserved == nil)
     }
     @Test func directActivitySurvivesMissingPowerAndNeverUsesPowerAsAPercentage() {
         var now=1.0, sample: XRGNPUReading? = reading(1,nil)

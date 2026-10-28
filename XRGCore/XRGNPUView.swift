@@ -93,7 +93,9 @@ public final class XRGNPUView: NSView, XRGModuleView {
             values = "\(percent)\n\(watts)"
         } else {
             // An energy change is evidence of activity, but cannot define a percentage.
-            status = (miner.powerWatts ?? 0) > 0 ? "Pwr↑" : "Pwr"
+            if miner.trafficObserved == true { status = "Traffic" }
+            else if (miner.powerWatts ?? 0) > 0 { status = "Pwr↑" }
+            else { status = miner.trafficObserved == false ? "No bus" : "Pwr" }
             values = "\(watts)\nn/a%"
         }
         labels.layoutColumnText("NPU\n\(status)", centerText: nil,
@@ -111,6 +113,13 @@ public final class XRGNPUView: NSView, XRGModuleView {
         } else if miner.powerWatts != nil {
             XRGGraphRenderer.drawDataSet(miner.powerDataSet, upperBound: max(1, miner.powerDataSet.max * 1.1), lowerBound: 0,
                                         in: bounds, flipped: false, filled: true, color: settings.graphFG1Color)
+        }
+        if miner.activeFraction == nil, miner.trafficObserved != nil {
+            // A narrow presence band cannot be mistaken for a 100% capacity
+            // meter. The main graph keeps its watt scale and n/a% label.
+            let band = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: min(6, bounds.height * 0.12))
+            XRGGraphRenderer.drawDataSet(miner.trafficDataSet, upperBound: max(1, miner.trafficDataSet.max * 1.1), lowerBound: 0,
+                                        in: band, flipped: false, filled: true, color: settings.graphFG2Color)
         }
         updateLabels(); XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
     }

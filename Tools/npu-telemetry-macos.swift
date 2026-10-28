@@ -19,6 +19,9 @@ import Foundation
             var record: [String: Any] = ["uptimeSeconds": value.time, "appleSilicon": value.appleSilicon,
                 "endpoints": value.devices.count, "cores": value.devices.compactMap(\.cores),
                 "activePercent": value.activity?.activeFraction.map { $0 * 100 } as Any? ?? NSNull(),
+                "trafficObserved": value.traffic?.observations.map { $0 > 0 } as Any? ?? NSNull(),
+                "trafficBinReports": value.traffic?.observations as Any? ?? NSNull(),
+                "trafficIntervalSeconds": value.traffic.map { $0.end - $0.start } as Any? ?? NSNull(),
                 "energy": value.energy?.map { ["id": $0.id, "unit": $0.unit, "counter": $0.value] as [String: Any] } as Any? ?? NSNull(),
                 "powerError": value.error as Any? ?? NSNull()]
             var watts: Double?

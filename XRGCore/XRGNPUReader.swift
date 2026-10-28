@@ -44,6 +44,7 @@ struct XRGNPUReading: Sendable {
     let energy: [XRGNPUEnergy]?
     let error: String?
     var activity: XRGNPUActivityInterval? = nil
+    var traffic: XRGNPUTrafficInterval? = nil
 }
 
 /// Used only on the NPU worker queue. IOReport is optional and dynamically
@@ -76,6 +77,7 @@ final class XRGNPUReader {
     private var channels: CFMutableDictionary?
     private var nextAttempt: TimeInterval = 0
     private let activityReader = XRGNPUActivityReader()
+    private let trafficReader = XRGNPUTrafficReader()
     deinit { subscription = nil; channels = nil; api = nil }
 
     static func isAppleSilicon() -> Bool {
@@ -142,8 +144,9 @@ final class XRGNPUReader {
         let silicon = Self.isAppleSilicon(), inventory = Self.devices()
         let now = ProcessInfo.processInfo.systemUptime
         let activity = activityReader.sample(deviceIDs: inventory.0.map(\.id))
+        let traffic = trafficReader.sample(deviceIDs: inventory.0.map(\.id))
         func result(_ energy: [XRGNPUEnergy]?, _ error: String?) -> XRGNPUReading {
-            XRGNPUReading(time: ProcessInfo.processInfo.systemUptime, devices: inventory.0, appleSilicon: silicon, energy: energy, error: error ?? inventory.1, activity: activity)
+            XRGNPUReading(time: ProcessInfo.processInfo.systemUptime, devices: inventory.0, appleSilicon: silicon, energy: energy, error: error ?? inventory.1, activity: activity, traffic: traffic)
         }
         guard !inventory.0.isEmpty else {
             subscription = nil; channels = nil; nextAttempt = 0

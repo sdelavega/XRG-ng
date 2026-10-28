@@ -15,6 +15,8 @@ func smokeCheck(_ condition: @autoclosure () -> Bool, _ message: String) throws 
 @MainActor final class XRGSmokeInputs {
     var time: TimeInterval = 100
     var cpuReads = 0, gpuReads = 0, npuReads = 0, memoryReads = 0, netReads = 0, diskReads = 0, batteryReads = 0
+    var npuEnergy = 0
+    var npuTrafficOnly = false, npuTrafficReported = false
     var activations = 0
     var nibs: [String] = [], presentations: [NSWindow] = [], errors: [String] = []
     var load: ((String, XRGAppDelegate) -> Void)?
@@ -106,10 +108,13 @@ private final class SmokePreferencesOwner: NSObject {
         })
         let npu = XRGNPUMiner(source: {
             source.npuReads += 1
+            if !source.npuTrafficOnly { source.npuEnergy += 250 }
             return XRGNPUReading(time: source.time, devices: [XRGNPUDevice(id: 7, cores: 16, architecture: "Fixture", firmwareLoaded: true)], appleSilicon: true,
-                                 energy: [XRGNPUEnergy(id: "fixture-ane", unit: "mJ", value: Int64(source.npuReads * 250))], error: nil,
-                                 activity: source.time > 0 ? .init(start: max(0, source.time - 0.5), end: source.time,
-                                     clusters: [.init(id: "fixture-ane", states: ["ACT": 25, "IDLE": 75])]) : nil)
+                                 energy: [XRGNPUEnergy(id: "fixture-ane", unit: "mJ", value: Int64(source.npuEnergy))], error: nil,
+                                 activity: !source.npuTrafficOnly && source.time > 0 ? .init(start: max(0, source.time - 0.5), end: source.time,
+                                     clusters: [.init(id: "fixture-ane", states: ["ACT": 25, "IDLE": 75])]) : nil,
+                                 traffic: source.npuTrafficOnly ? .init(start: source.time - 0.5, end: source.time,
+                                     channels: [.init(id: "fixture-traffic", states: ["2GB/s": source.npuTrafficReported ? 4000 : 0])]) : nil)
         }, clock: { source.time })
         let memory = XRGMemoryMiner(pageSize: 4096, source: {
             source.memoryReads += 1
@@ -239,6 +244,16 @@ private final class SmokePreferencesOwner: NSObject {
         for visible in [window, pref.window, delegate.sensorWindow].compactMap({ $0 }) {
             try smokeCheck(!visible.isVisible, "Smoke action presented a real window: \(visible.title)")
         }
+    }
+    func showNPUTrafficFixture() throws {
+        inputs.npuTrafficOnly = true
+        for index in 0..<32 {
+            inputs.npuTrafficReported = index % 8 >= 2
+            inputs.time += 1
+            window.npuView?.graphUpdate(nil)
+        }
+        try smokeCheck(window.npuView?.fullReading().contains("ANE fabric traffic observed") == true, "Traffic marker did not reach the production panel")
+        try smokeCheck(window.npuView?.fullReading().contains("Power: 0.000 W") == true, "Traffic fixture did not preserve frozen energy")
     }
     func shutdown() {
         guard !stopped else { return }; stopped = true
