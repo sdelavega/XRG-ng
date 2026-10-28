@@ -127,3 +127,81 @@ fn opaque_overlaps_keep_other_curves_visible_and_fills_retain_theme_alpha() {
         0
     );
 }
+
+fn bars_image(style: GraphStyle, series: &[Vec<f64>], range: (f64, f64), visible: bool) -> Vec<u8> {
+    let mut surface = ImageSurface::create(Format::ARgb32, 100, 100).unwrap();
+    let context = Context::new(&surface).unwrap();
+    context.set_line_width(7.);
+    graph::draw_bars(
+        &context,
+        series,
+        plot(range.0, range.1),
+        &xrg_ng_linux::settings::ActivityBars {
+            visible,
+            style,
+            color: [1., 0., 0., 0.5],
+        },
+        [0., 0., 1., 1.],
+    )
+    .unwrap();
+    assert_eq!(context.line_width(), 7.);
+    assert_eq!(context.clip_extents().unwrap(), (0., 0., 100., 100.));
+    drop(context);
+    surface.flush();
+    surface.data().unwrap().to_vec()
+}
+#[test]
+fn bars_keep_zero_visible_missing_blank_and_never_reuse_a_stale_endpoint() {
+    for style in GraphStyle::ALL {
+        let zero = bars_image(style, &[vec![50., 0.]], (0., 100.), true);
+        assert!(coverage(&zero) > 0);
+        assert_eq!(pixel(&zero, 40, 40), 0);
+        for series in [
+            vec![],
+            vec![vec![]],
+            vec![vec![50., f64::NAN]],
+            vec![vec![50., f64::INFINITY]],
+        ] {
+            assert_eq!(coverage(&bars_image(style, &series, (0., 100.), true)), 0);
+        }
+        assert_eq!(
+            coverage(&bars_image(style, &[vec![50.]], (0., 100.), false)),
+            0
+        );
+    }
+}
+#[test]
+fn bar_fills_use_signed_zero_baseline_clip_and_preserve_opacity() {
+    let img = bars_image(GraphStyle::Solid, &[vec![-50.]], (-100., 100.), true);
+    assert_eq!(pixel(&img, 40, 40), 0);
+    assert_eq!(pixel(&img, 40, 80), 0);
+    assert!((120..=136).contains(&(pixel(&img, 40, 60) >> 24)));
+    let img = bars_image(GraphStyle::Solid, &[vec![500.]], (0., 100.), true);
+    assert!(pixel(&img, 40, 20) >> 24 > 0);
+    assert_eq!(pixel(&img, 5, 40), 0);
+    assert_eq!(pixel(&img, 40, 5), 0);
+    let img = bars_image(
+        GraphStyle::Solid,
+        &[vec![50.], vec![f64::NAN], vec![0.]],
+        (0., 100.),
+        true,
+    );
+    assert!(pixel(&img, 20, 70) >> 24 > 0);
+    assert_eq!(pixel(&img, 45, 70), 0);
+    assert!(pixel(&img, 65, 89) >> 24 > 0);
+}
+#[test]
+fn bar_styles_are_distinct_and_auto_rates_use_the_graph_range() {
+    let rendered = GraphStyle::ALL.map(|s| bars_image(s, &[vec![50.]], (0., 100.), true));
+    assert_ne!(rendered[0], rendered[1]);
+    assert_ne!(rendered[1], rendered[2]);
+    assert!(coverage(&rendered[0]) > coverage(&rendered[3]));
+    let range = xrg_ng_linux::engine::Scale::Automatic.bounds(&[vec![100., 50.]]);
+    let img = bars_image(GraphStyle::Solid, &[vec![100., 50.]], range, true);
+    assert_eq!(pixel(&img, 40, 40), 0);
+    assert!(pixel(&img, 40, 65) >> 24 > 0);
+    assert_eq!(
+        coverage(&bars_image(GraphStyle::Solid, &[vec![50.]], (0., 0.), true)),
+        0
+    );
+}

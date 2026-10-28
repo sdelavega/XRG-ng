@@ -23,7 +23,7 @@ pub struct Import {
 impl Import {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, layout and system temperature units transfer when present. Graph order/height, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
+            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout and system temperature units transfer when present. Graph order/height, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
             self.imported.len(),
             self.skipped.len(),
             self.imported.join("\n")
@@ -183,6 +183,25 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 _ => return Err(format!("{label}: expected 0 (vertical) or 1 (horizontal)")),
             };
             imported.push(format!("{label} = {:?}", settings.layout));
+        } else if group == "Display" && key == "show_activity_bars" {
+            settings.activity_bars.visible = match value.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err(format!("{label}: expected true or false")),
+            };
+            imported.push(format!("{label} = {}", settings.activity_bars.visible));
+        } else if group == "Display" && key == "activity_bar_style" {
+            settings.activity_bars.style = *value
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| GraphStyle::ALL.get(n))
+                .ok_or_else(|| format!("{label}: expected an activity bar style from 0 to 3"))?;
+            imported.push(format!("{label} = {}", settings.activity_bars.style.name()));
+        } else if group == "Colors" && key == "activity_bar" {
+            settings.activity_bars.color =
+                color(&unescape(value).map_err(|e| format!("{label}: {e}"))?)
+                    .map_err(|e| format!("{label}: {e}"))?;
+            imported.push(format!("{label} (activity bar color)"));
         } else if group == "Temperature" && key == "units" {
             settings.temperature_units = match value.parse::<i32>() {
                 Ok(0) => Units::Celsius,
@@ -237,7 +256,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         }
     }
     if imported.is_empty() {
-        return Err("No supported legacy visibility, color, layout, graph-style or temperature-unit entries found".into());
+        return Err("No supported legacy visibility, color, layout, graph-style, activity-bar or temperature-unit entries found".into());
     }
     if has_colors {
         let name = entries

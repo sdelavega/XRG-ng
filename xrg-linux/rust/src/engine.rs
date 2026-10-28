@@ -20,6 +20,28 @@ pub struct Panel {
     pub temperature_text: Option<(crate::temperature::Text, crate::temperature::Text)>,
 }
 impl Panel {
+    pub fn activity_description(&self, units: crate::temperature::Units) -> String {
+        let (lower, upper) = self.scale.bounds(&self.series);
+        let axis = match self.scale {
+            Scale::Percent => "0–100%".into(),
+            Scale::Automatic => format!(
+                "{lower:.2}–{upper:.2} in graph units; scales to recent history, not device capacity"
+            ),
+            Scale::Celsius => format!(
+                "{:.1}–{:.1} °{}; a display range, not a thermal limit",
+                units.convert_celsius(lower),
+                units.convert_celsius(upper),
+                if units == crate::temperature::Units::Celsius {
+                    "C"
+                } else {
+                    "F"
+                }
+            ),
+        };
+        format!(
+            "Current-value (‘now’) bars use the graph axis: {axis}. Left to right follows series order. Missing latest readings have no track; measured zero has an empty track. Signed values extend from zero."
+        )
+    }
     fn with_temperature_text(
         mut self,
         label: crate::temperature::Text,

@@ -171,7 +171,7 @@ impl Shell {
                         .filter(|s| snapshot_matches(s, &active, module))
                         .and_then(|s| s.panels.get(module.index())),
                     active.temperature_units,
-                    appearance.style,
+                    (appearance.style, &active.activity_bars),
                 );
             });
             graphs.append(&area);
@@ -348,7 +348,13 @@ impl Shell {
                 continue;
             };
             let label = panel.display_label(settings.temperature_units);
-            let detail = panel.display_detail(settings.temperature_units);
+            let mut detail = panel
+                .display_detail(settings.temperature_units)
+                .into_owned();
+            if settings.activity_bars.visible {
+                detail.push_str("\n\n");
+                detail.push_str(&panel.activity_description(settings.temperature_units));
+            }
             area.set_tooltip_text(Some(&detail));
             area.update_property(&[
                 gtk::accessible::Property::Label(&format!("{}: {}", panel.title, label)),
@@ -674,7 +680,7 @@ fn draw(
     title: &str,
     panel: Option<&Panel>,
     units: xrg_ng_linux::temperature::Units,
-    style: GraphStyle,
+    (style, bars): (GraphStyle, &settings::ActivityBars),
 ) {
     // Compose translucent Classic colors over an opaque base; repainting never
     // accumulates alpha from previous frames.
@@ -703,12 +709,38 @@ fn draw(
     let _ = context.show_text(title);
     context.move_to(10., 39.);
     context.set_font_size(12.);
+    let bar_count = panel
+        .filter(|_| bars.visible)
+        .map_or(0, |p| p.series.len().min(3));
+    let bar_width = bar_count as f64 * 10.;
+    let _ = context.save();
+    context.rectangle(
+        8.,
+        24.,
+        (width as f64
+            - 26.
+            - if bar_count > 0 {
+                bar_width.max(18.)
+            } else {
+                0.
+            })
+        .max(0.),
+        20.,
+    );
+    context.clip();
+    context.move_to(10., 39.);
     let _ = context.show_text(
         panel
             .map(|p| p.display_label(units))
             .unwrap_or_else(|| "Waiting for sample…".into())
             .as_ref(),
     );
+    let _ = context.restore();
+    if bar_count > 0 {
+        context.set_font_size(9.);
+        context.move_to(width as f64 - 9. - bar_width.max(18.), 39.);
+        let _ = context.show_text("now");
+    }
     let Some(panel) = panel else {
         return;
     };
@@ -725,12 +757,26 @@ fn draw(
         xrg_ng_linux::graph::Plot {
             left: 8.,
             top,
-            right: width as f64 - 8.,
+            right: width as f64 - 8. - if bar_count > 0 { bar_width + 8. } else { 0. },
             bottom,
             lower: minimum,
             upper: maximum,
         },
         style,
+    );
+    let _ = xrg_ng_linux::graph::draw_bars(
+        context,
+        &panel.series,
+        xrg_ng_linux::graph::Plot {
+            left: width as f64 - 8. - bar_width,
+            right: width as f64 - 8.,
+            top,
+            bottom,
+            lower: minimum,
+            upper: maximum,
+        },
+        bars,
+        theme.colors[5],
     );
 }
 

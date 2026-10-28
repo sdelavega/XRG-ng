@@ -129,3 +129,85 @@ pub fn draw(
     let restored = context.restore();
     result.and(restored)
 }
+
+/// One track per current series, in the same order and on the same axis as the
+/// graph. Missing latest values leave a gap; a measured zero has an empty track.
+pub fn draw_bars(
+    context: &Context,
+    series: &[Vec<f64>],
+    plot: Plot,
+    bars: &crate::settings::ActivityBars,
+    border: [f64; 4],
+) -> Result<(), Error> {
+    if !bars.visible
+        || bars.validate().is_err()
+        || ![
+            plot.left,
+            plot.right,
+            plot.top,
+            plot.bottom,
+            plot.lower,
+            plot.upper,
+        ]
+        .iter()
+        .all(|v| v.is_finite())
+        || plot.right <= plot.left
+        || plot.bottom - plot.top < 2.
+        || plot.upper <= plot.lower
+    {
+        return Ok(());
+    }
+    let count = series.len().min(3);
+    if count == 0 {
+        return Ok(());
+    }
+    context.save()?;
+    let result = (|| {
+        context.rectangle(
+            plot.left,
+            plot.top,
+            plot.right - plot.left,
+            plot.bottom - plot.top,
+        );
+        context.clip();
+        let step = (plot.right - plot.left) / count as f64;
+        let width = (step - 2.).max(0.);
+        if width <= 1. {
+            return Ok(());
+        }
+        for (index, values) in series.iter().take(3).enumerate() {
+            let Some(value) = values.last().copied().filter(|v| v.is_finite()) else {
+                continue;
+            };
+            let x = plot.left + index as f64 * step + 0.5;
+            let zero = plot.y(0.);
+            let current = plot.y(value);
+            color(context, border);
+            context.set_line_width(1.);
+            context.rectangle(x, plot.top + 0.5, width - 1., plot.bottom - plot.top - 1.);
+            context.stroke()?;
+            context.rectangle(x, current.min(zero), width - 1., (current - zero).abs());
+            color(context, bars.color);
+            if bars.style == GraphStyle::Hollow {
+                context.stroke()?;
+            } else {
+                if bars.style != GraphStyle::Solid {
+                    context.set_source(pattern(bars.style, bars.color)?)?;
+                }
+                context.fill()?;
+            }
+            // An endpoint is also visible at zero and at the clipping edges.
+            color(context, bars.color);
+            context.move_to(x, current.clamp(plot.top + 0.75, plot.bottom - 0.75));
+            context.line_to(
+                x + width - 1.,
+                current.clamp(plot.top + 0.75, plot.bottom - 0.75),
+            );
+            context.set_line_width(1.5);
+            context.stroke()?;
+        }
+        Ok(())
+    })();
+    let restored = context.restore();
+    result.and(restored)
+}

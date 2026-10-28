@@ -13,7 +13,7 @@ use xrg_ng_linux::settings::{
     GraphStyle, Layout, Module, Settings, Store, ThemeChoice, ThemeDocument,
 };
 use xrg_ng_linux::temperature::{Text, Units};
-const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\n[Temperature]\nunits=1\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
+const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\nactivity_bar=rgba(0,255,128,0.5)\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\nactivity_bar_style=2\n[Temperature]\nunits=1\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
@@ -400,7 +400,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 10 && loaded.processes.limit == 20,
+                    loaded.version == 11 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -983,7 +983,10 @@ impl Harness {
                 require(
                     candidate.ai == self.expected.as_ref().unwrap().ai
                         && candidate.weather == self.expected.as_ref().unwrap().weather
-                        && candidate.metrics == self.expected.as_ref().unwrap().metrics,
+                        && candidate.metrics == self.expected.as_ref().unwrap().metrics
+                        && candidate.activity_bars.visible
+                        && candidate.activity_bars.style == GraphStyle::Dot
+                        && candidate.activity_bars.color == [0., 1., 128. / 255., 0.5],
                     "Import changed current service or metric source choices",
                 )?;
                 dialog.apply.emit_clicked();
@@ -1089,8 +1092,10 @@ impl Harness {
                 drop(state);
                 shell.refresh();
                 require(
-                    area.tooltip_text()
-                        .is_some_and(|s| s == "Sensor named 25.0 °C: -13.0 °F"),
+                    area.tooltip_text().is_some_and(|s| {
+                        s.split("\n\n").next() == Some("Sensor named 25.0 °C: -13.0 °F")
+                            && s.contains("graph axis: -40.0–248.0 °F")
+                    }),
                     "Tooltip did not convert only the typed temperature",
                 )?;
                 let details = shell.details(Module::Temperature);
@@ -1473,7 +1478,7 @@ impl Harness {
                             &title,
                             Some(&panel),
                             Units::Celsius,
-                            style,
+                            (style, &Default::default()),
                         )
                     });
                     content.append(&area);
@@ -1688,7 +1693,7 @@ impl Harness {
                             title,
                             Some(&panel),
                             Units::Celsius,
-                            style,
+                            (style, &Default::default()),
                         )
                     });
                     content.append(&area);
@@ -1882,6 +1887,191 @@ impl Harness {
                     Some(&*shell.settings.borrow()) == self.expected.as_ref(),
                     "Cancelling size defaults changed active preferences",
                 )?;
+                let dialog = shell.preferences();
+                dialog.activity_visible.set_active(false);
+                require(
+                    !dialog.activity_style.is_sensitive() && !dialog.activity_color.is_sensitive(),
+                    "Hidden bar controls remain enabled",
+                )?;
+                dialog.activity_visible.set_active(true);
+                dialog
+                    .activity_style
+                    .set_selected(GraphStyle::Pixel.index() as u32);
+                dialog
+                    .activity_color
+                    .set_rgba(&gtk::gdk::RGBA::new(0.5, 0.25, 0.75, 0.5));
+                let candidate = dialog.draft();
+                require(
+                    candidate.activity_bars.visible
+                        && candidate.activity_bars.style == GraphStyle::Pixel
+                        && candidate.activity_bars.color == [0.5, 0.25, 0.75, 0.5],
+                    "Activity controls missed draft",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    Some(&*shell.settings.borrow()) == self.expected.as_ref(),
+                    "Cancelling activity edit applied it",
+                )?;
+                let dialog = shell.preferences();
+                dialog.activity_visible.set_active(true);
+                dialog
+                    .activity_style
+                    .set_selected(GraphStyle::Pixel.index() as u32);
+                dialog
+                    .activity_color
+                    .set_rgba(&gtk::gdk::RGBA::new(0.5, 0.25, 0.75, 0.5));
+                dialog.layout.set_selected(0);
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                shell.window.set_default_size(440, 1000);
+                shell.scroll.vadjustment().set_value(0.);
+                self.stage = 49;
+            }
+            49 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, saved, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&saved) == self.expected.as_ref(),
+                    "Activity bars did not persist",
+                )?;
+                require(
+                    shell.areas[Module::Cpu.index()]
+                        .tooltip_text()
+                        .is_some_and(|t| t.contains("graph axis")),
+                    "Current-value axis missing from tooltip",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_BARS_LIVE_IMAGE") {
+                    shell.snapshot(&PathBuf::from(path))?;
+                }
+                let dialog = shell.preferences();
+                require(
+                    dialog.activity_visible.is_active()
+                        && dialog.activity_style.selected() == 1
+                        && dialog.activity_color.rgba()
+                            == gtk::gdk::RGBA::new(0.5, 0.25, 0.75, 0.5),
+                    "Reopened bar controls lost saved choices",
+                )?;
+                dialog.activity.set_expanded(true);
+                dialog.activity_visible.grab_focus();
+                self.dialog = Some(dialog);
+                self.stage = 50;
+            }
+            50 if self.since.elapsed() > Duration::from_millis(300) => {
+                let dialog = self.dialog.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_BARS_PREFS_IMAGE") {
+                    dialog.snapshot(&PathBuf::from(path))?;
+                }
+                dialog.activity_visible.set_active(false);
+                dialog.reset.emit_clicked();
+                require(
+                    dialog.draft().activity_bars == Settings::default().activity_bars,
+                    "Restore defaults did not reset bar appearance",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    Some(&*shell.settings.borrow()) == self.expected.as_ref(),
+                    "Cancelled bar defaults applied",
+                )?;
+                let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+                content.set_margin_top(12);
+                content.set_margin_bottom(12);
+                content.set_margin_start(12);
+                content.set_margin_end(12);
+                for (index, (title, label, scale, series)) in [
+                    (
+                        "Solid",
+                        "Percent fixtures · 80% / zero / missing",
+                        xrg_ng_linux::engine::Scale::Percent,
+                        vec![vec![40., 80.], vec![10., 0.], vec![50., f64::NAN]],
+                    ),
+                    (
+                        "Pixel",
+                        "Percent fixtures · 80% / zero / missing",
+                        xrg_ng_linux::engine::Scale::Percent,
+                        vec![vec![40., 80.], vec![10., 0.], vec![50., f64::NAN]],
+                    ),
+                    (
+                        "Dot",
+                        "Percent fixtures · 80% / zero / missing",
+                        xrg_ng_linux::engine::Scale::Percent,
+                        vec![vec![40., 80.], vec![10., 0.], vec![50., f64::NAN]],
+                    ),
+                    (
+                        "Hollow",
+                        "Percent fixtures · 80% / zero / missing",
+                        xrg_ng_linux::engine::Scale::Percent,
+                        vec![vec![40., 80.], vec![10., 0.], vec![50., f64::NAN]],
+                    ),
+                    (
+                        "Signed temperature",
+                        "Fixture · −20 °C · same graph range, not a thermal limit",
+                        xrg_ng_linux::engine::Scale::Celsius,
+                        vec![vec![10., -20.]],
+                    ),
+                    (
+                        "Rate",
+                        "Fixture · 500 / 250 B/s · relative to recent graph scale",
+                        xrg_ng_linux::engine::Scale::Automatic,
+                        vec![vec![1000., 500.], vec![500., 250.]],
+                    ),
+                    (
+                        "Unavailable",
+                        "Fixture · missing readings · no bars",
+                        xrg_ng_linux::engine::Scale::Percent,
+                        vec![],
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let panel = xrg_ng_linux::engine::Panel {
+                        title: "Activity bar fixture",
+                        label: label.into(),
+                        detail: String::new(),
+                        series,
+                        scale,
+                        temperature_text: None,
+                    };
+                    let theme = shell.settings.borrow().theme.palette()?;
+                    let bars = xrg_ng_linux::settings::ActivityBars {
+                        visible: true,
+                        style: GraphStyle::ALL[index.min(3)],
+                        color: [0.2, 1., 0.3, 1.],
+                    };
+                    let area = gtk::DrawingArea::new();
+                    area.set_content_width(620);
+                    area.set_content_height(112);
+                    area.set_draw_func(move |_, context, width, height| {
+                        super::draw(
+                            context,
+                            (width, height),
+                            &theme,
+                            title,
+                            Some(&panel),
+                            Units::Celsius,
+                            (GraphStyle::Hollow, &bars),
+                        );
+                    });
+                    content.append(&area);
+                }
+                let window = gtk::Window::builder()
+                    .application(&shell.window.application().unwrap())
+                    .transient_for(&shell.window)
+                    .title("Activity bars · fixture preview")
+                    .child(&content)
+                    .build();
+                let paintable = gtk::WidgetPaintable::new(Some(&window));
+                window.present();
+                self.style_preview = Some((window, paintable));
+                self.stage = 51;
+            }
+            51 if self.since.elapsed() > Duration::from_millis(300) => {
+                let (window, paintable) = self.style_preview.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_BARS_IMAGE") {
+                    super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
+                }
+                window.close();
                 return Ok(true);
             }
             _ => (),

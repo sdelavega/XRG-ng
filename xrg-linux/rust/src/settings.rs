@@ -95,6 +95,38 @@ impl GraphStyle {
         Self::ALL.iter().position(|s| *s == self).unwrap()
     }
 }
+/// Current-value indicators use the graph's axis, never an inferred capacity.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ActivityBars {
+    pub visible: bool,
+    pub style: GraphStyle,
+    pub color: [f64; 4],
+}
+impl Default for ActivityBars {
+    fn default() -> Self {
+        Self {
+            // Missing fields preserve the appearance of older Rust settings.
+            visible: false,
+            style: GraphStyle::Solid,
+            color: [0.2, 1., 0.3, 1.],
+        }
+    }
+}
+impl ActivityBars {
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .color
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=1.).contains(v))
+        {
+            return Err(
+                "Activity bar RGBA components must be finite numbers between 0 and 1".into(),
+            );
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GraphColors {
@@ -342,6 +374,8 @@ pub struct Settings {
     pub modules: Vec<ModuleSetting>,
     pub graph_height: u32,
     #[serde(default)]
+    pub activity_bars: ActivityBars,
+    #[serde(default)]
     pub layout: Layout,
     #[serde(default)]
     pub temperature_units: crate::temperature::Units,
@@ -357,7 +391,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 10,
+            version: 11,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -372,6 +406,10 @@ impl Default for Settings {
                 })
                 .collect(),
             graph_height: 100,
+            activity_bars: ActivityBars {
+                visible: true,
+                ..ActivityBars::default()
+            },
             layout: Layout::default(),
             temperature_units: crate::temperature::Units::default(),
             metrics: MetricSelection::default(),
@@ -383,7 +421,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 10 {
+        if self.version != 11 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -394,6 +432,7 @@ impl Settings {
             return Err("Settings must contain each graph exactly once".into());
         }
         self.theme.palette()?;
+        self.activity_bars.validate()?;
         for module in &self.modules {
             module.colors.validate()?;
             if module
@@ -434,6 +473,7 @@ impl Settings {
                 .strip_prefix("theme=")
                 .ok_or("Unrecognized settings format")?;
             let mut defaults = Self::default();
+            defaults.activity_bars.visible = false;
             for module in &mut defaults.modules {
                 module.style = GraphStyle::Hollow;
             }
@@ -481,6 +521,9 @@ impl Settings {
         }
         if result.version == 9 {
             result.version = 10;
+        }
+        if result.version == 10 {
+            result.version = 11;
         }
         result.validate()?;
         Ok(result)

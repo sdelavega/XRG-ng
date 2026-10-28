@@ -33,6 +33,10 @@ pub(super) struct Dialog {
     rows: Vec<Row>,
     pub height: gtk::SpinButton,
     pub graph_heights: super::graph_heights::Editor,
+    pub activity: gtk::Expander,
+    pub activity_visible: gtk::CheckButton,
+    pub activity_style: gtk::DropDown,
+    pub activity_color: gtk::ColorDialogButton,
     pub layout: gtk::DropDown,
     pub temperature_units: gtk::DropDown,
     pub name: gtk::Entry,
@@ -120,6 +124,33 @@ impl Dialog {
         form.append(&graph_row);
         let graph_heights = super::graph_heights::Editor::new();
         form.append(&graph_heights.widget);
+        let activity_content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let activity_description = gtk::Label::new(Some(
+            "One current-value bar per series, on the graph’s axis. Rate/count bars scale to recent history, not capacity. Temperature bars show a display range, not a thermal limit. Missing readings stay blank; measured zero has an empty track.",
+        ));
+        activity_description.set_wrap(true);
+        activity_description.set_xalign(0.);
+        activity_content.append(&activity_description);
+        let activity_visible = gtk::CheckButton::with_label("Show current-value activity bars");
+        activity_content.append(&activity_visible);
+        let activity_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let activity_style = gtk::DropDown::from_strings(&GraphStyle::ALL.map(GraphStyle::name));
+        activity_style.update_property(&[gtk::accessible::Property::Label("Activity bar style")]);
+        activity_row.append(&gtk::Label::new(Some("Style")));
+        activity_row.append(&activity_style);
+        let activity_dialog = gtk::ColorDialog::new();
+        activity_dialog.set_with_alpha(true);
+        activity_dialog.set_title("Activity bar color");
+        let activity_color = gtk::ColorDialogButton::new(Some(activity_dialog));
+        activity_color.update_property(&[gtk::accessible::Property::Label("Activity bar color")]);
+        activity_row.append(&gtk::Label::new(Some("Color")));
+        activity_row.append(&activity_color);
+        activity_content.append(&activity_row);
+        let activity = gtk::Expander::builder()
+            .label("Activity bars")
+            .child(&activity_content)
+            .build();
+        form.append(&activity);
         let layout = gtk::DropDown::from_strings(&["Vertical", "Horizontal"]);
         let temperature_units = gtk::DropDown::from_strings(&["Celsius (°C)", "Fahrenheit (°F)"]);
         for (title, control) in [
@@ -251,6 +282,10 @@ impl Dialog {
             rows,
             height,
             graph_heights,
+            activity,
+            activity_visible,
+            activity_style,
+            activity_color,
             layout,
             temperature_units,
             name,
@@ -265,6 +300,41 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.activity_visible.connect_toggled(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().activity_bars.visible = control.is_active();
+                dialog.activity_style.set_sensitive(control.is_active());
+                dialog.activity_color.set_sensitive(control.is_active());
+            }
+        });
+        let weak = Rc::downgrade(&dialog);
+        dialog
+            .activity_style
+            .connect_selected_notify(move |control| {
+                if let Some(dialog) = weak.upgrade()
+                    && !dialog.updating.get()
+                    && let Some(style) = GraphStyle::ALL.get(control.selected() as usize)
+                {
+                    dialog.draft.borrow_mut().activity_bars.style = *style;
+                }
+            });
+        let weak = Rc::downgrade(&dialog);
+        dialog.activity_color.connect_rgba_notify(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                let rgba = control.rgba();
+                dialog.draft.borrow_mut().activity_bars.color = [
+                    rgba.red() as f64,
+                    rgba.green() as f64,
+                    rgba.blue() as f64,
+                    rgba.alpha() as f64,
+                ];
+            }
+        });
         let weak = Rc::downgrade(&dialog);
         dialog.graph_heights.connect(Rc::new(move |change| {
             if let Some(dialog) = weak.upgrade() {
@@ -555,6 +625,21 @@ impl Dialog {
         }
         self.height.set_value(settings.graph_height as f64);
         self.graph_heights.refresh(&settings);
+        self.activity_visible
+            .set_active(settings.activity_bars.visible);
+        self.activity_style
+            .set_selected(settings.activity_bars.style.index() as u32);
+        self.activity_style
+            .set_sensitive(settings.activity_bars.visible);
+        self.activity_color
+            .set_sensitive(settings.activity_bars.visible);
+        let rgba = settings.activity_bars.color;
+        self.activity_color.set_rgba(&gtk::gdk::RGBA::new(
+            rgba[0] as f32,
+            rgba[1] as f32,
+            rgba[2] as f32,
+            rgba[3] as f32,
+        ));
         self.targets.set(&settings.metrics);
         let palette = Self::preview_palette(&settings);
         self.name.set_text(&palette.name);

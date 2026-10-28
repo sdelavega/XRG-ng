@@ -89,7 +89,7 @@ fn version_eight_upgrades_without_writing_or_changing_styles_sources_and_palette
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        10
+        11
     );
 }
 #[test]

@@ -305,6 +305,9 @@ Graph menu checks emit GTK mouse/key signals, test live details/source guards,
 hide/reorder/show-all persistence and existing window actions, including About.
 Legacy import checks invalid input, preview cancellation, draft cancellation,
 Apply/reopen, unchanged source bytes and closing during an asynchronous read.
+Activity-bar checks cover controls, Apply/Cancel, persistence/reopen, defaults,
+legacy mappings and dedicated previews of all four styles, zero/missing values,
+signed temperatures and relative rate scaling.
 The main window, preferences, process table, both AI tabs, weather window, graph
 menu, live details and legacy import preview are
 exported as PNGs. Smoke
@@ -395,17 +398,19 @@ The thirteen `[Colors]` keys written by the C app for Memory, Network, Disk and
 AI-token backgrounds/series import as overrides for those graph components.
 Missing components keep their current override or theme inheritance; module-only
 color imports leave the global palette intact.
+`[Display] show_activity_bars` (true/false), `activity_bar_style` (0–3 as above)
+and `[Colors] activity_bar` transfer independently. Malformed supported bar
+settings reject the entire import. A bar-only color import keeps the global theme.
 Partial files keep current draft values for missing fields. New VRAM/Fans
 visibility, graph order/height, metric sources, process filters, AI sources and
 weather remain as configured. A legacy weather visibility flag does not enable
 requests. The main window background stays opaque as with other custom themes.
 
-Window geometry/pinning/opacity, activity bars,
-billing and unrecognized entries are listed as
+Window geometry/pinning/opacity, billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
 supported booleans, colors, layout or unit values reject the entire import and
 leave the draft unchanged.
-Files containing no supported visibility/color/layout/unit/style entries are rejected.
+Files containing no supported visibility/color/layout/unit/style/activity-bar entries are rejected.
 
 Parsing follows the C writer's GLib key-file layout: UTF-8, case-sensitive grouped
 keys, `#` comments, lower-case `true`/`false`, repeated-group merging and last-key
@@ -436,6 +441,16 @@ entry opens the editor when a built-in preset is active. In Preferences:
   the overrides in the draft and keeps the default value. Sizes apply in both
   layouts; horizontal graphs align at the top rather than stretching shorter
   graphs. Ordering, hiding, sources, themes and styles preserve size choices.
+- Expand **Activity bars** to show/hide the compact **now** indicators and choose
+  their independent Solid/Pixel/Dot/Hollow style and RGBA color. Up to three bars
+  follow graph series order, left to right. Each shows the latest sample on the
+  **same axis as its graph**: percentage graphs use 0–100%; rates/counts use the
+  recent-history scale, not hardware capacity; temperatures use the graph's signed
+  display range, not a thermal threshold. Tooltips and accessibility descriptions
+  explain the axis. Missing latest values leave no track; measured zero has an
+  empty track and a zero marker. Signed values extend from zero. Apply/Cancel and
+  Restore defaults work like other appearance controls. Theme load/save keeps bar
+  settings intact; theme files still contain only the global palette.
 - Choose **Vertical** (stacked) or **Horizontal** (side by side) layout. Ordering
   controls become Left/Right horizontally; graph menus use the same order.
 - Choose **Celsius** or **Fahrenheit** for system sensor, GPU and TPU/NPU temperatures.
@@ -502,7 +517,7 @@ XTF load/save behavior is unchanged.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 10 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 11 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
@@ -527,6 +542,10 @@ module; missing/null values follow the default. Invalid values reject the whole
 settings document. Restore defaults clears size overrides in the draft. The C
 build does not serialize its per-graph height fields; legacy import keeps current
 graph sizes instead of treating saved window geometry as graph dimensions.
+Versions 1–10 without activity-bar fields, and the original `theme=…` format,
+keep bars hidden to preserve their appearance. New installations and Restore
+defaults enable Solid bars in the C app's electric green. Bar preferences are
+stored separately from graph styles/colors and the exchanged theme document.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:
