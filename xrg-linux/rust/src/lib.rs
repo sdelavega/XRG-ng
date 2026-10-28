@@ -8,6 +8,8 @@ pub mod cpu;
 pub mod engine;
 pub mod gpu;
 pub mod gpu_memory;
+#[cfg(feature = "gtk-ui")]
+pub mod graph;
 pub mod hardware;
 pub mod legacy;
 pub mod shared;

@@ -384,7 +384,10 @@ path and existing atomic/background writer and persistence-error handling.
 The importer transfers the ten legacy graph visibility flags and the seven global
 colors: background, graph background, three series, border and text. It also
 transfers `[Display] layout_orientation` (0 vertical, 1 horizontal) and
-`[Temperature] units` (0 Celsius, 1 Fahrenheit). Imported
+`[Temperature] units` (0 Celsius, 1 Fahrenheit). `[GraphStyles]` transfers the
+CPU, memory, network, disk, GPU, battery, temperature, AI-token and TPU style keys:
+0 Solid, 1 Pixel, 2 Dot and 3 Hollow. Missing style entries retain the draft's
+choices; invalid supported style values reject the whole import. Imported
 colors become an embedded custom theme, retaining alpha and black/zero values.
 The legacy theme name supplies a label only; palettes are never guessed from a
 matching preset name. A name without color entries leaves the current theme intact.
@@ -394,11 +397,11 @@ weather remain as configured. A legacy weather visibility flag does not enable
 requests. The main window background stays opaque as with other custom themes.
 
 Window geometry/pinning/opacity, activity bars, module-specific
-colors/styles, billing and unrecognized entries are listed as
+colors, billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
 supported booleans, colors, layout or unit values reject the entire import and
 leave the draft unchanged.
-Files containing no supported visibility/color/layout/unit entries are rejected.
+Files containing no supported visibility/color/layout/unit/style entries are rejected.
 
 Parsing follows the C writer's GLib key-file layout: UTF-8, case-sensitive grouped
 keys, `#` comments, lower-case `true`/`false`, repeated-group merging and last-key
@@ -416,6 +419,12 @@ The toolbar provides all six built-in presets and **Preferences…**. The Custom
 entry opens the editor when a built-in preset is active. In Preferences:
 
 - Check which graphs to show; use **Up/Down** to arrange them.
+- Choose each graph's **Solid**, **Pixel**, **Dot** or **Hollow** style beside its
+  visibility control. Solid fills the area; Pixel and Dot use coarse square or
+  fine dotted fills; Hollow retains the outline alone. Fills run to zero,
+  including for negative temperatures. Curves remain independent rather than
+  stacked, and their outlines stay visible above overlapping fills. Theme colors
+  and opacity apply to every style. Style changes keep the sampled histories.
 - Set graph height between 64 and 240 pixels.
 - Choose **Vertical** (stacked) or **Horizontal** (side by side) layout. Ordering
   controls become Left/Right horizontally; graph menus use the same order.
@@ -474,7 +483,7 @@ original imported file. XTF conversion remains follow-up work; legacy Linux impo
 is available as described above. The macOS application's
 XTF load/save behavior is unchanged.
 
-Settings use version 7 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 8 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
@@ -483,8 +492,13 @@ controls. Versions 1–4 gain weather settings with requests **disabled**. Exist
 AI sources, layouts and themes are preserved. Versions 1–5 gain vertical layout
 and Celsius defaults; existing settings are upgraded without immediate writes.
 Versions 1–6 gain default temperature/fan source choices while preserving existing
-layout, colors, units, sources and provider settings. The earlier Rust `theme=Ocean` format also loads with
-default controls. Formats upgrade only when preferences are next saved.
+layout, colors, units, sources and provider settings. Versions 1–7 without graph
+style fields gain **Hollow** styles, preserving their earlier line appearance.
+The earlier Rust `theme=Ocean` format also keeps Hollow styles. New installations
+and **Restore defaults** use Solid styles, matching the C application's default.
+Each module's style is stored with its identity and visibility, so reordering or
+hiding graphs does not move their style choices. Formats upgrade only when
+preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

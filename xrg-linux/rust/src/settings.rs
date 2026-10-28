@@ -71,11 +71,37 @@ impl Module {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphStyle {
+    Solid,
+    Pixel,
+    Dot,
+    /// Missing fields in older Rust documents retain their original line view.
+    #[default]
+    Hollow,
+}
+impl GraphStyle {
+    pub const ALL: [Self; 4] = [Self::Solid, Self::Pixel, Self::Dot, Self::Hollow];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid",
+            Self::Pixel => "Pixel",
+            Self::Dot => "Dot",
+            Self::Hollow => "Hollow",
+        }
+    }
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|s| *s == self).unwrap()
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleSetting {
     pub id: Module,
     pub visible: bool,
+    #[serde(default)]
+    pub style: GraphStyle,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -270,13 +296,17 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 7,
+            version: 8,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
             modules: Module::ALL
                 .into_iter()
-                .map(|id| ModuleSetting { id, visible: true })
+                .map(|id| ModuleSetting {
+                    id,
+                    visible: true,
+                    style: GraphStyle::Solid,
+                })
                 .collect(),
             graph_height: 100,
             layout: Layout::default(),
@@ -290,7 +320,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 7 {
+        if self.version != 8 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -328,9 +358,13 @@ impl Settings {
             let name = lines[0]
                 .strip_prefix("theme=")
                 .ok_or("Unrecognized settings format")?;
+            let mut defaults = Self::default();
+            for module in &mut defaults.modules {
+                module.style = GraphStyle::Hollow;
+            }
             Self {
                 theme: ThemeChoice::Builtin { name: name.into() },
-                ..Self::default()
+                ..defaults
             }
         };
         if result.version == 1 || result.version == 2 {
@@ -344,9 +378,13 @@ impl Settings {
             if result.modules.len() != 10 || actual != expected {
                 return Err("Legacy settings must contain each original graph exactly once".into());
             }
-            result.modules.extend(
-                [Module::GpuMemory, Module::Fans].map(|id| ModuleSetting { id, visible: false }),
-            );
+            result
+                .modules
+                .extend([Module::GpuMemory, Module::Fans].map(|id| ModuleSetting {
+                    id,
+                    visible: false,
+                    style: GraphStyle::Hollow,
+                }));
             result.version = 5;
         }
         if result.version == 3 || result.version == 4 {
@@ -357,6 +395,9 @@ impl Settings {
         }
         if result.version == 6 {
             result.version = 7;
+        }
+        if result.version == 7 {
+            result.version = 8;
         }
         result.validate()?;
         Ok(result)

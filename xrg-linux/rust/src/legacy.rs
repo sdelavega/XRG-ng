@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Explicit, read-only import of the C application's GLib key-file settings.
 use crate::{
-    settings::{Layout, Module, Settings, ThemeChoice, ThemeDocument},
+    settings::{GraphStyle, Layout, Module, Settings, ThemeChoice, ThemeDocument},
     system_file,
     temperature::Units,
 };
@@ -23,7 +23,7 @@ pub struct Import {
 impl Import {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Layout and system temperature units transfer when present. Graph order/height, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
+            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, layout and system temperature units transfer when present. Graph order/height, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
             self.imported.len(),
             self.skipped.len(),
             self.imported.join("\n")
@@ -133,6 +133,17 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         "border",
         "text",
     ];
+    let style_keys = [
+        ("cpu_style", Module::Cpu),
+        ("memory_style", Module::Memory),
+        ("network_style", Module::Network),
+        ("disk_style", Module::Disk),
+        ("gpu_style", Module::Gpu),
+        ("battery_style", Module::Battery),
+        ("temperature_style", Module::Temperature),
+        ("aitoken_style", Module::Ai),
+        ("tpu_style", Module::Tpu),
+    ];
     for ((group, key), value) in &entries {
         let label = format!("[{group}] {key}");
         if group == "Modules"
@@ -164,6 +175,21 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 _ => return Err(format!("{label}: expected 0 (Celsius) or 1 (Fahrenheit)")),
             };
             imported.push(format!("{label} = {:?}", settings.temperature_units));
+        } else if group == "GraphStyles"
+            && let Some((_, id)) = style_keys.iter().find(|(name, _)| name == key)
+        {
+            let style = value
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| GraphStyle::ALL.get(n))
+                .ok_or_else(|| format!("{label}: expected a graph style from 0 to 3"))?;
+            settings
+                .modules
+                .iter_mut()
+                .find(|m| m.id == *id)
+                .expect("Validated module set")
+                .style = *style;
+            imported.push(format!("{label} = {}", style.name()));
         } else if group == "Colors"
             && let Some(index) = color_keys.iter().position(|k| k == key)
         {
@@ -183,7 +209,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         }
     }
     if imported.is_empty() {
-        return Err("No supported legacy visibility, global color, layout or temperature-unit entries found".into());
+        return Err("No supported legacy visibility, global color, layout, graph-style or temperature-unit entries found".into());
     }
     if has_colors {
         let name = entries

@@ -7,13 +7,14 @@ use std::{
     path::{Path, PathBuf},
     rc::{Rc, Weak},
 };
-use xrg_ng_linux::settings::{Layout, Module, Settings, ThemeChoice, ThemeDocument};
+use xrg_ng_linux::settings::{GraphStyle, Layout, Module, Settings, ThemeChoice, ThemeDocument};
 use xrg_ng_linux::shared;
 use xrg_ng_linux::temperature::Units;
 struct Row {
     id: Module,
     widget: gtk::Box,
     check: gtk::CheckButton,
+    style: gtk::DropDown,
     up: gtk::Button,
     down: gtk::Button,
 }
@@ -69,6 +70,15 @@ impl Dialog {
             let check = gtk::CheckButton::with_label(id.title());
             check.set_hexpand(true);
             widget.append(&check);
+            let style = gtk::DropDown::from_strings(&GraphStyle::ALL.map(GraphStyle::name));
+            style.update_property(&[gtk::accessible::Property::Label(&format!(
+                "{} graph style",
+                id.title()
+            ))]);
+            style.set_tooltip_text(Some(
+                "Solid area, chunky pixels, fine dots, or a hollow outline",
+            ));
+            widget.append(&style);
             let up = gtk::Button::with_label("Up");
             up.set_tooltip_text(Some(&format!("Move {} up", id.title())));
             up.update_property(&[gtk::accessible::Property::Label(&format!(
@@ -88,6 +98,7 @@ impl Dialog {
                 id,
                 widget,
                 check,
+                style,
                 up,
                 down,
             });
@@ -245,6 +256,21 @@ impl Dialog {
         for row in &dialog.rows {
             let weak = Rc::downgrade(&dialog);
             let id = row.id;
+            row.style.connect_selected_notify(move |control| {
+                if let Some(dialog) = weak.upgrade()
+                    && !dialog.updating.get()
+                    && let Some(style) = GraphStyle::ALL.get(control.selected() as usize)
+                    && let Some(module) = dialog
+                        .draft
+                        .borrow_mut()
+                        .modules
+                        .iter_mut()
+                        .find(|m| m.id == id)
+                {
+                    module.style = *style;
+                }
+            });
+            let weak = Rc::downgrade(&dialog);
             row.check.connect_toggled(move |check| {
                 if let Some(dialog) = weak.upgrade()
                     && !dialog.updating.get()
@@ -450,6 +476,9 @@ impl Dialog {
     pub fn check(&self, id: Module) -> gtk::CheckButton {
         self.rows[id.index()].check.clone()
     }
+    pub fn style(&self, id: Module) -> gtk::DropDown {
+        self.rows[id.index()].style.clone()
+    }
     pub fn move_up(&self, id: Module) {
         self.rows[id.index()].up.emit_clicked();
     }
@@ -486,6 +515,7 @@ impl Dialog {
                 button.update_property(&[gtk::accessible::Property::Label(&label)]);
             }
             row.check.set_active(module.visible);
+            row.style.set_selected(module.style.index() as u32);
             row.up.set_sensitive(index > 0);
             row.down.set_sensitive(index + 1 < settings.modules.len());
             self.modules

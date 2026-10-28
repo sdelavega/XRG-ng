@@ -19,7 +19,9 @@ use std::{
 use xrg_ng_linux::{
     engine::{Panel, SelectionControl, Snapshot, Worker},
     metrics::Inventory,
-    settings::{self, Layout, Module, ProcessView, Settings, Store, ThemeChoice, Writer},
+    settings::{
+        self, GraphStyle, Layout, Module, ProcessView, Settings, Store, ThemeChoice, Writer,
+    },
     shared::{self, Theme},
 };
 
@@ -156,8 +158,7 @@ impl Shell {
                 let state = state.borrow();
                 draw(
                     context,
-                    width,
-                    height,
+                    (width, height),
                     &theme.borrow(),
                     module.title(),
                     state
@@ -165,6 +166,13 @@ impl Shell {
                         .filter(|s| snapshot_matches(s, &settings.borrow(), module))
                         .and_then(|s| s.panels.get(module.index())),
                     settings.borrow().temperature_units,
+                    settings
+                        .borrow()
+                        .modules
+                        .iter()
+                        .find(|m| m.id == module)
+                        .unwrap()
+                        .style,
                 );
             });
             graphs.append(&area);
@@ -661,12 +669,12 @@ fn color(context: &gtk::cairo::Context, color: [f64; 4]) {
 }
 fn draw(
     context: &gtk::cairo::Context,
-    width: i32,
-    height: i32,
+    (width, height): (i32, i32),
     theme: &Theme,
     title: &str,
     panel: Option<&Panel>,
     units: xrg_ng_linux::temperature::Units,
+    style: GraphStyle,
 ) {
     // Compose translucent Classic colors over an opaque base; repainting never
     // accumulates alpha from previous frames.
@@ -710,23 +718,20 @@ fn draw(
     if bottom <= top || width <= 20 {
         return;
     }
-    for (index, values) in panel.series.iter().enumerate() {
-        color(context, theme.colors[2 + index]);
-        context.set_line_width(1.5);
-        for (offset, value) in values.iter().enumerate() {
-            let x = 8.
-                + offset as f64 * (width as f64 - 16.)
-                    / (values.len().saturating_sub(1).max(1)) as f64;
-            let y =
-                bottom - ((value - minimum) / (maximum - minimum)).clamp(0., 1.) * (bottom - top);
-            if offset == 0 {
-                context.move_to(x, y);
-            } else {
-                context.line_to(x, y);
-            }
-        }
-        let _ = context.stroke();
-    }
+    let _ = xrg_ng_linux::graph::draw(
+        context,
+        &panel.series,
+        &theme.colors[2..5],
+        xrg_ng_linux::graph::Plot {
+            left: 8.,
+            top,
+            right: width as f64 - 8.,
+            bottom,
+            lower: minimum,
+            upper: maximum,
+        },
+        style,
+    );
 }
 
 fn save_snapshot(

@@ -9,7 +9,9 @@ use std::{
     rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use xrg_ng_linux::settings::{Layout, Module, Settings, Store, ThemeChoice, ThemeDocument};
+use xrg_ng_linux::settings::{
+    GraphStyle, Layout, Module, Settings, Store, ThemeChoice, ThemeDocument,
+};
 use xrg_ng_linux::temperature::{Text, Units};
 const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\n[Temperature]\nunits=1\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
 pub(super) struct Harness {
@@ -25,6 +27,7 @@ pub(super) struct Harness {
     neural_panel: Option<xrg_ng_linux::engine::Panel>,
     memory_panel: Option<xrg_ng_linux::engine::Panel>,
     cpu_panel: Option<xrg_ng_linux::engine::Panel>,
+    style_preview: Option<(gtk::Window, gtk::WidgetPaintable)>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -67,6 +70,7 @@ impl Harness {
             neural_panel: None,
             memory_panel: None,
             cpu_panel: None,
+            style_preview: None,
             expected: None,
             since: Instant::now(),
         })
@@ -396,7 +400,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 7 && loaded.processes.limit == 20,
+                    loaded.version == 8 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1381,6 +1385,116 @@ impl Harness {
                 }
                 details.window.close();
                 self.cpu_panel.take();
+                let before = shell.settings.borrow().clone();
+                let dialog = shell.preferences();
+                for (module, style) in Module::ALL[..4].iter().zip(GraphStyle::ALL) {
+                    dialog.style(*module).set_selected(style.index() as u32);
+                    require(
+                        dialog
+                            .draft()
+                            .modules
+                            .iter()
+                            .find(|m| m.id == *module)
+                            .unwrap()
+                            .style
+                            == style,
+                        "Graph style control did not update the draft",
+                    )?;
+                }
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelling graph styles changed active settings",
+                )?;
+                let dialog = shell.preferences();
+                for (module, style) in Module::ALL[..4].iter().zip(GraphStyle::ALL) {
+                    dialog.style(*module).set_selected(style.index() as u32);
+                }
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 39;
+            }
+            39 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, saved, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&saved) == self.expected.as_ref(),
+                    "Per-graph styles did not persist",
+                )?;
+                let dialog = shell.preferences();
+                for (module, style) in Module::ALL[..4].iter().zip(GraphStyle::ALL) {
+                    require(
+                        dialog.style(*module).selected() == style.index() as u32,
+                        "Reopening Preferences lost a graph style",
+                    )?;
+                }
+                dialog.reset.emit_clicked();
+                require(
+                    dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .all(|m| m.style == GraphStyle::Solid),
+                    "Restore defaults did not restore solid styles in the draft",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    Some(&*shell.settings.borrow()) == self.expected.as_ref(),
+                    "Cancelling style defaults changed active settings",
+                )?;
+                let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+                content.set_margin_top(12);
+                content.set_margin_bottom(12);
+                content.set_margin_start(12);
+                content.set_margin_end(12);
+                let theme = saved.theme.palette()?;
+                for (module, style) in Module::ALL[..4].iter().copied().zip(GraphStyle::ALL) {
+                    let area = gtk::DrawingArea::new();
+                    area.set_content_height(150);
+                    area.set_content_width(600);
+                    let theme = theme.clone();
+                    let title = format!("{} · {}", module.title(), style.name());
+                    let panel = xrg_ng_linux::engine::Panel {
+                        title: "Style fixture",
+                        label: "Independent curves · fixture data".into(),
+                        detail: String::new(),
+                        series: vec![
+                            vec![60., 80., 65., 90., 70., 80.],
+                            vec![30., 45., 25., 60., 30., 55.],
+                            vec![10., 15., 5., 30., 10., 20.],
+                        ],
+                        scale: xrg_ng_linux::engine::Scale::Percent,
+                        temperature_text: None,
+                    };
+                    area.set_draw_func(move |_, context, width, height| {
+                        super::draw(
+                            context,
+                            (width, height),
+                            &theme,
+                            &title,
+                            Some(&panel),
+                            Units::Celsius,
+                            style,
+                        )
+                    });
+                    content.append(&area);
+                }
+                let window = gtk::Window::builder()
+                    .application(&shell.window.application().unwrap())
+                    .transient_for(&shell.window)
+                    .title("Graph styles · fixture preview")
+                    .child(&content)
+                    .build();
+                let paintable = gtk::WidgetPaintable::new(Some(&window));
+                window.present();
+                self.style_preview = Some((window, paintable));
+                self.stage = 40;
+            }
+            40 if self.since.elapsed() > Duration::from_millis(300) => {
+                let (window, paintable) = self.style_preview.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_STYLES_IMAGE") {
+                    super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
+                }
+                window.close();
                 return Ok(true);
             }
             _ => (),

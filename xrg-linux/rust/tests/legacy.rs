@@ -93,6 +93,12 @@ fn imports_visibility_and_global_colors_without_changing_other_choices() {
         .unwrap()
         .visible = false;
     expected.theme = report.settings.theme.clone();
+    expected
+        .modules
+        .iter_mut()
+        .find(|m| m.id == Module::Cpu)
+        .unwrap()
+        .style = xrg_ng_linux::settings::GraphStyle::Dot;
     assert_eq!(report.settings, expected);
     let palette = report.settings.theme.palette().unwrap();
     assert_eq!(palette.name, "Imported Linux · Ocean");
@@ -102,7 +108,7 @@ fn imports_visibility_and_global_colors_without_changing_other_choices() {
         [17. / 255., 34. / 255., 51. / 255., 68. / 255.]
     );
     assert_eq!(palette.colors[0], base.theme.palette().unwrap().colors[0]);
-    assert_eq!(report.imported.len(), 5);
+    assert_eq!(report.imported.len(), 6);
     assert!(report.skipped.contains(&"[Modules] show_weather".into()));
     assert!(
         report
