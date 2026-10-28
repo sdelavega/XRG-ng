@@ -606,7 +606,8 @@ entry opens the editor when a built-in preset is active. In Preferences:
   **Use theme for this graph** clears only that graph's overrides. Theme changes
   update inherited components and preserve explicit overrides. Window background,
   text and border colors remain global. Style/source changes preserve overrides.
-- Use **Load theme…** and **Save theme…** for local portable JSON files.
+- Use **Load theme…** for portable JSON themes or supported original macOS `.xtf`
+  themes. **Save theme…** always writes portable XRG-ng JSON.
 - **Apply** uses the draft and saves preferences; **Cancel** keeps the active layout
   and colors. **Restore defaults** changes the draft until Apply is pressed.
 
@@ -653,9 +654,31 @@ previous values intact. Theme reads/writes run outside GTK's main thread. Files
 are limited to 128 KiB and must be regular local files without final-component
 symlinks. Built-in presets remain available after using custom colors. A custom
 palette is embedded in saved preferences, so reopening does not depend on the
-original imported file. XTF conversion remains follow-up work; legacy Linux import
-is available as described above. The macOS application's
-XTF load/save behavior is unchanged.
+original imported file. Legacy Linux settings import is available as described
+above. The macOS application's XTF load/save behavior is unchanged.
+
+Original macOS XTF import accepts XML and binary property lists containing the
+seven `*Color` archives and separate `*Transparency` numbers used by XRG. It reads
+plain NSColor RGB (device/calibrated) and grayscale components as palette values;
+it does not instantiate archived classes or call an Objective-C unarchiver.
+Separate transparency overrides archived alpha, matching the macOS loader, and
+must be a finite number between 0 and 1 (a boolean is not a number here). The
+original `ClassicTheme.xtf` fixture is checked against the shared Classic preset.
+Imported palettes are named **Imported macOS**, editable before Apply. Cancel and
+failed imports retain the previous settings. Saving converts the palette to JSON;
+it does not rewrite the original XTF or export macOS archives.
+
+This is component conversion, not display-profile/colorimetric matching. Custom
+ICC/profile-based colors (including newer AppKit sRGB archives carrying a custom
+space), named/system colors, patterns and CMYK are rejected with a clear error;
+export device RGB/grayscale colors or use JSON instead. All seven fields must be
+supported before any draft change. Per-graph overrides, layout and metric choices
+are preserved. Decoder bounds include 128 KiB per file, 64 KiB per color archive,
+64 archive objects, 12 collection nesting levels, 2,048 events and 256 KiB expanded
+payload per property list. Duplicate dictionary keys and invalid UID/class
+references are rejected. The pinned
+[Rust plist parser](https://docs.rs/plist/1.10.3/plist/) supplies streaming
+events; XRG-ng enforces these limits while building values.
 
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
@@ -1099,7 +1122,7 @@ automated tests use fixtures and make no weather requests.
    support and optional process priority controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
-3. Deeper metric preferences, XTF conversion and broader legacy-field mappings
+3. Deeper metric preferences, broader XTF color-space support and legacy-field mappings
    as their corresponding Rust features become available.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global
    window placement / keep-above APIs; supported positioning/pinning needs a

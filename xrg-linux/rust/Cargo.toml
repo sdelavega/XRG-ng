@@ -15,3 +15,4 @@ gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = tru
 rusqlite = { version = "0.41.0", features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
+plist = { version = "~1.10.3", default-features = false, features = ["enable_unstable_features_that_may_break_with_minor_version_bumps"] }

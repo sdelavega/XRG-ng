@@ -224,7 +224,13 @@ impl Dialog {
         form.append(&name);
         let files = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let load = gtk::Button::with_label("Load theme…");
+        load.set_tooltip_text(Some(
+            "Load an XRG-ng JSON theme or an original macOS XTF theme with RGB/grayscale colors.",
+        ));
         let save = gtk::Button::with_label("Save theme…");
+        save.set_tooltip_text(Some(
+            "Save the current global palette as portable XRG-ng JSON.",
+        ));
         files.append(&load);
         files.append(&save);
         form.append(&files);
@@ -838,8 +844,16 @@ impl Dialog {
             .modal(true)
             .build();
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("XRG-ng themes (*.json)"));
+        filter.set_name(Some(if save {
+            "XRG-ng themes (*.json)"
+        } else {
+            "XRG themes (*.json, *.xtf)"
+        }));
         filter.add_pattern("*.json");
+        if !save {
+            filter.add_pattern("*.xtf");
+            filter.add_pattern("*.XTF");
+        }
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         chooser.set_filters(Some(&filters));

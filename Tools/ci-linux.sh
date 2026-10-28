@@ -30,6 +30,9 @@ cargo fmt --manifest-path xrg-linux/rust/Cargo.toml --check
 cargo clippy "${cargo_options[@]}" --all-targets -- -D warnings
 cargo test "${cargo_options[@]}"
 cargo run "${cargo_options[@]}" -- --headless --samples 3
+# Dedicated theme conversion gate, with its own unchanged smoke deadline.
+XRG_SMOKE_XTF_THEME=1 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    cargo run "${cargo_options[@]}" -- --smoke-test
 # Default compact dashboard, with live Linux readings and honest absent-hardware states.
 for theme in Classic Midnight; do
     XRG_SMOKE_STYLE="$theme" XRG_SMOKE_IMAGE="$output/compact-$theme.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \

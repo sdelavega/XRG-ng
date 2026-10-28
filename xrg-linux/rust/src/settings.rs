@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Versioned Linux presentation preferences. Paths are explicit for isolated tests.
+mod xtf;
 use crate::{
     shared::{self, Theme},
     system_file,
@@ -249,6 +250,12 @@ impl ThemeDocument {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > LIMIT {
             return Err("Theme file exceeds 128 KiB".into());
+        }
+        let prefix = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+        if bytes.starts_with(b"bplist")
+            || prefix.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
+        {
+            return xtf::parse(bytes);
         }
         let value: Self =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid theme: {e}"))?;

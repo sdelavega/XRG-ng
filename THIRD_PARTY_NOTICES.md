@@ -53,6 +53,14 @@ Their license text is retained in `xrg-linux/rust/licenses/serde-MIT.txt` (ident
 in the selected crate versions). Cargo.lock records exact versions and transitive
 dependencies; distribution packaging must retain their applicable notices too.
 
+## Linux Rust property-list decoding
+
+The Linux XTF theme importer uses rust-plist (MIT, copyright 2015 Edward Barnard).
+Its license is retained in `xrg-linux/rust/licenses/plist-MIT.txt`. Cargo.lock records
+the parser and its transitive dependency versions. Preview source archives retain
+their Cargo sources and applicable license notices. The streaming API is pinned
+to the plist 1.10 minor release as required by that API's stability policy.
+
 ## Linux preview archives
 
 Preview archives retain the project license/credits, dependency license files and

@@ -14,6 +14,7 @@ mod process_details_smoke;
 mod processes;
 mod smoke;
 mod targets;
+mod theme_import_smoke;
 mod weather;
 mod weather_graph_smoke;
 use gtk::{glib, prelude::*};
