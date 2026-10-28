@@ -10,6 +10,8 @@ custom colors, with built-in presets and JSON theme load/save. Layout can be
 vertical or horizontal, with Celsius/Fahrenheit system temperature display.
 Per-core/interface/disk/GPU selectors and a sortable process table with name/UID
 filters are available in the new UI.
+CPU curves include total, user and system time, with load averages, scheduling-task
+counts and uptime in Live details.
 Driver-reported VRAM and fan RPM graphs, plus battery health/time details, use available
 driver counters without fabricating unsupported readings. The Memory panel adds
 cache/swap curves and live details for RAM categories and paging/swap rates; see

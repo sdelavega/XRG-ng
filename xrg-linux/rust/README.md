@@ -58,6 +58,29 @@ first, write/send second. First CPU sample waits for an interval. Failed collect
 shows an error rather than recording fabricated zeros; CPU/network/disk source
 failures clear their plotted histories and establish a fresh interval on recovery.
 
+The **CPU** graph keeps the total non-idle curve and adds independent **user**
+(including nice) and **system** (including reported IRQ/softirq) curves. All use
+the same interval total; they are not stacked. Total non-idle includes steal,
+which is hypervisor wait rather than executed work. Guest time already included
+in user/nice is not counted again. **Live details…** lists nice, idle, I/O wait and
+steal separately, plus system-wide 1/5/15-minute load averages, runnable/total
+scheduling entities (including threads) and uptime including suspend. Selecting
+one logical CPU changes its curves; load and uptime keep their exposed `/proc`
+scope. Those counters may exceed a container's assigned CPU capacity.
+
+Load averages are task counts, including uninterruptible I/O wait, not utilization
+percentages. Uptime's cumulative idle value can exceed elapsed uptime on multicore
+systems and is not used to estimate CPU usage. Optional load/uptime failures show
+unavailable details while preserving valid CPU curves. Their reads are capped at
+4 KiB each and reject final-component symlinks/special files. Failed CPU reads,
+counter regressions (including decreasing iowait), counter-layout changes,
+non-increasing times and gaps over 300 seconds clear the affected histories and
+start a fresh interval. Aggregate history also resets when logical CPU membership
+changes; a separately selected surviving CPU keeps its own baseline. See the
+kernel's [CPU counters](https://www.kernel.org/doc/html/latest/filesystems/proc.html#miscellaneous-kernel-statistics-in-proc-stat),
+[load-average definition](https://man7.org/linux/man-pages/man5/proc_loadavg.5.html)
+and [uptime definition](https://man7.org/linux/man-pages/man5/proc_uptime.5.html).
+
 Battery collection reads system power supplies, skips HID/HID++ names before
 opening attributes, and excludes `scope=Device` and absent batteries. Each percent
 uses a complete energy or charge pair; a bounded capacity percent is the fallback.

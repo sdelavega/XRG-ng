@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 use crate::{
-    collectors::{LinuxSources, cpu_percent},
+    collectors::LinuxSources,
     engine::{Panel, Scale},
-    metric_sources::{self, CpuRecords, Devices},
+    metric_sources::{self, Devices},
     settings::MetricSelection,
     shared::{History, Rates},
 };
@@ -115,8 +115,7 @@ impl IoHistory {
 }
 pub struct Sampler {
     selection: MetricSelection,
-    previous: Option<CpuRecords>,
-    cpu: History,
+    cpu: crate::cpu::View,
     network: IoHistory,
     disk: IoHistory,
 }
@@ -131,8 +130,7 @@ impl Default for Sampler {
     fn default() -> Self {
         Self {
             selection: MetricSelection::default(),
-            previous: None,
-            cpu: History::new(120),
+            cpu: crate::cpu::View::default(),
             network: IoHistory::new(),
             disk: IoHistory::new(),
         }
@@ -145,7 +143,7 @@ impl Sampler {
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
         if self.selection.cpu != selection.cpu {
-            self.cpu = History::new(120);
+            self.cpu.reset_history();
         }
         if self.selection.network != selection.network {
             self.network.reset();
@@ -158,8 +156,7 @@ impl Sampler {
     }
     pub fn sample(&mut self, source: &LinuxSources, time: f64) -> Sample {
         if !time.is_finite() || time < 0. {
-            self.previous = None;
-            self.cpu = History::new(120);
+            self.cpu = crate::cpu::View::default();
             self.network.reset();
             self.disk.reset();
             let panel = |title| Panel {
@@ -179,71 +176,8 @@ impl Sampler {
             };
         }
         let mut inventory = Inventory::default();
-        let mut valid_cpu = false;
-        let mut series = Vec::new();
-        let selected = self.selection.cpu;
-        let records = metric_sources::cpus(source);
-        if records.is_err() {
-            self.previous = None;
-        }
-        let value = records.and_then(|next| {
-            inventory.cpus = next.cores.keys().copied().collect();
-            valid_cpu = self
-                .previous
-                .as_ref()
-                .and_then(|old| cpu_percent(old.total, next.total))
-                .is_some();
-            let value = if let Some(id) = selected {
-                next.cores
-                    .get(&id)
-                    .ok_or_else(|| format!("CPU {id} unavailable"))
-                    .and_then(|cpu| {
-                        self.previous
-                            .as_ref()
-                            .and_then(|p| p.cores.get(&id))
-                            .and_then(|old| cpu_percent(*old, *cpu))
-                            .ok_or_else(|| format!("CPU {id} waiting for interval"))
-                    })
-            } else {
-                self.previous
-                    .as_ref()
-                    .and_then(|p| cpu_percent(p.total, next.total))
-                    .ok_or_else(|| "Waiting for CPU interval".into())
-            };
-            self.previous = Some(next);
-            value
-        });
-        let label = match value {
-            Ok(value) => {
-                self.cpu.append(value);
-                series.push(self.cpu.values());
-                format!(
-                    "{}{value:.1}%",
-                    selected
-                        .map(|id| format!("CPU {id} · "))
-                        .unwrap_or_default()
-                )
-            }
-            Err(error) => {
-                self.cpu = History::new(120);
-                error
-            }
-        };
-        let cpu = Panel {
-            title: "CPU",
-            detail: format!(
-                "{label}\n{}",
-                if selected.is_some() {
-                    "One logical CPU; idle includes iowait; guest time is not counted twice."
-                } else {
-                    "Aggregate CPU; idle includes iowait; guest time is not counted twice."
-                }
-            ),
-            label,
-            series,
-            scale: Scale::Percent,
-            temperature_text: None,
-        };
+        let (cpu, valid_cpu, cpus) = self.cpu.sample(source, self.selection.cpu, time);
+        inventory.cpus = cpus;
         let (network, valid_network, names) = self.network.panel(
             "Network",
             metric_sources::network(source),

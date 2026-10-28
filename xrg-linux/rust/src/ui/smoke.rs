@@ -24,6 +24,7 @@ pub(super) struct Harness {
     details: Option<Rc<super::menus::Details>>,
     neural_panel: Option<xrg_ng_linux::engine::Panel>,
     memory_panel: Option<xrg_ng_linux::engine::Panel>,
+    cpu_panel: Option<xrg_ng_linux::engine::Panel>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -65,6 +66,7 @@ impl Harness {
             details: None,
             neural_panel: None,
             memory_panel: None,
+            cpu_panel: None,
             expected: None,
             since: Instant::now(),
         })
@@ -162,6 +164,14 @@ impl Harness {
             shell.update_panel_text();
             shell.update_details();
             shell.areas[Module::Memory.index()].queue_draw();
+        }
+        if let Some(panel) = &self.cpu_panel {
+            if let Some(snapshot) = shell.state.borrow_mut().as_mut() {
+                snapshot.panels[Module::Cpu.index()] = panel.clone();
+            }
+            shell.update_panel_text();
+            shell.update_details();
+            shell.areas[Module::Cpu.index()].queue_draw();
         }
         match self.stage {
             0 if sequence >= 2 => {
@@ -1314,6 +1324,63 @@ impl Harness {
                 }
                 details.window.close();
                 self.memory_panel.take();
+                use xrg_ng_linux::{
+                    cpu::{self, Overview, View},
+                    metric_sources,
+                };
+                let overview = Overview {
+                    load: cpu::load("2.50 1.25 0.75 3/256 42"),
+                    uptime: cpu::uptime("172861.50 999999.00"),
+                };
+                let mut view = View::default();
+                view.panel(
+                    metric_sources::cpu_records(
+                        "cpu 100 10 30 800 10 2 3 5 900 800\ncpu0 100 10 30 800 10 2 3 5 900 800",
+                    ),
+                    &overview,
+                    None,
+                    1.,
+                );
+                self.cpu_panel = Some(view.panel(metric_sources::cpu_records("cpu 120 15 40 850 15 4 6 10 999 999\ncpu0 120 15 40 850 15 4 6 10 999 999"), &overview, None, 2.).0);
+                self.details = Some(shell.details(Module::Cpu));
+                self.details
+                    .as_ref()
+                    .unwrap()
+                    .window
+                    .set_default_size(840, 900);
+                self.stage = 38;
+            }
+            38 if self.since.elapsed() > Duration::from_millis(300) => {
+                let details = self.details.take().unwrap();
+                let text = details.text();
+                for expected in [
+                    "Non-idle: 45.0%",
+                    "User including nice: 25.0%",
+                    "System including reported IRQ/softirq: 15.0%",
+                    "Steal: 5.0%",
+                    "2.50 / 1.25 / 0.75",
+                    "3 / 256",
+                    "Uptime: 2d 00:01:01",
+                ] {
+                    require(
+                        text.contains(expected),
+                        &format!("CPU details omitted {expected}"),
+                    )?;
+                }
+                require(
+                    shell.state.borrow().as_ref().unwrap().panels[Module::Cpu.index()]
+                        .series
+                        .iter()
+                        .map(|s| *s.last().unwrap())
+                        .collect::<Vec<_>>()
+                        == [45., 25., 15.],
+                    "CPU graph lost its total/user/system curves",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_CPU_IMAGE") {
+                    details.snapshot(&PathBuf::from(path))?;
+                }
+                details.window.close();
+                self.cpu_panel.take();
                 return Ok(true);
             }
             _ => (),

@@ -10,6 +10,9 @@ use std::{
 pub struct Cpu {
     pub total: u64,
     pub idle: u64,
+    /// First eight /proc/stat fields; guest time is already in user/nice.
+    pub ticks: [u64; 8],
+    pub fields: usize,
 }
 fn invalid(message: &str) -> String {
     message.to_string()
@@ -30,24 +33,61 @@ pub fn cpu(text: &str) -> Result<Cpu, String> {
         return Err(invalid("Missing CPU totals"));
     }
     let values = fields
-        .take(8)
+        .take(11)
         .map(|v| number(Some(v)))
         .collect::<Result<Vec<_>, _>>()?;
-    if values.len() < 4 {
-        return Err(invalid("Incomplete CPU totals"));
+    if !(4..=10).contains(&values.len()) {
+        return Err(invalid("Unknown or incomplete CPU counter layout"));
     }
+    let mut ticks = [0; 8];
+    let fields = values.len().min(8);
+    ticks[..fields].copy_from_slice(&values[..fields]);
     Ok(Cpu {
-        total: sum(values.iter().copied())?,
-        idle: sum([values[3], *values.get(4).unwrap_or(&0)].into_iter())?,
+        total: sum(ticks.into_iter())?,
+        idle: sum([ticks[3], ticks[4]].into_iter())?,
+        ticks,
+        fields,
+    })
+}
+#[derive(Clone, Copy, Debug)]
+pub struct CpuUsage {
+    pub busy: f64,
+    pub user: f64,
+    pub system: f64,
+    pub nice: f64,
+    pub steal: f64,
+    pub iowait: f64,
+    pub idle: f64,
+    pub fields: usize,
+}
+pub fn cpu_usage(previous: Cpu, next: Cpu) -> Option<CpuUsage> {
+    if previous.fields != next.fields {
+        return None;
+    }
+    let deltas = next
+        .ticks
+        .iter()
+        .zip(previous.ticks)
+        .map(|(next, old)| next.checked_sub(old))
+        .collect::<Option<Vec<_>>>()?;
+    let total = sum(deltas.iter().copied()).ok()?;
+    if total == 0 {
+        return None;
+    }
+    let percent = |ticks| 100. * ticks as f64 / total as f64;
+    Some(CpuUsage {
+        busy: percent(total - deltas[3] - deltas[4]),
+        user: percent(deltas[0] + deltas[1]),
+        system: percent(deltas[2] + deltas[5] + deltas[6]),
+        nice: percent(deltas[1]),
+        steal: percent(deltas[7]),
+        iowait: percent(deltas[4]),
+        idle: percent(deltas[3]),
+        fields: next.fields,
     })
 }
 pub fn cpu_percent(previous: Cpu, next: Cpu) -> Option<f64> {
-    let total = next.total.checked_sub(previous.total)?;
-    let idle = next.idle.checked_sub(previous.idle)?;
-    if total == 0 || idle > total {
-        return None;
-    }
-    Some(100.0 * (total - idle) as f64 / total as f64)
+    cpu_usage(previous, next).map(|usage| usage.busy)
 }
 pub fn memory(text: &str) -> Result<f64, String> {
     crate::memory::parse(text).map(|reading| reading.used_percent())

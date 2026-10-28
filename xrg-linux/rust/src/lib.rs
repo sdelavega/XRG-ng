@@ -4,6 +4,7 @@ pub mod ai;
 pub mod collectors;
 #[cfg(unix)]
 pub mod command;
+pub mod cpu;
 pub mod engine;
 pub mod gpu;
 pub mod gpu_memory;
