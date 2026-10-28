@@ -5,8 +5,8 @@ A real-time system resource monitor for Linux with customizable floating graphs.
 The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rust/README.md).
 It currently provides CPU, memory, network, disk, battery, temperature, GPU, AI
 token-rate, process-count and TPU/NPU neural accelerator graphs, with shared macOS Swift histories, rate tracking, provider parsers
-and themes. The new Preferences editor saves graph visibility/order/height,
-per-graph Solid/Pixel/Dot/Hollow styles and color overrides, with built-in presets
+and themes. The new Preferences editor saves graph visibility/order, default and
+per-graph heights, Solid/Pixel/Dot/Hollow styles and color overrides, with built-in presets
 and JSON theme load/save. Layout can be
 vertical or horizontal, with Celsius/Fahrenheit system temperature display.
 Per-core/interface/disk/GPU selectors and a sortable process table with name/UID

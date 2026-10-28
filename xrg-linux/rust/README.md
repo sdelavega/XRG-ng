@@ -429,7 +429,13 @@ entry opens the editor when a built-in preset is active. In Preferences:
   including for negative temperatures. Curves remain independent rather than
   stacked, and their outlines stay visible above overlapping fills. Theme colors
   and opacity apply to every style. Style changes keep the sampled histories.
-- Set graph height between 64 and 240 pixels.
+- Set the **Default graph height** between 64 and 240 pixels. Expand **Individual
+  graph heights**, select a graph and uncheck **Use default height** to give it
+  an independent height in the same range. Changing the default resizes inherited
+  graphs while preserving overrides. **Use default height for all graphs** clears
+  the overrides in the draft and keeps the default value. Sizes apply in both
+  layouts; horizontal graphs align at the top rather than stretching shorter
+  graphs. Ordering, hiding, sources, themes and styles preserve size choices.
 - Choose **Vertical** (stacked) or **Horizontal** (side by side) layout. Ordering
   controls become Left/Right horizontally; graph menus use the same order.
 - Choose **Celsius** or **Fahrenheit** for system sensor, GPU and TPU/NPU temperatures.
@@ -454,7 +460,7 @@ Hidden graphs continue sampling, preserving their histories. Ordering changes th
 presentation while each graph retains its original collector. An all-hidden layout
 shows a recovery message and keeps Preferences accessible. Headless diagnostics
 continue reporting all collectors independently of these presentation preferences.
-Graph height is a minimum; small windows scroll. Horizontal graphs retain at
+Graph heights are minimum requests; small windows scroll. Horizontal graphs retain at
 least 360 pixels each and scroll sideways, with vertical scrolling when needed.
 Window placement/pinning is not part of these preferences.
 
@@ -496,7 +502,7 @@ XTF load/save behavior is unchanged.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 9 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 10 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
@@ -515,6 +521,12 @@ preferences are next saved. Versions 1–8 gain inherited per-graph colors, pres
 their existing global palette and styles. Module color overrides follow module
 identity through ordering/visibility changes and round-trip without quantizing
 untouched RGBA values. Restore defaults clears all overrides in the draft.
+Versions 1–9 gain inherited per-graph heights, retaining their existing default
+height and layout. Individual heights are optional fields stored with each
+module; missing/null values follow the default. Invalid values reject the whole
+settings document. Restore defaults clears size overrides in the draft. The C
+build does not serialize its per-graph height fields; legacy import keeps current
+graph sizes instead of treating saved window geometry as graph dimensions.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

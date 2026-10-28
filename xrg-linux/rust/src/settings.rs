@@ -156,6 +156,13 @@ pub struct ModuleSetting {
     pub style: GraphStyle,
     #[serde(default, skip_serializing_if = "GraphColors::is_inherited")]
     pub colors: GraphColors,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+impl ModuleSetting {
+    pub fn effective_height(&self, default: u32) -> u32 {
+        self.height.unwrap_or(default)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -350,7 +357,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 9,
+            version: 10,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -361,6 +368,7 @@ impl Default for Settings {
                     visible: true,
                     style: GraphStyle::Solid,
                     colors: GraphColors::default(),
+                    height: None,
                 })
                 .collect(),
             graph_height: 100,
@@ -375,7 +383,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 9 {
+        if self.version != 10 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -388,6 +396,15 @@ impl Settings {
         self.theme.palette()?;
         for module in &self.modules {
             module.colors.validate()?;
+            if module
+                .height
+                .is_some_and(|height| !(64..=240).contains(&height))
+            {
+                return Err(format!(
+                    "{} graph height must be between 64 and 240 pixels",
+                    module.id.title()
+                ));
+            }
         }
         self.metrics.validate()?;
         self.processes.validate()?;
@@ -443,6 +460,7 @@ impl Settings {
                     visible: false,
                     style: GraphStyle::Hollow,
                     colors: GraphColors::default(),
+                    height: None,
                 }));
             result.version = 5;
         }
@@ -460,6 +478,9 @@ impl Settings {
         }
         if result.version == 8 {
             result.version = 9;
+        }
+        if result.version == 9 {
+            result.version = 10;
         }
         result.validate()?;
         Ok(result)

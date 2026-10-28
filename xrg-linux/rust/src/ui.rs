@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 mod ai;
 mod graph_colors;
+mod graph_heights;
 mod legacy_import;
 mod menus;
 mod preferences;
@@ -299,7 +300,8 @@ impl Shell {
         for module in &settings.modules {
             let area = &self.areas[module.id.index()];
             area.set_visible(module.visible);
-            area.set_content_height(settings.graph_height as i32);
+            area.set_content_height(module.effective_height(settings.graph_height) as i32);
+            area.set_valign(gtk::Align::Start);
             area.set_vexpand(false);
             self.graphs.reorder_child_after(area, previous.as_ref());
             previous = Some(area.clone());

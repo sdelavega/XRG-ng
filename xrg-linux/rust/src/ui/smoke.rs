@@ -400,7 +400,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 9 && loaded.processes.limit == 20,
+                    loaded.version == 10 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1710,6 +1710,178 @@ impl Harness {
                     super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
                 }
                 window.close();
+                let before = shell.settings.borrow().clone();
+                let dialog = shell.preferences();
+                dialog.height.set_value(124.);
+                require(
+                    dialog.graph_heights.inherit.is_active()
+                        && !dialog.graph_heights.height.is_sensitive()
+                        && dialog.graph_heights.height.value_as_int() == 124,
+                    "Inherited graph height did not follow default control",
+                )?;
+                dialog
+                    .graph_heights
+                    .module
+                    .set_selected(Module::Memory.index() as u32);
+                dialog.graph_heights.inherit.set_active(false);
+                dialog.graph_heights.height.set_value(160.);
+                require(
+                    dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .find(|m| m.id == Module::Memory)
+                        .unwrap()
+                        .height
+                        == Some(160),
+                    "Graph height did not reach draft",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelling graph height changed active settings",
+                )?;
+                let dialog = shell.preferences();
+                dialog.height.set_value(124.);
+                dialog.layout.set_selected(0);
+                for (id, height) in [(Module::Cpu, 164.), (Module::Memory, 88.)] {
+                    dialog.graph_heights.module.set_selected(id.index() as u32);
+                    dialog.graph_heights.inherit.set_active(false);
+                    dialog.graph_heights.height.set_value(height);
+                }
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                shell.window.set_default_size(440, 1000);
+                shell.scroll.vadjustment().set_value(0.);
+                self.stage = 45;
+            }
+            45 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, saved, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&saved) == self.expected.as_ref(),
+                    "Individual graph heights did not persist",
+                )?;
+                for (id, height) in [
+                    (Module::Cpu, 164),
+                    (Module::Memory, 88),
+                    (Module::Network, 124),
+                ] {
+                    require(
+                        shell.areas[id.index()].content_height() == height
+                            && shell.areas[id.index()].height() == height,
+                        "Vertical graph height allocation differs from saved preference",
+                    )?;
+                }
+                if let Some(path) = std::env::var_os("XRG_SMOKE_HEIGHTS_VERTICAL_IMAGE") {
+                    shell.snapshot(&PathBuf::from(path))?;
+                }
+                let dialog = shell.preferences();
+                dialog.graph_heights.widget.set_expanded(true);
+                for (id, height, inherited) in [
+                    (Module::Cpu, 164, false),
+                    (Module::Memory, 88, false),
+                    (Module::Network, 124, true),
+                ] {
+                    dialog.graph_heights.module.set_selected(id.index() as u32);
+                    require(
+                        dialog.graph_heights.height.value_as_int() == height
+                            && dialog.graph_heights.inherit.is_active() == inherited,
+                        "Reopening Preferences lost graph height/inheritance",
+                    )?;
+                }
+                self.dialog = Some(dialog);
+                self.stage = 46;
+            }
+            46 if self.since.elapsed() > Duration::from_millis(300) => {
+                let dialog = self.dialog.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_HEIGHTS_PREFS_IMAGE") {
+                    dialog.snapshot(&PathBuf::from(path))?;
+                }
+                dialog.height.set_value(112.);
+                require(
+                    dialog.graph_heights.height.value_as_int() == 112
+                        && dialog
+                            .draft()
+                            .modules
+                            .iter()
+                            .find(|m| m.id == Module::Cpu)
+                            .unwrap()
+                            .height
+                            == Some(164),
+                    "Changing default height overwrote individual size",
+                )?;
+                dialog.layout.set_selected(1);
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                shell.window.set_default_size(1180, 600);
+                shell.scroll.hadjustment().set_value(0.);
+                self.stage = 47;
+            }
+            47 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                require(
+                    shell.graphs.orientation() == gtk::Orientation::Horizontal,
+                    "Height fixture did not switch layout",
+                )?;
+                for (id, height) in [
+                    (Module::Cpu, 164),
+                    (Module::Memory, 88),
+                    (Module::Network, 112),
+                ] {
+                    require(
+                        shell.areas[id.index()].content_height() == height
+                            && shell.areas[id.index()].height() == height,
+                        "Horizontal graphs stretched individual heights",
+                    )?;
+                }
+                if let Some(path) = std::env::var_os("XRG_SMOKE_HEIGHTS_HORIZONTAL_IMAGE") {
+                    shell.snapshot(&PathBuf::from(path))?;
+                }
+                let dialog = shell.preferences();
+                dialog.graph_heights.reset.emit_clicked();
+                let mut expected = shell.settings.borrow().clone();
+                for module in &mut expected.modules {
+                    module.height = None;
+                }
+                require(
+                    dialog.draft() == expected,
+                    "Reset graph heights changed unrelated preferences",
+                )?;
+                dialog.apply.emit_clicked();
+                self.expected = Some(expected);
+                self.stage = 48;
+            }
+            48 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, saved, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&saved) == self.expected.as_ref(),
+                    "Reset graph heights did not persist",
+                )?;
+                require(
+                    shell
+                        .areas
+                        .iter()
+                        .all(|a| a.content_height() == 112 && a.height() == 112),
+                    "Reset graph heights did not resume default sizing",
+                )?;
+                let dialog = shell.preferences();
+                dialog.graph_heights.inherit.set_active(false);
+                dialog.graph_heights.height.set_value(160.);
+                dialog.reset.emit_clicked();
+                require(
+                    dialog.draft().modules.iter().all(|m| m.height.is_none()),
+                    "Restore defaults retained a graph height override",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    Some(&*shell.settings.borrow()) == self.expected.as_ref(),
+                    "Cancelling size defaults changed active preferences",
+                )?;
                 return Ok(true);
             }
             _ => (),

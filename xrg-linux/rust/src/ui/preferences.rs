@@ -32,6 +32,7 @@ pub(super) struct Dialog {
     modules: gtk::Box,
     rows: Vec<Row>,
     pub height: gtk::SpinButton,
+    pub graph_heights: super::graph_heights::Editor,
     pub layout: gtk::DropDown,
     pub temperature_units: gtk::DropDown,
     pub name: gtk::Entry,
@@ -107,14 +108,18 @@ impl Dialog {
         }
         form.append(&modules);
         let graph_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let label = gtk::Label::new(Some("Graph height (pixels)"));
+        let label = gtk::Label::new(Some("Default graph height (pixels)"));
         label.set_hexpand(true);
         label.set_xalign(0.);
         graph_row.append(&label);
         let height = gtk::SpinButton::with_range(64., 240., 4.);
-        height.update_property(&[gtk::accessible::Property::Label("Graph height in pixels")]);
+        height.update_property(&[gtk::accessible::Property::Label(
+            "Default graph height in pixels",
+        )]);
         graph_row.append(&height);
         form.append(&graph_row);
+        let graph_heights = super::graph_heights::Editor::new();
+        form.append(&graph_heights.widget);
         let layout = gtk::DropDown::from_strings(&["Vertical", "Horizontal"]);
         let temperature_units = gtk::DropDown::from_strings(&["Celsius (°C)", "Fahrenheit (°F)"]);
         for (title, control) in [
@@ -245,6 +250,7 @@ impl Dialog {
             modules,
             rows,
             height,
+            graph_heights,
             layout,
             temperature_units,
             name,
@@ -259,6 +265,12 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.graph_heights.connect(Rc::new(move |change| {
+            if let Some(dialog) = weak.upgrade() {
+                dialog.graph_height_changed(change);
+            }
+        }));
         let weak = Rc::downgrade(&dialog);
         dialog.graph_colors.connect(Rc::new(move |change| {
             if let Some(dialog) = weak.upgrade() {
@@ -312,6 +324,7 @@ impl Dialog {
                 && !dialog.updating.get()
             {
                 dialog.draft.borrow_mut().graph_height = height.value_as_int() as u32;
+                dialog.refresh();
             }
         });
         let weak = Rc::downgrade(&dialog);
@@ -541,6 +554,7 @@ impl Dialog {
             previous = Some(row.widget.clone());
         }
         self.height.set_value(settings.graph_height as f64);
+        self.graph_heights.refresh(&settings);
         self.targets.set(&settings.metrics);
         let palette = Self::preview_palette(&settings);
         self.name.set_text(&palette.name);
@@ -577,6 +591,38 @@ impl Dialog {
             },
             choice => choice.palette().expect("Known preset"),
         }
+    }
+    fn graph_height_changed(&self, change: super::graph_heights::Change) {
+        if self.updating.get() {
+            return;
+        }
+        let Some(id) = self.graph_heights.selected() else {
+            return;
+        };
+        use super::graph_heights::Change;
+        {
+            let mut draft = self.draft.borrow_mut();
+            let default = draft.graph_height;
+            if matches!(change, Change::ResetAll) {
+                for module in &mut draft.modules {
+                    module.height = None;
+                }
+            } else {
+                let module = draft.modules.iter_mut().find(|m| m.id == id).unwrap();
+                match change {
+                    Change::Scope => {}
+                    Change::Inherit(true) => module.height = None,
+                    Change::Inherit(false) => {
+                        module.height = Some(module.effective_height(default))
+                    }
+                    Change::Height(value) if module.height.is_some() => module.height = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        self.updating.set(true);
+        self.graph_heights.refresh(&self.draft.borrow());
+        self.updating.set(false);
     }
     fn graph_color_changed(&self, change: super::graph_colors::Change) {
         if self.updating.get() {
