@@ -163,7 +163,7 @@ fn class(value: &Value, objects: &[Value], name: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn srgb(root: &Dictionary, objects: &[Value]) -> Result<[f64; 3], String> {
+fn modern_rgb(root: &Dictionary, objects: &[Value]) -> Result<[f64; 3], String> {
     keys(
         root,
         &[
@@ -185,24 +185,48 @@ fn srgb(root: &Dictionary, objects: &[Value]) -> Result<[f64; 3], String> {
     let space = object(root.get("NSCustomColorSpace"), objects)?;
     class(space, objects, "NSColorSpace")?;
     let space = dictionary(space)?;
-    keys(space, &["$class", "NSID", "NSICC"])?;
-    if space.get("NSID").and_then(Value::as_unsigned_integer) != Some(7) {
-        return Err("Unsupported XTF custom color space; only standard sRGB is supported".into());
-    }
-    if let Some(profile) = space.get("NSICC") {
-        let profile = object(Some(profile), objects)?
-            .as_data()
-            .ok_or("Invalid XTF ICC profile")?;
-        // AppKit's sRGB IEC61966-2.1 profile, verified from a real archive.
-        // NSID alone must not override an arbitrary embedded ICC profile.
-        if profile.len() != 3144
-            || blake3::hash(profile).to_hex().as_str()
-                != "584d7f5ba6f0afe67a1bba04b2a12d5e336e9721b198d6c98ee20b1a6e5759fc"
-        {
+    keys(space, &["$class", "NSID", "NSSpaceID", "NSICC"])?;
+    // Validate the presence/type as well as the numeric value. Conflicting IDs
+    // must not silently select a different interpretation of NSComponents.
+    let p3 = match (space.get("NSID"), space.get("NSSpaceID")) {
+        (Some(id), None) if id.as_unsigned_integer() == Some(7) => false,
+        (None, Some(id)) if id.as_unsigned_integer() == Some(12) => true,
+        _ => {
             return Err(
-                "Unsupported XTF ICC profile; export standard sRGB without a custom profile".into(),
+                "Unsupported XTF custom color space; use standard sRGB or Display P3".into(),
             );
         }
+    };
+    let profile = space
+        .get("NSICC")
+        .map(|reference| {
+            object(Some(reference), objects)?
+                .as_data()
+                .ok_or_else(|| "Invalid XTF ICC profile".to_owned())
+        })
+        .transpose()?;
+    let recognized = match (p3, profile) {
+        // AppKit recognizes the standard sRGB ID without an embedded profile.
+        (false, None) => true,
+        (false, Some(bytes)) => {
+            bytes.len() == 3144
+                && blake3::hash(bytes).to_hex().as_str()
+                    == "584d7f5ba6f0afe67a1bba04b2a12d5e336e9721b198d6c98ee20b1a6e5759fc"
+        }
+        // AppKit falls back to generic RGB for a P3 ID without its profile.
+        (true, None) => false,
+        (true, Some(bytes)) => {
+            let hash = blake3::hash(bytes).to_hex();
+            (bytes.len() == 536
+                && hash.as_str()
+                    == "7fcc7910cb31470edf89577e1a57e38ad381d92519531248986aa62dfa22fffe")
+                || (bytes.len() == 480
+                    && hash.as_str()
+                        == "c272bbc1879f7195034c1ac2cb7748cf7f76c7de936778fb166e4942825f992a")
+        }
+    };
+    if !recognized {
+        return Err("Unsupported or missing XTF ICC profile; export standard sRGB or a verified Display P3 profile".into());
     }
     if let Some(exposure) = root.get("NSLinearExposure")
         && exposure.as_data() != Some(b"0".as_slice())
@@ -212,7 +236,44 @@ fn srgb(root: &Dictionary, objects: &[Value]) -> Result<[f64; 3], String> {
     // NSRGB is a legacy calibrated fallback. AppKit's archived values differ
     // from the original sRGB channels, which NSComponents preserves.
     let v = components(root.get("NSComponents"), 3)?;
-    Ok([v[0], v[1], v[2]])
+    let rgb = [v[0], v[1], v[2]];
+    Ok(if p3 { display_p3(rgb) } else { rgb })
+}
+fn display_p3(rgb: [f64; 3]) -> [f64; 3] {
+    // Compose the D65 P3->XYZ and XYZ->sRGB matrices in CSS Color 4:
+    // https://www.w3.org/TR/css-color-4/#color-conversion-code
+    // P3 and sRGB share the transfer curve; both use D65, so no adaptation.
+    const MATRIX: [[f64; 3]; 3] = [
+        [1.2249401762805598, -0.22494017628055996, 0.],
+        [-0.04205695470968816, 1.042056954709688, 0.],
+        [
+            -0.019637554590334432,
+            -0.07863604555063189,
+            1.0982736001409663,
+        ],
+    ];
+    let linear = rgb.map(|v| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    MATRIX.map(|row| {
+        // The existing portable palette is bounded sRGB. Clip each channel,
+        // explicitly sacrificing out-of-gamut saturation; no perceptual mapping.
+        let v = row
+            .iter()
+            .zip(linear)
+            .map(|(a, b)| a * b)
+            .sum::<f64>()
+            .clamp(0., 1.);
+        if v <= 0.0031308 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1. / 2.4) - 0.055
+        }
+    })
 }
 fn color(bytes: &[u8]) -> Result<[f64; 3], String> {
     if bytes.len() > 64 * 1024 {
@@ -237,7 +298,7 @@ fn color(bytes: &[u8]) -> Result<[f64; 3], String> {
     class(root, objects, "NSColor")?;
     let root = dictionary(root)?;
     if root.contains_key("NSCustomColorSpace") || root.contains_key("NSComponents") {
-        return srgb(root, objects);
+        return modern_rgb(root, objects);
     }
     keys(root, &["$class", "NSColorSpace", "NSRGB", "NSWhite"])?;
     match root

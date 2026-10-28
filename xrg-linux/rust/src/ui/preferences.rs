@@ -243,7 +243,7 @@ impl Dialog {
         let files = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let load = gtk::Button::with_label("Load theme…");
         load.set_tooltip_text(Some(
-            "Load an XRG-ng JSON theme or an original macOS XTF theme with RGB/grayscale colors.",
+            "Load XRG-ng JSON or a macOS XTF theme with RGB, grayscale or verified Display P3 colors. Display P3 is converted to the sRGB palette.",
         ));
         let save = gtk::Button::with_label("Save theme…");
         save.set_tooltip_text(Some(

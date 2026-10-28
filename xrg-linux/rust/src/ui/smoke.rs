@@ -296,7 +296,7 @@ impl Harness {
             return "ai-view=grouped-cached-history-preserved";
         }
         if self.theme_import.is_some() {
-            return "xtf-theme=import-cancel-apply-export";
+            return "xtf-theme=classic-srgb-p3-import-cancel-apply-export";
         }
         if self.process_details.is_some() {
             return "process-details=identity-and-freshness";

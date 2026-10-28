@@ -409,3 +409,222 @@ fn loading_and_json_export_leave_the_original_xtf_untouched() {
     assert!(ThemeDocument::load(&root.join("alias.xtf")).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+
+const P3: &[u8] = include_bytes!("fixtures/DisplayP3.xtf");
+const P3_PROFILE: &[u8] = include_bytes!("fixtures/DisplayP3-v4.icc");
+fn p3_fixture() -> Value {
+    Value::from_reader(Cursor::new(P3)).unwrap()
+}
+fn palette_close(actual: &[[f64; 4]; 7], expected: &[[f64; 4]; 7]) {
+    for (a, b) in actual.iter().zip(expected) {
+        for i in 0..3 {
+            assert!((a[i] - b[i]).abs() < 0.0005, "{a:?} versus {b:?}");
+        }
+        assert_eq!(a[3], b[3]);
+    }
+}
+fn p3_components(rgb: [f64; 3]) -> ThemeDocument {
+    let mut value = p3_fixture();
+    archive(&mut value, |objects| {
+        objects[1].as_dictionary_mut().unwrap().insert(
+            "NSComponents".into(),
+            Value::Data(format!("{} {} {} 0.123", rgb[0], rgb[1], rgb[2]).into_bytes()),
+        );
+    });
+    ThemeDocument::parse(&xml(&value)).unwrap()
+}
+#[test]
+fn display_p3_palette_matches_appkit_and_preserves_alpha_in_binary_and_json() {
+    let expected: [[f64; 4]; 7] =
+        serde_json::from_slice(include_bytes!("fixtures/DisplayP3-expected.json")).unwrap();
+    let theme = ThemeDocument::parse(P3).unwrap();
+    palette_close(&theme.colors, &expected);
+    assert!(
+        (theme.colors[2][0] - 0.2).abs() > 0.09,
+        "P3 channels were relabeled as sRGB"
+    );
+    let mut binary = Vec::new();
+    p3_fixture().to_writer_binary(&mut binary).unwrap();
+    assert_eq!(ThemeDocument::parse(&binary).unwrap(), theme);
+    assert_eq!(
+        ThemeDocument::parse(&serde_json::to_vec(&theme).unwrap()).unwrap(),
+        theme
+    );
+    if let Some(path) = std::env::var_os("XRG_TEST_APPKIT_P3") {
+        assert_eq!(ThemeDocument::load(Path::new(&path)).unwrap(), theme);
+        let mut value = Value::from_reader(Cursor::new(fs::read(path).unwrap())).unwrap();
+        archive(&mut value, |objects| {
+            let bytes = objects
+                .iter_mut()
+                .find_map(|v| match v {
+                    Value::Data(bytes) => Some(bytes),
+                    _ => None,
+                })
+                .unwrap();
+            let index = bytes.len() / 2;
+            bytes[index] ^= 1;
+        });
+        assert!(
+            ThemeDocument::parse(&xml(&value))
+                .unwrap_err()
+                .contains("ICC")
+        );
+    }
+}
+#[test]
+fn display_p3_conversion_matches_appkit_across_dark_neutral_and_saturated_colors() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        p3: [f64; 3],
+        srgb: [f64; 3],
+    }
+    let cases: Vec<Case> =
+        serde_json::from_slice(include_bytes!("fixtures/DisplayP3-oracle.json")).unwrap();
+    assert_eq!(cases.len(), 216);
+    for case in cases {
+        let actual = p3_components(case.p3).colors[2];
+        for (a, b) in actual[..3].iter().zip(case.srgb) {
+            assert!(
+                (a - b).abs() < 0.0005,
+                "P3 {:?}: {actual:?} versus {:?}",
+                case.p3,
+                case.srgb
+            );
+        }
+        assert_eq!(actual[3], 0.75);
+    }
+}
+#[test]
+fn display_p3_standard_matrix_preserves_neutrals_and_clips_srgb_gamut_per_channel() {
+    for neutral in [0., 0.003, 0.04, 0.5, 1.] {
+        let color = p3_components([neutral; 3]).colors[2];
+        for value in &color[..3] {
+            assert!((value - neutral).abs() < 1e-12);
+        }
+    }
+    for primary in [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]] {
+        let color = p3_components(primary).colors[2];
+        for (a, b) in color[..3].iter().zip(primary) {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+    let color = p3_components([0.2, 0.4, 0.8]).colors[2];
+    for (a, b) in
+        color[..3]
+            .iter()
+            .zip([0.10405649654579502, 0.40593247414535527, 0.8278254694555525])
+    {
+        assert!((a - b).abs() < 1e-12);
+    }
+}
+#[test]
+fn display_p3_requires_a_verified_profile_and_rejects_conflicting_space_identities() {
+    assert_eq!(
+        blake3::hash(P3_PROFILE).to_hex().as_str(),
+        "c272bbc1879f7195034c1ac2cb7748cf7f76c7de936778fb166e4942825f992a"
+    );
+    for case in 0..7 {
+        let mut value = p3_fixture();
+        archive(&mut value, |objects| {
+            let space = objects
+                .iter()
+                .position(|v| {
+                    v.as_dictionary()
+                        .is_some_and(|d| d.contains_key("NSSpaceID"))
+                })
+                .unwrap();
+            match case {
+                0 => {
+                    objects[space].as_dictionary_mut().unwrap().remove("NSICC");
+                }
+                1 => {
+                    objects[space]
+                        .as_dictionary_mut()
+                        .unwrap()
+                        .insert("NSID".into(), Value::from(7u64));
+                }
+                2 => {
+                    objects[space]
+                        .as_dictionary_mut()
+                        .unwrap()
+                        .insert("NSSpaceID".into(), Value::from(13u64));
+                }
+                3 => {
+                    objects[space]
+                        .as_dictionary_mut()
+                        .unwrap()
+                        .insert("NSSpaceID".into(), Value::Real(12.));
+                }
+                4 => {
+                    objects[space]
+                        .as_dictionary_mut()
+                        .unwrap()
+                        .insert("NSICC".into(), Value::Uid(Uid::new(0)));
+                }
+                5 => {
+                    let bytes = objects
+                        .iter_mut()
+                        .find_map(|v| match v {
+                            Value::Data(bytes) => Some(bytes),
+                            _ => None,
+                        })
+                        .unwrap();
+                    bytes[200] ^= 1;
+                }
+                6 => {
+                    objects[space]
+                        .as_dictionary_mut()
+                        .unwrap()
+                        .insert("$class".into(), Value::Uid(Uid::new(1)));
+                }
+                _ => unreachable!(),
+            }
+        });
+        assert!(ThemeDocument::parse(&xml(&value)).is_err(), "case {case}");
+    }
+}
+#[test]
+fn display_p3_rejects_extended_values_exposure_and_malformed_components() {
+    for (key, data) in [
+        ("NSComponents", "-0.01 0 0 1"),
+        ("NSComponents", "0 1.01 0 1"),
+        ("NSComponents", "0 0 NaN 1"),
+        ("NSComponents", "0 0 0 inf"),
+        ("NSComponents", "0 0"),
+        ("NSLinearExposure", "1"),
+    ] {
+        let mut value = p3_fixture();
+        archive(&mut value, |objects| {
+            objects[1]
+                .as_dictionary_mut()
+                .unwrap()
+                .insert(key.into(), Value::Data(data.as_bytes().to_vec()));
+        });
+        assert!(ThemeDocument::parse(&xml(&value)).is_err(), "{key} {data}");
+    }
+}
+#[test]
+fn mixed_legacy_srgb_and_p3_colors_convert_independently_and_late_errors_reject_the_theme() {
+    let mut value = p3_fixture();
+    let srgb = srgb_fixture();
+    let classic = fixture();
+    for (name, source) in [("backgroundColor", &classic), ("graphBGColor", &srgb)] {
+        value
+            .as_dictionary_mut()
+            .unwrap()
+            .insert(name.into(), source.as_dictionary().unwrap()[name].clone());
+    }
+    let theme = ThemeDocument::parse(&xml(&value)).unwrap();
+    assert_eq!(theme.colors[0], [0., 0., 0., 0.9]);
+    assert_eq!(theme.colors[1], [1., 1., 1., 0.4]);
+    assert_eq!(theme.colors[2], ThemeDocument::parse(P3).unwrap().colors[2]);
+    value
+        .as_dictionary_mut()
+        .unwrap()
+        .insert("textColor".into(), Value::Data(b"bplist00broken".to_vec()));
+    assert!(
+        ThemeDocument::parse(&xml(&value))
+            .unwrap_err()
+            .starts_with("text:")
+    );
+}

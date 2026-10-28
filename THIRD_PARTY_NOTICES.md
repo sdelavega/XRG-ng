@@ -63,11 +63,22 @@ to the plist 1.10 minor release as required by that API's stability policy.
 
 ## Linux Rust transcript cache fingerprints
 
-The Linux AI log scanner uses the BLAKE3 crate under its CC0-1.0 license option.
+The Linux AI log scanner and XTF profile identification use the BLAKE3 crate under its CC0-1.0 license option.
 The text is retained in `xrg-linux/rust/licenses/blake3-CC0.txt`. Cargo.lock records
 exact versions and dependencies; preview source archives retain the corresponding
-Cargo sources and license notices. These digests verify reusable parsed prefixes;
+Cargo sources and license notices. These digests verify reusable parsed prefixes
+and identify supported theme profiles;
 they are not used as authentication or encryption.
+
+## Linux Display P3 theme fixtures
+
+The Display P3 XTF fixture embeds `DisplayP3-v4.icc` from
+[Compact ICC Profiles](https://github.com/saucecontrol/Compact-ICC-Profiles),
+revision `bdd84663061bc4ae95ca70decff54f581e27f702`. Its author releases the profiles
+under CC0-1.0; the text is retained in
+`xrg-linux/rust/licenses/Compact-ICC-Profiles-CC0.txt`. The unmodified 480-byte
+profile is retained beside the fixture. Apple's system profile bytes are used
+only for optional local verification and are not redistributed here.
 
 ## Linux preview archives
 

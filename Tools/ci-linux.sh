@@ -37,7 +37,7 @@ XRG_SMOKE_SAMPLING=1 XRG_SMOKE_SAMPLING_PREFS_IMAGE="$output/sampling-preference
 XRG_SMOKE_AI_VIEW=1 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
 # Dedicated theme conversion gate, with its own unchanged smoke deadline.
-XRG_SMOKE_XTF_THEME=1 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+XRG_SMOKE_XTF_THEME=1 XRG_SMOKE_P3_IMAGE="$output/p3-imported.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
 # Default compact dashboard, with live Linux readings and honest absent-hardware states.
 for theme in Classic Midnight; do

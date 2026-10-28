@@ -20,3 +20,28 @@ The original application's `ClassicTheme.xtf` remains in
 `XRGTests/Fixtures/ClassicTheme.xtf` and is tested against the shared Classic
 preset. These tests establish archive/component handling, not matching across
 physical monitors and display profiles.
+
+`DisplayP3.xtf`, `DisplayP3-expected.json` and `DisplayP3-oracle.json` come from
+`Tools/generate-p3-xtf-fixture.swift`. The XTF starts with AppKit Display P3 color
+archives, replacing their system ICC data with the unmodified 480-byte
+`DisplayP3-v4.icc` from Compact ICC Profiles (CC0-1.0), revision
+`bdd84663061bc4ae95ca70decff54f581e27f702`. Its license is retained under
+`xrg-linux/rust/licenses/Compact-ICC-Profiles-CC0.txt`. The profile fingerprint is
+`c272bbc1879f7195034c1ac2cb7748cf7f76c7de936778fb166e4942825f992a`.
+AppKit unarchives this fixture and verifies its original P3 components and alpha.
+Removing a P3 archive's ICC reference instead would silently decode as generic RGB.
+
+The expected palette uses AppKit's conversion of the CC0 fixture to sRGB; the
+216-case oracle uses AppKit's system Display P3 to sRGB conversion. Tests compare
+the standard matrix/transfer conversion within 0.0005 per channel, covering dark,
+neutral and saturated inputs. Separate analytic checks use tighter tolerances.
+Out-of-gamut values are clipped per channel to the existing sRGB palette; alpha
+is not premultiplied. XML, binary, mixed-space themes and JSON round trips are
+covered. This is not a physical-monitor or perceptual-gamut-mapping test.
+
+For optional verification of unmodified system archives, set `XRG_TEST_APPKIT_P3`
+to the generated `DisplayP3-full.xtf` when running the `xtf` Rust test. The
+536-byte Apple profile has fingerprint
+`7fcc7910cb31470edf89577e1a57e38ad381d92519531248986aa62dfa22fffe`.
+The importer requires a matching profile and space ID; modified/unknown profiles
+and P3 IDs without profiles remain rejected.
