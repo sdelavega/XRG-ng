@@ -13,6 +13,7 @@ mod process_actions_smoke;
 mod process_details;
 mod process_details_smoke;
 mod processes;
+mod sampling_smoke;
 mod smoke;
 mod targets;
 mod theme_import_smoke;
@@ -52,6 +53,7 @@ struct Shell {
     settings: Rc<RefCell<Settings>>,
     state: Rc<RefCell<Option<Snapshot>>>,
     selection: crate::ui::SelectionControl,
+    sampling: xrg_ng_linux::sampling::Control,
     processes: RefCell<Option<Rc<processes::Window>>>,
     ai_window: RefCell<Option<Rc<ai::Window>>>,
     ai_control: xrg_ng_linux::ai::Control,
@@ -75,9 +77,10 @@ impl Shell {
             SelectionControl,
             xrg_ng_linux::ai::Control,
             xrg_ng_linux::weather::Control,
+            xrg_ng_linux::sampling::Control,
         ),
     ) -> Rc<Self> {
-        let (selection, ai_control, weather_control) = controls;
+        let (selection, ai_control, weather_control, sampling) = controls;
         let settings = Rc::new(RefCell::new(settings));
         let theme = Rc::new(RefCell::new(
             settings
@@ -209,6 +212,7 @@ impl Shell {
             settings,
             state: state.clone(),
             selection,
+            sampling,
             processes: RefCell::new(None),
             ai_window: RefCell::new(None),
             ai_control,
@@ -388,6 +392,13 @@ impl Shell {
                 .set(settings.metrics.clone())
                 .expect("Validated selection");
         }
+        // Queue source selection before waking an overdue sampling deadline.
+        if old.sampling_interval_ms != settings.sampling_interval_ms
+            && let Err(error) = self.sampling.set(settings.sampling_interval_ms)
+        {
+            self.persistence_error(&error);
+            return;
+        }
         let process_change = old.processes != settings.processes;
         if old.ai != settings.ai {
             self.ai_control
@@ -534,8 +545,10 @@ impl Shell {
                 Ok(()) => {
                     self.saved_revision.set(revision);
                     if revision == self.revision.get() {
-                        self.status
-                            .set_text("Preferences saved · 1 second sampling interval");
+                        self.status.set_text(&format!(
+                            "Preferences saved · {} ms system sampling target",
+                            self.settings.borrow().sampling_interval_ms
+                        ));
                         self.status.set_tooltip_text(None);
                         self.status.set_visible(false);
                     }
@@ -580,15 +593,14 @@ pub fn run(smoke_mode: bool) -> bool {
             settings::preferences_path()
         };
         let (store, settings, error) = Store::open(path);
-        let monitor = Worker::start_with_sources(
+        let monitor = Worker::start_with_settings(
             !smoke_mode || std::env::var_os("XRG_SMOKE_STYLE").is_some(),
-            settings.metrics.clone(),
-            settings.ai.clone(),
-            settings.weather.clone(),
+            &settings,
         );
         let selection = monitor.selection_control();
         let ai_control = monitor.ai_control();
         let weather_control = monitor.weather_control();
+        let sampling = monitor.sampling_control();
         let latest = monitor.latest.clone();
         *owner.borrow_mut() = Some(monitor);
         let state = Rc::new(RefCell::new(None::<Snapshot>));
@@ -599,7 +611,7 @@ pub fn run(smoke_mode: bool) -> bool {
             error,
             smoke_mode,
             state.clone(),
-            (selection, ai_control, weather_control),
+            (selection, ai_control, weather_control, sampling),
         );
         *shell_owner.borrow_mut() = Some(view.clone());
         let weak = Rc::downgrade(&view);

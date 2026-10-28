@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 #[cfg(feature = "gtk-ui")]
 mod ui;
-use std::{process::ExitCode, time::Duration};
+use std::{process::ExitCode, time::Instant};
 use xrg_ng_linux::{engine::Sampler, shared};
 
 fn main() -> ExitCode {
@@ -27,8 +27,12 @@ fn main() -> ExitCode {
             eprintln!("Preferences unavailable; using default AI sources: {error}");
         }
         let mut sampler = Sampler::live_with_sources(true, settings.ai, settings.weather);
+        let mut schedule =
+            xrg_ng_linux::sampling::Schedule::new(settings.sampling_interval_ms, Instant::now())
+                .expect("Validated sampling interval");
         let mut valid = false;
         for index in 0..count {
+            let started = Instant::now();
             let snapshot = sampler.sample();
             valid = snapshot.valid;
             println!("sample={} valid={}", snapshot.sequence, snapshot.valid);
@@ -40,7 +44,8 @@ fn main() -> ExitCode {
                 );
             }
             if index + 1 < count {
-                std::thread::sleep(Duration::from_secs(1));
+                schedule.sampled(started, Instant::now());
+                std::thread::sleep(schedule.remaining(Instant::now()));
             }
         }
         return if valid {

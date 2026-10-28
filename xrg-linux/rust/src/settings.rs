@@ -415,6 +415,8 @@ pub struct Settings {
     pub graph_height: u32,
     #[serde(default = "default_graph_width")]
     pub graph_width: u32,
+    #[serde(default = "crate::sampling::default_interval")]
+    pub sampling_interval_ms: u32,
     #[serde(default)]
     pub activity_bars: ActivityBars,
     #[serde(default)]
@@ -441,7 +443,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 16,
+            version: 17,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -460,6 +462,7 @@ impl Default for Settings {
                 .collect(),
             graph_height: 90,
             graph_width: default_graph_width(),
+            sampling_interval_ms: crate::sampling::default_interval(),
             activity_bars: ActivityBars {
                 visible: true,
                 use_series_colors: true,
@@ -506,12 +509,13 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 16 {
+        if self.version != 17 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
             return Err("Graph height must be between 64 and 240 pixels".into());
         }
+        crate::sampling::interval(self.sampling_interval_ms)?;
         if !(100..=1200).contains(&self.graph_width) {
             return Err("Minimum graph width must be between 100 and 1200 pixels".into());
         }
@@ -645,6 +649,9 @@ impl Settings {
         }
         if result.version == 15 {
             result.version = 16;
+        }
+        if result.version == 16 {
+            result.version = 17;
         }
         result.validate()?;
         Ok(result)

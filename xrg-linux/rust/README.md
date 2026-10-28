@@ -552,6 +552,8 @@ Partial files keep current draft values for missing fields. New VRAM/Fans
 visibility, graph order/height, metric sources, process filters, AI sources and
 weather remain as configured. A legacy weather visibility flag does not enable
 requests. The main window background stays opaque as with other custom themes.
+The C writer does not save its update-interval fields; import preserves the Rust
+system sampling target instead of guessing it from unrelated keys or window data.
 
 `[AIToken] show_model_breakdown` transfers independently as a display preference:
 `true` shows recorded per-model token rows in AI monitoring; `false` keeps grouped
@@ -598,6 +600,20 @@ entry opens the editor when a built-in preset is active. In Preferences:
   the overrides in the draft and keeps the default value. Sizes apply in both
   layouts; horizontal graphs align at the top rather than stretching shorter
   graphs. Ordering, hiding, sources, themes and styles preserve size choices.
+- Set **System sampling interval** between **250 and 10,000 milliseconds**; the
+  default is **1,000 ms**. Any whole millisecond in that range can be saved.
+  This retimes the system worker (CPU, memory, network, disk, GPU, processes and
+  hardware sensors). Apply wakes a sleeping worker, without rebuilding collectors,
+  changing sources or resetting rate baselines/history. Cancel discards the draft;
+  Restore defaults puts 1,000 ms in the draft. Existing settings gain that default
+  without an immediate write. Headless sampling honors the same saved target.
+  Normal collection time is included in each interval. If collection overruns,
+  the next attempt waits one target interval after completion, avoiding catch-up
+  bursts. Changing the target cannot interrupt an active read/scan/command.
+  Rates use actual monotonic elapsed time; historical points retain their values
+  and are spaced by sample order, so a cadence change is not a uniform time axis.
+  AI still collects every five seconds, and weather keeps its own refresh policy.
+  Their latest cached views reach the window at the system snapshot cadence.
 - Expand **Activity bars** to show/hide the compact current-value indicators and choose
   their independent Solid/Pixel/Dot/Hollow style and RGBA color, or inherit graph
   series colors (the new default). Up to three bars
@@ -726,7 +742,7 @@ events; XRG-ng enforces these limits while building values.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 16 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 17 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show nine
@@ -777,6 +793,11 @@ model-display booleans reject the entire file. Grouped and expanded detail text 
 prepared by the AI worker; GTK switches between cached views without collection
 or JSON parsing. A dedicated GTK gate checks Apply/Cancel, reopening, Restore
 defaults, persistence, immediate cached updates and retained rate history.
+Version 17 adds the system sampling target, retaining a 1,000 ms default for older
+files. Out-of-range, non-integer and malformed intervals reject the whole file;
+migration writes only on explicit save. Worker timing and overrun handling have
+deterministic schedule tests; a separate GTK gate starts at ten seconds, applies
+a faster interval and checks cancellation, defaults, persistence and reopening.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:
@@ -789,7 +810,7 @@ silently replacing the external changes. No legacy C settings file is modified.
 ## AI monitoring
 
 The AI panel graphs **observed token-counter change per second**, polling every
-five seconds on a separate worker. Core graphs keep their one-second schedule even
+five seconds on a separate worker. Core graphs keep their configured system schedule even
 when provider scans or local APIs are slow. Tooltips/accessibility details show each
 provider's locally retained token total, rate, source, recorded cost when available,
 and errors. These totals are not account billing or a billing-period summary;

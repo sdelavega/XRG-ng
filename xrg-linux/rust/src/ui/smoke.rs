@@ -19,6 +19,7 @@ pub(super) struct Harness {
     stage: u8,
     theme_import: Option<super::theme_import_smoke::Harness>,
     ai_view: Option<super::ai_view_smoke::Harness>,
+    sampling: Option<super::sampling_smoke::Harness>,
     process_details: Option<super::process_details_smoke::Harness>,
     weather_graph: Option<super::weather_graph_smoke::Harness>,
     process_actions: Option<super::process_actions_smoke::Harness>,
@@ -84,6 +85,17 @@ impl Harness {
             )
             .map_err(|e| e.to_string())?;
         }
+        if std::env::var("XRG_SMOKE_SAMPLING").as_deref() == Ok("1") {
+            let settings = Settings {
+                sampling_interval_ms: 10000,
+                ..Settings::default()
+            };
+            fs::write(
+                root.join("settings.conf"),
+                serde_json::to_vec(&settings).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         fs::write(root.join("invalid.json"), "{broken").map_err(|e| e.to_string())?;
         fs::write(root.join("legacy.ini"), LEGACY_FIXTURE).map_err(|e| e.to_string())?;
         fs::write(
@@ -94,6 +106,8 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            sampling: (std::env::var("XRG_SMOKE_SAMPLING").as_deref() == Ok("1"))
+                .then(super::sampling_smoke::Harness::new),
             ai_view: (std::env::var("XRG_SMOKE_AI_VIEW").as_deref() == Ok("1"))
                 .then(super::ai_view_smoke::Harness::new),
             theme_import: (std::env::var("XRG_SMOKE_XTF_THEME").as_deref() == Ok("1"))
@@ -275,6 +289,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if self.sampling.is_some() {
+            return "sampling=wake-cancel-apply-persist";
+        }
         if self.ai_view.is_some() {
             return "ai-view=grouped-cached-history-preserved";
         }
@@ -297,6 +314,16 @@ impl Harness {
         }
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.sampling {
+            let finished = harness.tick(shell, sequence, &self.root)?;
+            if finished {
+                require(
+                    harness.tick(shell, sequence, &self.root)?,
+                    "Sampling smoke completion was not stable",
+                )?;
+            }
+            return Ok(finished);
+        }
         if let Some(harness) = &mut self.ai_view {
             let finished = harness.tick(shell, sequence, &self.root)?;
             if finished {
@@ -618,7 +645,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 16 && loaded.processes.limit == 20,
+                    loaded.version == 17 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;

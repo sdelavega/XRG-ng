@@ -18,6 +18,7 @@ pub mod temperature;
 pub mod weather;
 
 pub mod process;
+pub mod sampling;
 mod sensors;
 mod system_file;
 pub mod tpu;

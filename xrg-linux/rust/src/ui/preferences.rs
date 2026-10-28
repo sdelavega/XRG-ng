@@ -33,6 +33,7 @@ pub(super) struct Dialog {
     rows: Vec<Row>,
     pub height: gtk::SpinButton,
     pub width: gtk::SpinButton,
+    pub sampling: gtk::SpinButton,
     pub graph_heights: super::graph_heights::Editor,
     pub activity: gtk::Expander,
     pub activity_visible: gtk::CheckButton,
@@ -144,6 +145,18 @@ impl Dialog {
         form.append(&graph_row);
         let graph_heights = super::graph_heights::Editor::new();
         form.append(&graph_heights.widget);
+        let sampling_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let sampling_label = gtk::Label::new(Some("System sampling interval (milliseconds)"));
+        sampling_label.set_hexpand(true);
+        sampling_label.set_xalign(0.);
+        let sampling = gtk::SpinButton::with_range(250., 10000., 250.);
+        sampling.update_property(&[gtk::accessible::Property::Label(
+            "System sampling interval in milliseconds",
+        )]);
+        sampling.set_tooltip_text(Some("Target interval for system metrics. Slow collection can take longer. AI and weather keep their own schedules. Changing this interval preserves rate baselines and history."));
+        sampling_row.append(&sampling_label);
+        sampling_row.append(&sampling);
+        form.append(&sampling_row);
         let activity_content = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let activity_description = gtk::Label::new(Some(
             "CPU shows up to 64 logical-core bars. Other graphs show one current-value bar per series, on the graph’s axis. Rate/count bars scale to recent history, not capacity. Temperature bars show a display range, not a thermal limit. Missing readings stay blank; measured zero has an empty track.",
@@ -315,6 +328,7 @@ impl Dialog {
             rows,
             height,
             width,
+            sampling,
             graph_heights,
             activity,
             activity_visible,
@@ -336,6 +350,14 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.sampling.connect_value_changed(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().sampling_interval_ms = control.value_as_int() as u32;
+            }
+        });
         let weak = Rc::downgrade(&dialog);
         dialog.ai_models.connect_toggled(move |control| {
             if let Some(dialog) = weak.upgrade()
@@ -672,6 +694,8 @@ impl Dialog {
     fn refresh(&self) {
         self.updating.set(true);
         let settings = self.draft.borrow();
+        self.sampling
+            .set_value(f64::from(settings.sampling_interval_ms));
         let horizontal = settings.layout == Layout::Horizontal;
         self.layout.set_selected(u32::from(horizontal));
         self.temperature_units

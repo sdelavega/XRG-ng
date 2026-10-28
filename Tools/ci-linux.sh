@@ -30,6 +30,9 @@ cargo fmt --manifest-path xrg-linux/rust/Cargo.toml --check
 cargo clippy "${cargo_options[@]}" --all-targets -- -D warnings
 cargo test "${cargo_options[@]}"
 cargo run "${cargo_options[@]}" -- --headless --samples 3
+# A long saved interval must wake on Apply, with its own unchanged smoke deadline.
+XRG_SMOKE_SAMPLING=1 XRG_SMOKE_SAMPLING_PREFS_IMAGE="$output/sampling-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    cargo run "${cargo_options[@]}" -- --smoke-test
 # Display-only AI choices must preserve cached totals, sources and rate history.
 XRG_SMOKE_AI_VIEW=1 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test

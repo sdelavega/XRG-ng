@@ -64,6 +64,7 @@ jobs:
             ${{ steps.verify.outputs.results }}/validation.log
             ${{ steps.verify.outputs.results }}/gtk-smoke.png
             ${{ steps.verify.outputs.results }}/preferences-smoke.png
+            ${{ steps.verify.outputs.results }}/sampling-preferences.png
             ${{ steps.verify.outputs.results }}/processes-smoke.png
             ${{ steps.verify.outputs.results }}/ai-smoke.png
             ${{ steps.verify.outputs.results }}/ai-sources-smoke.png

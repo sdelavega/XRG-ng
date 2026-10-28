@@ -5,9 +5,9 @@ use crate::{collectors::LinuxSources, settings::MetricSelection, shared::History
 use std::{
     array,
     collections::BTreeMap,
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 #[derive(Clone, Debug)]
@@ -831,7 +831,7 @@ impl SelectionControl {
 }
 pub struct Worker {
     pub latest: Arc<Mutex<Option<Snapshot>>>,
-    stop: Option<mpsc::Sender<()>>,
+    sampling: crate::sampling::Control,
     join: Option<thread::JoinHandle<()>>,
     selection: SelectionControl,
     ai: crate::ai::Control,
@@ -865,20 +865,36 @@ impl Worker {
         ai_preferences: crate::ai::Preferences,
         weather_preferences: crate::weather::Preferences,
     ) -> Self {
+        Self::start_timed(
+            ai_enabled,
+            initial,
+            ai_preferences,
+            weather_preferences,
+            crate::sampling::default_interval(),
+        )
+    }
+    pub fn start_with_settings(ai_enabled: bool, settings: &crate::settings::Settings) -> Self {
+        settings.validate().expect("Validated settings");
+        Self::start_timed(
+            ai_enabled,
+            settings.metrics.clone(),
+            settings.ai.clone(),
+            settings.weather.clone(),
+            settings.sampling_interval_ms,
+        )
+    }
+    fn start_timed(
+        ai_enabled: bool,
+        initial: MetricSelection,
+        ai_preferences: crate::ai::Preferences,
+        weather_preferences: crate::weather::Preferences,
+        interval_ms: u32,
+    ) -> Self {
         ai_preferences.validate().expect("Validated AI preferences");
-        let ai = crate::ai::Control::default();
-        let ai_updates = ai.clone();
         weather_preferences
             .validate()
             .expect("Validated weather preferences");
-        let weather = crate::weather::Control::default();
-        let weather_updates = weather.clone();
-        let selection = SelectionControl(Arc::new(Mutex::new(None::<MetricSelection>)));
-        let updates = selection.clone();
-        let latest = Arc::new(Mutex::new(None));
-        let output = latest.clone();
-        let (stop, receiver) = mpsc::channel();
-        let join = thread::spawn(move || {
+        Self::spawn(initial, interval_ms, move |ai_updates, weather_updates| {
             // Swift handles are created and destroyed on this worker only.
             let mut sampler = Sampler::live(false);
             if ai_enabled && let Some(config) = crate::ai::Config::live() {
@@ -895,31 +911,53 @@ impl Worker {
                 ));
             }
             sampler
+        })
+    }
+    fn spawn(
+        initial: MetricSelection,
+        interval_ms: u32,
+        build: impl FnOnce(crate::ai::Control, crate::weather::Control) -> Sampler + Send + 'static,
+    ) -> Self {
+        initial.validate().expect("Validated initial selection");
+        let mut timer =
+            crate::sampling::Timer::new(interval_ms).expect("Validated sampling interval");
+        let sampling = timer.control();
+        let ai = crate::ai::Control::default();
+        let ai_updates = ai.clone();
+        let weather = crate::weather::Control::default();
+        let weather_updates = weather.clone();
+        let selection = SelectionControl(Arc::new(Mutex::new(None::<MetricSelection>)));
+        let updates = selection.clone();
+        let latest = Arc::new(Mutex::new(None));
+        let output = latest.clone();
+        let join = thread::spawn(move || {
+            let mut sampler = build(ai_updates, weather_updates);
+            sampler
                 .set_selection(initial)
                 .expect("Validated initial selection");
-            loop {
-                let next_sample = Instant::now() + Duration::from_secs(1);
+            while timer.wait() {
+                let started = Instant::now();
                 if let Some(selection) = updates.0.lock().unwrap().take() {
                     sampler
                         .set_selection(selection)
                         .expect("Validated selection update");
                 }
-                *output.lock().unwrap() = Some(sampler.sample());
                 // One latest-value slot bounds memory if drawing is slow or hidden.
-                match receiver.recv_timeout(next_sample.saturating_duration_since(Instant::now())) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => (),
-                    _ => break,
-                }
+                *output.lock().unwrap() = Some(sampler.sample());
+                timer.sampled(started);
             }
         });
         Self {
             latest,
-            stop: Some(stop),
+            sampling,
             join: Some(join),
             selection,
             ai,
             weather,
         }
+    }
+    pub fn sampling_control(&self) -> crate::sampling::Control {
+        self.sampling.clone()
     }
     pub fn selection_control(&self) -> SelectionControl {
         self.selection.clone()
@@ -936,9 +974,7 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
+        self.sampling.stop();
         if let Some(join) = self.join.take() {
             join.join().expect("collector worker panicked");
         }
@@ -1010,5 +1046,49 @@ mod gpu_activity_validation_tests {
         assert_eq!(gpu.activity(), Some((ActivitySource::Clients, 0.)));
         gpu.client_activity = Some(f64::INFINITY);
         assert!(gpu.activity().is_none());
+    }
+}
+
+#[cfg(test)]
+mod sampling_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    #[test]
+    fn retiming_wakes_the_same_sampler_without_rebuilding_sources_or_resetting_sequence() {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let observed = builds.clone();
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir()
+                .join(format!("xrg-missing-sampling-roots-{}", std::process::id()));
+            Sampler::with_sources(LinuxSources::with_roots(
+                root.join("proc"),
+                root.join("sys"),
+            ))
+        });
+        let wait_for = |sequence| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(snapshot) = worker.latest.lock().unwrap().as_ref()
+                    && snapshot.sequence >= sequence
+                {
+                    return snapshot.sequence;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Sampling did not wake before the original ten-second deadline"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        assert_eq!(wait_for(1), 1);
+        let control = worker.sampling_control();
+        control.set(250).unwrap();
+        assert!(wait_for(2) >= 2);
+        assert_eq!(builds.load(Ordering::Relaxed), 1);
+        assert!(control.set(0).is_err());
+        drop(worker);
+        assert!(control.set(500).is_err());
     }
 }

@@ -327,3 +327,32 @@ fn cpu_inventory_and_proc_read_sizes_are_bounded() {
         .unwrap();
     assert!(metric_sources::cpus(&f.source()).is_err());
 }
+
+#[test]
+fn changed_sampling_spacing_preserves_history_and_uses_measured_elapsed_time() {
+    let f = Fixture::new();
+    let source = f.source();
+    let mut sampler = Sampler::default();
+    sampler
+        .set_selection(MetricSelection {
+            network: Some("eth0".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    sampler.sample(&source, 1.);
+    f.cpu(1);
+    f.net(&[("eth0", 1100, 2200)]);
+    f.disk(20, 40, 50, 60, 9999);
+    let fast = sampler.sample(&source, 1.25);
+    assert_eq!(fast.network.series[0].last(), Some(&4000.));
+    assert_eq!(fast.disk.series[0].last(), Some(&61440.));
+    f.cpu(2);
+    f.net(&[("eth0", 2100, 4200)]);
+    f.disk(30, 60, 70, 90, 9999);
+    let slow = sampler.sample(&source, 11.25);
+    assert!(slow.valid);
+    assert_eq!(&slow.network.series[0][118..], &[4000., 100.]);
+    assert_eq!(&slow.network.series[1][118..], &[8000., 200.]);
+    assert_eq!(&slow.disk.series[0][118..], &[61440., 1536.]);
+    assert_eq!(&slow.cpu.series[0][118..], &[25., 25.]);
+}
