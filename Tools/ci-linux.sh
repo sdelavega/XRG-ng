@@ -30,6 +30,9 @@ cargo fmt --manifest-path xrg-linux/rust/Cargo.toml --check
 cargo clippy "${cargo_options[@]}" --all-targets -- -D warnings
 cargo test "${cargo_options[@]}"
 cargo run "${cargo_options[@]}" -- --headless --samples 3
+# Opt-in dashboard dimensions restore separately from per-graph sizing.
+XRG_SMOKE_WINDOW_SIZE=1 XRG_SMOKE_WINDOW_SIZE_PREFS_IMAGE="$output/window-size-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    cargo run "${cargo_options[@]}" -- --smoke-test
 # Main-window opacity must apply independently of fully readable Preferences.
 XRG_SMOKE_OPACITY=1 XRG_SMOKE_OPACITY_PREFS_IMAGE="$output/opacity-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test

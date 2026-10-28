@@ -410,3 +410,56 @@ fn legacy_window_opacity_import_is_explicit_bounded_and_preserves_source() {
         draft
     );
 }
+
+#[test]
+fn legacy_window_dimensions_are_independent_of_graph_dimensions_and_position() {
+    use xrg_ng_linux::settings::WindowSize;
+    let f = Fixture::new();
+    let base = rich_base();
+    let bytes = "[Window]\nwidth=640\nheight=520\nx=50\ny=10\nalways_on_top=true\n";
+    fs::write(f.source(), bytes).unwrap();
+    let report = legacy::load(&f.source(), &base).unwrap();
+    let mut expected = base.clone();
+    expected.window_size = Some(WindowSize {
+        width: 640,
+        height: 520,
+    });
+    assert_eq!(report.settings, expected);
+    assert_eq!(report.imported.len(), 2);
+    assert_eq!(
+        report.skipped,
+        ["[Window] always_on_top", "[Window] x", "[Window] y"]
+    );
+    assert_eq!(fs::read_to_string(f.source()).unwrap(), bytes);
+    let partial = legacy::parse(b"[Window]\nheight=600\n", &expected).unwrap();
+    expected.window_size.as_mut().unwrap().height = 600;
+    assert_eq!(partial.settings, expected);
+    let partial = legacy::parse(b"[Window]\nwidth=700\n[Modules]\nshow_cpu=true\n", &base).unwrap();
+    assert_eq!(partial.settings, base);
+    assert_eq!(partial.skipped, ["[Window] width"]);
+}
+
+#[test]
+fn malformed_legacy_window_dimensions_reject_the_entire_import() {
+    let base = rich_base();
+    for key in ["width", "height"] {
+        for bad in [
+            "",
+            "99",
+            "8193",
+            "-100",
+            "600.5",
+            "NaN",
+            "true",
+            "4294967296",
+        ] {
+            let bytes = format!("[Modules]\nshow_cpu=false\n[Window]\n{key}={bad}\n");
+            assert!(
+                legacy::parse(bytes.as_bytes(), &base)
+                    .unwrap_err()
+                    .contains(&format!("[Window] {key}"))
+            );
+        }
+    }
+    assert_eq!(base, rich_base());
+}

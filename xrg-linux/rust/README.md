@@ -564,7 +564,12 @@ reject the entire import. This does not alter AI sources or their histories.
 current draft opacity; invalid/non-finite values reject the whole import. The
 preview and Preferences stay opaque, and transparency changes only after Apply.
 
-Window geometry/pinning, billing and unrecognized entries are listed as
+`[Window] width` and `height` import as an explicit dashboard size (100–8192
+logical pixels each), independently of graph dimensions. Both are required when
+the draft uses automatic sizing. With an existing explicit size, a missing
+dimension preserves its draft value. An incomplete size in automatic mode is
+listed as not transferred; malformed/out-of-range dimensions reject the import.
+Window position/pinning, billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
 supported booleans, colors, layout or unit values reject the entire import and
 leave the draft unchanged.
@@ -618,6 +623,15 @@ entry opens the editor when a built-in preset is active. In Preferences:
   and are spaced by sample order, so a cadence change is not a uniform time axis.
   AI still collects every five seconds, and weather keeps its own refresh policy.
   Their latest cached views reach the window at the system snapshot cadence.
+- Expand **Dashboard window size** to enable **Remember dashboard window size**
+  and choose width/height in **logical pixels** (100–8192). Apply sets the requested
+  size independently of graph widths/heights. Subsequent dashboard resizing is
+  captured when opening Preferences, closing the dashboard or quitting normally.
+  Maximized/fullscreen dimensions are ignored; maximize/fullscreen state is not
+  restored. Your desktop and widget minimums can constrain the requested size.
+  Disabling the option or applying Restore defaults resumes automatic compact
+  sizing; Cancel leaves the active size unchanged. Existing Rust settings keep
+  automatic sizing by default. Theme load/save does not exchange window size.
 - Set **Main window opacity (%)** between **10% and 100%**. New installations,
   existing Rust settings and Restore defaults use **100%**. This affects the entire
   dashboard, including text and graphs; Preferences, details and other windows
@@ -679,7 +693,9 @@ continue reporting all collectors independently of these presentation preference
 Graph heights are minimum requests; small windows scroll. Graphs retain their
 chosen minimum width (140 pixels by default) in either layout and scroll sideways
 when necessary, with vertical scrolling when needed.
-Window placement/pinning is not part of these preferences.
+Explicit dashboard dimensions stay fixed across layout/graph changes, while
+scrolling keeps the graphs accessible. Automatic sizing continues to fit their
+configured dimensions. Window placement/pinning is not part of these preferences.
 
 CPU choices use logical core IDs. Network choices include loopback, while the
 default aggregate excludes it. Individual disks include partitions and stacked
@@ -767,7 +783,7 @@ events; XRG-ng enforces these limits while building values.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 18 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 19 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show nine
@@ -828,6 +844,14 @@ settings default to 1.0, preserving their appearance without a write until save.
 Invalid values reject the entire document. A dedicated GTK gate starts from saved
 transparency and checks cancellation, draft-only defaults, minimum and fractional
 opacity, fully opaque Preferences, persistence, reopening and applied defaults.
+Version 19 adds optional `window_size` with bounded integer `width` and `height`.
+Missing/null values retain automatic sizing, with no migration write until save.
+Unknown fields or malformed/out-of-range dimensions reject the whole document.
+The independent GTK size gate checks startup restoration, Cancel, draft-only
+Restore defaults, Apply, resize capture through the real close-request handler,
+persistence, reopening, and returning to automatic mode. It uses GTK normal-size
+requests under Xvfb, rather than physical pointer dragging or a particular window
+manager. Desktop-specific geometry behavior remains best effort; feedback is welcome.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

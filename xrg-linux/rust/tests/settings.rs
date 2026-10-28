@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 19;
+    value.version = 20;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -386,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        18
+        19
     );
 }
 #[test]
@@ -469,7 +469,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 18);
+    assert_eq!(migrated.version, 19);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -628,7 +628,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        18
+        19
     );
 }
 
@@ -844,5 +844,98 @@ fn window_opacity_requires_finite_visible_range_and_json_numbers() {
     ] {
         json["window_opacity"] = invalid;
         assert!(Settings::parse(&serde_json::to_vec(&json).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn version_eighteen_retains_automatic_window_sizing_until_explicit_save() {
+    use xrg_ng_linux::settings::WindowSize;
+    let f = Fixture::new();
+    let mut expected = Settings {
+        graph_width: 360,
+        window_opacity: 0.8,
+        ..Settings::default()
+    };
+    expected.module_mut(Module::Memory).height = Some(160);
+    expected.move_module(Module::Tpu, -2);
+    let mut json = serde_json::to_value(&expected).unwrap();
+    json["version"] = 18.into();
+    json.as_object_mut().unwrap().remove("window_size");
+    let bytes = serde_json::to_vec(&json).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(loaded.window_size, None);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.window_size = Some(WindowSize {
+        width: 640,
+        height: 520,
+    });
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+    assert_eq!(reopened.graph_width, 360);
+    assert_eq!(reopened.module(Module::Memory).height, Some(160));
+}
+
+#[test]
+fn explicit_window_sizes_require_two_bounded_integer_dimensions() {
+    use xrg_ng_linux::settings::WindowSize;
+    for (width, height) in [(100, 100), (8192, 8192), (600, 450)] {
+        let settings = Settings {
+            window_size: Some(WindowSize { width, height }),
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+        assert_eq!(
+            Settings::parse(&serde_json::to_vec(&settings).unwrap()).unwrap(),
+            settings
+        );
+    }
+    for bad in [0, 99, 8193, u32::MAX] {
+        for (width, height) in [(bad, 450), (600, bad)] {
+            let settings = Settings {
+                window_size: Some(WindowSize { width, height }),
+                ..Settings::default()
+            };
+            assert!(settings.validate().is_err());
+        }
+    }
+    let mut wire = serde_json::to_value(Settings::default()).unwrap();
+    for bad in [
+        serde_json::json!({"width":600}),
+        serde_json::json!({"height":450}),
+        serde_json::json!({"width":600.5,"height":450}),
+        serde_json::json!({"width":-600,"height":450}),
+        serde_json::json!({"width":"600","height":450}),
+        serde_json::json!({"width":600,"height":450,"x":0}),
+        serde_json::json!([600, 450]),
+        serde_json::json!(true),
+    ] {
+        wire["window_size"] = bad;
+        assert!(
+            Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err(),
+            "accepted {wire}"
+        );
+    }
+    wire["window_size"] = serde_json::Value::Null;
+    assert_eq!(
+        Settings::parse(&serde_json::to_vec(&wire).unwrap())
+            .unwrap()
+            .window_size,
+        None
+    );
+}
+
+#[test]
+fn window_size_rejects_duplicate_dimensions() {
+    use xrg_ng_linux::settings::WindowSize;
+    for text in [
+        r#"{"width":600,"height":450,"width":700}"#,
+        r#"{"width":600,"height":450,"height":500}"#,
+    ] {
+        assert!(serde_json::from_str::<WindowSize>(text).is_err());
     }
 }

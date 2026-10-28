@@ -119,6 +119,7 @@ pub(super) fn install(shell: &Rc<Shell>) -> gtk::MenuButton {
             .build().present();
     });
     action(shell, "quit", None, |s, _| {
+        s.capture_window_size();
         if let Some(app) = s.window.application() {
             app.quit();
         }

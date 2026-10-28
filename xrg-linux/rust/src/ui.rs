@@ -20,6 +20,8 @@ mod targets;
 mod theme_import_smoke;
 mod weather;
 mod weather_graph_smoke;
+mod window_size;
+mod window_size_smoke;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -227,11 +229,19 @@ impl Shell {
             dialog: RefCell::new(None),
         });
         toolbar.append(&menus::install(&shell));
+        let weak = Rc::downgrade(&shell);
+        shell.window.connect_close_request(move |_| {
+            if let Some(shell) = weak.upgrade() {
+                shell.capture_window_size();
+            }
+            glib::Propagation::Proceed
+        });
         shell.refresh();
         shell.fit_contents();
         if smoke
             && std::env::var_os("XRG_SMOKE_STYLE").is_none()
             && std::env::var_os("XRG_SMOKE_WEATHER_GRAPH").is_none()
+            && shell.settings.borrow().window_size.is_none()
         {
             shell.window.set_default_size(680, 1400);
         }
@@ -316,6 +326,11 @@ impl Shell {
     }
     fn fit_contents(&self) {
         let settings = self.settings.borrow();
+        if let Some(size) = settings.window_size {
+            self.window
+                .set_default_size(size.width as i32, size.height as i32);
+            return;
+        }
         let heights: Vec<_> = settings
             .modules
             .iter()
@@ -419,7 +434,8 @@ impl Shell {
             window.set_view(settings.processes.clone());
         }
         self.refresh();
-        if old.layout != settings.layout
+        if old.window_size != settings.window_size
+            || old.layout != settings.layout
             || old.graph_width != settings.graph_width
             || old.graph_height != settings.graph_height
             || old
@@ -448,6 +464,25 @@ impl Shell {
         self.settings.borrow_mut().processes = view;
         let settings = self.settings.borrow().clone();
         self.persist(settings);
+    }
+    fn capture_window_size(&self) {
+        if !self.window.is_realized()
+            || self.settings.borrow().window_size.is_none()
+            || self.window.is_maximized()
+            || self.window.is_fullscreen()
+        {
+            return;
+        }
+        let (width, height) = self.window.default_size();
+        let size = xrg_ng_linux::settings::WindowSize {
+            width: width as u32,
+            height: height as u32,
+        };
+        if size.validate().is_err() || self.settings.borrow().window_size == Some(size) {
+            return;
+        }
+        self.settings.borrow_mut().window_size = Some(size);
+        self.persist(self.settings.borrow().clone());
     }
     fn inventory(&self) -> Inventory {
         self.state
@@ -537,6 +572,7 @@ impl Shell {
             dialog.window.present();
             return dialog.clone();
         }
+        self.capture_window_size();
         let dialog = preferences::Dialog::new(self);
         *self.dialog.borrow_mut() = Some(dialog.clone());
         dialog.window.present();
@@ -689,6 +725,9 @@ pub fn run(smoke_mode: bool) -> bool {
         });
     });
     let exit = application.run_with_args(&["xrg-ng-linux"]);
+    if let Some(shell) = shell.borrow().as_ref() {
+        shell.capture_window_size();
+    }
     shell.borrow_mut().take();
     worker.borrow_mut().take();
     success.get() && exit == glib::ExitCode::SUCCESS

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Explicit, read-only import of the C application's GLib key-file settings.
 use crate::{
-    settings::{GraphStyle, Layout, Module, Settings, ThemeChoice, ThemeDocument},
+    settings::{GraphStyle, Layout, Module, Settings, ThemeChoice, ThemeDocument, WindowSize},
     system_file,
     temperature::Units,
 };
@@ -23,7 +23,7 @@ pub struct Import {
 impl Import {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout, main window opacity, system temperature units and per-model token display transfer when present. Graph order/sizes, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha. Window opacity affects the whole dashboard and requires X11 compositing or Wayland.\n\nReady to import:\n{}",
+            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout, main window size/opacity, system temperature units and per-model token display transfer when present. Graph order/sizes, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha. Window width/height require both dimensions when automatic sizing is active; a missing dimension otherwise keeps the draft value. Position and pinning do not transfer. Window opacity affects the whole dashboard and requires X11 compositing or Wayland.\n\nReady to import:\n{}",
             self.imported.len(),
             self.skipped.len(),
             self.imported.join("\n")
@@ -112,6 +112,30 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
     let mut has_colors = false;
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
+    // Geometry is separate from graph dimensions. A partial size can update an
+    // existing explicit size, but cannot invent its other dimension in auto mode.
+    let dimension = |name: &str| -> Result<Option<u32>, String> {
+        entries
+            .get(&("Window".to_owned(), name.to_owned()))
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|v| (100..=8192).contains(v))
+                    .ok_or_else(|| format!("[Window] {name}: expected 100 to 8192 logical pixels"))
+            })
+            .transpose()
+    };
+    let width = dimension("width")?;
+    let height = dimension("height")?;
+    if (width.is_some() || height.is_some())
+        && let (Some(width), Some(height)) = (
+            width.or(base.window_size.map(|s| s.width)),
+            height.or(base.window_size.map(|s| s.height)),
+        )
+    {
+        settings.window_size = Some(WindowSize { width, height });
+    }
     let module_keys = [
         ("show_cpu", Module::Cpu),
         ("show_memory", Module::Memory),
@@ -176,6 +200,17 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 .expect("Validated module set")
                 .visible = visible;
             imported.push(format!("{label} = {visible}"));
+        } else if group == "Window" && matches!(key.as_str(), "width" | "height") {
+            if let Some(size) = settings.window_size {
+                let value = if key == "width" {
+                    size.width
+                } else {
+                    size.height
+                };
+                imported.push(format!("{label} = {value} logical pixels"));
+            } else {
+                skipped.push(label);
+            }
         } else if group == "Window" && key == "opacity" {
             let opacity = value
                 .parse::<f64>()

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Versioned Linux presentation preferences. Paths are explicit for isolated tests.
+mod window_size;
 mod xtf;
 use crate::{
     shared::{self, Theme},
@@ -19,6 +20,7 @@ use std::{
     },
     thread,
 };
+pub use window_size::WindowSize;
 const LIMIT: usize = 128 * 1024;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -420,6 +422,8 @@ pub struct Settings {
     #[serde(default = "default_window_opacity")]
     pub window_opacity: f64,
     #[serde(default)]
+    pub window_size: Option<WindowSize>,
+    #[serde(default)]
     pub activity_bars: ActivityBars,
     #[serde(default)]
     pub layout: Layout,
@@ -448,7 +452,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 18,
+            version: 19,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -469,6 +473,7 @@ impl Default for Settings {
             graph_width: default_graph_width(),
             sampling_interval_ms: crate::sampling::default_interval(),
             window_opacity: default_window_opacity(),
+            window_size: None,
             activity_bars: ActivityBars {
                 visible: true,
                 use_series_colors: true,
@@ -515,13 +520,16 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 18 {
+        if self.version != 19 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
             return Err("Graph height must be between 64 and 240 pixels".into());
         }
         crate::sampling::interval(self.sampling_interval_ms)?;
+        if let Some(size) = self.window_size {
+            size.validate()?;
+        }
         if !self.window_opacity.is_finite() || !(0.1..=1.0).contains(&self.window_opacity) {
             return Err("Main window opacity must be between 0.1 and 1.0".into());
         }
@@ -664,6 +672,9 @@ impl Settings {
         }
         if result.version == 17 {
             result.version = 18;
+        }
+        if result.version == 18 {
+            result.version = 19;
         }
         result.validate()?;
         Ok(result)
