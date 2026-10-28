@@ -61,7 +61,7 @@ impl Module {
             Self::Network => "Network · receive / send",
             Self::Disk => "Disk · read / write",
             Self::Battery => "Battery",
-            Self::Temperature => "Temperature · hottest readable sensor",
+            Self::Temperature => "Temperature",
             Self::Gpu => "GPU · activity",
             Self::Ai => "AI tokens · observed rate",
             Self::Processes => "Processes · readable / running",
@@ -169,6 +169,8 @@ pub struct MetricSelection {
     pub disk: Option<String>,
     /// Collector-provided identity, compared with inventory; never used as a path.
     pub gpu: Option<String>,
+    pub temperature: Option<String>,
+    pub fan: Option<String>,
 }
 impl MetricSelection {
     pub fn validate(&self) -> Result<(), String> {
@@ -187,12 +189,13 @@ impl MetricSelection {
                 return Err("Invalid network/disk name".into());
             }
         }
-        if self
-            .gpu
-            .as_ref()
-            .is_some_and(|id| id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control))
+        for id in [&self.gpu, &self.temperature, &self.fan]
+            .into_iter()
+            .flatten()
         {
-            return Err("Invalid GPU identity".into());
+            if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
+                return Err("Invalid metric source identity".into());
+            }
         }
         Ok(())
     }
@@ -202,6 +205,8 @@ impl MetricSelection {
             Module::Network => self.network == other.network,
             Module::Disk => self.disk == other.disk,
             Module::Gpu | Module::GpuMemory => self.gpu == other.gpu,
+            Module::Temperature => self.temperature == other.temperature,
+            Module::Fans => self.fan == other.fan,
             _ => true,
         }
     }
@@ -265,7 +270,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 6,
+            version: 7,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -285,7 +290,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 6 {
+        if self.version != 7 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -349,6 +354,9 @@ impl Settings {
         }
         if result.version == 5 {
             result.version = 6;
+        }
+        if result.version == 6 {
+            result.version = 7;
         }
         result.validate()?;
         Ok(result)

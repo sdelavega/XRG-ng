@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 7;
+    value.version = 8;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -381,7 +381,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        6
+        7
     );
 }
 #[test]
@@ -397,6 +397,8 @@ fn metric_targets_and_process_filters_persist_and_validate_as_typed_preferences(
         network: Some("missing-interface".into()),
         disk: Some("missing-disk".into()),
         gpu: Some("pci:0000:02:00.0".into()),
+        temperature: Some("missing-sensor".into()),
+        fan: Some("missing-fan".into()),
     };
     settings.processes = ProcessView {
         sort: Sort::Name,
@@ -461,7 +463,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 6);
+    assert_eq!(migrated.version, 7);
     assert_eq!(migrated.modules.len(), 12);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -579,5 +581,75 @@ fn version_five_adds_display_defaults_without_writes_and_new_choices_persist() {
         let mut invalid = serde_json::to_value(&loaded).unwrap();
         invalid[field] = value.into();
         assert!(Settings::parse(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing() {
+    let f = Fixture::new();
+    let mut expected = Settings::default();
+    expected.metrics.cpu = Some(2);
+    expected.metrics.disk = Some("sda".into());
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 6.into();
+    wire["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("temperature");
+    wire["metrics"].as_object_mut().unwrap().remove("fan");
+    let original = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &original).unwrap();
+    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+    store.save(&loaded).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
+        7
+    );
+}
+
+#[test]
+fn sensor_source_validation_and_snapshot_matching_are_scoped_to_their_graphs() {
+    use xrg_ng_linux::settings::MetricSelection;
+    let before = MetricSelection::default();
+    for (after, module) in [
+        (
+            MetricSelection {
+                temperature: Some("sensor".into()),
+                ..Default::default()
+            },
+            Module::Temperature,
+        ),
+        (
+            MetricSelection {
+                fan: Some("fan".into()),
+                ..Default::default()
+            },
+            Module::Fans,
+        ),
+    ] {
+        for candidate in Module::ALL {
+            assert_eq!(before.matches(&after, candidate), candidate != module);
+        }
+    }
+    for id in [String::new(), "bad\nname".into(), "x".repeat(4097)] {
+        assert!(
+            MetricSelection {
+                temperature: Some(id.clone()),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            MetricSelection {
+                fan: Some(id),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

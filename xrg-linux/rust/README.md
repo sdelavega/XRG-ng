@@ -5,7 +5,7 @@ in `../src`; the C executable and its `~/.config/xrg-linux/settings.conf` remain
 available. The new executable is `xrg-ng-linux`, version 0.1.0. It currently shows
 aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature, GPU activity, AI token-rate, process-count and
-TPU/NPU neural accelerator, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU selection and a
+TPU/NPU neural accelerator, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU/temperature/fan selection and a
 sortable, filterable process table.
 An opt-in **Weather** window shows station observations using the shared Swift
 METAR decoder, with saved station, units and refresh controls.
@@ -80,13 +80,20 @@ flags are reported separately. Canonical path/channel/inode identity prevents cl
 aliases duplicating a sensor and resets histories after disappearance/replacement.
 Scanning has a cooperative 100 ms / 256-channel budget, bounded directory/attribute
 reads, and explicit partial-coverage errors. Fan details are capped at 64 channels.
-Driver labels do not establish CPU/GPU ownership. PWM values are not RPM, and this
+Preferences offers individual **Fan RPM** sources as well as the default three-channel view.
+A selected missing, faulted or disabled fan shows unavailable; another fan never
+replaces it automatically. Driver labels do not establish CPU/GPU ownership. PWM values are not RPM, and this
 collector never writes fan controls or guesses board-specific calibration.
 
 Temperature collection reads standard hwmon temperature channels, honors disabled
 and fault flags, and falls back to thermal zones if no hwmon values are usable.
-The graph shows the maximum readable temperature; tooltips list individual sensors.
-Negative temperatures use a signed graph range. Channels marked as thermistors
+The default graph shows the maximum readable hwmon temperature, using thermal
+zones only when no hwmon values are usable. **Temperature** in Preferences can
+instead select an individual hwmon channel or thermal zone. A selected thermal
+zone stays readable when hwmon appears. The source list includes both backends;
+tooltips list the readings contributing to the selected graph.
+Temperature scans share a cooperative 100 ms / 256-channel budget and report
+partial coverage. Negative temperatures use a signed graph range. Channels marked as thermistors
 (`tempN_type=4`) are excluded until calibrated conversion is supported, since some
 report voltage rather than Celsius. This initial reader does not apply libsensors
 configuration/compute rules. See the kernel's
@@ -368,7 +375,8 @@ entry opens the editor when a built-in preset is active. In Preferences:
   Graph labels, tooltips, accessibility text and open live details update together.
   Collector/history values stay Celsius; unit changes preserve history and graph
   shape. Missing readings stay unavailable. Weather has its own units setting.
-- Choose aggregate or individual CPU, network, disk and GPU sources. **Refresh
+- Choose aggregate or individual CPU, network, disk and GPU sources, a temperature
+  sensor, and a fan RPM channel. **Refresh
   source lists** uses the latest collector inventory without discarding the draft.
 - Select a preset, name a custom palette and edit its seven colors.
 - Use **Load theme…** and **Save theme…** for local portable JSON files.
@@ -389,7 +397,14 @@ devices; the default aggregate uses whole physical devices as described above.
 GPU choices retain the collector's adapter identity; the default displays up to
 three adapters. A saved source that disappears stays selected and shows unavailable
 until it returns or another source is chosen. It never silently changes to an
-aggregate. Changing sources resets the affected history. Network/disk membership,
+aggregate. Changing sources resets the affected history. Temperature/fan choices use
+canonical device/channel identities, including the reported chip name. Physical hwmon
+paths exclude transient `hwmonN` class numbering; virtual sources whose kernel
+paths change can still need re-selection. Labels include channel identifiers to
+distinguish duplicate driver labels. Aliases are deduplicated, ambiguous identities
+are omitted, and attribute/device inode changes reset histories. The default
+temperature maximum also resets when its contributing sensors change.
+Network/disk membership,
 identity changes and counter resets establish a fresh rate baseline; device
 replacement detection is limited by the identity metadata the kernel exposes.
 
@@ -411,7 +426,7 @@ original imported file. XTF conversion remains follow-up work; legacy Linux impo
 is available as described above. The macOS application's
 XTF load/save behavior is unchanged.
 
-Settings use version 6 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 7 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
@@ -419,7 +434,8 @@ twelve graphs by default. Version 3 layouts also load, adding default AI source
 controls. Versions 1–4 gain weather settings with requests **disabled**. Existing
 AI sources, layouts and themes are preserved. Versions 1–5 gain vertical layout
 and Celsius defaults; existing settings are upgraded without immediate writes.
-The earlier Rust `theme=Ocean` format also loads with
+Versions 1–6 gain default temperature/fan source choices while preserving existing
+layout, colors, units, sources and provider settings. The earlier Rust `theme=Ocean` format also loads with
 default controls. Formats upgrade only when preferences are next saved.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
@@ -725,7 +741,7 @@ automated tests use fixtures and make no weather requests.
 ## Remaining migration
 
 1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
-   support, individual fan/sensor controls and detailed process controls.
+   support, multi-sensor graph selection and detailed process controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
 3. Deeper metric preferences, XTF conversion and broader legacy-field mappings

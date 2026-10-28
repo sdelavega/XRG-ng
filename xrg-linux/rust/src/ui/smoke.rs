@@ -132,6 +132,8 @@ impl Harness {
                     .cloned(),
                 disk: inventory.disks.first().cloned(),
                 gpu: inventory.gpus.first().map(|g| g.id.clone()),
+                temperature: inventory.temperatures.first().map(|s| s.id.clone()),
+                fan: inventory.fans.first().map(|s| s.id.clone()),
             });
         dialog.check(Module::Cpu).set_active(false);
         for _ in 0..9 {
@@ -374,7 +376,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 6 && loaded.processes.limit == 20,
+                    loaded.version == 7 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1164,6 +1166,94 @@ impl Harness {
                 }
                 details.window.close();
                 self.neural_panel.take();
+                self.stage = 34;
+            }
+            34 => {
+                let dialog = shell.preferences();
+                let selection = dialog.draft().metrics;
+                let inventory = xrg_ng_linux::metrics::Inventory {
+                    temperatures: vec![xrg_ng_linux::metrics::SourceOption {
+                        id: "smoke-temperature-source".into(),
+                        label: "Fixture temperature channel".into(),
+                    }],
+                    fans: vec![xrg_ng_linux::metrics::SourceOption {
+                        id: "smoke-fan-source".into(),
+                        label: "Fixture fan channel".into(),
+                    }],
+                    ..Default::default()
+                };
+                dialog.targets.refresh(&inventory, &selection);
+                dialog
+                    .targets
+                    .temperature
+                    .select(Some("smoke-temperature-source".into()));
+                dialog.targets.fan.select(Some("smoke-fan-source".into()));
+                let expected = dialog.draft();
+                require(
+                    expected.metrics.temperature.as_deref() == Some("smoke-temperature-source")
+                        && expected.metrics.fan.as_deref() == Some("smoke-fan-source"),
+                    "Sensor source controls did not update the draft",
+                )?;
+                dialog.targets.refresh(
+                    &xrg_ng_linux::metrics::Inventory::default(),
+                    &expected.metrics,
+                );
+                require(
+                    dialog.targets.value() == expected.metrics,
+                    "Sensor source refresh silently switched missing choices",
+                )?;
+                dialog.apply.emit_clicked();
+                require(
+                    *shell.settings.borrow() == expected,
+                    "Sensor source Apply failed",
+                )?;
+                self.expected = Some(expected);
+                self.stage = 35;
+            }
+            35 if self.since.elapsed() > Duration::from_millis(300)
+                && shell.saved_revision.get() == shell.revision.get()
+                && shell.state.borrow().as_ref().is_some_and(|snapshot| {
+                    super::snapshot_matches(snapshot, &shell.settings.borrow(), Module::Temperature)
+                        && super::snapshot_matches(snapshot, &shell.settings.borrow(), Module::Fans)
+                }) =>
+            {
+                let state = shell.state.borrow();
+                let snapshot = state.as_ref().unwrap();
+                require(
+                    snapshot.panels[Module::Temperature.index()]
+                        .series
+                        .is_empty()
+                        && snapshot.panels[Module::Fans.index()].series.is_empty(),
+                    "Missing selected sensor plotted a fallback",
+                )?;
+                require(
+                    snapshot.panels[Module::Temperature.index()]
+                        .label
+                        .contains("unavailable")
+                        && snapshot.panels[Module::Fans.index()]
+                            .label
+                            .contains("unavailable"),
+                    "Missing selected sensor did not show unavailable",
+                )?;
+                let (_, saved, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&saved) == self.expected.as_ref(),
+                    "Sensor sources did not persist",
+                )?;
+                let dialog = shell.preferences();
+                require(
+                    dialog.targets.value() == saved.metrics,
+                    "Reopened sensor source controls lost saved choices",
+                )?;
+                self.dialog = Some(dialog);
+                self.stage = 36;
+            }
+            36 if self.since.elapsed() > Duration::from_millis(300) => {
+                let dialog = self.dialog.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_SENSOR_SOURCES_IMAGE") {
+                    dialog.snapshot(&PathBuf::from(path))?;
+                }
+                dialog.cancel.emit_clicked();
                 return Ok(true);
             }
             _ => (),

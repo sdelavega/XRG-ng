@@ -321,11 +321,12 @@ fn descendant_held_pipe_does_not_escape_the_timeout() {
     );
     let mut command = BoundedCommand::default();
     let start = Instant::now();
+    let error = command
+        .output(&program, &[], Duration::from_millis(80), 100)
+        .unwrap_err();
     assert!(
-        command
-            .output(&program, &[], Duration::from_millis(80), 100)
-            .unwrap_err()
-            .contains("timed out")
+        error.contains("timed out"),
+        "Unexpected query error: {error}"
     );
     assert!(start.elapsed() < Duration::from_secs(2));
     std::thread::sleep(Duration::from_millis(400));

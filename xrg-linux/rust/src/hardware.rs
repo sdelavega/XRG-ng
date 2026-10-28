@@ -4,6 +4,7 @@
 //! Values follow the power_supply and hwmon kernel ABIs; no subprocesses are used.
 mod battery;
 mod fans;
+mod sensor_identity;
 pub use battery::{BatteryTime, TimeSource};
 pub use fans::{Fan, fans};
 use std::{
@@ -32,6 +33,9 @@ pub struct Battery {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Temperature {
+    pub id: String,
+    pub source_id: String,
+    pub thermal: bool,
     pub name: String,
     pub celsius: f64,
 }
@@ -131,7 +135,30 @@ pub(crate) fn celsius(value: i64) -> Result<f64, String> {
     }
     Ok(value as f64 / 1000.)
 }
-fn hwmon(directory: &Path, result: &mut Readings<Temperature>) -> Result<(), String> {
+struct TemperatureBudget {
+    start: std::time::Instant,
+    attempted: usize,
+}
+impl TemperatureBudget {
+    fn check(&self) -> Result<(), String> {
+        if self.attempted >= 256 || self.start.elapsed() >= std::time::Duration::from_millis(100) {
+            Err("Temperature scan limit reached; coverage is partial".into())
+        } else {
+            Ok(())
+        }
+    }
+    fn attempt(&mut self) -> Result<(), String> {
+        self.check()?;
+        self.attempted += 1;
+        Ok(())
+    }
+}
+fn hwmon(
+    sys: &Path,
+    directory: &Path,
+    result: &mut Readings<Temperature>,
+    budget: &mut TemperatureBudget,
+) -> Result<(), String> {
     let chip = short_label(&text(&directory.join("name"))?.unwrap_or_else(|| "hwmon".into()));
     let device = directory.file_name().unwrap().to_string_lossy();
     for input in directories(directory)? {
@@ -145,9 +172,12 @@ fn hwmon(directory: &Path, result: &mut Readings<Temperature>) -> Result<(), Str
         if channel.is_empty() || !channel.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
+        budget.attempt()?;
         let read = || -> Result<Option<Temperature>, String> {
-            if integer(&directory.join(format!("temp{channel}_enable")))? == Some(0) {
-                return Ok(None);
+            match integer(&directory.join(format!("temp{channel}_enable")))? {
+                Some(0) => return Ok(None),
+                Some(1) | None => (),
+                _ => return Err("Invalid temperature enable flag".into()),
             }
             // Some thermistor/ADC channels report millivolts, requiring calibrated
             // userspace conversion. Do not label those raw values as Celsius.
@@ -157,11 +187,21 @@ fn hwmon(directory: &Path, result: &mut Readings<Temperature>) -> Result<(), Str
             if integer(&directory.join(format!("temp{channel}_fault")))?.is_some_and(|v| v != 0) {
                 return Err("Sensor reports a fault".into());
             }
+            let (source_id, id) = sensor_identity::identity(sys, directory, &input, &chip)?;
             let value = integer(&input)?.ok_or("Sensor disappeared")?;
             let label = text(&directory.join(format!("temp{channel}_label")))?
                 .unwrap_or_else(|| format!("temp{channel}"));
+            if sensor_identity::identity(sys, directory, &input, &chip)?.1 != id {
+                return Err("Temperature sensor changed during read".into());
+            }
             Ok(Some(Temperature {
-                name: format!("{chip} ({device}) · {}", short_label(&label)),
+                id,
+                source_id,
+                thermal: false,
+                name: format!(
+                    "{chip} ({device}) · {} [temp{channel}]",
+                    short_label(&label)
+                ),
                 celsius: celsius(value)?,
             }))
         };
@@ -174,29 +214,66 @@ fn hwmon(directory: &Path, result: &mut Readings<Temperature>) -> Result<(), Str
     Ok(())
 }
 pub fn temperatures(sys: &Path) -> Result<Readings<Temperature>, String> {
+    collect_temperatures(sys, false)
+}
+pub fn temperature_sources(sys: &Path) -> Result<Readings<Temperature>, String> {
+    collect_temperatures(sys, true)
+}
+fn collect_temperatures(sys: &Path, all: bool) -> Result<Readings<Temperature>, String> {
     let mut result = Readings {
         values: Vec::new(),
         errors: Vec::new(),
     };
+    let mut budget = TemperatureBudget {
+        start: std::time::Instant::now(),
+        attempted: 0,
+    };
     for directory in directories(&sys.join("class/hwmon"))? {
-        if let Err(error) = hwmon(&directory, &mut result) {
+        if let Err(error) = budget.check() {
+            result.errors.push(error);
+            break;
+        }
+        if let Err(error) = hwmon(sys, &directory, &mut result, &mut budget) {
             result.errors.push(error);
         }
     }
     // Avoid duplicate hwmon/thermal readings. Thermal zones are a fallback for
     // machines whose kernel exposes no usable hwmon temperatures.
-    if result.values.is_empty() {
+    if (all || result.values.is_empty())
+        && let Err(error) = budget.check()
+    {
+        result.errors.push(error);
+    }
+    if (all || result.values.is_empty()) && budget.check().is_ok() {
         for directory in directories(&sys.join("class/thermal"))? {
             let name = directory.file_name().unwrap().to_string_lossy();
             if !name.starts_with("thermal_zone") {
                 continue;
             }
+            if let Err(error) = budget.attempt() {
+                result.errors.push(error);
+                break;
+            }
             let read = || -> Result<Temperature, String> {
+                let kind = text(&directory.join("type"))?;
+                // A display fallback may contain class numbering; never use it
+                // as device metadata or aliases would acquire different IDs.
+                let chip = short_label(kind.as_deref().unwrap_or("thermal"));
+                let label = kind.unwrap_or_else(|| name.to_string());
+                let (source_id, id) =
+                    sensor_identity::identity(sys, &directory, &directory.join("temp"), &chip)?;
                 let value =
                     integer(&directory.join("temp"))?.ok_or("Missing thermal temperature")?;
-                let label = text(&directory.join("type"))?.unwrap_or_else(|| name.into_owned());
+                if sensor_identity::identity(sys, &directory, &directory.join("temp"), &chip)?.1
+                    != id
+                {
+                    return Err("Thermal sensor changed during read".into());
+                }
                 Ok(Temperature {
-                    name: short_label(&label),
+                    id,
+                    source_id,
+                    thermal: true,
+                    name: format!("{} ({name})", short_label(&label)),
                     celsius: celsius(value)?,
                 })
             };
@@ -205,6 +282,18 @@ pub fn temperatures(sys: &Path) -> Result<Readings<Temperature>, String> {
                 Err(error) => result.errors.push(error),
             }
         }
+    }
+    result.values.sort_by(|a, b| a.id.cmp(&b.id));
+    result.values.dedup_by(|a, b| a.id == b.id);
+    let mut counts = std::collections::BTreeMap::new();
+    for value in &result.values {
+        *counts.entry(value.source_id.clone()).or_insert(0usize) += 1;
+    }
+    result.values.retain(|value| counts[&value.source_id] == 1);
+    if counts.values().any(|n| *n > 1) {
+        result
+            .errors
+            .push("Ambiguous temperature source identities omitted".into());
     }
     result.values.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)

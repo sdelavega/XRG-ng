@@ -197,7 +197,7 @@ fn thermal_zone_fallback_ignores_cooling_devices() {
     f.put("class/thermal/cooling_device0/type", "Processor");
     let report = hardware::temperatures(&f.0).unwrap();
     assert!(report.errors.is_empty());
-    assert_eq!(report.values[0].name, "x86_pkg_temp");
+    assert_eq!(report.values[0].name, "x86_pkg_temp (thermal_zone0)");
     assert_eq!(report.values[0].celsius, 42.);
 }
 #[test]
@@ -557,4 +557,227 @@ fn fan_scan_work_is_capped_and_reports_partial_coverage() {
     let report = hardware::fans(&f.0).unwrap();
     assert!(report.values.len() <= 256);
     assert!(report.errors.iter().any(|e| e.contains("partial")));
+}
+
+#[test]
+fn selected_temperature_and_fan_never_fall_back_and_clear_replaced_history() {
+    use xrg_ng_linux::settings::MetricSelection;
+    let f = Fixture::new();
+    f.core();
+    f.sensor("hwmon0", "1", "10000");
+    f.sensor("hwmon0", "2", "90000");
+    f.put("class/hwmon/hwmon0/temp1_label", "Same label");
+    f.put("class/hwmon/hwmon0/temp2_label", "Same label");
+    f.put("class/hwmon/hwmon0/fan1_input", "1100");
+    f.put("class/hwmon/hwmon0/fan2_input", "0");
+    let temperatures = hardware::temperatures(&f.0).unwrap().values;
+    let fans = hardware::fans(&f.0).unwrap().values;
+    let temperature = temperatures
+        .iter()
+        .find(|s| s.celsius == 10.)
+        .unwrap()
+        .source_id
+        .clone();
+    let fan = fans.iter().find(|s| s.rpm == 0).unwrap().source_id.clone();
+    assert_ne!(temperatures[0].source_id, temperatures[1].source_id);
+    let mut s = Sampler::with_sources(f.sources());
+    let selection = MetricSelection {
+        temperature: Some(temperature.clone()),
+        fan: Some(fan.clone()),
+        ..Default::default()
+    };
+    s.set_selection(selection.clone()).unwrap();
+    let first = s.sample();
+    assert_eq!(first.inventory.temperatures.len(), 2);
+    assert_eq!(first.inventory.fans.len(), 2);
+    assert_eq!(first.panels[5].series[0].last(), Some(&10.));
+    assert!(!first.panels[5].label.contains(" max"));
+    assert_eq!(first.panels[11].series.len(), 1);
+    assert_eq!(first.panels[11].series[0].last(), Some(&0.));
+    f.put("class/hwmon/hwmon0/temp1_label", "Renamed temperature");
+    f.put("class/hwmon/hwmon0/fan2_label", "Renamed fan");
+    f.put("class/hwmon/hwmon0/temp1_input", "12000");
+    f.put("class/hwmon/hwmon0/fan2_input", "600");
+    let next = s.sample();
+    assert_eq!(next.panels[5].series[0][118..], [10., 12.]);
+    assert_eq!(next.panels[11].series[0][118..], [0., 600.]);
+    // Keep old inodes allocated, forcing a distinct attribute incarnation.
+    for path in ["temp1_input", "fan2_input"] {
+        let path = f.0.join("class/hwmon/hwmon0").join(path);
+        fs::rename(&path, path.with_extension("old")).unwrap();
+    }
+    f.put("class/hwmon/hwmon0/temp1_input", "15000");
+    f.put("class/hwmon/hwmon0/fan2_input", "900");
+    let replaced = s.sample();
+    assert_eq!(replaced.selection, selection);
+    assert_eq!(replaced.panels[5].series[0][118..], [0., 15.]);
+    assert_eq!(replaced.panels[11].series[0][118..], [0., 900.]);
+    fs::remove_file(f.0.join("class/hwmon/hwmon0/temp1_input")).unwrap();
+    fs::remove_file(f.0.join("class/hwmon/hwmon0/fan2_input")).unwrap();
+    let missing = s.sample();
+    assert!(
+        missing.panels[5]
+            .label
+            .contains("Selected temperature sensor unavailable")
+    );
+    assert!(
+        missing.panels[11]
+            .label
+            .contains("Selected fan unavailable")
+    );
+    assert!(missing.panels[5].series.is_empty() && missing.panels[11].series.is_empty());
+    assert_eq!(missing.selection, selection);
+    f.put("class/hwmon/hwmon0/temp1_input", "17000");
+    f.put("class/hwmon/hwmon0/fan2_input", "1200");
+    let returned = s.sample();
+    assert_eq!(returned.panels[5].series[0][118..], [0., 17.]);
+    assert_eq!(returned.panels[11].series[0][118..], [0., 1200.]);
+    s.set_selection(MetricSelection::default()).unwrap();
+    let aggregate = s.sample();
+    assert_eq!(aggregate.panels[5].series[0][118..], [0., 90.]);
+    assert_eq!(aggregate.panels[11].series.len(), 2);
+}
+
+#[test]
+fn physical_sensor_identity_survives_hwmon_renumbering_and_aliases() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    f.put("devices/platform/board/hwmon/hwmon0/name", "board");
+    f.put("devices/platform/board/hwmon/hwmon0/temp1_input", "42000");
+    f.put("devices/platform/board/hwmon/hwmon0/fan1_input", "1234");
+    fs::create_dir_all(f.0.join("class/hwmon")).unwrap();
+    symlink(
+        f.0.join("devices/platform/board/hwmon/hwmon0"),
+        f.0.join("class/hwmon/hwmon0"),
+    )
+    .unwrap();
+    symlink(
+        f.0.join("devices/platform/board/hwmon/hwmon0"),
+        f.0.join("class/hwmon/hwmon7"),
+    )
+    .unwrap();
+    let old_temperature = hardware::temperatures(&f.0).unwrap().values;
+    let old_fan = hardware::fans(&f.0).unwrap().values;
+    assert_eq!(old_temperature.len(), 1);
+    assert_eq!(old_fan.len(), 1);
+    fs::remove_file(f.0.join("class/hwmon/hwmon0")).unwrap();
+    fs::remove_file(f.0.join("class/hwmon/hwmon7")).unwrap();
+    fs::rename(
+        f.0.join("devices/platform/board/hwmon/hwmon0"),
+        f.0.join("devices/platform/board/hwmon/hwmon9"),
+    )
+    .unwrap();
+    symlink(
+        f.0.join("devices/platform/board/hwmon/hwmon9"),
+        f.0.join("class/hwmon/hwmon9"),
+    )
+    .unwrap();
+    let new_temperature = hardware::temperatures(&f.0).unwrap().values;
+    let new_fan = hardware::fans(&f.0).unwrap().values;
+    assert_eq!(new_temperature[0].source_id, old_temperature[0].source_id);
+    assert_eq!(new_fan[0].source_id, old_fan[0].source_id);
+    assert_eq!(new_temperature[0].id, old_temperature[0].id);
+    assert_eq!(new_fan[0].id, old_fan[0].id);
+}
+
+#[test]
+fn ambiguous_physical_channels_are_not_assigned_to_a_saved_choice() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    fs::create_dir_all(f.0.join("class/hwmon")).unwrap();
+    for node in ["hwmon0", "hwmon1"] {
+        let path = format!("devices/platform/board/hwmon/{node}");
+        f.put(&format!("{path}/name"), "board");
+        f.put(&format!("{path}/temp1_input"), "42000");
+        f.put(&format!("{path}/fan1_input"), "1234");
+        symlink(f.0.join(path), f.0.join("class/hwmon").join(node)).unwrap();
+    }
+    let temperatures = hardware::temperatures(&f.0).unwrap();
+    let fans = hardware::fans(&f.0).unwrap();
+    assert!(temperatures.values.is_empty() && fans.values.is_empty());
+    assert!(temperatures.errors.iter().any(|s| s.contains("Ambiguous")));
+    assert!(fans.errors.iter().any(|s| s.contains("Ambiguous")));
+}
+
+#[test]
+fn thermal_fallback_does_not_replace_a_missing_selected_hwmon_source() {
+    let f = Fixture::new();
+    f.core();
+    f.sensor("hwmon0", "1", "42000");
+    let id = hardware::temperatures(&f.0).unwrap().values[0]
+        .source_id
+        .clone();
+    let mut s = Sampler::with_sources(f.sources());
+    s.set_selection(xrg_ng_linux::settings::MetricSelection {
+        temperature: Some(id),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(s.sample().panels[5].series[0].last(), Some(&42.));
+    fs::remove_dir_all(f.0.join("class/hwmon")).unwrap();
+    f.put("class/thermal/thermal_zone0/type", "x86_pkg_temp");
+    f.put("class/thermal/thermal_zone0/temp", "90000");
+    let missing = s.sample();
+    assert!(missing.panels[5].series.is_empty());
+    assert_eq!(missing.inventory.temperatures.len(), 1);
+}
+
+#[test]
+fn temperature_scan_budget_and_nonstandard_enable_flags_report_partial_coverage() {
+    let f = Fixture::new();
+    for channel in 1..=257 {
+        f.sensor("hwmon0", &channel.to_string(), "42000");
+    }
+    let report = hardware::temperatures(&f.0).unwrap();
+    assert!(report.values.len() <= 256);
+    assert!(!report.errors.is_empty());
+    let f = Fixture::new();
+    f.sensor("hwmon0", "1", "42000");
+    f.put("class/hwmon/hwmon0/temp1_enable", "2");
+    let report = hardware::temperatures(&f.0).unwrap();
+    assert!(report.values.is_empty());
+    assert!(report.errors.iter().any(|e| e.contains("enable flag")));
+}
+
+#[test]
+fn selected_thermal_zone_stays_readable_when_hwmon_appears() {
+    let f = Fixture::new();
+    f.core();
+    f.put("class/thermal/thermal_zone0/type", "x86_pkg_temp");
+    f.put("class/thermal/thermal_zone0/temp", "40000");
+    let id = hardware::temperature_sources(&f.0).unwrap().values[0]
+        .source_id
+        .clone();
+    let mut s = Sampler::with_sources(f.sources());
+    s.set_selection(xrg_ng_linux::settings::MetricSelection {
+        temperature: Some(id.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(s.sample().panels[5].series[0].last(), Some(&40.));
+    f.sensor("hwmon0", "1", "90000");
+    let selected = s.sample();
+    assert_eq!(selected.inventory.temperatures.len(), 2);
+    assert_eq!(selected.panels[5].series[0].last(), Some(&40.));
+    assert_eq!(selected.selection.temperature, Some(id));
+    s.set_selection(Default::default()).unwrap();
+    assert_eq!(s.sample().panels[5].series[0].last(), Some(&90.));
+}
+
+#[test]
+fn thermal_aliases_without_type_metadata_are_still_one_source() {
+    let f = Fixture::new();
+    f.put("class/thermal/thermal_zone0/temp", "42000");
+    std::os::unix::fs::symlink(
+        f.0.join("class/thermal/thermal_zone0"),
+        f.0.join("class/thermal/thermal_zone8"),
+    )
+    .unwrap();
+    let report = hardware::temperature_sources(&f.0).unwrap();
+    assert!(report.errors.is_empty());
+    assert_eq!(
+        report.values.len(),
+        1,
+        "An alias must not create a second source when type metadata is missing"
+    );
 }

@@ -105,6 +105,8 @@ pub(super) struct Targets {
     pub network: Rc<Picker<String>>,
     pub disk: Rc<Picker<String>>,
     pub gpu: Rc<Picker<String>>,
+    pub temperature: Rc<Picker<String>>,
+    pub fan: Rc<Picker<String>>,
 }
 impl Targets {
     pub fn new(inventory: &Inventory, selection: &MetricSelection) -> Self {
@@ -149,11 +151,31 @@ impl Targets {
                 .collect(),
             selection.gpu.clone(),
         );
+        let temperature = Picker::new(
+            "Hottest readable sensor",
+            inventory
+                .temperatures
+                .iter()
+                .map(|s| (s.id.clone(), s.label.clone()))
+                .collect(),
+            selection.temperature.clone(),
+        );
+        let fan = Picker::new(
+            "Up to three readable fans",
+            inventory
+                .fans
+                .iter()
+                .map(|s| (s.id.clone(), s.label.clone()))
+                .collect(),
+            selection.fan.clone(),
+        );
         for (title, picker) in [
             ("CPU", &cpu.widget),
             ("Network", &network.widget),
             ("Disk", &disk.widget),
             ("GPU and VRAM", &gpu.widget),
+            ("Temperature", &temperature.widget),
+            ("Fan RPM", &fan.widget),
         ] {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let label = gtk::Label::new(Some(title));
@@ -170,6 +192,8 @@ impl Targets {
             network,
             disk,
             gpu,
+            temperature,
+            fan,
         }
     }
     pub fn value(&self) -> MetricSelection {
@@ -178,6 +202,8 @@ impl Targets {
             network: self.network.value(),
             disk: self.disk.value(),
             gpu: self.gpu.value(),
+            temperature: self.temperature.value(),
+            fan: self.fan.value(),
         }
     }
     pub fn set(&self, value: &MetricSelection) {
@@ -185,6 +211,8 @@ impl Targets {
         self.network.select(value.network.clone());
         self.disk.select(value.disk.clone());
         self.gpu.select(value.gpu.clone());
+        self.temperature.select(value.temperature.clone());
+        self.fan.select(value.fan.clone());
     }
     pub fn refresh(&self, inventory: &Inventory, value: &MetricSelection) {
         self.cpu.replace(
@@ -219,16 +247,34 @@ impl Targets {
                 .collect(),
             value.gpu.clone(),
         );
+        self.temperature.replace(
+            inventory
+                .temperatures
+                .iter()
+                .map(|s| (s.id.clone(), s.label.clone()))
+                .collect(),
+            value.temperature.clone(),
+        );
+        self.fan.replace(
+            inventory
+                .fans
+                .iter()
+                .map(|s| (s.id.clone(), s.label.clone()))
+                .collect(),
+            value.fan.clone(),
+        );
     }
     pub fn connect_changed(self: &Rc<Self>, callback: impl Fn() + 'static) {
         let callback: Rc<dyn Fn()> = Rc::new(callback);
-        for register in [0, 1, 2, 3] {
+        for register in [0, 1, 2, 3, 4, 5] {
             let cb = callback.clone();
             match register {
                 0 => self.cpu.changed(move || cb()),
                 1 => self.network.changed(move || cb()),
                 2 => self.disk.changed(move || cb()),
-                _ => self.gpu.changed(move || cb()),
+                3 => self.gpu.changed(move || cb()),
+                4 => self.temperature.changed(move || cb()),
+                _ => self.fan.changed(move || cb()),
             }
         }
     }

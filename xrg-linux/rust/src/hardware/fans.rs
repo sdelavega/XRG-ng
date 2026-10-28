@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use super::{Readings, directories, integer, short_label, text};
+use super::{Readings, directories, integer, sensor_identity, short_label, text};
 use std::{
-    fs,
-    os::unix::fs::MetadataExt,
     path::Path,
     time::{Duration, Instant},
 };
@@ -11,6 +9,7 @@ use std::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fan {
     pub id: String,
+    pub source_id: String,
     pub name: String,
     pub rpm: u64,
     pub alarm: Option<bool>,
@@ -72,6 +71,7 @@ pub fn fans(sys: &Path) -> Result<Readings<Fan>, String> {
                 {
                     return Err("Fan sensor reports a fault".into());
                 }
+                let (source_id, id) = sensor_identity::identity(sys, &directory, &input, &chip)?;
                 let rpm = integer(&input)?.ok_or("Fan sensor disappeared")?;
                 let rpm = u64::try_from(rpm).map_err(|_| "Invalid negative fan RPM")?;
                 let label = text(&directory.join(format!("fan{channel}_label")))?
@@ -90,12 +90,14 @@ pub fn fans(sys: &Path) -> Result<Readings<Fan>, String> {
                         None
                     }
                 };
-                let canonical = fs::canonicalize(&directory).map_err(|e| e.to_string())?;
-                let inode = fs::metadata(&input).map_err(|e| e.to_string())?.ino();
+                if sensor_identity::identity(sys, &directory, &input, &chip)?.1 != id {
+                    return Err("Fan sensor changed during read".into());
+                }
                 Ok(Some(Fan {
-                    id: format!("{}:{channel}:{inode}", canonical.display()),
+                    id,
+                    source_id,
                     name: format!(
-                        "{chip} ({}) · {}",
+                        "{chip} ({}) · {} [fan{channel}]",
                         directory.file_name().unwrap_or_default().to_string_lossy(),
                         short_label(&label)
                     ),
@@ -114,5 +116,15 @@ pub fn fans(sys: &Path) -> Result<Readings<Fan>, String> {
     // Duplicate class aliases must not produce a second line for the same sensor.
     report.values.sort_by(|a, b| a.id.cmp(&b.id));
     report.values.dedup_by(|a, b| a.id == b.id);
+    let mut counts = std::collections::BTreeMap::new();
+    for value in &report.values {
+        *counts.entry(value.source_id.clone()).or_insert(0usize) += 1;
+    }
+    report.values.retain(|value| counts[&value.source_id] == 1);
+    if counts.values().any(|n| *n > 1) {
+        report
+            .errors
+            .push("Ambiguous fan source identities omitted".into());
+    }
     Ok(report)
 }

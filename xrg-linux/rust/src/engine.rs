@@ -97,6 +97,7 @@ pub struct Sampler {
     metrics: crate::metrics::Sampler,
     memory_history: History,
     temperature_history: History,
+    temperature_members: Option<Vec<String>>,
     inventory: crate::metrics::Inventory,
     process_report: Result<Arc<crate::process::Report>, String>,
     battery_histories: BTreeMap<String, History>,
@@ -162,6 +163,7 @@ impl Sampler {
             metrics: crate::metrics::Sampler::default(),
             memory_history: History::new(120),
             temperature_history: History::new(120),
+            temperature_members: None,
             inventory: crate::metrics::Inventory::default(),
             process_report: Err("Waiting for process sample".into()),
             battery_histories: BTreeMap::new(),
@@ -175,6 +177,13 @@ impl Sampler {
         if self.metrics.selection().gpu != selection.gpu {
             self.gpu_histories.clear();
             self.gpu_memory.reset();
+        }
+        if self.metrics.selection().temperature != selection.temperature {
+            self.temperature_history = History::new(120);
+            self.temperature_members = None;
+        }
+        if self.metrics.selection().fan != selection.fan {
+            self.fan_histories.clear();
         }
         self.metrics.set_selection(selection)
     }
@@ -479,7 +488,7 @@ impl Sampler {
             self.inventory.gpus = report
                 .values
                 .iter()
-                .map(|gpu| crate::metrics::GpuOption {
+                .map(|gpu| crate::metrics::SourceOption {
                     id: gpu.id.clone(),
                     label: format!(
                         "{} · {}",
@@ -649,7 +658,24 @@ impl Sampler {
                 panel.label = "Fan readings unavailable".into();
                 panel.detail.push_str(&format!("\n{error}"));
             }
-            Ok(report) => {
+            Ok(mut report) => {
+                self.inventory.fans = report
+                    .values
+                    .iter()
+                    .map(|fan| crate::metrics::SourceOption {
+                        id: fan.source_id.clone(),
+                        label: fan.name.clone(),
+                    })
+                    .collect();
+                if let Some(selected) = &self.metrics.selection().fan {
+                    report.values.retain(|fan| fan.source_id == *selected);
+                    if report.values.is_empty() {
+                        self.fan_histories.clear();
+                        panel.label = "Selected fan unavailable".into();
+                        panel.detail.push_str(&format!("\nSaved fan source {selected} is not readable in the latest sample.\n{}",report.errors.join("\n")));
+                        return panel;
+                    }
+                }
                 let visible: Vec<_> = report.values.iter().take(3).collect();
                 self.fan_histories
                     .retain(|id, _| visible.iter().any(|fan| fan.id == *id));
@@ -763,59 +789,100 @@ impl Sampler {
         }
     }
     fn temperature_panel(&mut self) -> Panel {
-        let mut series = Vec::new();
-        let (label, detail): (Text, Text) = match self.source.temperatures() {
-            Err(error) => ("Temperature unavailable".into(), error.into()),
-            Ok(report) if report.values.is_empty() => {
-                if report.errors.is_empty() {
-                    self.temperature_history = History::new(120);
-                    (
-                        "No temperature sensors".into(),
-                        "No readable hwmon or thermal-zone temperature detected".into(),
-                    )
-                } else {
-                    (
-                        "Temperature unavailable".into(),
-                        report.errors.join("\n").into(),
-                    )
-                }
-            }
-            Ok(report) => {
-                let maximum = report
-                    .values
-                    .iter()
-                    .map(|v| v.celsius)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                self.temperature_history.append(maximum);
-                series.push(self.temperature_history.values());
-                let partial = if report.errors.is_empty() {
-                    ""
-                } else {
-                    " · partial"
-                };
-                let count = report.values.len();
-                let noun = if count == 1 { "sensor" } else { "sensors" };
-                let label = Text::reading("", maximum, &format!(" max · {count} {noun}{partial}"));
-                let mut detail: Vec<Text> = report
-                    .values
-                    .iter()
-                    .map(|v| Text::reading(&format!("{}: ", v.name), v.celsius, ""))
-                    .collect();
-                detail.extend(report.errors.into_iter().map(Text::from));
-                (label, Text::join(detail, "\n"))
-            }
-        };
-        Panel {
+        let selected = self.metrics.selection().temperature.clone();
+        let mut panel = Panel {
             title: "Temperature",
             label: String::new(),
             detail: String::new(),
-            series,
+            series: Vec::new(),
             scale: Scale::Celsius,
             temperature_text: None,
+        };
+        let mut report = match crate::hardware::temperature_sources(self.source.sys_root()) {
+            Ok(report) => report,
+            Err(error) => {
+                self.temperature_history = History::new(120);
+                self.temperature_members = None;
+                return panel.with_temperature_text("Temperature unavailable".into(), error.into());
+            }
+        };
+        self.inventory.temperatures = report
+            .values
+            .iter()
+            .map(|sensor| crate::metrics::SourceOption {
+                id: sensor.source_id.clone(),
+                label: sensor.name.clone(),
+            })
+            .collect();
+        if let Some(selected) = &selected {
+            report.values.retain(|sensor| sensor.source_id == *selected);
+        } else if report.values.iter().any(|sensor| !sensor.thermal) {
+            report.values.retain(|sensor| !sensor.thermal);
         }
-        .with_temperature_text(label, detail)
+        if report.values.is_empty() {
+            self.temperature_history = History::new(120);
+            self.temperature_members = None;
+            let (label, detail) = if let Some(selected) = selected {
+                (
+                    "Selected temperature sensor unavailable".to_owned(),
+                    format!(
+                        "Saved temperature source {selected} is not readable in the latest sample.\n{}",
+                        report.errors.join("\n")
+                    ),
+                )
+            } else if report.errors.is_empty() {
+                (
+                    "No temperature sensors".into(),
+                    "No readable hwmon or thermal-zone temperature detected".into(),
+                )
+            } else {
+                ("Temperature unavailable".into(), report.errors.join("\n"))
+            };
+            return panel.with_temperature_text(label.into(), detail.into());
+        }
+        let mut members: Vec<_> = report
+            .values
+            .iter()
+            .map(|sensor| sensor.id.clone())
+            .collect();
+        members.sort();
+        if self.temperature_members.as_ref() != Some(&members) {
+            self.temperature_history = History::new(120);
+            self.temperature_members = Some(members);
+        }
+        let maximum = report
+            .values
+            .iter()
+            .map(|v| v.celsius)
+            .fold(f64::NEG_INFINITY, f64::max);
+        self.temperature_history.append(maximum);
+        panel.series.push(self.temperature_history.values());
+        let partial = if report.errors.is_empty() {
+            ""
+        } else {
+            " · partial"
+        };
+        let label = if selected.is_some() {
+            Text::reading(
+                "",
+                maximum,
+                &format!(" · {}{partial}", report.values[0].name),
+            )
+        } else {
+            let count = report.values.len();
+            let noun = if count == 1 { "sensor" } else { "sensors" };
+            Text::reading("", maximum, &format!(" max · {count} {noun}{partial}"))
+        };
+        let mut detail: Vec<Text> = report
+            .values
+            .iter()
+            .map(|v| Text::reading(&format!("{}: ", v.name), v.celsius, ""))
+            .collect();
+        detail.extend(report.errors.into_iter().map(Text::from));
+        panel.with_temperature_text(label, Text::join(detail, "\n"))
     }
 }
+
 pub(crate) fn bytes_per_second(value: f64) -> String {
     if value >= 1_048_576. {
         format!("{:.1} MiB/s", value / 1_048_576.)

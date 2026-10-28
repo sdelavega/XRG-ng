@@ -8,7 +8,7 @@ use crate::{
     shared::{History, Rates},
 };
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GpuOption {
+pub struct SourceOption {
     pub id: String,
     pub label: String,
 }
@@ -17,7 +17,9 @@ pub struct Inventory {
     pub cpus: Vec<u32>,
     pub networks: Vec<String>,
     pub disks: Vec<String>,
-    pub gpus: Vec<GpuOption>,
+    pub gpus: Vec<SourceOption>,
+    pub temperatures: Vec<SourceOption>,
+    pub fans: Vec<SourceOption>,
 }
 struct IoHistory {
     rates: Rates,
