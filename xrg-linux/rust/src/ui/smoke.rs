@@ -127,6 +127,81 @@ impl Harness {
         };
         create().map_err(|e| e.to_string())
     }
+    fn sensor_fixture(
+        &self,
+    ) -> Result<
+        (
+            Vec<xrg_ng_linux::engine::Panel>,
+            Vec<xrg_ng_linux::engine::Panel>,
+        ),
+        String,
+    > {
+        let create = || -> std::io::Result<_> {
+            let sys = self.root.join("multi-sensors-fixture");
+            let directory = sys.join("class/hwmon/hwmon0");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("name"), "Fixture board")?;
+            for (channel, temp, rpm, label) in [
+                (1, "-20000", "1200", "Ambient"),
+                (2, "0", "0", "Board"),
+                (3, "65000", "2400", "Package"),
+            ] {
+                fs::write(directory.join(format!("temp{channel}_input")), temp)?;
+                fs::write(directory.join(format!("temp{channel}_label")), label)?;
+                fs::write(directory.join(format!("fan{channel}_input")), rpm)?;
+                fs::write(directory.join(format!("fan{channel}_label")), label)?;
+            }
+            let temperatures = xrg_ng_linux::hardware::temperature_sources(&sys)
+                .map_err(std::io::Error::other)?
+                .values;
+            let fans = xrg_ng_linux::hardware::fans(&sys)
+                .map_err(std::io::Error::other)?
+                .values;
+            let selection = xrg_ng_linux::settings::MetricSelection {
+                temperature: Some(temperatures[0].source_id.clone()),
+                temperature_extra: [
+                    Some(temperatures[1].source_id.clone()),
+                    Some(temperatures[2].source_id.clone()),
+                ],
+                fan: Some(fans[0].source_id.clone()),
+                fan_extra: [
+                    Some(fans[1].source_id.clone()),
+                    Some(fans[2].source_id.clone()),
+                ],
+                ..Default::default()
+            };
+            let mut sampler = xrg_ng_linux::engine::Sampler::with_sources(
+                xrg_ng_linux::collectors::LinuxSources::with_roots(sys.join("proc"), &sys),
+            );
+            sampler
+                .set_selection(selection)
+                .map_err(std::io::Error::other)?;
+            for _ in 0..119 {
+                sampler.sample();
+            }
+            let complete = sampler.sample().panels;
+            fs::remove_file(directory.join("temp2_input"))?;
+            fs::remove_file(directory.join("fan2_input"))?;
+            let partial = sampler.sample().panels;
+            Ok((complete, partial))
+        };
+        let panels = create().map_err(|e| e.to_string())?;
+        for index in [Module::Temperature.index(), Module::Fans.index()] {
+            require(
+                panels.1[index].series.len() == 3
+                    && panels.1[index].series[1].iter().all(|v| v.is_nan())
+                    && panels.1[index].series[2]
+                        .last()
+                        .is_some_and(|v| v.is_finite()),
+                "Missing fixture sensor shifted another curve",
+            )?;
+        }
+        require(
+            panels.0[Module::Fans.index()].series[1].last() == Some(&0.),
+            "Stopped fixture fan is unavailable",
+        )?;
+        Ok(panels)
+    }
     fn configure(dialog: &Dialog, shell: &Shell) {
         let inventory = shell.inventory();
         dialog
@@ -142,6 +217,7 @@ impl Harness {
                 gpu: inventory.gpus.first().map(|g| g.id.clone()),
                 temperature: inventory.temperatures.first().map(|s| s.id.clone()),
                 fan: inventory.fans.first().map(|s| s.id.clone()),
+                ..Default::default()
             });
         dialog.check(Module::Cpu).set_active(false);
         for _ in 0..9 {
@@ -400,7 +476,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 11 && loaded.processes.limit == 20,
+                    loaded.version == 12 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1201,14 +1277,26 @@ impl Harness {
                 let dialog = shell.preferences();
                 let selection = dialog.draft().metrics;
                 let inventory = xrg_ng_linux::metrics::Inventory {
-                    temperatures: vec![xrg_ng_linux::metrics::SourceOption {
-                        id: "smoke-temperature-source".into(),
-                        label: "Fixture temperature channel".into(),
-                    }],
-                    fans: vec![xrg_ng_linux::metrics::SourceOption {
-                        id: "smoke-fan-source".into(),
-                        label: "Fixture fan channel".into(),
-                    }],
+                    temperatures: (0..3)
+                        .map(|i| xrg_ng_linux::metrics::SourceOption {
+                            id: if i == 0 {
+                                "smoke-temperature-source".into()
+                            } else {
+                                format!("smoke-temperature-source-{i}")
+                            },
+                            label: format!("Fixture temperature channel {}", i + 1),
+                        })
+                        .collect(),
+                    fans: (0..3)
+                        .map(|i| xrg_ng_linux::metrics::SourceOption {
+                            id: if i == 0 {
+                                "smoke-fan-source".into()
+                            } else {
+                                format!("smoke-fan-source-{i}")
+                            },
+                            label: format!("Fixture fan channel {}", i + 1),
+                        })
+                        .collect(),
                     ..Default::default()
                 };
                 dialog.targets.refresh(&inventory, &selection);
@@ -1217,10 +1305,42 @@ impl Harness {
                     .temperature
                     .select(Some("smoke-temperature-source".into()));
                 dialog.targets.fan.select(Some("smoke-fan-source".into()));
+                dialog.targets.temperature_extra[0].select(Some("smoke-temperature-source".into()));
+                let before = shell.settings.borrow().clone();
+                dialog.apply.emit_clicked();
+                require(
+                    dialog.message().contains("different sensor")
+                        && *shell.settings.borrow() == before,
+                    "Duplicate sensor selections were accepted",
+                )?;
+                for i in 0..2 {
+                    dialog.targets.temperature_extra[i]
+                        .select(Some(format!("smoke-temperature-source-{}", i + 1)));
+                    dialog.targets.fan_extra[i].select(Some(format!("smoke-fan-source-{}", i + 1)));
+                }
+                let cancelled = dialog.draft();
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelled multi-sensor choices applied",
+                )?;
+                let dialog = shell.preferences();
+                dialog.targets.refresh(&inventory, &dialog.draft().metrics);
+                dialog.targets.set(&cancelled.metrics);
                 let expected = dialog.draft();
                 require(
                     expected.metrics.temperature.as_deref() == Some("smoke-temperature-source")
-                        && expected.metrics.fan.as_deref() == Some("smoke-fan-source"),
+                        && expected.metrics.fan.as_deref() == Some("smoke-fan-source")
+                        && expected.metrics.temperature_extra
+                            == [
+                                Some("smoke-temperature-source-1".into()),
+                                Some("smoke-temperature-source-2".into()),
+                            ]
+                        && expected.metrics.fan_extra
+                            == [
+                                Some("smoke-fan-source-1".into()),
+                                Some("smoke-fan-source-2".into()),
+                            ],
                     "Sensor source controls did not update the draft",
                 )?;
                 dialog.targets.refresh(
@@ -1274,6 +1394,13 @@ impl Harness {
                     dialog.targets.value() == saved.metrics,
                     "Reopened sensor source controls lost saved choices",
                 )?;
+                dialog.targets.curves.set_expanded(true);
+                let weak = Rc::downgrade(&dialog);
+                gtk::glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                    if let Some(dialog) = weak.upgrade() {
+                        dialog.reveal_sensor_curves();
+                    }
+                });
                 self.dialog = Some(dialog);
                 self.stage = 36;
             }
@@ -2069,6 +2196,77 @@ impl Harness {
             51 if self.since.elapsed() > Duration::from_millis(300) => {
                 let (window, paintable) = self.style_preview.take().unwrap();
                 if let Some(path) = std::env::var_os("XRG_SMOKE_BARS_IMAGE") {
+                    super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
+                }
+                window.close();
+                let panels = self.sensor_fixture()?;
+                let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+                content.set_margin_top(12);
+                content.set_margin_bottom(12);
+                content.set_margin_start(12);
+                content.set_margin_end(12);
+                let intro = gtk::Label::new(Some(
+                    "Fixture data · selected curves 1/2/3 · missing curve 2 keeps its slot",
+                ));
+                content.append(&intro);
+                for (panel, title, units) in [
+                    (
+                        panels.0[Module::Temperature.index()].clone(),
+                        "Temperature · complete fixture",
+                        Units::Celsius,
+                    ),
+                    (
+                        panels.0[Module::Fans.index()].clone(),
+                        "Fans · complete fixture · curve 2 is stopped",
+                        Units::Celsius,
+                    ),
+                    (
+                        panels.1[Module::Temperature.index()].clone(),
+                        "Temperature · missing curve 2 · Fahrenheit",
+                        Units::Fahrenheit,
+                    ),
+                    (
+                        panels.1[Module::Fans.index()].clone(),
+                        "Fans · missing curve 2 · no replacement",
+                        Units::Celsius,
+                    ),
+                ] {
+                    let theme = shell.settings.borrow().theme.palette()?;
+                    let bars = xrg_ng_linux::settings::ActivityBars {
+                        visible: true,
+                        ..Settings::default().activity_bars
+                    };
+                    let area = gtk::DrawingArea::new();
+                    area.set_content_width(640);
+                    area.set_content_height(160);
+                    area.set_tooltip_text(Some(&panel.display_detail(units)));
+                    area.set_draw_func(move |_, context, width, height| {
+                        super::draw(
+                            context,
+                            (width, height),
+                            &theme,
+                            title,
+                            Some(&panel),
+                            units,
+                            (GraphStyle::Hollow, &bars),
+                        );
+                    });
+                    content.append(&area);
+                }
+                let window = gtk::Window::builder()
+                    .application(&shell.window.application().unwrap())
+                    .transient_for(&shell.window)
+                    .title("Multiple sensor curves · fixture preview")
+                    .child(&content)
+                    .build();
+                let paintable = gtk::WidgetPaintable::new(Some(&window));
+                window.present();
+                self.style_preview = Some((window, paintable));
+                self.stage = 52;
+            }
+            52 if self.since.elapsed() > Duration::from_millis(300) => {
+                let (window, paintable) = self.style_preview.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_MULTI_SENSORS_IMAGE") {
                     super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
                 }
                 window.close();

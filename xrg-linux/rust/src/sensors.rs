@@ -1,0 +1,353 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stephen de la Vega.
+//! Sensor presentation histories are keyed by physical input incarnation, never
+//! labels or enumeration order. Saved source identities are compared, not opened.
+use crate::{
+    engine::{Panel, Scale},
+    hardware::{Fan, Readings, Temperature},
+    metrics::SourceOption,
+    settings::MetricSelection,
+    shared::History,
+    temperature::Text,
+};
+use std::collections::BTreeMap;
+
+pub(crate) struct View {
+    maximum: History,
+    maximum_members: Option<Vec<String>>,
+    temperatures: BTreeMap<String, History>,
+    fans: BTreeMap<String, History>,
+    automatic_fans: [Option<String>; 3],
+}
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            maximum: History::new(120),
+            maximum_members: None,
+            temperatures: BTreeMap::new(),
+            fans: BTreeMap::new(),
+            automatic_fans: Default::default(),
+        }
+    }
+}
+fn selected<'a>(primary: &'a str, extra: &'a [Option<String>; 2]) -> Vec<Option<&'a str>> {
+    let mut slots = vec![Some(primary), extra[0].as_deref(), extra[1].as_deref()];
+    slots.truncate(slots.iter().rposition(Option::is_some).unwrap() + 1);
+    slots
+}
+/// Empty slots and unavailable selected inputs keep their series/color index.
+/// Dropping an input removes its history, so reappearance starts a fresh curve.
+fn curves(
+    histories: &mut BTreeMap<String, History>,
+    slots: &[Option<(&str, f64)>],
+) -> Vec<Vec<f64>> {
+    histories.retain(|id, _| slots.iter().flatten().any(|(key, _)| *key == id.as_str()));
+    if slots.iter().all(Option::is_none) {
+        return Vec::new();
+    }
+    slots
+        .iter()
+        .map(|slot| match slot {
+            Some((id, value)) => {
+                let history = histories
+                    .entry((*id).into())
+                    .or_insert_with(|| History::new(120));
+                history.append(*value);
+                history.values()
+            }
+            None => vec![f64::NAN; 120],
+        })
+        .collect()
+}
+fn fan_detail(fan: &Fan, prefix: &str) -> String {
+    let mut detail = format!(
+        "\n{prefix}{}: {} RPM{}",
+        fan.name,
+        fan.rpm,
+        match fan.alarm {
+            Some(true) => " · driver alarm active",
+            Some(false) => " · driver alarm clear",
+            None => "",
+        }
+    );
+    for note in &fan.notes {
+        detail.push_str(&format!("\n{note}"));
+    }
+    detail
+}
+impl View {
+    pub fn temperatures(
+        &mut self,
+        report: Result<Readings<Temperature>, String>,
+        selection: &MetricSelection,
+    ) -> (Panel, Vec<SourceOption>) {
+        let mut panel = Panel {
+            title: "Temperature",
+            label: String::new(),
+            detail: String::new(),
+            series: Vec::new(),
+            scale: Scale::Celsius,
+            temperature_text: None,
+        };
+        let mut report = match report {
+            Ok(report) => report,
+            Err(error) => {
+                self.maximum_members = None;
+                self.temperatures.clear();
+                return (
+                    panel.with_temperature_text("Temperature unavailable".into(), error.into()),
+                    Vec::new(),
+                );
+            }
+        };
+        let inventory = report
+            .values
+            .iter()
+            .map(|s| SourceOption {
+                id: s.source_id.clone(),
+                label: s.name.clone(),
+            })
+            .collect();
+        let mut detail = vec![Text::from(
+            "Read-only temperatures. Driver labels do not establish CPU/GPU ownership. Curves use Celsius internally; units affect display only.",
+        )];
+        let label;
+        if let Some(primary) = &selection.temperature {
+            self.maximum_members = None;
+            let sources = selected(primary, &selection.temperature_extra);
+            let readings: Vec<_> = sources
+                .iter()
+                .map(|source| {
+                    source.and_then(|id| report.values.iter().find(|s| s.source_id == id))
+                })
+                .collect();
+            let slots: Vec<_> = readings
+                .iter()
+                .map(|r| r.map(|s| (s.id.as_str(), s.celsius)))
+                .collect();
+            panel.series = curves(&mut self.temperatures, &slots);
+            let mut labels = Vec::new();
+            for (index, (source, reading)) in sources.iter().zip(readings).enumerate() {
+                let Some(source) = source else {
+                    continue;
+                };
+                if let Some(reading) = reading {
+                    labels.push(Text::reading(
+                        &format!("{}: ", index + 1),
+                        reading.celsius,
+                        &if sources.len() == 1 {
+                            format!(" · {}", reading.name)
+                        } else {
+                            String::new()
+                        },
+                    ));
+                    detail.push(Text::reading(
+                        &format!("Curve {} · {}: ", index + 1, reading.name),
+                        reading.celsius,
+                        "",
+                    ));
+                } else {
+                    labels.push(format!("{}: unavailable", index + 1).into());
+                    detail.push(format!("Curve {} unavailable: saved temperature source {source} is not readable in the latest sample. No fallback is substituted.", index+1).into());
+                }
+            }
+            label = if panel.series.is_empty() {
+                Text::from("Selected temperature sensor unavailable")
+            } else {
+                Text::join(labels, " / ")
+            };
+        } else {
+            self.temperatures.clear();
+            // The maximum retains the existing hwmon-first thermal fallback.
+            if report.values.iter().any(|s| !s.thermal) {
+                report.values.retain(|s| !s.thermal);
+            }
+            if report.values.is_empty() {
+                self.maximum_members = None;
+                label = if report.errors.is_empty() {
+                    "No temperature sensors".into()
+                } else {
+                    "Temperature unavailable".into()
+                };
+                detail.push("No readable hwmon or thermal-zone temperature detected".into());
+            } else {
+                let mut members: Vec<_> = report.values.iter().map(|s| s.id.clone()).collect();
+                members.sort();
+                if self.maximum_members.as_ref() != Some(&members) {
+                    self.maximum = History::new(120);
+                    self.maximum_members = Some(members);
+                }
+                let maximum = report
+                    .values
+                    .iter()
+                    .map(|s| s.celsius)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                self.maximum.append(maximum);
+                panel.series.push(self.maximum.values());
+                let count = report.values.len();
+                label = Text::reading(
+                    "",
+                    maximum,
+                    &format!(
+                        " max · {count} {}",
+                        if count == 1 { "sensor" } else { "sensors" }
+                    ),
+                );
+                detail.push("Curve 1: maximum across the readable sensors below. Membership changes reset this aggregate history.".into());
+                detail.extend(
+                    report
+                        .values
+                        .iter()
+                        .take(64)
+                        .map(|s| Text::reading(&format!("{}: ", s.name), s.celsius, "")),
+                );
+                if report.values.len() > 64 {
+                    detail.push("Additional temperature details omitted".into());
+                }
+            }
+        }
+        let label = if report.errors.is_empty() {
+            label
+        } else {
+            Text::join([label, Text::from("partial")], " · ")
+        };
+        detail.extend(report.errors.into_iter().map(Text::from));
+        (
+            panel.with_temperature_text(label, Text::join(detail, "\n")),
+            inventory,
+        )
+    }
+    pub fn fans(
+        &mut self,
+        report: Result<Readings<Fan>, String>,
+        selection: &MetricSelection,
+    ) -> (Panel, Vec<SourceOption>) {
+        let mut panel = Panel { title: "Fans", label: "No readable fan sensors".into(), series: Vec::new(),
+            detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership. Curve numbers identify graph colors and current-value bars.".into(), scale: Scale::Automatic, temperature_text: None };
+        let report = match report {
+            Ok(report) => report,
+            Err(error) => {
+                self.fans.clear();
+                self.automatic_fans = Default::default();
+                panel.label = "Fan readings unavailable".into();
+                panel.detail.push_str(&format!("\n{error}"));
+                return (panel, Vec::new());
+            }
+        };
+        let inventory = report
+            .values
+            .iter()
+            .map(|s| SourceOption {
+                id: s.source_id.clone(),
+                label: s.name.clone(),
+            })
+            .collect();
+        let sources = if let Some(primary) = &selection.fan {
+            self.automatic_fans = Default::default();
+            selected(primary, &selection.fan_extra)
+        } else {
+            // Keep surviving automatic sources in their existing color slots.
+            for source in &mut self.automatic_fans {
+                if !report
+                    .values
+                    .iter()
+                    .any(|s| Some(&s.source_id) == source.as_ref())
+                {
+                    *source = None;
+                }
+            }
+            for fan in &report.values {
+                if !self.automatic_fans.contains(&Some(fan.source_id.clone()))
+                    && let Some(slot) = self.automatic_fans.iter_mut().find(|s| s.is_none())
+                {
+                    *slot = Some(fan.source_id.clone());
+                }
+            }
+            let count = self
+                .automatic_fans
+                .iter()
+                .rposition(Option::is_some)
+                .map_or(0, |n| n + 1);
+            self.automatic_fans[..count]
+                .iter()
+                .map(Option::as_deref)
+                .collect()
+        };
+        let readings: Vec<_> = sources
+            .iter()
+            .map(|source| source.and_then(|id| report.values.iter().find(|s| s.source_id == id)))
+            .collect();
+        let slots: Vec<_> = readings
+            .iter()
+            .map(|r| r.map(|s| (s.id.as_str(), s.rpm as f64)))
+            .collect();
+        panel.series = curves(&mut self.fans, &slots);
+        let mut labels = Vec::new();
+        for (index, (source, reading)) in sources.iter().zip(readings).enumerate() {
+            let Some(source) = source else {
+                continue;
+            };
+            if let Some(fan) = reading {
+                labels.push(format!(
+                    "{}: {}{} RPM{}",
+                    index + 1,
+                    if sources.len() == 1 {
+                        format!("{} ", fan.name)
+                    } else {
+                        String::new()
+                    },
+                    fan.rpm,
+                    if fan.alarm == Some(true) {
+                        " · alarm"
+                    } else {
+                        ""
+                    }
+                ));
+                panel
+                    .detail
+                    .push_str(&fan_detail(fan, &format!("Curve {} · ", index + 1)));
+            } else {
+                labels.push(format!("{}: unavailable", index + 1));
+                panel.detail.push_str(&format!("\nCurve {} unavailable: saved fan source {source} is not readable in the latest sample. No fallback is substituted.",index+1));
+            }
+        }
+        if !labels.is_empty() {
+            panel.label = labels.join(" / ");
+        }
+        if panel.series.is_empty() && selection.fan.is_some() {
+            panel.label = "Selected fan unavailable".into();
+        } else if labels.is_empty() && !report.errors.is_empty() {
+            panel.label = "Fan readings unavailable".into();
+        }
+        if selection.fan.is_none() && report.values.len() > 3 {
+            panel.label.push_str(" (+more)");
+        }
+        if !report.errors.is_empty() || report.values.iter().any(|f| !f.notes.is_empty()) {
+            panel.label.push_str(" · partial");
+        }
+        if selection.fan.is_none() {
+            panel.detail.push_str("\nAutomatic view keeps up to three readable fans in stable color slots; new sources fill empty slots. Other readable fans:");
+            for fan in report
+                .values
+                .iter()
+                .filter(|s| !sources.contains(&Some(s.source_id.as_str())))
+                .take(64)
+            {
+                panel.detail.push_str(&fan_detail(fan, ""));
+            }
+            if report
+                .values
+                .iter()
+                .filter(|s| !sources.contains(&Some(s.source_id.as_str())))
+                .count()
+                > 64
+            {
+                panel.detail.push_str("\nAdditional fan details omitted");
+            }
+        }
+        for error in report.errors {
+            panel.detail.push_str(&format!("\n{error}"));
+        }
+        (panel, inventory)
+    }
+}

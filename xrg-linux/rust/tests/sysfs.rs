@@ -781,3 +781,215 @@ fn thermal_aliases_without_type_metadata_are_still_one_source() {
         "An alias must not create a second source when type metadata is missing"
     );
 }
+
+fn sensor_channels(f: &Fixture) -> ([String; 3], [String; 3]) {
+    f.core();
+    for (channel, temperature, fan) in [
+        (1, "10000", "1000"),
+        (2, "20000", "0"),
+        (3, "-5000", "2400"),
+    ] {
+        f.sensor("hwmon0", &channel.to_string(), temperature);
+        f.put(
+            &format!("class/hwmon/hwmon0/temp{channel}_label"),
+            "Same label",
+        );
+        f.put(&format!("class/hwmon/hwmon0/fan{channel}_input"), fan);
+        f.put(
+            &format!("class/hwmon/hwmon0/fan{channel}_label"),
+            "Same label",
+        );
+    }
+    let temperatures = hardware::temperature_sources(&f.0).unwrap().values;
+    let fans = hardware::fans(&f.0).unwrap().values;
+    (
+        std::array::from_fn(|i| {
+            temperatures
+                .iter()
+                .find(|s| s.source_id.contains(&format!("temp{}_input", i + 1)))
+                .unwrap()
+                .source_id
+                .clone()
+        }),
+        std::array::from_fn(|i| {
+            fans.iter()
+                .find(|s| s.source_id.contains(&format!("fan{}_input", i + 1)))
+                .unwrap()
+                .source_id
+                .clone()
+        }),
+    )
+}
+fn three_channels(
+    temperatures: &[String; 3],
+    fans: &[String; 3],
+) -> xrg_ng_linux::settings::MetricSelection {
+    xrg_ng_linux::settings::MetricSelection {
+        temperature: Some(temperatures[0].clone()),
+        temperature_extra: [Some(temperatures[1].clone()), Some(temperatures[2].clone())],
+        fan: Some(fans[0].clone()),
+        fan_extra: [Some(fans[1].clone()), Some(fans[2].clone())],
+        ..Default::default()
+    }
+}
+#[test]
+fn pinned_curves_follow_identity_and_keep_histories_through_reordering_and_unit_changes() {
+    use xrg_ng_linux::temperature::Units;
+    let f = Fixture::new();
+    let (temperatures, fans) = sensor_channels(&f);
+    let mut sampler = Sampler::with_sources(f.sources());
+    let mut selection = three_channels(&temperatures, &fans);
+    sampler.set_selection(selection.clone()).unwrap();
+    let first = sampler.sample();
+    for (panel, expected) in [(5, [10., 20., -5.]), (11, [1000., 0., 2400.])] {
+        assert_eq!(first.panels[panel].series.len(), 3);
+        for (series, value) in first.panels[panel].series.iter().zip(expected) {
+            assert_eq!(series.last(), Some(&value));
+        }
+    }
+    assert!(
+        first.panels[5]
+            .display_label(Units::Fahrenheit)
+            .contains("23.0 °F")
+    );
+    assert!(
+        first.panels[5]
+            .display_detail(Units::Fahrenheit)
+            .contains("Curve 3")
+    );
+    assert_eq!(first.panels[5].series[2].last(), Some(&-5.));
+    f.put("class/hwmon/hwmon0/temp1_input", "11000");
+    f.put("class/hwmon/hwmon0/temp1_label", "Renamed channel");
+    f.put("class/hwmon/hwmon0/fan2_input", "600");
+    let second = sampler.sample();
+    assert_eq!(second.panels[5].series[0][118..], [10., 11.]);
+    assert_eq!(second.panels[11].series[1][118..], [0., 600.]);
+    selection.temperature_extra.swap(0, 1);
+    selection.fan_extra.swap(0, 1);
+    sampler.set_selection(selection).unwrap();
+    let reordered = sampler.sample();
+    assert_eq!(reordered.panels[5].series[0][117..], [10., 11., 11.]);
+    assert_eq!(reordered.panels[5].series[1][117..], [-5., -5., -5.]);
+    assert_eq!(reordered.panels[5].series[2][117..], [20., 20., 20.]);
+    assert_eq!(reordered.panels[11].series[2][117..], [0., 600., 600.]);
+}
+#[test]
+fn missing_pinned_primary_never_shifts_peers_or_falls_back_and_replacement_resets_only_its_history()
+{
+    let f = Fixture::new();
+    let (temperatures, fans) = sensor_channels(&f);
+    let mut sampler = Sampler::with_sources(f.sources());
+    let selection = three_channels(&temperatures, &fans);
+    sampler.set_selection(selection.clone()).unwrap();
+    sampler.sample();
+    for kind in ["temp", "fan"] {
+        fs::remove_file(f.0.join(format!("class/hwmon/hwmon0/{kind}1_input"))).unwrap();
+    }
+    f.sensor("hwmon0", "4", "99000");
+    f.put("class/hwmon/hwmon0/fan4_input", "9999");
+    let missing = sampler.sample();
+    for panel in [5, 11] {
+        assert_eq!(missing.panels[panel].series.len(), 3);
+        assert!(missing.panels[panel].series[0].iter().all(|v| v.is_nan()));
+        assert!(missing.panels[panel].label.contains("1: unavailable"));
+    }
+    assert_eq!(missing.panels[5].series[1][118..], [20., 20.]);
+    assert_eq!(missing.panels[11].series[1][118..], [0., 0.]);
+    for kind in ["temp", "fan"] {
+        let path = f.0.join(format!("class/hwmon/hwmon0/{kind}2_input"));
+        fs::rename(&path, path.with_extension("old")).unwrap();
+    }
+    f.put("class/hwmon/hwmon0/temp2_input", "65000");
+    f.put("class/hwmon/hwmon0/fan2_input", "1500");
+    let replaced = sampler.sample();
+    assert_eq!(replaced.panels[5].series[1][118..], [0., 65.]);
+    assert_eq!(replaced.panels[11].series[1][118..], [0., 1500.]);
+    assert_eq!(replaced.panels[5].series[2][117..], [-5., -5., -5.]);
+    for kind in ["temp", "fan"] {
+        for channel in [2, 3] {
+            fs::remove_file(f.0.join(format!("class/hwmon/hwmon0/{kind}{channel}_input"))).unwrap();
+        }
+    }
+    let absent = sampler.sample();
+    assert!(absent.panels[5].series.is_empty() && absent.panels[11].series.is_empty());
+    assert_eq!(absent.selection, selection);
+    assert_eq!(absent.inventory.temperatures.len(), 1);
+    f.put("class/hwmon/hwmon0/temp1_input", "17000");
+    f.put("class/hwmon/hwmon0/fan1_input", "1200");
+    let returned = sampler.sample();
+    assert_eq!(returned.panels[5].series[0][118..], [0., 17.]);
+    assert_eq!(returned.panels[11].series[0][118..], [0., 1200.]);
+    assert!(returned.panels[5].series[2].iter().all(|v| v.is_nan()));
+}
+#[test]
+fn unassigned_curve_two_keeps_curve_three_color_and_a_real_zero_is_not_missing() {
+    let f = Fixture::new();
+    let (temperatures, fans) = sensor_channels(&f);
+    let mut selection = three_channels(&temperatures, &fans);
+    selection.temperature_extra[0] = None;
+    selection.fan_extra = [None, Some(fans[1].clone())];
+    let mut sampler = Sampler::with_sources(f.sources());
+    sampler.set_selection(selection).unwrap();
+    let snapshot = sampler.sample();
+    for panel in [5, 11] {
+        assert_eq!(snapshot.panels[panel].series.len(), 3);
+        assert!(snapshot.panels[panel].series[1].iter().all(|v| v.is_nan()));
+    }
+    assert_eq!(snapshot.panels[11].series[2].last(), Some(&0.));
+    assert!(snapshot.panels[11].label.contains("3: 0 RPM"));
+    assert!(snapshot.panels[5].detail.contains("Curve 3"));
+}
+#[test]
+fn automatic_fans_keep_surviving_color_slots_and_new_sources_fill_only_empty_slots() {
+    let f = Fixture::new();
+    sensor_channels(&f);
+    let mut sampler = Sampler::with_sources(f.sources());
+    sampler.sample();
+    fs::remove_file(f.0.join("class/hwmon/hwmon0/fan1_input")).unwrap();
+    let missing = sampler.sample();
+    assert_eq!(missing.panels[11].series.len(), 3);
+    assert!(missing.panels[11].series[0].iter().all(|v| v.is_nan()));
+    assert_eq!(missing.panels[11].series[1][118..], [0., 0.]);
+    assert_eq!(missing.panels[11].series[2][118..], [2400., 2400.]);
+    f.put("class/hwmon/hwmon0/fan4_input", "4500");
+    let new = sampler.sample();
+    assert_eq!(new.panels[11].series[0][118..], [0., 4500.]);
+    assert_eq!(new.panels[11].series[2][117..], [2400., 2400., 2400.]);
+}
+#[test]
+fn sensor_scan_failure_clears_inventory_and_never_leaves_a_stale_curve() {
+    let f = Fixture::new();
+    sensor_channels(&f);
+    let mut sampler = Sampler::with_sources(f.sources());
+    let first = sampler.sample();
+    assert_eq!(first.inventory.fans.len(), 3);
+    fs::remove_dir_all(f.0.join("class/hwmon")).unwrap();
+    f.put("class/hwmon", "not a directory");
+    let failed = sampler.sample();
+    assert!(failed.inventory.fans.is_empty() && failed.inventory.temperatures.is_empty());
+    assert!(failed.panels[5].series.is_empty() && failed.panels[11].series.is_empty());
+}
+
+#[test]
+fn automatic_fan_details_keep_alarms_and_notes_for_channels_outside_the_plotted_three() {
+    let f = Fixture::new();
+    sensor_channels(&f);
+    f.put("class/hwmon/hwmon0/fan4_input", "4500");
+    f.put("class/hwmon/hwmon0/fan4_alarm", "1");
+    f.put("class/hwmon/hwmon0/fan5_input", "5500");
+    f.put("class/hwmon/hwmon0/fan5_alarm", "2");
+    let mut sampler = Sampler::with_sources(f.sources());
+    let panel = sampler.sample().panels.remove(11);
+    assert_eq!(panel.series.len(), 3);
+    assert!(
+        panel
+            .detail
+            .contains("[fan4]: 4500 RPM · driver alarm active")
+    );
+    assert!(
+        panel
+            .detail
+            .contains("[fan5]: 5500 RPM\nInvalid fan alarm flag")
+    );
+    assert!(panel.label.contains("partial"));
+}

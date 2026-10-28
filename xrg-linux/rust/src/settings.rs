@@ -290,6 +290,14 @@ pub struct MetricSelection {
     pub gpu: Option<String>,
     pub temperature: Option<String>,
     pub fan: Option<String>,
+    /// Optional curves 2/3. A primary source is required; holes retain color slots.
+    #[serde(skip_serializing_if = "empty_sensor_extras")]
+    pub temperature_extra: [Option<String>; 2],
+    #[serde(skip_serializing_if = "empty_sensor_extras")]
+    pub fan_extra: [Option<String>; 2],
+}
+fn empty_sensor_extras(value: &[Option<String>; 2]) -> bool {
+    value.iter().all(Option::is_none)
 }
 impl MetricSelection {
     pub fn validate(&self) -> Result<(), String> {
@@ -311,9 +319,26 @@ impl MetricSelection {
         for id in [&self.gpu, &self.temperature, &self.fan]
             .into_iter()
             .flatten()
+            .chain(self.temperature_extra.iter().flatten())
+            .chain(self.fan_extra.iter().flatten())
         {
             if id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control) {
                 return Err("Invalid metric source identity".into());
+            }
+        }
+        for (name, primary, extra) in [
+            ("Temperature", &self.temperature, &self.temperature_extra),
+            ("Fan", &self.fan, &self.fan_extra),
+        ] {
+            if primary.is_none() && extra.iter().any(Option::is_some) {
+                return Err(format!(
+                    "{name}: choose a primary sensor before adding curves"
+                ));
+            }
+            let ids: Vec<_> = std::iter::once(primary).chain(extra).flatten().collect();
+            let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+            if unique.len() != ids.len() {
+                return Err(format!("{name}: each curve must use a different sensor"));
             }
         }
         Ok(())
@@ -324,8 +349,11 @@ impl MetricSelection {
             Module::Network => self.network == other.network,
             Module::Disk => self.disk == other.disk,
             Module::Gpu | Module::GpuMemory => self.gpu == other.gpu,
-            Module::Temperature => self.temperature == other.temperature,
-            Module::Fans => self.fan == other.fan,
+            Module::Temperature => {
+                self.temperature == other.temperature
+                    && self.temperature_extra == other.temperature_extra
+            }
+            Module::Fans => self.fan == other.fan && self.fan_extra == other.fan_extra,
             _ => true,
         }
     }
@@ -391,7 +419,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 11,
+            version: 12,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -421,7 +449,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 11 {
+        if self.version != 12 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -524,6 +552,9 @@ impl Settings {
         }
         if result.version == 10 {
             result.version = 11;
+        }
+        if result.version == 11 {
+            result.version = 12;
         }
         result.validate()?;
         Ok(result)

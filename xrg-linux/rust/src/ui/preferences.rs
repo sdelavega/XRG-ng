@@ -589,6 +589,17 @@ impl Dialog {
         let adjustment = self.scroll.vadjustment();
         adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.));
     }
+    pub fn reveal_sensor_curves(&self) {
+        self.targets.curves.set_expanded(true);
+        if let Some(point) = self
+            .targets
+            .widget
+            .compute_point(&self.form, &gtk::graphene::Point::new(0., 0.))
+        {
+            self.scroll.vadjustment().set_value(point.y() as f64);
+        }
+        self.targets.temperature_extra[0].widget.grab_focus();
+    }
     pub fn message(&self) -> String {
         self.message.text().to_string()
     }

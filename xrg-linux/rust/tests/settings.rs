@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 12;
+    value.version = 13;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -382,7 +382,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        11
+        12
     );
 }
 #[test]
@@ -400,6 +400,7 @@ fn metric_targets_and_process_filters_persist_and_validate_as_typed_preferences(
         gpu: Some("pci:0000:02:00.0".into()),
         temperature: Some("missing-sensor".into()),
         fan: Some("missing-fan".into()),
+        ..Default::default()
     };
     settings.processes = ProcessView {
         sort: Sort::Name,
@@ -464,7 +465,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 11);
+    assert_eq!(migrated.version, 12);
     assert_eq!(migrated.modules.len(), 12);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -607,7 +608,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        11
+        12
     );
 }
 
