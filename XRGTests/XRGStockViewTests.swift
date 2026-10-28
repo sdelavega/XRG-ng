@@ -129,7 +129,7 @@ struct XRGStockViewTests {
             let view = panel(settings, defaults, factory)
             host.contentView?.addSubview(view); view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module), timer = try #require(view.tickerTimer)
-            #expect(module.name == "Stock" && module.displayOrder == 8)
+            #expect(module.name == "Stock" && module.displayOrder == 9)
             #expect(module.doesGraphUpdate && !module.doesFastUpdate && module.doesMin30Update && !module.doesMin5Update)
             #expect(module.isDisplayed && module.reference === view && host.stockView === view)
             #expect(host.moduleManager?.moduleList().count == 1 && host.timerRequests == 1)

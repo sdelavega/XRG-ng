@@ -103,7 +103,7 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Weather", reference: self, defaults: defaults)
-        module.displayOrder = 7; module.doesGraphUpdate = true; module.doesFastUpdate = false
+        module.displayOrder = 8; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = true
         module.isDisplayed = defaults.bool(forKey: "showWeatherGraph")
         self.module = module; registeredManager = manager; host.weatherView = self

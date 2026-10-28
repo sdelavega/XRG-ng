@@ -111,7 +111,7 @@ struct XRGTemperatureViewTests {
             let view = panel(reader.miner(), settings, defaults)
             host.contentView?.addSubview(view); view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module)
-            #expect(module.name == "Temperature" && module.displayOrder == 4)
+            #expect(module.name == "Temperature" && module.displayOrder == 5)
             #expect(module.doesGraphUpdate && !module.doesFastUpdate && !module.doesMin5Update && !module.doesMin30Update && !module.alwaysDoesGraphUpdate)
             #expect(!module.isDisplayed && module.reference === view && host.temperatureView === view)
             #expect(host.moduleManager?.moduleList().count == 1 && host.timerRequests == 1 && view.subviews.count == 3)

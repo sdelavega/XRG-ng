@@ -98,7 +98,7 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Memory", reference: self, defaults: defaults)
-        module.displayOrder = 2
+        module.displayOrder = 3
         module.doesGraphUpdate = true
         module.doesFastUpdate = false
         module.doesMin5Update = false

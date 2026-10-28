@@ -92,10 +92,17 @@ public final class XRGDataSet: NSObject {
     }
 
     public func resize(_ count: Int) {
+        resize(count, fillingWith: 0)
+    }
+
+    #if canImport(ObjectiveC)
+    @nonobjc
+    #endif
+    public func resize(_ count: Int, fillingWith value: CGFloat) {
         guard count >= 0 else { return }
         let wasEmpty = samples.isEmpty
         let retained = orderedValues.suffix(count)
-        samples = Array(repeating: 0, count: count - retained.count) + retained.map(Double.init)
+        samples = Array(repeating: Double(value), count: count - retained.count) + retained.map(Double.init)
         currentIndex = count == 0 || wasEmpty ? 0 : count - 1
         updateStatistics()
     }

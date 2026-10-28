@@ -14,7 +14,7 @@ func smokeCheck(_ condition: @autoclosure () -> Bool, _ message: String) throws 
 
 @MainActor final class XRGSmokeInputs {
     var time: TimeInterval = 100
-    var cpuReads = 0, gpuReads = 0, memoryReads = 0, netReads = 0, diskReads = 0, batteryReads = 0
+    var cpuReads = 0, gpuReads = 0, npuReads = 0, memoryReads = 0, netReads = 0, diskReads = 0, batteryReads = 0
     var activations = 0
     var nibs: [String] = [], presentations: [NSWindow] = [], errors: [String] = []
     var load: ((String, XRGAppDelegate) -> Void)?
@@ -63,7 +63,7 @@ private final class SmokePreferencesOwner: NSObject {
 }
 
 @MainActor final class XRGApplicationSmokeScene {
-    static let moduleNames = ["CPU", "GPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"]
+    static let moduleNames = ["CPU", "GPU", "NPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"]
     let defaults: UserDefaults
     let resources: Bundle
     let inputs = XRGSmokeInputs()
@@ -104,6 +104,11 @@ private final class SmokePreferencesOwner: NSObject {
             source.gpuReads += 1
             return [XRGGPUSample(id: 1, vendor: "Fixture", total: 1024, free: 512, wait: 0, utilization: 25)]
         })
+        let npu = XRGNPUMiner(source: {
+            source.npuReads += 1
+            return XRGNPUReading(time: source.time, devices: [XRGNPUDevice(id: 7, cores: 16, architecture: "Fixture", firmwareLoaded: true)], appleSilicon: true,
+                                 energy: [XRGNPUEnergy(id: "fixture-ane", unit: "mJ", value: Int64(source.npuReads * 250))], error: nil)
+        }, clock: { source.time })
         let memory = XRGMemoryMiner(pageSize: 4096, source: {
             source.memoryReads += 1
             var value = XRGMemorySnapshot(); value.free = 1000; value.active = 2000; value.wired = 1000
@@ -122,6 +127,7 @@ private final class SmokePreferencesOwner: NSObject {
         panels = [
             XRGCPUView(frame: frame, miner: cpu, processMiner: process, settings: settings, defaults: defaults),
             XRGGPUView(frame: frame, miner: gpu, settings: settings, defaults: defaults),
+            XRGNPUView(frame: frame, miner: npu, settings: settings, defaults: defaults),
             XRGMemoryView(frame: frame, memoryMiner: memory, processMiner: process, settings: settings, defaults: defaults),
             XRGBatteryView(frame: frame, miner: battery, settings: settings, defaults: defaults),
             XRGTemperatureView(frame: frame, miner: temperature, settings: settings, defaults: defaults),
@@ -178,7 +184,8 @@ private final class SmokePreferencesOwner: NSObject {
 
     func launched() throws {
         try smokeCheck(inputs.activations == 1, "Application launch delegate did not run exactly once")
-        try smokeCheck(window.moduleManager?.moduleList().count == 10, "Expected ten production panels")
+        try smokeCheck(window.moduleManager?.moduleList().count == 11, "Expected eleven production panels")
+        try smokeCheck(window.moduleManager?.displayList().prefix(4).compactMap(\.name) == ["CPU", "GPU", "NPU", "Memory"], "Neural Engine is not between GPU and Memory")
         for (name, panel) in zip(Self.moduleNames, panels) {
             try smokeCheck(window.moduleManager?.getModule(byName: name)?.reference === panel, "Missing module registration: \(name)")
         }
@@ -198,7 +205,7 @@ private final class SmokePreferencesOwner: NSObject {
         background.expandWindow()
         inputs.time += 2; window.graphUpdate(nil); window.fastUpdate(nil); window.min5Update(nil); window.min30Update(nil)
         window.weatherView?.min30UpdatePostProcessing()
-        try smokeCheck(inputs.cpuReads > 0 && inputs.gpuReads > 0 && inputs.memoryReads > 0 && inputs.netReads > 0 && inputs.diskReads > 0 && inputs.batteryReads > 0, "Fixture collector dispatch failed")
+        try smokeCheck(inputs.cpuReads > 0 && inputs.gpuReads > 0 && inputs.npuReads > 0 && inputs.memoryReads > 0 && inputs.netReads > 0 && inputs.diskReads > 0 && inputs.batteryReads > 0, "Fixture collector dispatch failed")
         for panel in panels {
             try smokeCheck(panel.frame.width.isFinite && panel.frame.height.isFinite && panel.frame.width > 0 && panel.frame.height > 0, "Invalid panel layout")
         }

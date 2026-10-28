@@ -11,7 +11,7 @@ struct XRGApplicationLifecycleTests {
         let defaults = try #require(UserDefaults(suiteName: domain))
         defaults.set(false, forKey: "checkForUpdates")
         defaults.set(true, forKey: "isDockIconHidden")
-        for key in ["showCPUGraph", "showGPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph",
+        for key in ["showCPUGraph", "showGPUGraph", "showNPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph",
                     "showNetworkGraph", "showDiskGraph", "showWeatherGraph", "showStockGraph", "showAITokenGraph"] {
             defaults.set(true, forKey: key)
         }

@@ -182,7 +182,7 @@ def main():
             "showWeatherGraph": False, "showStockGraph": False, "showAITokenGraph": False,
             "aiTokensTrackingEnabled": False, "showSensorWindow": False, "graphRefresh": 0.25,
             "windowTitle": "Packaged XRG smoke", "icao": "", "stockSymbols": ""}
-    for key in ("showCPUGraph", "showGPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph", "showNetworkGraph", "showDiskGraph"):
+    for key in ("showCPUGraph", "showGPUGraph", "showNPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph", "showNetworkGraph", "showDiskGraph"):
         seed[key] = True
     (output / "seed.plist").write_bytes(plistlib.dumps(seed))
     preferences = home / "Library/Preferences" / (domain + ".plist")
@@ -231,7 +231,7 @@ def main():
                 launch(app / "Contents/MacOS/XRG-ng", f"{phase}-{orientation}.log", phase)
                 report = json.loads((output / f"{phase}-{orientation}.json").read_text())
                 if (report["architecture"] != architecture or report["translated"] is not translated or
-                    report["phase"] != phase or report["orientation"] != orientation or report["moduleCount"] != 10 or not all(report[key] for key in
+                    report["phase"] != phase or report["orientation"] != orientation or report["moduleCount"] != 11 or not all(report[key] for key in
                         ("mainMenuConnected", "productionClassImages", "shippingPriority", "runtimeTimersAdvanced",
                          "preferencesNibLoaded", "sensorsNibLoaded", "windowsHidden", "timersStopped", "appKitTerminationCallback"))):
                     raise RuntimeError("Packaged app verification failed")

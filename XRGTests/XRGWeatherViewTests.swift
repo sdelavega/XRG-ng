@@ -116,7 +116,7 @@ struct XRGWeatherViewTests {
         let f = try WeatherFixture(show: false); defer { f.cleanUp() }; f.attach()
         let host = try #require(f.host), module = try #require(f.view.module)
         f.view.awakeFromNib(); f.view.awakeFromNib()
-        #expect(module.name == "Weather" && module.displayOrder == 7 && module.reference === f.view)
+        #expect(module.name == "Weather" && module.displayOrder == 8 && module.reference === f.view)
         #expect(module.doesGraphUpdate && module.doesMin30Update && !module.doesFastUpdate && !module.doesMin5Update)
         #expect(!module.isDisplayed && host.weatherView === f.view && host.timerRequests == 1)
         #expect(f.sources.allSatisfy { $0.loads == 0 } && f.view.tickerTimer == nil && f.view.subviews.count == 3)

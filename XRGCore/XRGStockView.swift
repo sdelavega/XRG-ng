@@ -126,7 +126,7 @@ public final class XRGStockView: NSView, XRGModuleView {
               registeredManager !== manager else { synchronizeTicker(); updateLabels(); return }
         stockSymbols = Self.parseSymbols(settings?.stockSymbols ?? "")
         let module = XRGModule(name: "Stock", reference: self, defaults: defaults)
-        module.displayOrder = 8; module.doesGraphUpdate = true; module.doesFastUpdate = false
+        module.displayOrder = 9; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = true
         module.isDisplayed = defaults.bool(forKey: "showStockGraph")
         self.module = module; registeredManager = manager

@@ -65,7 +65,7 @@ enum XRGWindowVersion {
 @MainActor @objc(XRGGraphWindow) @objcMembers
 public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XRGMemoryViewHost,
     XRGNetViewHost, XRGBatteryViewHost, XRGCPUViewHost, XRGTemperatureViewHost, XRGStockViewHost,
-    XRGDiskViewHost, XRGAITokenViewHost, XRGBackgroundViewHost, XRGWeatherViewHost {
+    XRGDiskViewHost, XRGAITokenViewHost, XRGBackgroundViewHost, XRGWeatherViewHost, XRGNPUViewHost {
     private let defaults: UserDefaults
     private let wakeCenter: NotificationCenter
     private let scheduleTimers: Bool
@@ -92,6 +92,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public var moduleManager: XRGModuleManager?
     public var cpuView: XRGCPUView?
     public var gpuView: XRGGPUView?
+    public var npuView: XRGNPUView?
     public var netView: XRGNetView?
     public var diskView: XRGDiskView?
     public var memoryView: XRGMemoryView?
@@ -237,6 +238,12 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         aiTokenView = view; contentView?.addSubview(view); view.awakeFromNib()
         moduleManager?.windowChanged(to: frame.size)
     }
+    public func initializeNPUView() {
+        guard npuView == nil else { return }
+        let view = XRGNPUView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: XRGNPUMiner(), settings: appSettings, defaults: defaults)
+        npuView = view; contentView?.addSubview(view); view.awakeFromNib()
+        moduleManager?.windowChanged(to: frame.size)
+    }
     public func showMemoryPreferences() { controller?.showPrefs(withPanel: "RAM") }
     public func showNetworkPreferences() { controller?.showPrefs(withPanel: "Network") }
     public func showCPUPreferences() { controller?.showPrefs(withPanel: "CPU") }
@@ -254,6 +261,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     @IBAction public func setShowCPUGraph(_ sender: Any?) { showModule("CPU", sender: sender) }
     @IBAction public func setShowGPUGraph(_ sender: Any?) { showModule("GPU", sender: sender) }
+    @IBAction public func setShowNPUGraph(_ sender: Any?) { showModule("NPU", sender: sender) }
     @IBAction public func setShowMemoryGraph(_ sender: Any?) { showModule("Memory", sender: sender) }
     @IBAction public func setShowBatteryGraph(_ sender: Any?) { showModule("Battery", sender: sender) }
     @IBAction public func setShowTemperatureGraph(_ sender: Any?) { showModule("Temperature", sender: sender) }

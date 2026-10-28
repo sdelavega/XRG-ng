@@ -93,7 +93,7 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Temperature", reference: self, defaults: defaults)
-        module.displayOrder = 4
+        module.displayOrder = 5
         module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false; module.alwaysDoesGraphUpdate = false
         module.isDisplayed = defaults.bool(forKey: "showTemperatureGraph")

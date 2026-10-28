@@ -63,6 +63,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     @IBOutlet public var borderWidthSlider: NSSlider?
     @IBOutlet public var showCPUGraph: NSButton?
     @IBOutlet public var showGPUGraph: NSButton?
+    public private(set) var showNPUGraph: NSButton?
     @IBOutlet public var showMemoryGraph: NSButton?
     @IBOutlet public var showBatteryGraph: NSButton?
     @IBOutlet public var showTemperatureGraph: NSButton?
@@ -234,6 +235,24 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             button.frame = stock.frame.offsetBy(dx: 0, dy: -stock.frame.height - 8); container.addSubview(button); showAITokensGraph = button
         }
         let ai = showAITokenGraph ?? showAITokensGraph
+        if showNPUGraph == nil, let gpu = showGPUGraph, let container = gpu.superview {
+            let button = NSButton(checkboxWithTitle: "Neural Engine", target: nil, action: nil)
+            button.controlSize = .small; button.font = gpu.font
+            container.addSubview(button); showNPUGraph = button
+        }
+        if let npu = showNPUGraph, let gpu = showGPUGraph, npu.superview === gpu.superview {
+            // Six rows fit the original nib's graph-toggle group, keeping the
+            // new graph adjacent to GPU without altering the archived nib.
+            for (column, buttons) in [[showCPUGraph, showGPUGraph, showNPUGraph, showMemoryGraph, showBatteryGraph, showTemperatureGraph],
+                                      [showNetGraph, showDiskGraph, showWeatherGraph, showStockGraph, ai]].enumerated() {
+                for (row, button) in buttons.enumerated() {
+                    button?.frame = NSRect(x: column == 0 ? 17 : 192, y: 101 - row * 19, width: column == 0 ? 155 : 145, height: 18)
+                }
+            }
+        }
+        bind(showNPUGraph, #selector(XRGGraphWindow.setShowNPUGraph(_:)))
+        showNPUGraph?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "NPU")?.isDisplayed == true ? .on : .off
+        showNPUGraph?.toolTip = "Show Apple Neural Engine power; unavailable telemetry is not assumed idle"
         ai?.toolTip = "Enable/Disable the AI Token Graph"
         bind(ai, #selector(XRGGraphWindow.setShowAITokenGraph(_:))); ai?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "AI Tokens")?.isDisplayed == true ? .on : .off
         bind(graphRefreshValue, #selector(setGraphRefreshAction(_:)), target: self)
@@ -450,6 +469,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         if let button = generalShowSummary { values["showSummary"] = button.state == .on }
         if let button = showCPUGraph { values["showCPUGraph"] = button.state == .on }
         if let button = showGPUGraph { values["showGPUGraph"] = button.state == .on }
+        if let button = showNPUGraph { values["showNPUGraph"] = button.state == .on }
         if let button = showMemoryGraph { values["showMemoryGraph"] = button.state == .on }
         if let button = showBatteryGraph { values["showBatteryGraph"] = button.state == .on }
         if let button = showTemperatureGraph { values["showTemperatureGraph"] = button.state == .on }

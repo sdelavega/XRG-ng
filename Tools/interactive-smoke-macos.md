@@ -21,7 +21,9 @@ control; the user's installed XRG may also be running.
 Check these actions in the visible UI:
 
 1. Open Preferences with Command-comma. Change the title and orientation; toggle
-   a system graph off and on. Leave external-provider graphs and updates disabled.
+   a system graph off and on. Confirm GPU → NPU → Memory order and toggle
+   Neural Engine off/on. Its W label is power; missing data is n/a. Leave
+   external-provider graphs and updates disabled.
 2. Visit General, Appearance, CPU, Memory, Temperature, Network, Disk, Weather,
    Stocks and AI. Use the toolbar overflow menu when a panel narrows the window.
    Change a budget value without enabling AI tracking.
@@ -49,6 +51,7 @@ Write the expected saved values to a JSON file, for example:
   "aiTokensDailyBudget": 2345,
   "windowIsMinimized": false,
   "showGPUGraph": true,
+  "showNPUGraph": true,
   "showAITokenGraph": false,
   "aiTokensTrackingEnabled": false,
   "checkForUpdates": false,

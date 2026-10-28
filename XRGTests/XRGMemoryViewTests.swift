@@ -98,7 +98,7 @@ struct XRGMemoryViewTests {
             host.contentView?.addSubview(view)
             view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module)
-            #expect(module.name == "Memory" && module.displayOrder == 2)
+            #expect(module.name == "Memory" && module.displayOrder == 3)
             #expect(!module.isDisplayed && module.doesGraphUpdate && !module.doesFastUpdate)
             #expect(module.reference === view && host.memoryView === view)
             #expect(host.moduleManager?.moduleList().count == 1)

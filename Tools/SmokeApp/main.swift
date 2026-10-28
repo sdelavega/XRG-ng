@@ -15,11 +15,16 @@ import Darwin
                    "Smoke preferences require a generated, private UUID domain")
     try smokeCheck(phase == "seed" || phase == "restore", "Invalid smoke phase")
     let output = URL(fileURLWithPath: outputPath, isDirectory: true)
+    func capture(_ view: NSView?, _ name: String) throws {
+        guard let view, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        if let png = bitmap.representation(using: .png, properties: [:]) { try png.write(to: output.appendingPathComponent(name)) }
+    }
     try smokeCheck(Bundle.main.bundleIdentifier == domain, "Smoke bundle and private preference domain must match")
     let defaults = UserDefaults.standard
     if phase == "seed" {
         defaults.set(false, forKey: "checkForUpdates"); defaults.set(true, forKey: "isDockIconHidden")
-        for key in ["showCPUGraph", "showGPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph",
+        for key in ["showCPUGraph", "showGPUGraph", "showNPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph",
                     "showNetworkGraph", "showDiskGraph", "showWeatherGraph", "showStockGraph", "showAITokenGraph"] {
             defaults.set(true, forKey: key)
         }
@@ -48,6 +53,10 @@ import Darwin
                         try smokeCheck(scene.window.appSettings?.windowTitle == "XRG smoke restore", "Saved title was not restored")
                     }
                     try scene.sampleAndExercise()
+                    try capture(scene.window.contentView, "layout-\(phase).png")
+                    try capture(scene.window.npuView, "npu-\(phase).png")
+                    scene.delegate.showPrefs(withPanel: "General")
+                    try capture(scene.delegate.prefController?.GeneralPrefView, "general-\(phase).png")
                     guard let pref = scene.delegate.prefController, let orientation = pref.graphOrientation,
                           let budget = pref.AIPrefView?.viewWithTag(1002) as? NSTextField else {
                         throw XRGSmokeError.failed("Missing production preferences controls")
@@ -79,18 +88,19 @@ import Darwin
     try smokeCheck(launched, "AppKit did not finish launching")
     let timers = [scene.window.graphTimer, scene.window.fastTimer, scene.window.min5Timer, scene.window.min30Timer].compactMap { $0 }
     try smokeCheck(timers.count == 4, "Expected all four graph timers before shutdown")
+    let moduleCount = scene.window.moduleManager?.moduleList().count ?? 0
     scene.shutdown()
     try smokeCheck(timers.allSatisfy { !$0.isValid }, "Shutdown left graph timers active")
     try smokeCheck(defaults.synchronize(), "Private preferences did not synchronize")
     let report: [String: Any] = ["phase": phase, "pid": ProcessInfo.processInfo.processIdentifier,
-                               "appKitLaunchNotification": launched, "moduleCount": 10,
+                               "appKitLaunchNotification": launched, "moduleCount": moduleCount,
                                "budget": defaults.integer(forKey: "aiTokensDailyBudget"),
                                "collapsed": defaults.bool(forKey: "windowIsMinimized"),
                                "nibs": scene.inputs.nibs, "failures": scene.inputs.errors,
                                "shutdownTimersInvalidated": true]
     try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         .write(to: output.appendingPathComponent("\(phase).json"))
-    print("PASS: isolated AppKit \(phase), ten fixture-backed panels, preference persistence and delegate shutdown")
+    print("PASS: isolated AppKit \(phase), eleven fixture-backed panels, preference persistence and delegate shutdown")
 }
 
 exit(MainActor.assumeIsolated {

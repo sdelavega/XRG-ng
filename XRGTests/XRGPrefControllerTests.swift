@@ -103,6 +103,7 @@ struct XRGPrefControllerTests {
         let f = try PreferencesFixture(); defer { f.cleanUp() }
         let height = f.pref.ColorPrefView!.frame.height, count = f.pref.AIPrefView!.subviews.count
         let ai = try #require(f.pref.showAITokensGraph)
+        let npu = try #require(f.pref.showNPUGraph)
         f.pref.configure(); f.pref.setUpColorPanel(); f.pref.setUpAIPanel(); f.pref.awakeFromNib()
         #expect(f.pref.ColorPrefView?.frame.height == height && f.pref.AIPrefView?.subviews.count == count)
         #expect(f.pref.showAITokensGraph === ai && f.defaults.bool(forKey: "showAITokenGraph"))
@@ -110,6 +111,10 @@ struct XRGPrefControllerTests {
             (view as? NSButton)?.title == "AI Tokens" ? 1 : view.subviews.reduce(0) { $0 + countAIButtons($1) }
         }
         #expect(countAIButtons(f.pref.GeneralPrefView!) == 1)
+        #expect(f.pref.showNPUGraph === npu && npu.target === f.graph && npu.action == #selector(XRGGraphWindow.setShowNPUGraph(_:)))
+        let toggles = [f.pref.showCPUGraph,f.pref.showGPUGraph,f.pref.showNPUGraph,f.pref.showMemoryGraph,f.pref.showBatteryGraph,f.pref.showTemperatureGraph,
+                       f.pref.showNetGraph,f.pref.showDiskGraph,f.pref.showWeatherGraph,f.pref.showStockGraph,ai].compactMap { $0 }
+        for (i,a) in toggles.enumerated() { for b in toggles.dropFirst(i+1) { #expect(!a.frame.intersects(b.frame)) } }
         #expect(ai.target === f.graph && ai.action == #selector(XRGGraphWindow.setShowAITokenGraph(_:)))
         #expect(f.pref.ColorPrefView?.subviews.filter { $0.tag == 1010 }.count == 1)
         #expect(f.pref.ColorPrefView?.subviews.filter { $0.tag == 1011 }.count == 1)
@@ -244,12 +249,14 @@ struct XRGPrefControllerTests {
         let f = try PreferencesFixture(); defer { f.cleanUp() }
         f.pref.windowTitle?.stringValue = "Saved title"; f.pref.ICAOCode?.stringValue = "KJFK"; f.pref.stockSymbols?.stringValue = "AAPL,MSFT"
         f.pref.showCPUGraph?.state = .on; f.pref.showGPUGraph?.state = .off; f.pref.fastCPUUsageCheckbox?.state = .off
+        f.pref.showNPUGraph?.state = .on
         f.pref.generalAutoExpandGraph?.state = .off; f.pref.secondaryWeatherGraph?.selectItem(at: 5); f.pref.temperatureUnits?.selectItem(at: 1)
         f.pref.diskGraphMode?.selectCell(atRow: 2, column: 0); f.pref.borderWidthSlider?.intValue = 8
         f.pref.showAITokensGraph?.state = .on
         (f.pref.AIPrefView?.viewWithTag(1002) as? NSTextField)?.stringValue = "123456789012"
         let values = try f.pref.preferencesSnapshot()
         #expect(values["showCPUGraph"] as? Bool == true && values["showGPUGraph"] as? Bool == false && values["showAITokenGraph"] as? Bool == true)
+        #expect(values["showNPUGraph"] as? Bool == true)
         #expect(values["showCPUBars"] as? Bool == false && values["autoExpandGraph"] as? Bool == false && values["secondaryWeatherGraph"] as? Int == 5)
         #expect(values["diskGraphMode"] as? Int == 2 && values["borderWidth"] as? Int32 == 8 && values["aiTokensDailyBudget"] as? Int == 123456789012)
         #expect(f.pref.persistPreferences() && f.graph.appSettings?.windowTitle == "Saved title" && f.graph.appSettings?.ICAO == "KJFK" && f.graph.appSettings?.stockSymbols == "AAPL,MSFT")

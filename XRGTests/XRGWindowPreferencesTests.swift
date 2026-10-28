@@ -41,7 +41,8 @@ struct XRGWindowPreferencesTests {
     @Test func defaultsMatchThePreMigrationObjectiveCSnapshot() throws {
         let legacy = try legacyDefaults()
         let current = XRGWindowPreferences.defaultValues(metric: false, screen: NSRect(x: 0, y: 0, width: 1920, height: 1080))
-        #expect(current.count == legacy.count)
+        #expect(current.count == legacy.count + 1)
+        #expect(current["showNPUGraph"] as? String == (XRGNPUReader.isAppleSilicon() ? "YES" : "NO"))
         for key in legacy.allKeys.compactMap({ $0 as? String }) {
             if ["backgroundColor", "graphBGColor", "graphFG1Color", "graphFG2Color", "graphFG3Color", "borderColor", "textColor"].contains(key) {
                 let old = try NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: try #require(legacy[key] as? Data))

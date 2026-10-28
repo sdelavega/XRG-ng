@@ -35,10 +35,13 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
     }
     try require(XRGPackagedSmokeInstalled() == 1 && NSApp.activationPolicy() == .prohibited, "Presentation protections were lost")
     try require(String(cString: class_getName(type(of: delegate))) == "XRGAppDelegate", "Wrong nib delegate class")
-    try require(modules.count == 10, "MainMenu did not register ten modules")
-    let expected = Set(["CPU", "GPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"])
+    try require(modules.count == 11, "MainMenu did not register eleven modules")
+    let expected = Set(["CPU", "GPU", "NPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"])
     let names = try Set(modules.map { try property($0, "name") as? String ?? "" })
     try require(names == expected, "Unexpected module identities")
+    let displayed = try property(manager, "displayList") as? [NSObject] ?? []
+    let order = try displayed.prefix(4).map { try property($0, "name") as? String ?? "" }
+    try require(order == ["CPU", "GPU", "NPU", "Memory"], "NPU was not placed between GPU and Memory")
     for object in [delegate, window, manager] + modules {
         guard let image = class_getImageName(type(of: object)) else { throw Failure.failed("Missing runtime image") }
         try require(URL(fileURLWithPath: String(cString: image)).resolvingSymlinksInPath().path == Bundle.main.executableURL?.resolvingSymlinksInPath().path,

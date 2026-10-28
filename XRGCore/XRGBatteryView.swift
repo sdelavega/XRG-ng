@@ -92,7 +92,7 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Battery", reference: self, defaults: defaults)
-        module.displayOrder = 3
+        module.displayOrder = 4
         module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showBatteryGraph")

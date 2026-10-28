@@ -134,7 +134,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "AI Tokens", reference: self, defaults: defaults)
-        module.displayOrder = 9; module.doesGraphUpdate = true; module.doesFastUpdate = false
+        module.displayOrder = 10; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showAITokenGraph")
         self.module = module; registeredManager = manager

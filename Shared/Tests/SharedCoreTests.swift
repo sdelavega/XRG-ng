@@ -5,6 +5,16 @@ import Testing
 @testable import XRGSharedCore
 
 struct SharedCoreTests {
+    @Test func resizingCanPadMissingSamplesWithoutChangingTheOriginalZeroDefault() {
+        let history = XRGDataSet(); history.resize(2)
+        history.setNextValue(2); history.setNextValue(3)
+        history.resize(4, fillingWith: -1000)
+        #expect(history.orderedValues == [-1000, -1000, 2, 3])
+        history.resize(2, fillingWith: -1000)
+        #expect(history.orderedValues == [2, 3])
+        history.resize(3)
+        #expect(history.orderedValues == [0, 2, 3])
+    }
     @Test func historyRetainsNewestAndArithmeticStatistics() {
         let history = XRGDataSet()
         history.resize(3)

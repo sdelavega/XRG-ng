@@ -101,7 +101,7 @@ struct XRGNetViewTests {
             let view = panel(source, settings, defaults)
             host.contentView?.addSubview(view); view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module)
-            #expect(module.name == "Network" && module.displayOrder == 5)
+            #expect(module.name == "Network" && module.displayOrder == 6)
             #expect(module.doesGraphUpdate && module.doesFastUpdate && !module.doesMin5Update && !module.doesMin30Update)
             #expect(!module.isDisplayed && host.netView === view && module.reference === view)
             #expect(host.moduleManager?.moduleList().count == 1 && host.timerRequests == 1)

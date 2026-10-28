@@ -85,7 +85,7 @@ struct XRGDiskViewTests {
             let view = panel(source.miner(), settings, defaults)
             host.contentView?.addSubview(view); view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module)
-            #expect(module.name == "Disk" && module.displayOrder == 6)
+            #expect(module.name == "Disk" && module.displayOrder == 7)
             #expect(module.doesGraphUpdate && module.doesFastUpdate && module.doesMin5Update && !module.doesMin30Update)
             #expect(!module.isDisplayed && module.reference === view && host.diskView === view)
             #expect(host.moduleManager?.moduleList().count == 1 && host.timerRequests == 1 && view.subviews.count == 5)

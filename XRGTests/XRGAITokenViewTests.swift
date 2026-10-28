@@ -108,7 +108,7 @@ struct XRGAITokenViewTests {
             let view = panel(settings, defaults, observer, source, width: 200, height: 100)
             host.contentView?.addSubview(view); view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module)
-            #expect(module.name == "AI Tokens" && module.displayOrder == 9)
+            #expect(module.name == "AI Tokens" && module.displayOrder == 10)
             #expect(module.doesGraphUpdate && !module.doesFastUpdate && !module.doesMin5Update && !module.doesMin30Update)
             #expect(!module.isDisplayed && host.aiTokenView === view && module.reference === view)
             #expect(host.moduleManager?.moduleList().count == 1 && host.timerRequests == 1 && source.updates == 0)

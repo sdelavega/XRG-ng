@@ -137,6 +137,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         guard let window = xrgGraphWindow else { return }
         window.startRuntimeIfNeeded()
         window.moduleManager?.windowChanged(to: window.frame.size)
+        window.initializeNPUView()
         window.initializeAITokenView()
 
         if defaults.bool(forKey: "windowIsMinimized") {

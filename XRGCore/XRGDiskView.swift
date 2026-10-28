@@ -96,7 +96,7 @@ public final class XRGDiskView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Disk", reference: self, defaults: defaults)
-        module.displayOrder = 6
+        module.displayOrder = 7
         module.doesGraphUpdate = true; module.doesFastUpdate = true
         module.doesMin5Update = true; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showDiskGraph")

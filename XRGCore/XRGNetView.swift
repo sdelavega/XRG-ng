@@ -103,7 +103,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Network", reference: self, defaults: defaults)
-        module.displayOrder = 5
+        module.displayOrder = 6
         module.doesGraphUpdate = true; module.doesFastUpdate = true
         module.doesMin5Update = false; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showNetworkGraph")

@@ -99,7 +99,7 @@ def main():
             command([str(binary)], output / f"{phase}.log", cwd=output, timeout=30, env=environment)
             report = json.loads((output / f"{phase}.json").read_text())
             if not (report["phase"] == phase and report["appKitLaunchNotification"]
-                    and report["moduleCount"] == 10 and report["budget"] == 1337
+                    and report["moduleCount"] == 11 and report["budget"] == 1337
                     and report["collapsed"] and report["shutdownTimersInvalidated"]
                     and sorted(report["nibs"]) == ["Preferences", "Sensors"] and not report["failures"]):
                 raise RuntimeError(f"Unexpected smoke results: {report}")
@@ -117,7 +117,7 @@ def main():
             if passed:
                 raise RuntimeError(f"Failed to remove private preferences for {domain}")
             print(f"Private preference cleanup returned {cleanup.returncode} for {domain}", file=sys.stderr)
-    print("PASS: two AppKit processes, ten fixture-backed panels, private preferences restored and removed, timers stopped", flush=True)
+    print("PASS: two AppKit processes, eleven fixture-backed panels, private preferences restored and removed, timers stopped", flush=True)
 
 
 if __name__ == "__main__":

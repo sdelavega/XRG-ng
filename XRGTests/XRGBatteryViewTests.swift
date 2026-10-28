@@ -102,7 +102,7 @@ struct XRGBatteryViewTests {
             let view = panel(source, settings, defaults)
             host.contentView?.addSubview(view); view.awakeFromNib(); view.awakeFromNib()
             let module = try #require(view.module)
-            #expect(module.name == "Battery" && module.displayOrder == 3)
+            #expect(module.name == "Battery" && module.displayOrder == 4)
             #expect(module.doesGraphUpdate && !module.doesFastUpdate && !module.doesMin5Update && !module.doesMin30Update)
             #expect(!module.isDisplayed && module.reference === view && host.batteryView === view)
             #expect(host.moduleManager?.moduleList().count == 1 && host.timerRequests == 1)

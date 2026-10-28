@@ -34,12 +34,46 @@ Bug reports, corrections and contributions help improve support for everyone.
 Physical validation of every listed platform is not a prerequisite for progress
 or releases.
 
+## Apple Neural Engine on macOS
+
+The **NPU** graph sits directly below **GPU** and above **Memory** in vertical
+layout (GPU → NPU → Memory horizontally). It is enabled by default on Apple
+Silicon; General Preferences provides a **Neural Engine** visibility checkbox.
+Intel Macs keep it hidden by default. Existing module sizes, visibility choices,
+themes and XTF load/save continue to work.
+
+The graph shows **ANE power in watts**, from IOReport energy-counter changes over
+elapsed monotonic time. Power is not a utilization percentage, inference rate or
+estimate derived from a chip's maximum power. The vertical scale follows observed
+power. Tooltips/context menu and accessibility text report ANE endpoint identity,
+core count/architecture and firmware state when exposed. Detection and firmware
+presence do not verify inference execution.
+
+Acquisition is read-only, runs on a serial background queue and coalesces requests
+to at most one per second. It opens no accelerator user client, loads no models,
+and needs no root helper, `powermetrics`, network service or extra dependency.
+The optional private IOReport symbols are resolved at runtime. Only recognized
+ANE energy channels/units are used; aggregate counters take precedence over their
+indexed components, and counter identities must be unique. The first sample,
+counter resets, source/unit changes, stale data and failures show **n/a** and
+establish a fresh interval; measured zero remains **0.00 W**. Missing data creates
+no synthetic idle samples. Registry discovery is bounded to 16 endpoints.
+
+Apple's private interfaces can differ across chips and macOS versions. This is
+best-effort support: unavailable metrics remain explicit, and device feedback is
+welcome and encouraged. The implementation uses IOReport's energy subscription
+interface (see the [interface reference](https://github.com/tmc/aneperf/blob/main/ioreport.go));
+automated fixtures cover conversion, recovery, graph placement and preferences.
+Live checks on the available Mac verify discovery and readable energy counters,
+not every model or workload.
+
 ## Features
 
 XRG-ng displays real-time graphs for:
 
 - **CPU Usage** - Per-core utilization and load averages
 - **GPU Usage** - GPU utilization and memory (Apple Silicon & Intel)
+- **Neural Engine (NPU)** - Measured Apple ANE power, between GPU and Memory on macOS
 - **Memory** - RAM usage, swap, page ins/outs
 - **Network** - Upload/download rates per interface
 - **Disk Activity** - Read/write operations per volume

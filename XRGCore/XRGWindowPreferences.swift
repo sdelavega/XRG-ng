@@ -57,6 +57,7 @@ public final class XRGWindowPreferences: NSObject {
             "showWeatherGraph": "YES",
             "showStockGraph": "YES",
             "showGPUGraph": "YES",
+            "showNPUGraph": XRGNPUReader.isAppleSilicon() ? "YES" : "NO",
             "showAITokenGraph": "YES",
             "windowLevel": "0",
             "stickyWindow": "YES",

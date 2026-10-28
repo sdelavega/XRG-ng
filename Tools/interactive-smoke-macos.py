@@ -75,7 +75,7 @@ def main():
                 "showWeatherGraph": False, "showStockGraph": False, "showAITokenGraph": False,
                 "aiTokensTrackingEnabled": False, "graphOrientationVertical": True,
                 "windowIsMinimized": False, "windowTitle": "XRG-ng UI check", "icao": "", "stockSymbols": ""}
-        for key in ("showCPUGraph", "showGPUGraph", "showMemoryGraph", "showBatteryGraph",
+        for key in ("showCPUGraph", "showGPUGraph", "showNPUGraph", "showMemoryGraph", "showBatteryGraph",
                     "showTemperatureGraph", "showNetworkGraph", "showDiskGraph"):
             seed[key] = True
         (output / "seed.plist").write_bytes(plistlib.dumps(seed))
