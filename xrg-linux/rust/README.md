@@ -963,7 +963,14 @@ The shared Swift decoders own JSON/metrics interpretation. Rust owns discovery,
 metadata caches, reads, SQLite and local HTTP acquisition. Unchanged log files are
 not reread. Cache stamps include device/inode, size, modification time and change
 time, so ordinary same-size rewrites invalidate the cache even if mtime is restored.
-Changed files are read in full and checked for mutation before/after parsing.
+Changed JSONL files use bounded streaming reads and are checked for mutation
+before/after parsing. Raw read buffers hold one record (at most 8 MiB plus its
+newline) and a 64 KiB block, rather than a whole 64 MiB file. This bounds input
+buffering, not total parser/cache memory. Gemini session JSON is still decoded as
+one bounded document (at most 8 MiB). Deadline checks run between read blocks and
+records. Reads, prefix verification and one-byte EOF probes share the provider's byte
+budget. Extra content beyond the reported size is rejected, including virtual
+files that report zero length; ordinary EOF probes consume zero bytes.
 Growing JSONL files can reuse a decoded prefix only when device/inode still match
 and a BLAKE3 digest verifies **all** bytes through the preceding complete newline.
 Edits in the middle of a growing file invalidate reuse, not just boundary edits.
@@ -979,8 +986,13 @@ A failed file read/parse, including overflow or budget exhaustion, leaves that
 file's cached snapshot and checkpoint intact. A provider result is published only after a
 complete sweep. The checkpoint and visible snapshot share storage when possible;
 an unterminated usage record can require a second bounded parsed view, each
-subject to the existing message/model caps. This reduces JSON decoding work,
-**not changed-file I/O**; incremental I/O for very large logs remains future work.
+subject to the existing message/model caps. This reduces JSON decoding and raw
+buffering. Verified append scans still reread the prefix and consume the whole
+changed file. A prefix mismatch rewinds and reparses from byte zero; both reads
+charge the I/O budget. This is not suffix-only incremental I/O, and the 64 MiB
+file limit is unchanged. Counted-reader tests cover request sizes, exact record
+boundaries, rewrites, budget exhaustion, short/interrupted reads, failed I/O and
+premature EOF without altering cached counts.
 
 Incomplete scans publish no partial provider total. A failed source
 shows unavailable and the last complete total as stale; it contributes no synthetic
@@ -991,8 +1003,9 @@ cover retained session files; independently copied rollout files can count twice
 
 Scans exclude symlinks and special files, bound discovery to 20,000 entries/six
 nested directory levels, keep at most 100,000 identified messages per provider,
-and allow 64 MiB per changed log file, 8 MiB per record/session, 128 MiB of changed
-files and two seconds per provider pass. Hitting a limit is reported as unavailable;
+and allow 64 MiB per changed log file, 8 MiB per record/session, 128 MiB of actual
+log reads (including prefix verification and rereads) and two seconds per provider
+pass. Hitting a limit is reported as unavailable;
 completed file-cache work can be reused on the next poll. SQLite uses read-only
 connections, no lock waiting, a 250 ms VM deadline and a 100,000-row limit. WAL
 snapshots include committed changes. Costs are unavailable if rows lack recorded

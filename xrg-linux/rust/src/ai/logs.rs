@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Metadata-cached bounded scans. Only a complete provider sweep is published.
+mod stream;
 use super::{ModelUsage, models::Totals};
 use crate::shared::{self, Usage};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::Read,
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
+const IO_BUDGET: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 const RECORD_LIMIT: usize = 8 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 20_000;
@@ -104,7 +105,7 @@ impl LogScan {
         // deleting old logs could leave the cache permanently stuck at its cap.
         let keep: BTreeSet<_> = paths.iter().cloned().collect();
         self.cache.retain(|path, _| keep.contains(path));
-        let mut budget = 128 * 1024 * 1024u64;
+        let mut budget = IO_BUDGET;
         let mut cached_records: usize =
             self.cache.values().map(|e| e.parsed.identified.len()).sum();
         for path in &paths {
@@ -123,26 +124,18 @@ impl LogScan {
             if stamp.size > budget {
                 return Err("Log scan budget reached; continuing next poll".into());
             }
-            budget -= stamp.size;
-            let file = open_regular(path)?;
+            let mut file = open_regular(path)?;
             if Stamp::from(&file.metadata().map_err(|e| e.to_string())?) != stamp {
                 return Err("Log changed while opening; retrying".into());
             }
-            let mut bytes = Vec::new();
-            (&file)
-                .take(FILE_LIMIT + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| e.to_string())?;
-            if bytes.len() as u64 != stamp.size {
-                return Err("Log changed while reading; retrying".into());
-            }
-            let entry = parse(
-                &bytes,
+            let entry = stream::parse(
+                &mut file,
                 self.layout,
                 path.extension().is_some_and(|e| e == "json"),
                 stamp,
                 deadline,
                 self.cache.get(path),
+                &mut budget,
             )?;
             if Stamp::from(&file.metadata().map_err(|e| e.to_string())?) != stamp
                 || Stamp::from(&fs::symlink_metadata(path).map_err(|e| e.to_string())?) != stamp
@@ -263,92 +256,6 @@ pub(super) fn open_regular(path: &Path) -> Result<File, String> {
         return Err("Expected a regular file".into());
     }
     Ok(file)
-}
-fn parse(
-    bytes: &[u8],
-    layout: Layout,
-    session: bool,
-    stamp: Stamp,
-    deadline: Instant,
-    old: Option<&Entry>,
-) -> Result<Entry, String> {
-    let mut parsed = Arc::new(Parsed::default());
-    if matches!(layout, Layout::Gemini) && session {
-        if bytes.len() > RECORD_LIMIT {
-            return Err("Gemini session exceeds 8 MiB".into());
-        }
-        let details =
-            shared::provider_details(bytes, 2).ok_or("Invalid or over-limit Gemini session")?;
-        let entry = Arc::make_mut(&mut parsed);
-        entry.anonymous = details.record.usage;
-        for row in details.models {
-            entry.anonymous_models.add(ModelUsage {
-                model: row.model,
-                usage: row.usage,
-                cost: None,
-            })?;
-        }
-        return Ok(Entry {
-            stamp,
-            parsed,
-            checkpoint: None,
-        });
-    }
-    // Metadata alone cannot prove an append. Verify every cached prefix byte,
-    // including the middle of the file, before reusing any decoded records.
-    let reused = checkpoint(bytes, stamp, old, deadline)?;
-    let offset = reused.map_or(0, |c| c.length);
-    if let Some(reused) = reused {
-        parsed = reused.parsed.clone();
-    }
-    let end = bytes[offset..]
-        .iter()
-        .rposition(|b| *b == b'\n')
-        .map_or(offset, |last| offset + last + 1);
-    lines(&bytes[offset..end], layout, &mut parsed, deadline)?;
-    let checkpoint = Checkpoint {
-        length: end,
-        hash: if end == offset {
-            reused.map(|c| c.hash).unwrap_or_else(|| blake3::hash(&[]))
-        } else {
-            digest(&bytes[..end], deadline)?
-        },
-        parsed: parsed.clone(),
-    };
-    // Complete records without LF remain visible, but are deliberately absent
-    // from the checkpoint. Appending may extend or invalidate this same line.
-    lines(&bytes[end..], layout, &mut parsed, deadline)?;
-    Ok(Entry {
-        stamp,
-        parsed,
-        checkpoint: Some(checkpoint),
-    })
-}
-fn digest(bytes: &[u8], deadline: Instant) -> Result<blake3::Hash, String> {
-    let mut hash = blake3::Hasher::new();
-    for chunk in bytes.chunks(64 * 1024) {
-        check(deadline)?;
-        hash.update(chunk);
-    }
-    Ok(hash.finalize())
-}
-fn checkpoint<'a>(
-    bytes: &[u8],
-    stamp: Stamp,
-    old: Option<&'a Entry>,
-    deadline: Instant,
-) -> Result<Option<&'a Checkpoint>, String> {
-    let Some(old) = old.filter(|old| {
-        old.stamp.device == stamp.device
-            && old.stamp.inode == stamp.inode
-            && old.stamp.size < stamp.size
-    }) else {
-        return Ok(None);
-    };
-    let Some(checkpoint) = old.checkpoint.as_ref().filter(|c| c.length <= bytes.len()) else {
-        return Ok(None);
-    };
-    Ok((digest(&bytes[..checkpoint.length], deadline)? == checkpoint.hash).then_some(checkpoint))
 }
 fn lines(
     bytes: &[u8],
