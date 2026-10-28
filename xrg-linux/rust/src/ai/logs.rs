@@ -9,6 +9,7 @@ use std::{
     io::Read,
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
@@ -29,6 +30,8 @@ struct Stamp {
     size: u64,
     seconds: i64,
     nanos: i64,
+    changed_seconds: i64,
+    changed_nanos: i64,
 }
 impl Stamp {
     fn from(m: &fs::Metadata) -> Self {
@@ -38,18 +41,31 @@ impl Stamp {
             size: m.len(),
             seconds: m.mtime(),
             nanos: m.mtime_nsec(),
+            changed_seconds: m.ctime(),
+            changed_nanos: m.ctime_nsec(),
         }
     }
 }
+#[derive(Clone)]
 struct Recorded {
     usage: Usage,
     models: Vec<ModelUsage>,
 }
-struct Entry {
-    stamp: Stamp,
+#[derive(Clone, Default)]
+struct Parsed {
     anonymous: Usage,
     anonymous_models: Totals,
     identified: BTreeMap<String, Recorded>,
+}
+struct Checkpoint {
+    length: usize,
+    hash: blake3::Hash,
+    parsed: Arc<Parsed>,
+}
+struct Entry {
+    stamp: Stamp,
+    parsed: Arc<Parsed>,
+    checkpoint: Option<Checkpoint>,
 }
 pub struct Scan {
     pub usage: Usage,
@@ -89,7 +105,8 @@ impl LogScan {
         let keep: BTreeSet<_> = paths.iter().cloned().collect();
         self.cache.retain(|path, _| keep.contains(path));
         let mut budget = 128 * 1024 * 1024u64;
-        let mut cached_records: usize = self.cache.values().map(|e| e.identified.len()).sum();
+        let mut cached_records: usize =
+            self.cache.values().map(|e| e.parsed.identified.len()).sum();
         for path in &paths {
             check(deadline)?;
             let before = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
@@ -125,14 +142,18 @@ impl LogScan {
                 path.extension().is_some_and(|e| e == "json"),
                 stamp,
                 deadline,
+                self.cache.get(path),
             )?;
             if Stamp::from(&file.metadata().map_err(|e| e.to_string())?) != stamp
                 || Stamp::from(&fs::symlink_metadata(path).map_err(|e| e.to_string())?) != stamp
             {
                 return Err("Log changed during parsing; retrying".into());
             }
-            let old_count = self.cache.get(path).map_or(0, |e| e.identified.len());
-            let next_count = cached_records - old_count + entry.identified.len();
+            let old_count = self
+                .cache
+                .get(path)
+                .map_or(0, |e| e.parsed.identified.len());
+            let next_count = cached_records - old_count + entry.parsed.identified.len();
             if next_count > USAGE_LIMIT {
                 return Err("Provider message cache limit exceeded".into());
             }
@@ -146,11 +167,11 @@ impl LogScan {
         let mut identified = BTreeMap::new();
         for entry in self.cache.values() {
             check(deadline)?;
-            total = add(total, entry.anonymous)?;
-            for row in entry.anonymous_models.rows() {
+            total = add(total, entry.parsed.anonymous)?;
+            for row in entry.parsed.anonymous_models.rows() {
                 models.add(row.clone())?;
             }
-            for (id, usage) in &entry.identified {
+            for (id, usage) in &entry.parsed.identified {
                 check(deadline)?;
                 if identified.len() >= USAGE_LIMIT && !identified.contains_key(id) {
                     return Err("Provider message identity limit exceeded".into());
@@ -249,19 +270,16 @@ fn parse(
     session: bool,
     stamp: Stamp,
     deadline: Instant,
+    old: Option<&Entry>,
 ) -> Result<Entry, String> {
-    let mut entry = Entry {
-        stamp,
-        anonymous: Usage::default(),
-        anonymous_models: Totals::default(),
-        identified: BTreeMap::new(),
-    };
+    let mut parsed = Arc::new(Parsed::default());
     if matches!(layout, Layout::Gemini) && session {
         if bytes.len() > RECORD_LIMIT {
             return Err("Gemini session exceeds 8 MiB".into());
         }
         let details =
             shared::provider_details(bytes, 2).ok_or("Invalid or over-limit Gemini session")?;
+        let entry = Arc::make_mut(&mut parsed);
         entry.anonymous = details.record.usage;
         for row in details.models {
             entry.anonymous_models.add(ModelUsage {
@@ -270,9 +288,75 @@ fn parse(
                 cost: None,
             })?;
         }
-        return Ok(entry);
+        return Ok(Entry {
+            stamp,
+            parsed,
+            checkpoint: None,
+        });
     }
-    for line in bytes.split(|b| *b == b'\n') {
+    // Metadata alone cannot prove an append. Verify every cached prefix byte,
+    // including the middle of the file, before reusing any decoded records.
+    let reused = checkpoint(bytes, stamp, old, deadline)?;
+    let offset = reused.map_or(0, |c| c.length);
+    if let Some(reused) = reused {
+        parsed = reused.parsed.clone();
+    }
+    let end = bytes[offset..]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(offset, |last| offset + last + 1);
+    lines(&bytes[offset..end], layout, &mut parsed, deadline)?;
+    let checkpoint = Checkpoint {
+        length: end,
+        hash: if end == offset {
+            reused.map(|c| c.hash).unwrap_or_else(|| blake3::hash(&[]))
+        } else {
+            digest(&bytes[..end], deadline)?
+        },
+        parsed: parsed.clone(),
+    };
+    // Complete records without LF remain visible, but are deliberately absent
+    // from the checkpoint. Appending may extend or invalidate this same line.
+    lines(&bytes[end..], layout, &mut parsed, deadline)?;
+    Ok(Entry {
+        stamp,
+        parsed,
+        checkpoint: Some(checkpoint),
+    })
+}
+fn digest(bytes: &[u8], deadline: Instant) -> Result<blake3::Hash, String> {
+    let mut hash = blake3::Hasher::new();
+    for chunk in bytes.chunks(64 * 1024) {
+        check(deadline)?;
+        hash.update(chunk);
+    }
+    Ok(hash.finalize())
+}
+fn checkpoint<'a>(
+    bytes: &[u8],
+    stamp: Stamp,
+    old: Option<&'a Entry>,
+    deadline: Instant,
+) -> Result<Option<&'a Checkpoint>, String> {
+    let Some(old) = old.filter(|old| {
+        old.stamp.device == stamp.device
+            && old.stamp.inode == stamp.inode
+            && old.stamp.size < stamp.size
+    }) else {
+        return Ok(None);
+    };
+    let Some(checkpoint) = old.checkpoint.as_ref().filter(|c| c.length <= bytes.len()) else {
+        return Ok(None);
+    };
+    Ok((digest(&bytes[..checkpoint.length], deadline)? == checkpoint.hash).then_some(checkpoint))
+}
+fn lines(
+    bytes: &[u8],
+    layout: Layout,
+    parsed: &mut Arc<Parsed>,
+    deadline: Instant,
+) -> Result<(), String> {
+    for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
         check(deadline)?;
         if line.len() > RECORD_LIMIT {
             return Err("JSONL record exceeds 8 MiB".into());
@@ -280,7 +364,7 @@ fn parse(
         if matches!(layout, Layout::Codex) {
             if let Some(total) = shared::codex_record(line) {
                 // Each event is a cumulative session snapshot, never an increment.
-                entry.anonymous.total = total;
+                Arc::make_mut(parsed).anonymous.total = total;
             }
         } else if let Some(details) = shared::provider_details(
             line,
@@ -290,6 +374,7 @@ fn parse(
                 1
             },
         ) {
+            let entry = Arc::make_mut(parsed);
             let usage = details.record.usage;
             let id = details.record.identity;
             let models: Vec<_> = details
@@ -314,5 +399,7 @@ fn parse(
             }
         }
     }
-    Ok(entry)
+    Ok(())
 }
+#[cfg(test)]
+mod tests;

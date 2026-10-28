@@ -61,6 +61,14 @@ the parser and its transitive dependency versions. Preview source archives retai
 their Cargo sources and applicable license notices. The streaming API is pinned
 to the plist 1.10 minor release as required by that API's stability policy.
 
+## Linux Rust transcript cache fingerprints
+
+The Linux AI log scanner uses the BLAKE3 crate under its CC0-1.0 license option.
+The text is retained in `xrg-linux/rust/licenses/blake3-CC0.txt`. Cargo.lock records
+exact versions and dependencies; preview source archives retain the corresponding
+Cargo sources and license notices. These digests verify reusable parsed prefixes;
+they are not used as authentication or encryption.
+
 ## Linux preview archives
 
 Preview archives retain the project license/credits, dependency license files and

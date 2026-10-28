@@ -814,8 +814,28 @@ and [Ollama's inventory API](https://docs.ollama.com/api/tags).
 
 The shared Swift decoders own JSON/metrics interpretation. Rust owns discovery,
 metadata caches, reads, SQLite and local HTTP acquisition. Unchanged log files are
-not reread; changed files are reparsed so truncation/replacement cannot leave old
-usage behind. Incomplete scans publish no partial provider total. A failed source
+not reread. Cache stamps include device/inode, size, modification time and change
+time, so ordinary same-size rewrites invalidate the cache even if mtime is restored.
+Changed files are read in full and checked for mutation before/after parsing.
+Growing JSONL files can reuse a decoded prefix only when device/inode still match
+and a BLAKE3 digest verifies **all** bytes through the preceding complete newline.
+Edits in the middle of a growing file invalidate reuse, not just boundary edits.
+Truncation, replacement and same-size rewrites parse from the beginning. Gemini
+whole-session JSON documents also always parse from the beginning.
+
+Complete records lacking a final newline remain visible, but are excluded from
+the reusable checkpoint. Each append reparses that final line, including partial
+JSON/UTF-8, so anonymous records are not added twice and an extended invalid line
+cannot retain its former count. Message-ID replacements, copied-message
+deduplication, model groups and Codex's last cumulative total keep the same rules.
+A failed file read/parse, including overflow or budget exhaustion, leaves that
+file's cached snapshot and checkpoint intact. A provider result is published only after a
+complete sweep. The checkpoint and visible snapshot share storage when possible;
+an unterminated usage record can require a second bounded parsed view, each
+subject to the existing message/model caps. This reduces JSON decoding work,
+**not changed-file I/O**; incremental I/O for very large logs remains future work.
+
+Incomplete scans publish no partial provider total. A failed source
 shows unavailable and the last complete total as stale; it contributes no synthetic
 idle series. First samples, source changes, counter resets and recovery establish
 new rate baselines. The graph combines rates only from currently readable sources.
@@ -1120,8 +1140,8 @@ automated tests use fixtures and make no weather requests.
 
 1. Xe PMU activity, additional vendor counters, calibrated thermistor
    support and optional process priority controls.
-2. Safe Codex model attribution where cumulative records permit it, append-offset
-   scanning for very large logs and optional price tables.
+2. Safe Codex model attribution where cumulative records permit it, incremental
+   I/O for very large logs beyond the verified append-parsing cache, and optional price tables.
 3. Deeper metric preferences, broader XTF color-space support and legacy-field mappings
    as their corresponding Rust features become available.
 4. Wayland/X11 behavior and accessibility validation. GTK4 removed GTK3's global
