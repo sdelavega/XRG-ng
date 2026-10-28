@@ -45,6 +45,11 @@ impl Harness {
         )
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64, root: &Path) -> Result<bool, String> {
+        // The outer driver can keep polling after completion until every graph
+        // has drawn three times. Never consume the closed window a second time.
+        if self.stage == 3 {
+            return Ok(true);
+        }
         self.inject(shell);
         let previous = self.stage;
         match self.stage {
@@ -177,6 +182,7 @@ impl Harness {
                     "Grouped view retained stale source data",
                 )?;
                 window.cancel.emit_clicked();
+                self.stage = 3;
                 return Ok(true);
             }
             _ => (),

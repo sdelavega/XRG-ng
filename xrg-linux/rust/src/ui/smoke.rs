@@ -298,7 +298,16 @@ impl Harness {
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
         if let Some(harness) = &mut self.ai_view {
-            return harness.tick(shell, sequence, &self.root);
+            let finished = harness.tick(shell, sequence, &self.root)?;
+            if finished {
+                // Reproduce fast completion followed by another driver tick,
+                // even when this machine already satisfies the drawing gate.
+                require(
+                    harness.tick(shell, sequence, &self.root)?,
+                    "AI display smoke completion was not stable",
+                )?;
+            }
+            return Ok(finished);
         }
         if let Some(harness) = &mut self.theme_import {
             return harness.tick(shell, sequence, &self.root);
