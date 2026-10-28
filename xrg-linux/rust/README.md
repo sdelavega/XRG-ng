@@ -104,6 +104,31 @@ series; read failures show unavailable/partial labels. Neither makes core-only
 headless or live GTK smoke checks fail on desktops/containers without that hardware.
 The graph area scrolls on small windows and exposes details to accessibility APIs.
 
+The **Memory** panel carries forward the C collector's cache, swap and paging
+readings. Its curves follow the label order: **RAM used** (`MemTotal − MemAvailable`)
+as a percentage of RAM, reported **Cached** as a percentage of RAM when readable,
+then **swap used** as a percentage of configured swap. These are independent
+curves, not stacked components: Linux memory categories overlap, and Cached is
+not subtracted again from the kernel's available-memory estimate. Zero swap
+capacity says **no swap** and produces no swap percentage; an enabled but empty
+swap pool has a valid zero curve. Missing/invalid swap counters say **swap n/a**.
+
+Right-click Memory → **Live details…** for used/total/available RAM, reported free,
+buffers, cache, slab/reclaimable slab, shared memory, dirty/writeback and swap
+values. Buffers and Slab are not labeled macOS wired memory or added to infer
+application memory. Paging details use elapsed monotonic time: `pgpgin/pgpgout`
+are **KiB/s** (including file-backed I/O), while `pswpin/pswpout` are **pages/s**.
+They are separate quantities; the collector does not assume a 4 KiB page size.
+First samples, counter regressions, missing reads and clock gaps above 300 seconds
+establish a fresh interval before showing a rate. Valid no-change intervals show
+zero. Optional failures retain valid RAM readings and explain unavailable values.
+Memory read failures clear its plotted histories; capacity changes reset the
+affected curves. All parsing/reads run on the system worker, with 256 KiB file,
+4,096-line and 4,096-byte line limits. These counters describe the exposed `/proc`
+scope, which may exceed a container's cgroup limit. See the kernel's
+[memory-counter definitions](https://www.kernel.org/doc/html/latest/filesystems/proc.html#meminfo)
+and [vmstat export units](https://code.googlesource.com/linux/torvalds/linux/+/0cb552aa97843f24549ce808883494138471c16b/mm/vmstat.c#1800).
+
 The **VRAM** graph displays the driver-reported VRAM pool used as a percentage of
 each adapter's reported total (up to three adapters). Activity and memory share one collector
 sample and the **GPU and VRAM** source selector. AMD/NVIDIA counters feed this view

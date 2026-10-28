@@ -11,7 +11,9 @@ vertical or horizontal, with Celsius/Fahrenheit system temperature display.
 Per-core/interface/disk/GPU selectors and a sortable process table with name/UID
 filters are available in the new UI.
 Driver-reported VRAM and fan RPM graphs, plus battery health/time details, use available
-driver counters without fabricating unsupported readings. AI monitoring covers
+driver counters without fabricating unsupported readings. The Memory panel adds
+cache/swap curves and live details for RAM categories and paging/swap rates; see
+the [memory counter behavior](rust/README.md#construction). AI monitoring covers
 Claude/Codex/Gemini/Hermes usage and Ollama model
 status; see the [new provider sources and limits](rust/README.md#ai-monitoring). The instructions below describe the existing
 C/GTK3 implementation, retained during migration.

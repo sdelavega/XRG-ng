@@ -23,6 +23,7 @@ pub(super) struct Harness {
     menu_paintable: Option<gtk::WidgetPaintable>,
     details: Option<Rc<super::menus::Details>>,
     neural_panel: Option<xrg_ng_linux::engine::Panel>,
+    memory_panel: Option<xrg_ng_linux::engine::Panel>,
     expected: Option<Settings>,
     since: Instant,
 }
@@ -63,6 +64,7 @@ impl Harness {
             menu_paintable: None,
             details: None,
             neural_panel: None,
+            memory_panel: None,
             expected: None,
             since: Instant::now(),
         })
@@ -152,6 +154,14 @@ impl Harness {
             shell.update_panel_text();
             shell.update_details();
             shell.areas[Module::Tpu.index()].queue_draw();
+        }
+        if let Some(panel) = &self.memory_panel {
+            if let Some(snapshot) = shell.state.borrow_mut().as_mut() {
+                snapshot.panels[Module::Memory.index()] = panel.clone();
+            }
+            shell.update_panel_text();
+            shell.update_details();
+            shell.areas[Module::Memory.index()].queue_draw();
         }
         match self.stage {
             0 if sequence >= 2 => {
@@ -1254,6 +1264,56 @@ impl Harness {
                     dialog.snapshot(&PathBuf::from(path))?;
                 }
                 dialog.cancel.emit_clicked();
+                use xrg_ng_linux::memory::{self, Paging, View};
+                let memory = memory::parse(
+                    "MemTotal: 8388608 kB\nMemAvailable: 3145728 kB\nMemFree: 1048576 kB\nBuffers: 262144 kB\nCached: 2097152 kB\nSlab: 524288 kB\nSReclaimable: 262144 kB\nSUnreclaim: 262144 kB\nShmem: 131072 kB\nDirty: 128 kB\nWriteback: 0 kB\nSwapTotal: 4194304 kB\nSwapFree: 3145728 kB\n",
+                );
+                let mut view = View::default();
+                let mut panel = None;
+                for index in 0..120 {
+                    let counters = Ok(Paging {
+                        io_kib: Ok([1000 + index * 64, 2000 + index * 32]),
+                        swap_pages: Ok([index * 2, index]),
+                    });
+                    panel = Some(view.panel(&memory, &counters, index as f64 + 1.));
+                }
+                self.memory_panel = panel;
+                self.details = Some(shell.details(Module::Memory));
+                self.details
+                    .as_ref()
+                    .unwrap()
+                    .window
+                    .set_default_size(840, 900);
+                self.stage = 37;
+            }
+            37 if self.since.elapsed() > Duration::from_millis(300) => {
+                let details = self.details.take().unwrap();
+                let text = details.text();
+                for expected in [
+                    "RAM 62.5%",
+                    "cache 25.0%",
+                    "swap 25.0%",
+                    "Page I/O in / out: 64.0 / 32.0 KiB/s",
+                    "Swap in / out: 2.0 / 1.0 pages/s",
+                    "not stacked",
+                ] {
+                    require(
+                        text.contains(expected),
+                        &format!("Memory details omitted {expected}"),
+                    )?;
+                }
+                require(
+                    shell.state.borrow().as_ref().unwrap().panels[Module::Memory.index()]
+                        .series
+                        .len()
+                        == 3,
+                    "Memory graph lost its independent RAM/cache/swap curves",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_MEMORY_IMAGE") {
+                    details.snapshot(&PathBuf::from(path))?;
+                }
+                details.window.close();
+                self.memory_panel.take();
                 return Ok(true);
             }
             _ => (),

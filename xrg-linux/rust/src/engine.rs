@@ -95,7 +95,7 @@ pub struct Sampler {
     npu_histories: BTreeMap<String, History>,
     npu_activity_mode: bool,
     metrics: crate::metrics::Sampler,
-    memory_history: History,
+    memory: crate::memory::View,
     temperature_history: History,
     temperature_members: Option<Vec<String>>,
     inventory: crate::metrics::Inventory,
@@ -161,7 +161,7 @@ impl Sampler {
             gpu_histories: BTreeMap::new(),
             gpu_memory: crate::gpu_memory::View::default(),
             metrics: crate::metrics::Sampler::default(),
-            memory_history: History::new(120),
+            memory: crate::memory::View::default(),
             temperature_history: History::new(120),
             temperature_members: None,
             inventory: crate::metrics::Inventory::default(),
@@ -191,25 +191,10 @@ impl Sampler {
         let time = self.start.elapsed().as_secs_f64();
         let metrics = self.metrics.sample(&self.source, time);
         self.inventory = metrics.inventory;
-        let memory = self.source.memory();
+        let memory = crate::memory::read(self.source.proc_root());
         let valid = metrics.valid && memory.is_ok();
-        let mut series = Vec::new();
-        let label = match memory {
-            Ok(value) => {
-                self.memory_history.append(value);
-                series.push(self.memory_history.values());
-                format!("{value:.1}%")
-            }
-            Err(error) => error,
-        };
-        let memory = Panel {
-            title: "Memory",
-            detail: label.clone(),
-            label,
-            series,
-            scale: Scale::Percent,
-            temperature_text: None,
-        };
+        let paging = crate::memory::read_paging(self.source.proc_root());
+        let memory = self.memory.panel(&memory, &paging, time);
         let mut panels = vec![metrics.cpu, memory, metrics.network, metrics.disk];
         panels.push(self.battery_panel());
         panels.push(self.temperature_panel());

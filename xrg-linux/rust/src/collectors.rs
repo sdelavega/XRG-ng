@@ -50,20 +50,7 @@ pub fn cpu_percent(previous: Cpu, next: Cpu) -> Option<f64> {
     Some(100.0 * (total - idle) as f64 / total as f64)
 }
 pub fn memory(text: &str) -> Result<f64, String> {
-    let field = |name| {
-        text.lines()
-            .find_map(|line| {
-                let mut parts = line.split_whitespace();
-                (parts.next() == Some(name)).then(|| number(parts.next()))
-            })
-            .unwrap_or_else(|| Err(invalid("Missing memory counter")))
-    };
-    let total = field("MemTotal:")?;
-    let available = field("MemAvailable:")?;
-    if total == 0 || available > total {
-        return Err(invalid("Invalid memory totals"));
-    }
-    Ok(100.0 * (total - available) as f64 / total as f64)
+    crate::memory::parse(text).map(|reading| reading.used_percent())
 }
 pub fn network(text: &str) -> Result<[u64; 2], String> {
     if text.lines().count() < 2 {
@@ -179,7 +166,7 @@ impl LinuxSources {
         cpu(&Self::read(&self.proc, "stat")?)
     }
     pub fn memory(&self) -> Result<f64, String> {
-        memory(&Self::read(&self.proc, "meminfo")?)
+        crate::memory::read(&self.proc).map(|reading| reading.used_percent())
     }
     pub fn network(&self) -> Result<[u64; 2], String> {
         network(&Self::read(&self.proc, "net/dev")?)
