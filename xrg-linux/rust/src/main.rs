@@ -39,9 +39,6 @@ fn main() -> ExitCode {
                     panel.display_label(settings.temperature_units)
                 );
             }
-            if let Some(weather) = snapshot.weather {
-                println!("Weather: {}", weather.summary);
-            }
             if index + 1 < count {
                 std::thread::sleep(Duration::from_secs(1));
             }

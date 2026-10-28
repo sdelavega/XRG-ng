@@ -48,3 +48,5 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "binary=$cargo_target/$configuration/xrg-ng-linux" >> "$GITHUB_OUTPUT"
     echo "swift_library=$swift_bin/libXRGSharedCore.so" >> "$GITHUB_OUTPUT"
 fi
+XRG_SMOKE_WEATHER_GRAPH=1 XRG_SMOKE_WEATHER_GRAPH_IMAGE="$output/weather-graph.png" XRG_SMOKE_WEATHER_STALE_IMAGE="$output/weather-stale.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    cargo run "${cargo_options[@]}" -- --smoke-test

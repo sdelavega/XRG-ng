@@ -61,6 +61,7 @@ pub(super) fn draw(
     units: Units,
     (style, bars): (GraphStyle, &ActivityBars),
 ) {
+    let units = panel.map_or(units, |p| p.scale.temperature_units(units));
     let (w, h) = (width as f64, height as f64);
     let title = panel.map_or(title, |p| p.title);
     let title = title.split(" · ").next().unwrap_or(title);

@@ -17,6 +17,7 @@ const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
+    weather_graph: Option<super::weather_graph_smoke::Harness>,
     process_actions: Option<super::process_actions_smoke::Harness>,
     dialog: Option<Rc<Dialog>>,
     process: Option<Rc<super::processes::Window>>,
@@ -63,6 +64,23 @@ impl Harness {
             )
             .map_err(|e| e.to_string())?;
         }
+        if std::env::var("XRG_SMOKE_WEATHER_GRAPH").as_deref() == Ok("1") {
+            let mut settings = Settings {
+                theme: ThemeChoice::Builtin {
+                    name: "Midnight".into(),
+                },
+                ..Settings::default()
+            };
+            for m in &mut settings.modules {
+                m.visible = matches!(m.id, Module::Cpu | Module::Memory);
+            }
+            settings.module_mut(Module::Weather).height = Some(128);
+            fs::write(
+                root.join("settings.conf"),
+                serde_json::to_vec(&settings).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         fs::write(root.join("invalid.json"), "{broken").map_err(|e| e.to_string())?;
         fs::write(root.join("legacy.ini"), LEGACY_FIXTURE).map_err(|e| e.to_string())?;
         fs::write(
@@ -73,6 +91,8 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            weather_graph: (std::env::var("XRG_SMOKE_WEATHER_GRAPH").as_deref() == Ok("1"))
+                .then(super::weather_graph_smoke::Harness::new),
             process_actions: if std::env::var("XRG_SMOKE_PROCESS_ACTIONS").as_deref() == Ok("1") {
                 Some(super::process_actions_smoke::Harness::new()?)
             } else {
@@ -246,6 +266,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if self.weather_graph.is_some() {
+            return "weather-graph=fixture-no-network";
+        }
         if std::env::var_os("XRG_SMOKE_STYLE").is_some() {
             return "compact-style live Linux readings";
         }
@@ -256,6 +279,9 @@ impl Harness {
         }
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.weather_graph {
+            return harness.tick(shell, sequence);
+        }
         if let Some(harness) = &mut self.process_actions {
             return harness.tick(shell);
         }
@@ -556,7 +582,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 14 && loaded.processes.limit == 20,
+                    loaded.version == 15 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;

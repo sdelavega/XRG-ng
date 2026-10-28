@@ -125,6 +125,10 @@ fn version_eleven_loads_existing_sensor_choices_without_writing_and_protects_inv
     expected.activity_bars.visible = false;
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 11.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     let original = serde_json::to_vec(&wire).unwrap();
     std::fs::write(&path, &original).unwrap();
     let (mut store, loaded, error) = Store::open(Some(path.clone()));

@@ -45,6 +45,10 @@ fn previous_settings_keep_the_original_minimum_without_an_early_write() {
     expected.activity_bars.color = [0.2, 0.3, 0.4, 0.5];
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 12.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     wire.as_object_mut().unwrap().remove("graph_width");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();

@@ -43,6 +43,10 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         settings.ai.ollama = false;
         let mut wire = serde_json::to_value(&settings).unwrap();
         wire["version"] = version.into();
+        wire["modules"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|m| m["id"] != "weather");
         let modules = wire["modules"].as_array_mut().unwrap();
         if version <= 2 {
             modules.retain(|m| !["gpu_memory", "fans"].contains(&m["id"].as_str().unwrap()));
@@ -54,15 +58,11 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         fs::write(f.path(), &original).unwrap();
         let (mut store, loaded, error) = Store::open(Some(f.path()));
         assert!(error.is_none(), "version {version}: {error:?}");
-        assert_eq!(loaded.version, 14);
+        assert_eq!(loaded.version, 15);
         assert!(loaded.modules.iter().all(|m| m.height.is_none()
             && m.effective_height(loaded.graph_height) == loaded.graph_height));
-        assert!(
-            loaded
-                .modules
-                .iter()
-                .all(|m| !m.visible && m.style == GraphStyle::Hollow)
-        );
+        assert!(loaded.modules.iter().all(|m| !m.visible
+            && (m.id == xrg_ng_linux::settings::Module::Weather || m.style == GraphStyle::Hollow)));
         assert_eq!(loaded.metrics, settings.metrics);
         assert_eq!(loaded.theme, settings.theme);
         assert_eq!(loaded.ai, settings.ai);

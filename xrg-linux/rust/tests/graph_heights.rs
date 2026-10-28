@@ -106,6 +106,10 @@ fn version_nine_preserves_existing_layout_and_palette_until_explicit_save() {
     expected.ai.ollama = false;
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 9.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = Store::open(Some(f.path()));
@@ -126,7 +130,7 @@ fn version_nine_preserves_existing_layout_and_palette_until_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        14
+        15
     );
 }
 #[test]

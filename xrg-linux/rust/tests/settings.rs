@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 15;
+    value.version = 16;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -386,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        14
+        15
     );
 }
 #[test]
@@ -469,8 +469,8 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 14);
-    assert_eq!(migrated.modules.len(), 12);
+    assert_eq!(migrated.version, 15);
+    assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
     assert_eq!(migrated.processes, old.processes);
@@ -512,6 +512,10 @@ fn version_three_ai_defaults_upgrade_without_writes_and_custom_sources_round_tri
     let original = Settings::default();
     let mut wire = serde_json::to_value(&original).unwrap();
     wire["version"] = 3.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     wire.as_object_mut().unwrap().remove("ai");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
@@ -536,6 +540,10 @@ fn version_four_keeps_ai_and_layout_and_adds_opt_in_weather_without_writing() {
     old.modules[0].visible = false;
     let mut wire = serde_json::to_value(&old).unwrap();
     wire["version"] = 4.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     wire.as_object_mut().unwrap().remove("weather");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
@@ -568,6 +576,10 @@ fn version_five_adds_display_defaults_without_writes_and_new_choices_persist() {
     expected.ai.enabled = [false; 4];
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 5.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     for field in ["layout", "temperature_units"] {
         wire.as_object_mut().unwrap().remove(field);
     }
@@ -598,6 +610,10 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     expected.metrics.disk = Some("sda".into());
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 6.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     wire["metrics"]
         .as_object_mut()
         .unwrap()
@@ -612,7 +628,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        14
+        15
     );
 }
 
@@ -658,4 +674,39 @@ fn sensor_source_validation_and_snapshot_matching_are_scoped_to_their_graphs() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn weather_module_upgrade_preserves_old_graphs_and_sources_without_enabling_requests() {
+    let f = Fixture::new();
+    let mut settings = Settings::default();
+    settings.modules.pop();
+    settings.modules.reverse();
+    for module in &mut settings.modules {
+        module.visible = false;
+    }
+    settings.graph_width = 440;
+    settings.modules[0].height = Some(164);
+    settings.weather = xrg_ng_linux::weather::Preferences {
+        station: "KSEA".into(),
+        ..Default::default()
+    };
+    settings.version = 14;
+    let original = serde_json::to_vec(&settings).unwrap();
+    fs::write(f.path(), &original).unwrap();
+    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(&loaded.modules[..12], &settings.modules);
+    assert_eq!(loaded.weather, settings.weather);
+    assert_eq!(loaded.graph_width, 440);
+    assert_eq!(loaded.modules[0].height, Some(164));
+    assert!(!loaded.module(Module::Weather).visible);
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+    store.save(&loaded).unwrap();
+    assert_eq!(
+        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
+        loaded
+    );
+    settings.modules.pop();
+    assert!(Settings::parse(&serde_json::to_vec(&settings).unwrap()).is_err());
 }

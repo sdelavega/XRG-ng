@@ -7,8 +7,9 @@ aggregate CPU, memory, network receive/send, physical-disk read/write, system
 battery capacity, temperature, GPU activity, AI token-rate, process-count and
 TPU/NPU neural accelerator, VRAM pool and fan RPM graphs, with per-core/interface/disk/GPU/temperature/fan selection and a
 sortable, filterable process table.
-An opt-in **Weather** window shows station observations using the shared Swift
-METAR decoder, with saved station, units and refresh controls.
+An opt-in **Weather** graph and settings window show station observations using
+the shared Swift METAR decoder, with saved visibility, station, units and refresh
+controls.
 The main window follows the macOS strip: a draggable hostname band with a compact
 menu, plots with overlaid readings, thin separators and the same six Swift theme
 palettes. New profiles default to **Classic**, 140-pixel graph width and 90-pixel
@@ -350,6 +351,10 @@ own unchanged twenty-second deadline and targets only disposable child processes
 It checks row/action state, a frozen context-menu target, cancel, pause/resume,
 selection through sorting, parent-close cancellation, terminate and force kill.
 Its process-menu, confirmation and controls screenshots are exported separately.
+A separate weather-graph smoke invocation uses a visibly labeled fixture with
+network workers disabled. It checks visibility drafts, saved controls, unit and
+station guards, stale gaps, disabling, and compact drawing; fresh/stale screenshots
+are exported.
 Width smoke checks exercise draft cancellation, Apply/reopen, default restoration,
 wide vertical scrolling and compact horizontal allocations, with screenshots of
 both layouts and the control. Kernel-backed Rust regressions also verify stale start/UID/directory rejection,
@@ -619,6 +624,10 @@ Versions 1–12 without an explicit width gain the 140-pixel minimum graph width
 write. Invalid widths reject the whole document. The C app does not serialize its
 `graph_width` field; legacy import preserves the current minimum rather than
 mistaking saved window geometry for graph width.
+Version 15 appends a hidden Weather module to earlier twelve-graph layouts,
+retaining their order, source preferences and deliberately all-hidden states. It
+does not enable requests. Invalid older module sets remain rejected; migration
+writes only when preferences are saved.
 Version 14 adds optional activity-bar series-color inheritance; older saved bar
 colors stay explicit. Existing dimensions and ordering are not rewritten.
 Writes use private temporary files and atomic replacement; a single background
@@ -632,14 +641,14 @@ silently replacing the external changes. No legacy C settings file is modified.
 
 ## AI monitoring
 
-The eighth panel graphs **observed token-counter change per second**, polling every
+The AI panel graphs **observed token-counter change per second**, polling every
 five seconds on a separate worker. Core graphs keep their one-second schedule even
 when provider scans or local APIs are slow. Tooltips/accessibility details show each
 provider's locally retained token total, rate, source, recorded cost when available,
 and errors. These totals are not account billing or a billing-period summary;
 batched log writes produce bursts in the graph.
 
-**AI…** in the toolbar opens **Usage and models** plus a **Sources** tab. Usage
+**AI monitoring…** in the title-band menu opens **Usage and models** plus a **Sources** tab. Usage
 shows provider totals, observed rates, selected source, recorded costs and errors.
 It also shows **token totals by model** for Claude logs, Gemini logs and Hermes
 sessions, plus installed/loaded Ollama model names (up to 128 per list). Ollama
@@ -915,6 +924,37 @@ default**. Enable them, enter a four-character ICAO station such as `KSEA`, choo
 Metric or US units, and press **Apply**. Station codes are normalized to uppercase;
 invalid drafts leave active settings unchanged. **Close** discards unapplied edits.
 No automatic location detection or API key is used.
+
+Check **Show weather graph in the main strip** and **Apply** to display the compact
+panel. This checkbox is independent of **Enable weather requests**; showing or
+hiding a graph never opts in to requests. Graph visibility/order, styles, colors
+and height are also available in Preferences, like other modules. The graph menu
+opens Weather settings and offers **Refresh observations**, using the same bounded
+worker and cooldown. **Close** discards both station and visibility drafts.
+
+The face uses the saved weather Metric/US units independently of the system's
+temperature setting. It shows station, temperature, wind, humidity, visibility and
+pressure, with dewpoint, gust and **H/L (session)** when height permits. Set the
+individual Weather height to about 128 pixels to fit all nine rows at the default
+font. Full values, timestamp, age, source, raw METAR and exact retained session
+high/low remain in Live details, tooltips and accessibility text.
+
+[Fresh graph fixture](../../screenshots/linux-weather-graph-fixture.png) ·
+[Stale graph fixture](../../screenshots/linux-weather-stale-fixture.png).
+The weather observations in these GTK4 Release screenshots are explicitly labeled
+synthetic data, with no network requests; CPU and memory readings are live in a
+Linux validation VM.
+
+The Celsius temperature curve retains up to **120 distinct observations received
+during this station session**, in timestamp order with equal spacing. It is not a
+24-hour archive or a forecast. Repeated worker ticks do not add points; a corrected
+latest observation replaces its timestamp. Missing temperatures and gaps longer
+than two hours stay gaps. Stale/missing observations leave a gap at the newest end
+and no current-value bar. Cached readings are marked **STALE**. An older report
+cannot roll the current values backward. Station changes and disabling clear the
+history; unit/refresh changes reuse it. H/L uses only retained observations, not a
+daily high/low. The signed plot range follows retained Celsius values; its axis is
+not a utilization percentage or a thermal limit.
 
 The window shows temperature, dewpoint, relative humidity, wind/gusts, visibility,
 pressure, observation time/age, source and normalized raw METAR. Missing values

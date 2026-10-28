@@ -15,6 +15,7 @@ pub(super) struct Window {
     pub window: gtk::Window,
     shell: Weak<Shell>,
     pub enabled: gtk::CheckButton,
+    pub show_graph: gtk::CheckButton,
     pub station: gtk::Entry,
     pub units: gtk::DropDown,
     pub interval: gtk::SpinButton,
@@ -41,6 +42,8 @@ impl Window {
         content.append(&note);
         let enabled = gtk::CheckButton::with_label("Enable weather requests");
         content.append(&enabled);
+        let show_graph = gtk::CheckButton::with_label("Show weather graph in the main strip");
+        content.append(&show_graph);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.append(&gtk::Label::new(Some("ICAO station")));
         let station = gtk::Entry::new();
@@ -111,6 +114,7 @@ impl Window {
             window,
             shell: Rc::downgrade(shell),
             enabled,
+            show_graph,
             station,
             units,
             interval,
@@ -124,6 +128,13 @@ impl Window {
         });
         let preferences = &shell.settings.borrow().weather;
         view.enabled.set_active(preferences.enabled);
+        view.show_graph.set_active(
+            shell
+                .settings
+                .borrow()
+                .module(xrg_ng_linux::settings::Module::Weather)
+                .visible,
+        );
         view.station.set_text(&preferences.station);
         view.units
             .set_selected(if preferences.units == Units::Metric {
@@ -182,6 +193,9 @@ impl Window {
                     self.station.set_text(&preferences.station);
                     let mut settings = shell.settings.borrow().clone();
                     settings.weather = preferences;
+                    settings
+                        .module_mut(xrg_ng_linux::settings::Module::Weather)
+                        .visible = self.show_graph.is_active();
                     shell.apply(settings);
                     self.update(
                         shell

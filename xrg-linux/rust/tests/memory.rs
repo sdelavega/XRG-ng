@@ -228,7 +228,7 @@ fn sampler_publishes_memory_details_and_bounded_reads_reject_symlinks_special_fi
     let root = f.0.join("proc");
     let mut sampler = Sampler::with_sources(LinuxSources::with_roots(&root, f.0.join("sys")));
     let snapshot = sampler.sample();
-    assert_eq!(snapshot.panels.len(), 12);
+    assert_eq!(snapshot.panels.len(), 13);
     assert_eq!(snapshot.panels[1].series.len(), 3);
     assert!(snapshot.panels[1].detail.contains("Swap used:"));
     fs::remove_file(root.join("meminfo")).unwrap();

@@ -62,11 +62,18 @@ fn version_eight_upgrades_without_writing_or_changing_styles_sources_and_palette
         module.style = GraphStyle::ALL[i % 4];
         module.visible = i % 2 == 0;
     }
+    expected
+        .module_mut(xrg_ng_linux::settings::Module::Weather)
+        .visible = false;
     expected.move_module(Module::Memory, 6);
     expected.metrics.cpu = Some(2);
     expected.ai.ollama = false;
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 8.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     let original = serde_json::to_vec_pretty(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = Store::open(Some(f.path()));
@@ -89,7 +96,7 @@ fn version_eight_upgrades_without_writing_or_changing_styles_sources_and_palette
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        14
+        15
     );
 }
 #[test]

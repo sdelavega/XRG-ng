@@ -19,6 +19,10 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     expected.activity_bars.use_series_colors = false;
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 10.into();
+    wire["modules"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "weather");
     wire.as_object_mut().unwrap().remove("activity_bars");
     let original = serde_json::to_vec(&wire).unwrap();
     std::fs::write(&path, &original).unwrap();
@@ -33,7 +37,7 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["version"],
-        14
+        15
     );
     std::fs::remove_dir_all(&root).unwrap();
     assert!(

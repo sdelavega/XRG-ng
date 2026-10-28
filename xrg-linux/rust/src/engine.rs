@@ -22,13 +22,14 @@ pub struct Panel {
 }
 impl Panel {
     pub fn activity_description(&self, units: crate::temperature::Units) -> String {
+        let units = self.scale.temperature_units(units);
         let (lower, upper) = self.scale.bounds(&self.series);
         let axis = match self.scale {
             Scale::Percent => "0–100%".into(),
             Scale::Automatic => format!(
                 "{lower:.2}–{upper:.2} in graph units; scales to recent history, not device capacity"
             ),
-            Scale::Celsius => format!(
+            Scale::Celsius | Scale::Weather(_) => format!(
                 "{:.1}–{:.1} °{}; a display range, not a thermal limit",
                 units.convert_celsius(lower),
                 units.convert_celsius(upper),
@@ -58,12 +59,14 @@ impl Panel {
         self
     }
     pub fn display_label(&self, units: crate::temperature::Units) -> std::borrow::Cow<'_, str> {
+        let units = self.scale.temperature_units(units);
         self.temperature_text.as_ref().map_or_else(
             || self.label.as_str().into(),
             |(label, _)| label.render(units),
         )
     }
     pub fn display_detail(&self, units: crate::temperature::Units) -> std::borrow::Cow<'_, str> {
+        let units = self.scale.temperature_units(units);
         self.temperature_text.as_ref().map_or_else(
             || self.detail.as_str().into(),
             |(_, detail)| detail.render(units),
@@ -76,8 +79,20 @@ pub enum Scale {
     Percent,
     Automatic,
     Celsius,
+    /// Weather keeps its own display-unit preference; samples remain Celsius.
+    Weather(crate::temperature::Units),
 }
 impl Scale {
+    pub fn temperature_units(
+        self,
+        fallback: crate::temperature::Units,
+    ) -> crate::temperature::Units {
+        if let Self::Weather(units) = self {
+            units
+        } else {
+            fallback
+        }
+    }
     pub fn bounds(self, series: &[Vec<f64>]) -> (f64, f64) {
         match self {
             Self::Percent => (0., 100.),
@@ -85,6 +100,19 @@ impl Scale {
                 0.,
                 series.iter().flatten().copied().fold(1.0, f64::max) * 1.1,
             ),
+            Self::Weather(_) => {
+                let mut values = series.iter().flatten().copied().filter(|v| v.is_finite());
+                if let Some(first) = values.next() {
+                    let (low, high) =
+                        values.fold((first, first), |(low, high), v| (low.min(v), high.max(v)));
+                    (
+                        ((low - 5.) / 5.).floor() * 5.,
+                        ((high + 5.) / 5.).ceil() * 5.,
+                    )
+                } else {
+                    (-10., 40.)
+                }
+            }
             Self::Celsius => {
                 let min = series.iter().flatten().copied().fold(0.0, f64::min);
                 let max = series.iter().flatten().copied().fold(120.0, f64::max);
@@ -111,6 +139,7 @@ pub struct Sampler {
     ai_update: Option<crate::ai::Update>,
     weather: Option<crate::weather::Worker>,
     weather_update: Option<crate::weather::Update>,
+    weather_view: crate::weather::Graph,
     process: crate::process::Collector,
     process_histories: [History; 2],
     tpu: crate::tpu::Collector,
@@ -172,6 +201,7 @@ impl Sampler {
             ai_update: None,
             weather: None,
             weather_update: None,
+            weather_view: Default::default(),
             gpu,
             process,
             process_histories: array::from_fn(|_| History::new(120)),
@@ -228,6 +258,7 @@ impl Sampler {
         {
             self.weather_update = Some(update);
         }
+        panels.push(self.weather_view.panel(self.weather_update.as_ref()));
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,

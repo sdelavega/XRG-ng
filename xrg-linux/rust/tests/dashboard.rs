@@ -20,6 +20,7 @@ fn compact_defaults_and_existing_profiles_preserve_custom_choices() {
     );
     let mut old = defaults;
     old.version = 13;
+    let weather = old.modules.pop().unwrap();
     old.graph_width = 360;
     old.graph_height = 100;
     old.modules.reverse();
@@ -27,7 +28,8 @@ fn compact_defaults_and_existing_profiles_preserve_custom_choices() {
     old.module_mut(Module::Memory).style = GraphStyle::Hollow;
     old.activity_bars.use_series_colors = false;
     let loaded = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    old.version = 14;
+    old.version = 15;
+    old.modules.push(weather);
     assert_eq!(loaded, old);
 }
 #[test]

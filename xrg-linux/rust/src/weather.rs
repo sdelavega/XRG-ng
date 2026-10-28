@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Opt-in station observations; parsing stays in the shared Swift core.
+mod graph;
 use crate::{
     command::BoundedCommand,
     shared::{self, Metar},
 };
+pub use graph::Graph;
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,

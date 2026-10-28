@@ -13,6 +13,7 @@ mod processes;
 mod smoke;
 mod targets;
 mod weather;
+mod weather_graph_smoke;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -218,7 +219,10 @@ impl Shell {
         toolbar.append(&menus::install(&shell));
         shell.refresh();
         shell.fit_contents();
-        if smoke && std::env::var_os("XRG_SMOKE_STYLE").is_none() {
+        if smoke
+            && std::env::var_os("XRG_SMOKE_STYLE").is_none()
+            && std::env::var_os("XRG_SMOKE_WEATHER_GRAPH").is_none()
+        {
             shell.window.set_default_size(680, 1400);
         }
         let weak = Rc::downgrade(&shell);
@@ -667,6 +671,12 @@ pub fn run(smoke_mode: bool) -> bool {
     success.get() && exit == glib::ExitCode::SUCCESS
 }
 fn snapshot_matches(snapshot: &Snapshot, settings: &Settings, module: Module) -> bool {
+    if module == Module::Weather {
+        return snapshot
+            .weather
+            .as_ref()
+            .is_some_and(|w| w.preferences == settings.weather);
+    }
     snapshot.selection.matches(&settings.metrics, module)
         && (module != Module::Ai
             || snapshot

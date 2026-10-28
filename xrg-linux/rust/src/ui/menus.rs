@@ -47,6 +47,11 @@ pub(super) fn install(shell: &Rc<Shell>) -> gtk::MenuButton {
     action(shell, "weather", None, |s, _| {
         s.weather();
     });
+    action(shell, "weather-refresh", None, |s, _| {
+        if s.settings.borrow().weather.enabled {
+            s.weather_control.refresh();
+        }
+    });
     action(shell, "show-all", None, |s, _| {
         let mut settings = s.settings.borrow().clone();
         if settings.modules.iter().all(|m| m.visible) {
@@ -242,6 +247,10 @@ pub(super) fn popup(shell: &Rc<Shell>, module: Module, x: f64, y: f64) -> gtk::P
     commands.append(Some("Graph preferences…"), Some("win.preferences"));
     if module == Module::Ai {
         commands.append(Some("AI monitoring…"), Some("win.ai"));
+    }
+    if module == Module::Weather {
+        commands.append(Some("Weather settings…"), Some("win.weather"));
+        commands.append(Some("Refresh observations"), Some("win.weather-refresh"));
     }
     if module == Module::Processes {
         commands.append(Some("Process table…"), Some("win.processes"));

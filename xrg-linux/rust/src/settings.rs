@@ -35,9 +35,10 @@ pub enum Module {
     Tpu,
     GpuMemory,
     Fans,
+    Weather,
 }
 impl Module {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Cpu,
         Self::Memory,
         Self::Network,
@@ -50,6 +51,7 @@ impl Module {
         Self::Tpu,
         Self::GpuMemory,
         Self::Fans,
+        Self::Weather,
     ];
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|m| *m == self).unwrap()
@@ -68,6 +70,7 @@ impl Module {
             Self::Tpu => "TPU / NPU · neural accelerators",
             Self::GpuMemory => "VRAM · reported pool used",
             Self::Fans => "Fans · RPM",
+            Self::Weather => "Weather · station observations",
         }
     }
 }
@@ -426,7 +429,7 @@ fn default_graph_width() -> u32 {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 14,
+            version: 15,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -434,7 +437,10 @@ impl Default for Settings {
                 .into_iter()
                 .map(|id| ModuleSetting {
                     id,
-                    visible: !matches!(id, Module::Processes | Module::GpuMemory | Module::Fans),
+                    visible: !matches!(
+                        id,
+                        Module::Processes | Module::GpuMemory | Module::Fans | Module::Weather
+                    ),
                     style: GraphStyle::Solid,
                     colors: GraphColors::default(),
                     height: None,
@@ -457,7 +463,7 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    pub fn default_order() -> [Module; 12] {
+    pub fn default_order() -> [Module; 13] {
         [
             Module::Cpu,
             Module::Gpu,
@@ -471,6 +477,7 @@ impl Settings {
             Module::Processes,
             Module::GpuMemory,
             Module::Fans,
+            Module::Weather,
         ]
     }
     pub fn module(&self, id: Module) -> &ModuleSetting {
@@ -486,7 +493,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 14 {
+        if self.version != 15 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -602,6 +609,26 @@ impl Settings {
         }
         if result.version == 13 {
             result.version = 14;
+        }
+        if result.version == 14 {
+            let expected: std::collections::BTreeSet<_> =
+                Module::ALL[..12].iter().copied().collect();
+            let actual: std::collections::BTreeSet<_> =
+                result.modules.iter().map(|m| m.id).collect();
+            if result.modules.len() != 12 || actual != expected {
+                return Err(
+                    "Previous settings must contain each of their twelve graphs exactly once"
+                        .into(),
+                );
+            }
+            result.modules.push(ModuleSetting {
+                id: Module::Weather,
+                visible: false,
+                style: GraphStyle::Solid,
+                colors: GraphColors::default(),
+                height: None,
+            });
+            result.version = 15;
         }
         result.validate()?;
         Ok(result)
