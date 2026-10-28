@@ -5,6 +5,7 @@
 mod battery;
 mod fans;
 mod sensor_identity;
+pub(crate) mod temperature;
 pub use battery::{BatteryTime, TimeSource};
 pub use fans::{Fan, fans};
 use std::{
@@ -159,7 +160,8 @@ fn hwmon(
     result: &mut Readings<Temperature>,
     budget: &mut TemperatureBudget,
 ) -> Result<(), String> {
-    let chip = short_label(&text(&directory.join("name"))?.unwrap_or_else(|| "hwmon".into()));
+    let chip_name = text(&directory.join("name"))?;
+    let chip = short_label(chip_name.as_deref().unwrap_or("hwmon"));
     let device = directory.file_name().unwrap().to_string_lossy();
     for input in directories(directory)? {
         let file = input.file_name().unwrap().to_string_lossy();
@@ -174,35 +176,27 @@ fn hwmon(
         }
         budget.attempt()?;
         let read = || -> Result<Option<Temperature>, String> {
-            match integer(&directory.join(format!("temp{channel}_enable")))? {
-                Some(0) => return Ok(None),
-                Some(1) | None => (),
-                _ => return Err("Invalid temperature enable flag".into()),
-            }
-            // Some thermistor/ADC channels report millivolts, requiring calibrated
-            // userspace conversion. Do not label those raw values as Celsius.
-            if integer(&directory.join(format!("temp{channel}_type")))? == Some(4) {
-                return Err("Thermistor conversion is not supported yet".into());
-            }
-            if integer(&directory.join(format!("temp{channel}_fault")))?.is_some_and(|v| v != 0) {
-                return Err("Sensor reports a fault".into());
-            }
             let (source_id, id) = sensor_identity::identity(sys, directory, &input, &chip)?;
-            let value = integer(&input)?.ok_or("Sensor disappeared")?;
+            let Some(value) = temperature::read(directory, channel)? else {
+                return Ok(None);
+            };
+            if value.chip != chip_name {
+                return Err("Temperature chip changed during scan".into());
+            }
             let label = text(&directory.join(format!("temp{channel}_label")))?
                 .unwrap_or_else(|| format!("temp{channel}"));
             if sensor_identity::identity(sys, directory, &input, &chip)?.1 != id {
                 return Err("Temperature sensor changed during read".into());
             }
             Ok(Some(Temperature {
-                id,
+                id: format!("{id}:type={:?}", value.kind),
                 source_id,
                 thermal: false,
                 name: format!(
                     "{chip} ({device}) · {} [temp{channel}]",
                     short_label(&label)
                 ),
-                celsius: celsius(value)?,
+                celsius: value.celsius,
             }))
         };
         match read() {

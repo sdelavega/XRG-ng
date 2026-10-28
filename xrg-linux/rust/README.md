@@ -150,10 +150,31 @@ A selected thermal
 zone stays readable when hwmon appears. The source list includes both backends;
 tooltips list the readings contributing to the selected graph.
 Temperature scans share a cooperative 100 ms / 256-channel budget and report
-partial coverage. Negative temperatures use a signed graph range. Channels marked as thermistors
-(`tempN_type=4`) are excluded until calibrated conversion is supported, since some
-report voltage rather than Celsius. This initial reader does not apply libsensors
-configuration/compute rules. See the kernel's
+partial coverage. Negative temperatures use a signed graph range. Standard hwmon
+channels use millidegrees Celsius, including thermistors (`tempN_type=4`). The
+type describes probe technology, not a voltage unit. In particular the kernel's
+`ntc-thermistor` driver already performs resistance/table conversion for its
+Murata, EPCOS and Samsung-compatible sensors; Winbond and other conforming hwmon
+drivers can also report converted thermistor temperatures. Negative and zero
+readings remain valid. Probe-type changes reset the curve while keeping the saved
+physical source selection. Chip/type/enable/fault metadata must agree before and
+after the input read; malformed/unsupported types, disabled inputs and faulted
+sensors do not produce measurements. System and GPU hwmon views share this reader.
+
+Known legacy VIA exceptions remain unavailable until board-specific conversion
+is supported: VT1211 external channels (temp1 and temp3–temp7), and VT8231 channels.
+Only VT1211's driver-converted internal temp2 is used directly. Raw voltage or
+unscaled diode readings never become tiny Celsius values or contribute to the
+hottest-sensor graph; thermal-zone fallback remains available. No input magnitude,
+label, guessed thermistor beta or default resistor network determines conversion.
+This reader does not apply libsensors configuration/compute rules or write sensor
+configuration. The paths are tested with fixtures; physical hardware validation
+remains best effort and community feedback is welcome. See the kernel's
+[NTC thermistor driver](https://docs.kernel.org/hwmon/ntc_thermistor.html),
+[Winbond driver](https://docs.kernel.org/hwmon/w83781d.html),
+[VT1211 conversion rules](https://docs.kernel.org/hwmon/vt1211.html),
+[VT8231 implementation](https://github.com/torvalds/linux/blob/master/drivers/hwmon/vt8231.c),
+[legacy board-conversion examples](https://github.com/lm-sensors/lm-sensors/blob/master/etc/sensors.conf.eg#L1392),
 [power-supply ABI](https://docs.kernel.org/power/power_supply_class.html) and
 [hwmon interface](https://docs.kernel.org/hwmon/sysfs-interface.html).
 Missing optional hardware shows an explicit absence label and no fabricated zero
@@ -1142,8 +1163,8 @@ automated tests use fixtures and make no weather requests.
 
 ## Remaining migration
 
-1. Xe PMU activity, additional vendor counters, calibrated thermistor
-   support and optional process priority controls.
+1. Xe PMU activity, additional vendor counters, board-specific conversion for raw
+   thermistor/diode inputs, and optional process priority controls.
 2. Safe Codex model attribution where cumulative records permit it, incremental
    I/O for very large logs beyond the verified append-parsing cache, and optional price tables.
 3. Deeper metric preferences, broader XTF color-space support and legacy-field mappings

@@ -287,22 +287,8 @@ fn sysfs_metrics(device: &mut Device) {
         Err(e) => gpu.notes.push(e),
         Ok(paths) => {
             for path in paths {
-                let read_temperature = || -> Result<Option<f64>, String> {
-                    if hardware::integer(&path.join("temp1_enable"))? == Some(0) {
-                        return Ok(None);
-                    }
-                    if hardware::integer(&path.join("temp1_fault"))?.is_some_and(|v| v != 0) {
-                        return Err("GPU temperature sensor fault".into());
-                    }
-                    if hardware::integer(&path.join("temp1_type"))? == Some(4) {
-                        return Err("GPU thermistor conversion unsupported".into());
-                    }
-                    hardware::integer(&path.join("temp1_input"))?
-                        .map(hardware::celsius)
-                        .transpose()
-                };
-                match read_temperature() {
-                    Ok(Some(value)) => gpu.temperature = Some(value),
+                match hardware::temperature::read(&path, "1") {
+                    Ok(Some(value)) => gpu.temperature = Some(value.celsius),
                     Ok(None) => (),
                     Err(error) => gpu.notes.push(error),
                 }

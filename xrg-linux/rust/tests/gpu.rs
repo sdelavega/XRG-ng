@@ -85,6 +85,47 @@ impl Drop for Fixture {
 const ROW: &str = "00000000:03:00.0, NVIDIA Test, 37, 512, 8192, 52, 45.5, 20, 1200";
 
 #[test]
+fn gpu_kernel_converted_thermistor_keeps_negative_zero_and_fault_states() {
+    let f = Fixture::new();
+    f.gpu("card0", "0000:03:00.0", "0x1002", "amdgpu");
+    let root = "bus/pci/devices/0000:03:00.0/hwmon/hwmon0";
+    f.put(&format!("{root}/name"), "amdgpu");
+    f.put(&format!("{root}/temp1_type"), "4");
+    for (raw, value) in [("-5000", -5.), ("0", 0.), ("42025", 42.025)] {
+        f.put(&format!("{root}/temp1_input"), raw);
+        assert_eq!(
+            f.collector().sample().unwrap().values[0].temperature,
+            Some(value)
+        );
+    }
+    f.put(&format!("{root}/temp1_fault"), "1");
+    let gpu = f.collector().sample().unwrap().values.remove(0);
+    assert!(gpu.temperature.is_none());
+    assert!(gpu.notes.iter().any(|n| n.contains("fault")));
+    f.put(&format!("{root}/temp1_enable"), "0");
+    f.put(&format!("{root}/temp1_type"), "bad while disabled");
+    let gpu = f.collector().sample().unwrap().values.remove(0);
+    assert!(gpu.temperature.is_none() && gpu.notes.is_empty());
+}
+
+#[test]
+fn gpu_hwmon_uses_the_same_unit_and_enable_validation_as_system_temperatures() {
+    let f = Fixture::new();
+    f.gpu("card0", "0000:03:00.0", "0x1002", "amdgpu");
+    let root = "bus/pci/devices/0000:03:00.0/hwmon/hwmon0";
+    f.put(&format!("{root}/name"), "vt8231");
+    f.put(&format!("{root}/temp1_input"), "1100");
+    let gpu = f.collector().sample().unwrap().values.remove(0);
+    assert!(gpu.temperature.is_none());
+    assert!(gpu.notes.iter().any(|n| n.contains("calibration")));
+    f.put(&format!("{root}/name"), "amdgpu");
+    f.put(&format!("{root}/temp1_enable"), "2");
+    let gpu = f.collector().sample().unwrap().values.remove(0);
+    assert!(gpu.temperature.is_none());
+    assert!(gpu.notes.iter().any(|n| n.contains("enable flag")));
+}
+
+#[test]
 fn amd_metrics_have_correct_units_and_zero_is_real() {
     let f = Fixture::new();
     f.gpu("card1", "0000:03:00.0", "0x1002", "amdgpu");

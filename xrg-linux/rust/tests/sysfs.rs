@@ -177,16 +177,146 @@ fn disabled_faulty_and_malformed_sensors_are_not_fake_zeros() {
     assert_eq!(report.errors.len(), 3);
 }
 #[test]
-fn thermistor_channels_require_calibrated_conversion() {
+fn via_external_channels_require_board_calibration() {
     let f = Fixture::new();
-    f.sensor("hwmon0", "1", "950");
-    f.put("class/hwmon/hwmon0/temp1_type", "4");
+    f.sensor("hwmon0", "3", "950");
+    f.put("class/hwmon/hwmon0/temp3_type", "4");
     f.sensor("hwmon0", "2", "55000");
+    f.put("class/hwmon/hwmon0/name", "vt1211");
     let report = hardware::temperatures(&f.0).unwrap();
     assert_eq!(report.values.len(), 1);
     assert_eq!(report.values[0].celsius, 55.);
     assert_eq!(report.errors.len(), 1);
-    assert!(report.errors[0].contains("Thermistor conversion"));
+    assert!(report.errors[0].contains("board-specific calibration"));
+}
+
+#[test]
+fn kernel_converted_thermistors_are_celsius_including_negative_and_zero() {
+    for chip in [
+        "b57330v2103",
+        "b57891s0103",
+        "ncp03wb473",
+        "ncp03wf104",
+        "ncp15wb473",
+        "ncp15wl333",
+        "ncp15xh103",
+        "ncp18wb473",
+        "ncp21wb473",
+        "ssg1404_001221",
+        "ncp18wm474",
+        "w83782d",
+        "it87",
+    ] {
+        let f = Fixture::new();
+        for (channel, raw) in [("1", "-12500"), ("2", "0"), ("3", "55025")] {
+            f.sensor("hwmon0", channel, raw);
+            f.put(&format!("class/hwmon/hwmon0/temp{channel}_type"), "4");
+        }
+        f.put("class/hwmon/hwmon0/name", chip);
+        f.put("class/thermal/thermal_zone0/temp", "99999");
+        let report = hardware::temperatures(&f.0).unwrap();
+        assert!(report.errors.is_empty(), "{chip}: {:?}", report.errors);
+        assert_eq!(
+            report.values.iter().map(|v| v.celsius).collect::<Vec<_>>(),
+            [-12.5, 0., 55.025],
+            "{chip}"
+        );
+        assert!(report.values.iter().all(|v| !v.thermal));
+    }
+}
+
+#[test]
+fn via_raw_channels_without_type_metadata_never_become_celsius() {
+    for (chip, channels) in [
+        ("vt1211", vec![1, 3, 4, 5, 6, 7]),
+        ("vt8231", vec![1, 2, 3, 4, 5, 6]),
+    ] {
+        let f = Fixture::new();
+        for channel in &channels {
+            f.sensor("hwmon0", &channel.to_string(), "1100");
+        }
+        f.put("class/hwmon/hwmon0/name", chip);
+        f.put("class/thermal/thermal_zone0/temp", "42000");
+        let report = hardware::temperatures(&f.0).unwrap();
+        assert_eq!(report.values.len(), 1);
+        assert_eq!(report.values[0].celsius, 42.);
+        assert!(report.values[0].thermal);
+        assert_eq!(report.errors.len(), channels.len());
+        assert!(
+            report
+                .errors
+                .iter()
+                .all(|e| e.contains("calibration") && e.contains("not Celsius"))
+        );
+    }
+}
+
+#[test]
+fn thermistor_faults_disable_flags_and_unsupported_types_do_not_create_samples() {
+    let f = Fixture::new();
+    for channel in 1..=6 {
+        f.sensor("hwmon0", &channel.to_string(), "0");
+    }
+    f.put("class/hwmon/hwmon0/name", "ncp15wb473");
+    f.put("class/hwmon/hwmon0/temp1_enable", "0");
+    f.put("class/hwmon/hwmon0/temp1_type", "invalid while disabled");
+    f.put("class/hwmon/hwmon0/temp1_fault", "invalid while disabled");
+    f.put("class/hwmon/hwmon0/temp2_type", "4");
+    f.put("class/hwmon/hwmon0/temp2_fault", "1");
+    for (channel, kind) in [(3, "0"), (4, "-1"), (5, "7"), (6, "bad")] {
+        f.put(&format!("class/hwmon/hwmon0/temp{channel}_type"), kind);
+    }
+    let report = hardware::temperatures(&f.0).unwrap();
+    assert!(report.values.is_empty());
+    assert_eq!(report.errors.len(), 5);
+    assert!(report.errors.iter().any(|e| e.contains("fault")));
+}
+
+#[test]
+fn temperature_probe_type_changes_reset_history_but_keep_saved_source_identity() {
+    use xrg_ng_linux::settings::MetricSelection;
+    let f = Fixture::new();
+    f.core();
+    f.sensor("hwmon0", "1", "42000");
+    f.put("class/hwmon/hwmon0/temp1_type", "1");
+    let before = hardware::temperatures(&f.0).unwrap().values.remove(0);
+    let selection = MetricSelection {
+        temperature: Some(before.source_id.clone()),
+        ..Default::default()
+    };
+    let mut sampler = Sampler::with_sources(f.sources());
+    sampler.set_selection(selection.clone()).unwrap();
+    assert_eq!(sampler.sample().panels[5].series[0].last(), Some(&42.));
+    f.put("class/hwmon/hwmon0/temp1_type", "4");
+    f.put("class/hwmon/hwmon0/temp1_input", "43000");
+    let after = hardware::temperatures(&f.0).unwrap().values.remove(0);
+    assert_eq!(after.source_id, before.source_id);
+    assert_ne!(after.id, before.id);
+    let snapshot = sampler.sample();
+    assert_eq!(snapshot.selection, selection);
+    assert_eq!(snapshot.panels[5].series[0][118..], [0., 43.]);
+}
+
+#[test]
+fn kernel_thermistor_class_aliases_do_not_duplicate_or_modify_the_sensor() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    let path = "devices/platform/board/hwmon/hwmon0";
+    f.put(&format!("{path}/name"), "ncp15wb473");
+    f.put(&format!("{path}/temp1_type"), "4");
+    f.put(&format!("{path}/temp1_input"), "25000");
+    fs::create_dir_all(f.0.join("class/hwmon")).unwrap();
+    for alias in ["hwmon0", "hwmon8"] {
+        symlink(f.0.join(path), f.0.join("class/hwmon").join(alias)).unwrap();
+    }
+    let report = hardware::temperature_sources(&f.0).unwrap();
+    assert!(report.errors.is_empty());
+    assert_eq!(report.values.len(), 1);
+    assert_eq!(report.values[0].celsius, 25.);
+    assert_eq!(
+        fs::read_to_string(f.0.join(format!("{path}/temp1_type"))).unwrap(),
+        "4"
+    );
 }
 
 #[test]
