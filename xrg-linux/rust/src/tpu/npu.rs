@@ -160,6 +160,7 @@ fn device(path: &Path) -> Result<Option<Device>, String> {
         driver: bound,
         capability_only: false,
         utilization: None,
+        client_activity: None,
         frequency_mhz: None,
         memory_bytes: None,
         notes: Vec::new(),
@@ -314,7 +315,7 @@ pub(super) fn extend(
                 found.insert(id.clone(), Device {
                     id, label:format!("{} · {soc} (SoC capability)",family.name()),
                     initialized:false, suspended:false,temperature_c:None,
-                    family, driver:None, capability_only:true,
+                    family, driver:None, capability_only:true, client_activity:None,
                     utilization:None,frequency_mhz:None,memory_bytes:None,busy_time_us:None,
                     notes:vec!["Known SoC includes a neural compute engine; no corresponding Linux accelerator endpoint was detected. Availability and activity are unverified.".into()],
                 });

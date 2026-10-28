@@ -6,6 +6,7 @@ pub mod collectors;
 pub mod command;
 pub mod cpu;
 pub mod dashboard;
+mod drm_clients;
 pub mod engine;
 pub mod gpu;
 pub mod gpu_memory;

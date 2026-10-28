@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! TPU/NPU inventory and externally reported inference statistics. Detection does
 //! not prove usable inference, and producer counters are not device utilization.
+mod clients;
 mod npu;
 use crate::{
     hardware::{self, Readings, short_label},
@@ -49,6 +50,13 @@ impl Family {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub struct ClientActivity {
+    pub percent: Option<f64>,
+    pub clients: usize,
+    /// Observed client set and device binding; used only for history identity.
+    pub scope: String,
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct Device {
     pub id: String,
     pub label: String,
@@ -60,10 +68,26 @@ pub struct Device {
     /// Known SoC capability only, not an enumerated Linux accelerator endpoint.
     pub capability_only: bool,
     pub utilization: Option<f64>,
+    pub client_activity: Option<ClientActivity>,
     pub frequency_mhz: Option<f64>,
     pub memory_bytes: Option<u64>,
     pub notes: Vec<String>,
     pub busy_time_us: Option<u64>,
+}
+impl Device {
+    pub fn activity_percent(&self) -> Option<f64> {
+        self.utilization
+            .or_else(|| self.client_activity.as_ref().and_then(|a| a.percent))
+    }
+    pub(crate) fn activity_key(&self) -> String {
+        if self.utilization.is_some() || self.busy_time_us.is_some() {
+            format!("{}:device", self.id)
+        } else if let Some(activity) = &self.client_activity {
+            format!("{}:clients:{}", self.id, activity.scope)
+        } else {
+            self.id.clone()
+        }
+    }
 }
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Categories {
@@ -137,6 +161,8 @@ struct Baseline {
 }
 pub struct Collector {
     sys: PathBuf,
+    proc: PathBuf,
+    clients: clients::Collector,
     stats: Option<PathBuf>,
     previous: Option<Baseline>,
     activity: npu::Activity,
@@ -145,6 +171,12 @@ pub struct Collector {
 impl Collector {
     pub fn new(sys: PathBuf, stats: Option<PathBuf>) -> Self {
         Self {
+            proc: if sys == Path::new("/sys") {
+                PathBuf::from("/proc")
+            } else {
+                sys.join("proc")
+            },
+            clients: clients::Collector::default(),
             sys,
             stats,
             previous: None,
@@ -152,12 +184,19 @@ impl Collector {
             start: Instant::now(),
         }
     }
+    pub fn with_proc_root(mut self, proc: impl Into<PathBuf>) -> Self {
+        self.proc = proc.into();
+        self.clients = clients::Collector::default();
+        self
+    }
     pub fn sample(&mut self) -> Report {
         self.sample_at(self.start.elapsed().as_secs_f64(), SystemTime::now())
     }
     pub fn sample_at(&mut self, time: f64, wall: SystemTime) -> Report {
         let mut devices = discover(&self.sys);
         self.activity.update(&mut devices, time);
+        self.clients
+            .collect(&self.proc, &self.sys, &mut devices, time);
         let inference = self.read(time, wall);
         if inference.is_err() {
             self.previous = None;
@@ -314,6 +353,7 @@ pub fn discover(sys: &Path) -> Result<Readings<Device>, String> {
                         driver: None,
                         capability_only: false,
                         utilization: None,
+                        client_activity: None,
                         frequency_mhz: None,
                         memory_bytes: None,
                         notes: Vec::new(),
@@ -357,6 +397,7 @@ pub fn discover(sys: &Path) -> Result<Readings<Device>, String> {
                         driver: driver.then(|| "apex".into()),
                         capability_only: false,
                         utilization: None,
+                        client_activity: None,
                         frequency_mhz: None,
                         memory_bytes: None,
                         notes: Vec::new(),

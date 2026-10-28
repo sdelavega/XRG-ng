@@ -4,7 +4,7 @@ use crate::temperature::Text;
 use crate::{collectors::LinuxSources, settings::MetricSelection, shared::History};
 use std::{
     array,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
     thread,
     time::Instant,
@@ -345,11 +345,14 @@ impl Sampler {
     }
     fn tpu_panel(&mut self) -> Panel {
         let report = self.tpu.sample();
-        let mut details: Vec<Text> = vec!["Read-only TPU/NPU inventory. Detection or a bound driver does not prove usable inference. Graph: measured NPU activity (%) when a supported counter is readable; otherwise unscoped producer inference rate (inf/s). These quantities never share a scale. Producer statistics are not assigned to detected adapters.".into()];
+        self.tpu_panel_from(report)
+    }
+    fn tpu_panel_from(&mut self, report: crate::tpu::Report) -> Panel {
+        let mut details: Vec<Text> = vec!["Read-only TPU/NPU inventory. Detection or a bound driver does not prove usable inference. Graph: device activity or explicitly labeled busiest observed readable-client activity (%), when supported counters are readable; otherwise unscoped producer inference rate (inf/s). These quantities never share a scale. Producer statistics are not assigned to detected adapters.".into()];
         let activity_mode = report.devices.as_ref().is_ok_and(|r| {
-            r.values
-                .iter()
-                .any(|d| d.busy_time_us.is_some() || d.utilization.is_some())
+            r.values.iter().any(|d| {
+                d.busy_time_us.is_some() || d.utilization.is_some() || d.client_activity.is_some()
+            })
         });
         if activity_mode != self.npu_activity_mode {
             self.tpu_history = History::new(120);
@@ -373,23 +376,33 @@ impl Sampler {
                     .filter(|d| !d.capability_only)
                     .count();
                 capability_records = readings.values.len() - devices;
-                self.npu_histories.retain(|id, _| {
-                    readings
-                        .values
-                        .iter()
-                        .any(|d| &d.id == id && d.utilization.is_some())
-                });
+                let active_keys: BTreeSet<_> = readings
+                    .values
+                    .iter()
+                    .filter(|d| d.activity_percent().is_some())
+                    .map(|d| d.activity_key())
+                    .collect();
+                self.npu_histories.retain(|id, _| active_keys.contains(id));
                 detection_error = !readings.errors.is_empty();
                 for device in readings.values {
-                    if let Some(value) = device.utilization {
+                    if let Some(value) = device.activity_percent() {
                         let history = self
                             .npu_histories
-                            .entry(device.id.clone())
+                            .entry(device.activity_key())
                             .or_insert_with(|| History::new(120));
                         history.append(value);
                         if activity_series.len() < 3 {
                             activity_series.push(history.values());
-                            activity_labels.push(format!("{} {value:.1}%", device.label));
+                            activity_labels.push(format!(
+                                "{}{} {value:.1}%",
+                                device.label,
+                                if device.utilization.is_none() && device.client_activity.is_some()
+                                {
+                                    " (clients)"
+                                } else {
+                                    ""
+                                }
+                            ));
                         }
                     }
                     let state = if device.capability_only {
@@ -414,10 +427,30 @@ impl Sampler {
                     if let Some(driver) = &device.driver {
                         details.push(format!("Driver: {driver}").into());
                     }
-                    details.push(device.utilization.map_or_else(
+                    details.push(device.activity_percent().map_or_else(
                         || "Activity: unavailable (not assumed idle)".into(),
-                        |v| format!("Activity: {v:.1}%").into(),
+                        |v| {
+                            format!(
+                                "Activity: {v:.1}%{}",
+                                if device.utilization.is_none() && device.client_activity.is_some()
+                                {
+                                    " (busiest observed readable client)"
+                                } else {
+                                    ""
+                                }
+                            )
+                            .into()
+                        },
                     ));
+                    if let Some(activity) = &device.client_activity {
+                        details.push(
+                            format!(
+                                "Observed AMD NPU clients with counters: {}",
+                                activity.clients
+                            )
+                            .into(),
+                        );
+                    }
                     if let Some(clock) = device.frequency_mhz {
                         details.push(format!("Reported clock: {clock:.0} MHz").into());
                     }
@@ -1090,5 +1123,69 @@ mod sampling_tests {
         assert!(control.set(0).is_err());
         drop(worker);
         assert!(control.set(500).is_err());
+    }
+}
+
+#[cfg(test)]
+mod npu_client_history_tests {
+    use super::*;
+    use crate::{
+        hardware::Readings,
+        tpu::{ClientActivity, Device, Family, Report},
+    };
+    fn report(scope: &str, percent: Option<f64>, device_percent: Option<f64>) -> Report {
+        Report {
+            devices: Ok(Readings {
+                values: vec![Device {
+                    id: "fixture-amd-npu".into(),
+                    label: "AMD fixture".into(),
+                    family: Family::Amd,
+                    initialized: true,
+                    suspended: false,
+                    temperature_c: None,
+                    driver: Some("amdxdna".into()),
+                    capability_only: false,
+                    utilization: device_percent,
+                    frequency_mhz: None,
+                    memory_bytes: None,
+                    busy_time_us: None,
+                    notes: Vec::new(),
+                    client_activity: Some(ClientActivity {
+                        percent,
+                        clients: 2,
+                        scope: scope.into(),
+                    }),
+                }],
+                errors: Vec::new(),
+            }),
+            inference: Err("No fixture inference producer".into()),
+        }
+    }
+    #[test]
+    fn client_scope_warmup_and_device_source_changes_never_join_unrelated_histories() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let warm = sampler.tpu_panel_from(report("one", None, None));
+        assert!(warm.series.is_empty());
+        assert!(matches!(warm.scale, Scale::Percent));
+        let first = sampler.tpu_panel_from(report("one", Some(50.), None));
+        assert!(first.label.contains("clients"));
+        let same = sampler.tpu_panel_from(report("one", Some(40.), None));
+        assert_eq!(&same.series[0][118..], &[50., 40.]);
+        let changed = sampler.tpu_panel_from(report("two", Some(20.), None));
+        assert_eq!(&changed.series[0][118..], &[0., 20.]);
+        assert!(
+            sampler
+                .tpu_panel_from(report("two", None, None))
+                .series
+                .is_empty()
+        );
+        let recovered = sampler.tpu_panel_from(report("two", Some(10.), None));
+        assert_eq!(&recovered.series[0][118..], &[0., 10.]);
+        let device = sampler.tpu_panel_from(report("two", Some(10.), Some(30.)));
+        assert_eq!(&device.series[0][118..], &[0., 30.]);
+        assert!(!device.label.contains("clients"));
     }
 }

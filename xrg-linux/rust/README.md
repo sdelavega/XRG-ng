@@ -1052,7 +1052,7 @@ producer-reported inference throughput are distinct quantities.
 | Family | Inventory evidence | Activity in this build |
 | --- | --- | --- |
 | Intel NPU | `intel_vpu`/`ivpu`, accel-class aliases and known NPU PCI IDs | Elapsed delta of `npu_busy_time_us`; optional reported MHz and allocated-memory bytes |
-| AMD Ryzen AI / XDNA | `amdxdna`, accel-class aliases and known AMD NPU PCI IDs | Inventory; utilization unavailable without a supported telemetry interface |
+| AMD Ryzen AI / XDNA | `amdxdna`, accel-class aliases and known AMD NPU PCI IDs | AIE2 readable-client busy-time activity when `drm-engine-npu` is exposed; other devices remain inventory only |
 | Apple Neural Engine | ANE platform compatible/driver; known M-series SoC fallback | Inventory or explicitly unverified SoC capability; no Linux ANE utilization reader |
 | Rockchip RKNN / RKNPU | `rknpu` and mainline `rocket` endpoints; selected known SoC fallback | Vendor `rknpu/load` mean core load when readable and uniquely owned; Rocket inventory only |
 | Qualcomm Hexagon / HTP | NPU or compute DSP CDSP/NSP platform compatibles, with remoteproc state where exposed; selected known SoC fallback | Inventory; no inference/activity estimate from firmware or DSP state |
@@ -1084,6 +1084,35 @@ read/scheduling skew is clamped at 100%). Rockchip's multi-core report is averag
 not summed; its global debugfs report is never copied onto multiple devices.
 Missing/inaccessible counters remain **unavailable**, with no privilege escalation.
 
+**AMD client activity** reads existing `/proc/PID/fdinfo/FD` records mapped to
+`/dev/accel/accelN` through the accelerator class. It requires `amdxdna`, vendor
+`1022`, an AIE2 device ID (`1502` or `17f0`), matching `drm-pdev` and
+`drm-driver: amdxdna_accel_driver`, and `drm-engine-npu` in nanoseconds. This
+recent interface is absent in older kernels. AIE4/PF/VF IDs remain inventory
+only until their accounting hooks are verified; the existence of a generic
+zero-valued field alone is insufficient. No accelerator device is opened.
+
+The graph marks AMD values **(clients)** and uses the maximum observed
+`100 × delta(client busy ns) / measured elapsed ns`, rather than summing clients
+that can overlap. It represents driver-accounted submitted work for the busiest
+observed readable client, not device-wide occupancy, capacity, TOPS or inference
+throughput. Protected/exiting clients may be absent; partial scans are noted.
+No readable counters means unavailable, not idle. First/new clients, rebinds,
+missing data, non-increasing clocks and gaps over 300 seconds warm up; temporary
+counter regressions retain the larger baseline until recovery. Impossible deltas
+are omitted, with at most 2% read skew clamped at 100%. Histories reset when the
+observed client set, binding or device/client source changes. Client memory,
+clocks and power are not converted into activity estimates.
+
+The GPU and AMD NPU paths share the bounded read-only DRM scanner: a cooperative
+50 ms budget per scan, 4,096 process entries, 8,192 descriptors and 64 KiB per
+record. AMD additionally bounds class-node discovery to 256 entries, observed
+clients to 256 per device and retained baselines to 1,024 globally. Records with
+duplicate fields, wrong identities/units, final-component symlinks or oversized
+contents are rejected. Descriptor targets and physical driver bindings are
+checked before/after acquisition. Tests use synthetic proc/sysfs data and do not
+establish physical AMD hardware accuracy; community feedback is encouraged.
+
 Discovery reads sysfs only: `/sys/class/accel`, PCI and platform devices, plus
 known machine compatibles. It does not open accelerator device nodes, submit
 ioctls, load firmware, reset hardware or change power/clocks. Rockchip load is read
@@ -1101,6 +1130,8 @@ temperature reads are deferred while runtime power is suspended/transitioning.
 Interface references: Intel [PCI IDs](https://github.com/torvalds/linux/blob/master/drivers/accel/ivpu/ivpu_drv.h)
 and [sysfs counters](https://github.com/torvalds/linux/blob/master/drivers/accel/ivpu/ivpu_sysfs.c),
 AMD [XDNA driver](https://docs.kernel.org/accel/amdxdna/amdnpu.html),
+AMD [client counter interface](https://www.kernel.org/doc/html/next/accel/amdxdna/amdnpu.html#amdxdna-drm-client-usage-stats-implementation)
+and [accounting implementation](https://github.com/torvalds/linux/blob/master/drivers/accel/amdxdna/aie.c),
 Rockchip [vendor load format](https://github.com/rockchip-linux/kernel/blob/develop-6.1/drivers/rknpu/rknpu_debugger.c)
 and [Rocket](https://docs.kernel.org/accel/rocket/index.html),
 Qualcomm [CDSP bindings](https://github.com/torvalds/linux/blob/master/Documentation/devicetree/bindings/remoteproc/qcom,sm8550-pas.yaml)

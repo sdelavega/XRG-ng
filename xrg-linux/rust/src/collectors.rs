@@ -165,6 +165,7 @@ impl LinuxSources {
     }
     pub fn tpu_collector(&self) -> crate::tpu::Collector {
         crate::tpu::Collector::new(self.sys.clone(), self.tpu_stats.clone())
+            .with_proc_root(self.proc.clone())
     }
     pub fn battery(&self) -> Result<crate::hardware::Readings<crate::hardware::Battery>, String> {
         crate::hardware::batteries(&self.sys)
