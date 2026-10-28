@@ -240,6 +240,7 @@ impl View {
             series: Vec::new(),
             scale: Scale::Percent,
             temperature_text: None,
+            readout: Default::default(),
         };
         let reading = match memory {
             Ok(reading) => reading,
@@ -332,6 +333,27 @@ impl View {
         });
         detail.extend(reading.notes.clone());
         detail.push("Graph series follow the label order: RAM used (MemTotal − MemAvailable), reported Cached / RAM, then used / configured swap when available. Curves are independent percentages, not stacked memory components. Cached can overlap other categories; Buffers and Slab are not macOS wired memory. Page I/O includes file-backed activity; it is not swap-only I/O. Swap event rates use pages, independent of the kernel page size. Values describe the exposed /proc scope, not a cgroup memory limit.".into());
+        use crate::dashboard::{Row, bytes};
+        panel.readout.top = vec![
+            Row::new("Memory", bytes(reading.total as f64)),
+            Row::new("Used", bytes((reading.total - reading.available) as f64)),
+            Row::new("Available", bytes(reading.available as f64)),
+            Row::new(
+                "Cached",
+                reading
+                    .cached
+                    .map(|v| bytes(v as f64))
+                    .unwrap_or_else(|| "n/a".into()),
+            ),
+            Row::new(
+                "Swap used",
+                reading
+                    .swap
+                    .as_ref()
+                    .map(|v| bytes(v.used as f64))
+                    .unwrap_or_else(|| "n/a".into()),
+            ),
+        ];
         panel.label = labels.join(" · ");
         panel.detail = detail.join("\n");
         panel

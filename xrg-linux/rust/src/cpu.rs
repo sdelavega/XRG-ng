@@ -172,6 +172,7 @@ impl View {
             self.selected = selected;
         }
         let mut valid = false;
+        let mut readout = crate::dashboard::Readout::default();
         let mut inventory = Vec::new();
         if records.is_err() {
             self.previous = None;
@@ -189,6 +190,22 @@ impl View {
                     .as_ref()
                     .and_then(|(old, _)| cpu_usage(old.total, next.total))
                     .is_some();
+            readout.cores = next
+                .cores
+                .iter()
+                .filter(|(id, _)| selected.is_none_or(|chosen| chosen == **id))
+                .take(64)
+                .map(|(id, current)| {
+                    (
+                        *id,
+                        previous
+                            .as_ref()
+                            .and_then(|(old, _)| old.cores.get(id))
+                            .and_then(|old| cpu_usage(*old, *current))
+                            .map(|usage| usage.busy),
+                    )
+                })
+                .collect();
             let result = if let Some(id) = selected {
                 next.cores
                     .get(&id)
@@ -216,6 +233,19 @@ impl View {
         let mut detail = Vec::new();
         let label = match result {
             Ok(value) => {
+                use crate::dashboard::Row;
+                readout.top.push(Row::new(
+                    "CPU",
+                    if selected.is_some() || inventory.is_empty() {
+                        format!("{:.0}%", value.busy)
+                    } else {
+                        format!("{:.0}%", value.busy * inventory.len() as f64)
+                    },
+                ));
+                readout
+                    .top
+                    .push(Row::new("Average", format!("{:.1}%", value.busy)));
+
                 for (history, value) in
                     self.histories
                         .iter_mut()
@@ -256,6 +286,27 @@ impl View {
                 error
             }
         };
+        use crate::dashboard::Row;
+        if readout.top.is_empty() {
+            readout.top.push(Row::new("CPU", "n/a"));
+        }
+        readout.top.push(Row::new(
+            "Load",
+            overview
+                .load
+                .as_ref()
+                .map(|load| format!("{:.2}", load.averages[0]))
+                .unwrap_or_else(|_| "n/a".into()),
+        ));
+        readout.top.push(Row::new(
+            "Uptime",
+            overview
+                .uptime
+                .as_ref()
+                .map(|v| crate::dashboard::uptime(*v))
+                .unwrap_or_else(|_| "n/a".into()),
+        ));
+        detail.push("Graph-face CPU total uses core-percent (average × logical CPU count); Average and history use aggregate capacity, 0–100%. Load shows the one-minute system average. Per-core bars include reported steal time as non-idle and show at most 64 CPUs. Missing intervals remain gaps.".into());
         detail.insert(0, label.clone());
         detail.push(format!("Scope: {}. Graph curves: total non-idle / user including nice / system including reported interrupts; independent percentages, not stacked. Idle includes iowait for the total curve. Guest time already in user/nice is not counted twice. Steal is hypervisor wait, not executed CPU work. Counter regressions (including iowait), CPU inventory changes for the aggregate, failed reads and invalid or delayed intervals clear the affected history.", selected.map(|id| format!("logical CPU {id}")).unwrap_or_else(|| "all reported logical CPUs (100% is aggregate capacity)".into())));
         detail.push(overview.description());
@@ -267,6 +318,7 @@ impl View {
                 series,
                 scale: Scale::Percent,
                 temperature_text: None,
+                readout,
             },
             valid,
             inventory,

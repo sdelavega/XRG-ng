@@ -16,6 +16,7 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     expected.modules[1].colors.series[0] = Some([0., 1., 0., 0.25]);
     expected.metrics.cpu = Some(2);
     expected.activity_bars.visible = false;
+    expected.activity_bars.use_series_colors = false;
     let mut wire = serde_json::to_value(&expected).unwrap();
     wire["version"] = 10.into();
     wire.as_object_mut().unwrap().remove("activity_bars");
@@ -32,7 +33,7 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["version"],
-        13
+        14
     );
     std::fs::remove_dir_all(&root).unwrap();
     assert!(
@@ -48,6 +49,7 @@ fn all_bar_styles_and_transparent_black_round_trip_without_changing_theme_or_gra
     for style in GraphStyle::ALL {
         let settings = Settings {
             activity_bars: ActivityBars {
+                use_series_colors: false,
                 visible: true,
                 style,
                 color: [0.; 4],
@@ -93,6 +95,7 @@ fn legacy_bars_import_independently_and_bad_entries_are_atomic() {
         let report = legacy::parse(text.as_bytes(), &base).unwrap();
         let mut expected = base.clone();
         expected.activity_bars = ActivityBars {
+            use_series_colors: false,
             visible: false,
             style,
             color: [0., 128. / 255., 1., 0.375],
@@ -128,6 +131,7 @@ fn bar_axis_text_never_calls_rates_or_temperatures_utilization() {
         label: String::new(),
         detail: String::new(),
         temperature_text: None,
+        readout: Default::default(),
         series: vec![vec![0., 50.]],
         scale: Scale::Percent,
     };

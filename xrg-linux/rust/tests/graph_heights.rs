@@ -33,13 +33,14 @@ impl Drop for Fixture {
 #[test]
 fn independent_sizes_follow_identity_and_global_changes_only_affect_inherited_graphs() {
     let mut settings = Settings::default();
-    settings.modules[Module::Cpu.index()].height = Some(164);
-    settings.modules[Module::Memory.index()].height = Some(88);
-    settings.modules[Module::Memory.index()]
+    settings.module_mut(Module::Cpu).height = Some(164);
+    settings.module_mut(Module::Memory).height = Some(88);
+    settings
+        .module_mut(Module::Memory)
         .colors
         .set(1, Some([1., 0., 0., 0.5]))
         .unwrap();
-    settings.modules[Module::Memory.index()].style = GraphStyle::Dot;
+    settings.module_mut(Module::Memory).style = GraphStyle::Dot;
     settings.graph_height = 124;
     settings.move_module(Module::Memory, 5);
     for layout in [Layout::Vertical, Layout::Horizontal] {
@@ -125,7 +126,7 @@ fn version_nine_preserves_existing_layout_and_palette_until_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        13
+        14
     );
 }
 #[test]

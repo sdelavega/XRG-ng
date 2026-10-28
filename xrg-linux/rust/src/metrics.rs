@@ -48,6 +48,7 @@ impl IoHistory {
         let mut names = Vec::new();
         let mut series = Vec::new();
         let mut detail = String::new();
+        let mut readout = crate::dashboard::Readout::default();
         let values = source.and_then(|devices| {
             let empty_disk = title == "Disk" && devices.aggregate.is_empty();
             valid = !empty_disk && devices.values(None).is_ok();
@@ -83,6 +84,22 @@ impl IoHistory {
                 }
                 let a = self.rates.sample(0, values[0], time).1 as f64;
                 let b = self.rates.sample(1, values[1], time).1 as f64;
+                use crate::dashboard::{Row, bytes};
+                let (heading, first, second) = if title == "Disk" {
+                    ("Disk", "Read", "Write")
+                } else {
+                    ("Net", "Rx", "Tx")
+                };
+                readout.top = vec![
+                    Row::new(heading, ""),
+                    Row::new(format!("{first} total"), bytes(values[0] as f64)),
+                    Row::new(format!("{second} total"), bytes(values[1] as f64)),
+                ];
+                readout.bottom = vec![
+                    Row::new(first, format!("{}/s", bytes(a))),
+                    Row::new(second, format!("{}/s", bytes(b))),
+                ];
+                detail.push_str("\nGraph-face totals are kernel lifetime counters for the selected devices (normally since boot); compact byte units use powers of 1024. They are not disk capacity or session transfers.");
                 self.histories[0].append(a);
                 self.histories[1].append(b);
                 series = self.histories.iter().map(History::values).collect();
@@ -106,6 +123,7 @@ impl IoHistory {
                 series,
                 scale: Scale::Automatic,
                 temperature_text: None,
+                readout,
                 detail,
             },
             valid,
@@ -166,6 +184,7 @@ impl Sampler {
                 series: Vec::new(),
                 scale: Scale::Automatic,
                 temperature_text: None,
+                readout: Default::default(),
             };
             return Sample {
                 cpu: panel("CPU"),

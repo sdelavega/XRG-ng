@@ -88,6 +88,7 @@ impl View {
             series: Vec::new(),
             scale: Scale::Celsius,
             temperature_text: None,
+            readout: Default::default(),
         };
         let mut report = match report {
             Ok(report) => report,
@@ -126,12 +127,20 @@ impl View {
                 .map(|r| r.map(|s| (s.id.as_str(), s.celsius)))
                 .collect();
             panel.series = curves(&mut self.temperatures, &slots);
+            panel
+                .readout
+                .top
+                .push(crate::dashboard::Row::new("Temp", ""));
             let mut labels = Vec::new();
             for (index, (source, reading)) in sources.iter().zip(readings).enumerate() {
                 let Some(source) = source else {
                     continue;
                 };
                 if let Some(reading) = reading {
+                    panel.readout.top.push(crate::dashboard::Row::new(
+                        format!("{}: {}", index + 1, reading.name),
+                        Text::reading("", reading.celsius, ""),
+                    ));
                     labels.push(Text::reading(
                         &format!("{}: ", index + 1),
                         reading.celsius,
@@ -147,6 +156,10 @@ impl View {
                         "",
                     ));
                 } else {
+                    panel.readout.top.push(crate::dashboard::Row::new(
+                        format!("{}: unavailable", index + 1),
+                        "n/a",
+                    ));
                     labels.push(format!("{}: unavailable", index + 1).into());
                     detail.push(format!("Curve {} unavailable: saved temperature source {source} is not readable in the latest sample. No fallback is substituted.", index+1).into());
                 }
@@ -184,6 +197,16 @@ impl View {
                     .fold(f64::NEG_INFINITY, f64::max);
                 self.maximum.append(maximum);
                 panel.series.push(self.maximum.values());
+                panel.readout.top.push(crate::dashboard::Row::new(
+                    "Temp (max)",
+                    Text::reading("", maximum, ""),
+                ));
+                for sensor in report.values.iter().take(3) {
+                    panel.readout.top.push(crate::dashboard::Row::new(
+                        &sensor.name,
+                        Text::reading("", sensor.celsius, ""),
+                    ));
+                }
                 let count = report.values.len();
                 label = Text::reading(
                     "",
@@ -223,7 +246,7 @@ impl View {
         selection: &MetricSelection,
     ) -> (Panel, Vec<SourceOption>) {
         let mut panel = Panel { title: "Fans", label: "No readable fan sensors".into(), series: Vec::new(),
-            detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership. Curve numbers identify graph colors and current-value bars.".into(), scale: Scale::Automatic, temperature_text: None };
+            detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership. Curve numbers identify graph colors and current-value bars.".into(), scale: Scale::Automatic, temperature_text: None, readout: Default::default() };
         let report = match report {
             Ok(report) => report,
             Err(error) => {
@@ -288,6 +311,16 @@ impl View {
                 continue;
             };
             if let Some(fan) = reading {
+                if panel.readout.top.is_empty() {
+                    panel
+                        .readout
+                        .top
+                        .push(crate::dashboard::Row::new("Fans", ""));
+                }
+                panel.readout.top.push(crate::dashboard::Row::new(
+                    &fan.name,
+                    format!("{} RPM", fan.rpm),
+                ));
                 labels.push(format!(
                     "{}: {}{} RPM{}",
                     index + 1,
@@ -349,5 +382,53 @@ impl View {
             panel.detail.push_str(&format!("\n{error}"));
         }
         (panel, inventory)
+    }
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+
+    #[test]
+    fn temperature_face_identifies_maximum_and_keeps_selected_curve_gaps_and_units() {
+        use crate::{
+            hardware::{Readings, Temperature},
+            sensors::View,
+            settings::MetricSelection,
+            temperature::Units,
+        };
+        let report = || {
+            Ok(Readings {
+                values: (0..4)
+                    .map(|id| Temperature {
+                        id: format!("kernel-{id}"),
+                        source_id: format!("sensor-{id}"),
+                        thermal: false,
+                        name: format!("Sensor {id}"),
+                        celsius: 10. + id as f64 * 10.,
+                    })
+                    .collect(),
+                errors: Vec::new(),
+            })
+        };
+        let mut view = View::default();
+        let automatic = view.temperatures(report(), &MetricSelection::default()).0;
+        assert_eq!(automatic.readout.top[0].left, "Temp (max)");
+        assert_eq!(
+            automatic.readout.top[0].right.render(Units::Celsius),
+            "40.0 °C"
+        );
+        assert_eq!(
+            automatic.readout.top[0].right.render(Units::Fahrenheit),
+            "104.0 °F"
+        );
+        let selected = MetricSelection {
+            temperature: Some("sensor-0".into()),
+            temperature_extra: [Some("missing".into()), Some("sensor-3".into())],
+            ..Default::default()
+        };
+        let pinned = view.temperatures(report(), &selected).0;
+        assert_eq!(pinned.readout.top[1].left, "1: Sensor 0");
+        assert_eq!(pinned.readout.top[2].right.render(Units::Celsius), "n/a");
+        assert_eq!(pinned.readout.top[3].left, "3: Sensor 3");
     }
 }

@@ -89,13 +89,14 @@ fn version_eight_upgrades_without_writing_or_changing_styles_sources_and_palette
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        13
+        14
     );
 }
 #[test]
 fn color_choices_follow_module_identity_through_reorder_and_theme_round_trips() {
     let mut settings = Settings::default();
-    settings.modules[Module::Network.index()]
+    settings
+        .module_mut(Module::Network)
         .colors
         .set(1, Some([1., 0., 0., 0.5]))
         .unwrap();
@@ -159,7 +160,7 @@ fn invalid_overrides_reject_whole_documents_and_keep_existing_files_protected() 
 #[test]
 fn legacy_module_colors_import_only_the_named_components_and_reject_invalid_values_atomically() {
     let mut base = Settings::default();
-    base.modules[Module::Disk.index()]
+    base.module_mut(Module::Disk)
         .colors
         .set(3, Some([0., 1., 0., 0.5]))
         .unwrap();
@@ -200,22 +201,15 @@ fn legacy_module_colors_import_only_the_named_components_and_reject_invalid_valu
     }
     assert_eq!(report.settings.theme, base.theme);
     assert_eq!(
-        report.settings.modules[Module::Disk.index()].colors.series[2],
+        report.settings.module(Module::Disk).colors.series[2],
         Some([0., 1., 0., 0.5])
     );
     let partial = legacy::parse(b"[Colors]\nnetwork_fg1=#000\ngraph_fg2=#fff\n", &base).unwrap();
     assert_eq!(
-        partial.settings.modules[Module::Network.index()]
-            .colors
-            .series[0],
+        partial.settings.module(Module::Network).colors.series[0],
         Some([0., 0., 0., 1.])
     );
-    assert!(
-        partial.settings.modules[Module::Network.index()]
-            .colors
-            .series[1]
-            .is_none()
-    );
+    assert!(partial.settings.module(Module::Network).colors.series[1].is_none());
     assert_eq!(
         partial.settings.theme.palette().unwrap().colors[3],
         [1., 1., 1., 1.]
@@ -227,5 +221,5 @@ fn legacy_module_colors_import_only_the_named_components_and_reject_invalid_valu
         )
         .is_err()
     );
-    assert!(base.modules[Module::Memory.index()].colors.is_inherited());
+    assert!(base.module_mut(Module::Memory).colors.is_inherited());
 }

@@ -18,6 +18,7 @@ pub struct Panel {
     pub scale: Scale,
     pub detail: String,
     pub temperature_text: Option<(crate::temperature::Text, crate::temperature::Text)>,
+    pub readout: crate::dashboard::Readout,
 }
 impl Panel {
     pub fn activity_description(&self, units: crate::temperature::Units) -> String {
@@ -291,6 +292,7 @@ impl Sampler {
             series,
             scale: Scale::Automatic,
             temperature_text: None,
+            readout: Default::default(),
         }
     }
     fn tpu_panel(&mut self) -> Panel {
@@ -473,11 +475,13 @@ impl Sampler {
                 Scale::Automatic
             },
             temperature_text: None,
+            readout: Default::default(),
         }
         .with_temperature_text(label.into(), Text::join(details, "\n\n"))
     }
     fn gpu_panels(&mut self) -> (Panel, Panel) {
         let mut series = Vec::new();
+        let mut readout = crate::dashboard::Readout::default();
         let mut result = self.gpu.sample();
         self.inventory.gpus.clear();
         if let Ok(report) = &mut result {
@@ -510,6 +514,7 @@ impl Sampler {
                             series,
                             scale: Scale::Percent,
                             temperature_text: None,
+                            readout: Default::default(),
                         },
                         vram,
                     );
@@ -563,6 +568,22 @@ impl Sampler {
                         gpu.label,
                         if device_counter { "" } else { " clients" }
                     ));
+                }
+                readout.top.push(crate::dashboard::Row::new("GPU", ""));
+                for gpu in report.values.iter().take(3) {
+                    readout.top.push(crate::dashboard::Row::new(
+                        &gpu.name,
+                        gpu.utilization
+                            .map(|v| format!("{v:.0}%"))
+                            .or_else(|| gpu.client_activity.map(|v| format!("{v:.0}% clients")))
+                            .unwrap_or_else(|| "n/a".into()),
+                    ));
+                    if let Some(used) = gpu.memory_used {
+                        readout.top.push(crate::dashboard::Row::new(
+                            "VRAM used",
+                            crate::dashboard::bytes(used as f64),
+                        ));
+                    }
                 }
                 for gpu in &report.values {
                     let mut fields: Vec<Text> = vec![
@@ -635,6 +656,7 @@ impl Sampler {
                 series,
                 scale: Scale::Percent,
                 temperature_text: None,
+                readout,
             }
             .with_temperature_text(label.into(), detail),
             vram,
@@ -701,6 +723,7 @@ impl Sampler {
             series,
             scale: Scale::Percent,
             temperature_text: None,
+            readout: Default::default(),
         }
     }
     fn temperature_panel(&mut self) -> Panel {

@@ -137,6 +137,7 @@ fn bars_image(style: GraphStyle, series: &[Vec<f64>], range: (f64, f64), visible
         series,
         plot(range.0, range.1),
         &xrg_ng_linux::settings::ActivityBars {
+            use_series_colors: false,
             visible,
             style,
             color: [1., 0., 0., 0.5],

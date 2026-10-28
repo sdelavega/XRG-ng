@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod ai;
+mod dashboard;
 mod graph_colors;
 mod graph_heights;
 mod legacy_import;
@@ -80,7 +81,7 @@ impl Shell {
                 .palette()
                 .expect("Validated settings"),
         ));
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
         content.add_css_class("xrg-shell");
         let css = gtk::CssProvider::new();
         apply_shell_theme(&css, &theme.borrow());
@@ -89,15 +90,18 @@ impl Shell {
             &css,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
-        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        toolbar.set_margin_start(10);
-        toolbar.set_margin_end(10);
-        toolbar.set_margin_top(8);
-        toolbar.set_margin_bottom(4);
-        let heading = gtk::Label::new(Some("XRG-ng"));
+        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        toolbar.add_css_class("xrg-title");
+        let heading = gtk::Label::new(Some(&glib::host_name()));
+        heading.set_ellipsize(gtk::pango::EllipsizeMode::End);
         heading.set_hexpand(true);
-        heading.set_halign(gtk::Align::Start);
-        toolbar.append(&heading);
+        heading.set_tooltip_text(Some(
+            "XRG-ng · drag to move · menu for preferences and tools",
+        ));
+        let handle = gtk::WindowHandle::new();
+        handle.set_hexpand(true);
+        handle.set_child(Some(&heading));
+        toolbar.append(&handle);
         let names: Vec<_> = shared::themes()
             .iter()
             .map(|t| t.name.clone())
@@ -113,22 +117,8 @@ impl Shell {
         limit_dropdown(&chooser);
         chooser.set_tooltip_text(Some("Theme"));
         chooser.update_property(&[gtk::accessible::Property::Label("Theme")]);
-        toolbar.append(&chooser);
-        let process_button = gtk::Button::with_label("Processes…");
-        toolbar.append(&process_button);
-        let ai_button = gtk::Button::with_label("AI…");
-        ai_button.set_tooltip_text(Some("AI usage, model inventories and sources"));
-        toolbar.append(&ai_button);
-        let weather_button = gtk::Button::from_icon_name("weather-clear-symbolic");
-        weather_button.set_tooltip_text(Some("Weather · station observations"));
-        weather_button.update_property(&[gtk::accessible::Property::Label("Weather")]);
-        toolbar.append(&weather_button);
-        let prefs = gtk::Button::from_icon_name("preferences-system-symbolic");
-        prefs.set_tooltip_text(Some("Preferences · graphs and themes"));
-        prefs.update_property(&[gtk::accessible::Property::Label("Preferences")]);
-        toolbar.append(&prefs);
         content.append(&toolbar);
-        let graphs = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let graphs = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let empty = gtk::Label::new(Some(
             "All graphs are hidden. Open Preferences to show a graph.",
         ));
@@ -181,7 +171,8 @@ impl Shell {
             areas.push(area);
             draws.push(count);
         }
-        let status = gtk::Label::new(Some("Sampling on a worker · 1 second interval"));
+        let status = gtk::Label::new(None);
+        status.set_visible(false);
         status.set_wrap(true);
         status.set_margin_bottom(6);
         status.set_margin_start(10);
@@ -190,8 +181,9 @@ impl Shell {
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("XRG-ng")
-            .default_width(680)
-            .default_height(if smoke { 1400 } else { 850 })
+            .decorated(false)
+            .default_width(148)
+            .default_height(850)
             .child(&content)
             .build();
         let paintable = gtk::WidgetPaintable::new(Some(&content));
@@ -225,6 +217,10 @@ impl Shell {
         });
         toolbar.append(&menus::install(&shell));
         shell.refresh();
+        shell.fit_contents();
+        if smoke && std::env::var_os("XRG_SMOKE_STYLE").is_none() {
+            shell.window.set_default_size(680, 1400);
+        }
         let weak = Rc::downgrade(&shell);
         shell.chooser.connect_selected_notify(move |chooser| {
             let Some(shell) = weak.upgrade() else {
@@ -250,30 +246,6 @@ impl Shell {
                 let mut settings = shell.settings.borrow().clone();
                 settings.theme = choice;
                 shell.apply(settings);
-            }
-        });
-        let weak = Rc::downgrade(&shell);
-        prefs.connect_clicked(move |_| {
-            if let Some(shell) = weak.upgrade() {
-                shell.preferences();
-            }
-        });
-        let weak = Rc::downgrade(&shell);
-        process_button.connect_clicked(move |_| {
-            if let Some(shell) = weak.upgrade() {
-                shell.processes();
-            }
-        });
-        let weak = Rc::downgrade(&shell);
-        ai_button.connect_clicked(move |_| {
-            if let Some(shell) = weak.upgrade() {
-                shell.ai();
-            }
-        });
-        let weak = Rc::downgrade(&shell);
-        weather_button.connect_clicked(move |_| {
-            if let Some(shell) = weak.upgrade() {
-                shell.weather();
             }
         });
         if let Some(error) = error {
@@ -328,6 +300,28 @@ impl Shell {
         }
         self.update_panel_text();
     }
+    fn fit_contents(&self) {
+        let settings = self.settings.borrow();
+        let heights: Vec<_> = settings
+            .modules
+            .iter()
+            .filter(|m| m.visible)
+            .map(|m| m.effective_height(settings.graph_height) as i32)
+            .collect();
+        let count = heights.len() as i32;
+        let (width, height) = if settings.layout == Layout::Horizontal {
+            (
+                (settings.graph_width as i32 * count + 2 * (count - 1).max(0) + 8).clamp(148, 1200),
+                heights.iter().max().copied().unwrap_or(90) + 30,
+            )
+        } else {
+            (
+                (settings.graph_width as i32 + 8).max(148),
+                (heights.iter().sum::<i32>() + 2 * (count - 1).max(0) + 30).clamp(120, 1000),
+            )
+        };
+        self.window.set_default_size(width, height);
+    }
     fn update_panel_text(&self) {
         let state = self.state.borrow();
         let settings = self.settings.borrow();
@@ -351,7 +345,19 @@ impl Shell {
                 .into_owned();
             if settings.activity_bars.visible {
                 detail.push_str("\n\n");
-                detail.push_str(&panel.activity_description(settings.temperature_units));
+                if module == Module::Cpu && !panel.readout.cores.is_empty() {
+                    detail.push_str("Per-core activity bars: logical CPUs, graph axis 0–100% non-idle including reported steal; missing intervals stay blank.\n");
+                    for (id, value) in &panel.readout.cores {
+                        detail.push_str(&format!(
+                            "CPU {id}: {}\n",
+                            value
+                                .map(|v| format!("{v:.1}%"))
+                                .unwrap_or_else(|| "unavailable".into())
+                        ));
+                    }
+                } else {
+                    detail.push_str(&panel.activity_description(settings.temperature_units));
+                }
             }
             area.set_tooltip_text(Some(&detail));
             area.update_property(&[
@@ -391,6 +397,17 @@ impl Shell {
             window.set_view(settings.processes.clone());
         }
         self.refresh();
+        if old.layout != settings.layout
+            || old.graph_width != settings.graph_width
+            || old.graph_height != settings.graph_height
+            || old
+                .modules
+                .iter()
+                .zip(&settings.modules)
+                .any(|(a, b)| a.id != b.id || a.visible != b.visible || a.height != b.height)
+        {
+            self.fit_contents();
+        }
         self.update_details();
         self.persist(settings);
     }
@@ -398,6 +415,7 @@ impl Shell {
         let revision = self.revision.get() + 1;
         self.revision.set(revision);
         self.writer.queue(revision, settings);
+        self.status.set_visible(false);
         self.status.set_text("Saving preferences…");
         self.status.set_tooltip_text(None);
     }
@@ -477,6 +495,7 @@ impl Shell {
         window
     }
     fn persistence_error(&self, error: &str) {
+        self.status.set_visible(true);
         self.status
             .set_text("Changes apply for this session; preferences could not be saved.");
         self.status.set_tooltip_text(Some(error));
@@ -501,6 +520,7 @@ impl Shell {
                         self.status
                             .set_text("Preferences saved · 1 second sampling interval");
                         self.status.set_tooltip_text(None);
+                        self.status.set_visible(false);
                     }
                 }
                 Err(error) if revision == self.revision.get() => self.persistence_error(&error),
@@ -544,7 +564,7 @@ pub fn run(smoke_mode: bool) -> bool {
         };
         let (store, settings, error) = Store::open(path);
         let monitor = Worker::start_with_sources(
-            !smoke_mode,
+            !smoke_mode || std::env::var_os("XRG_SMOKE_STYLE").is_some(),
             settings.metrics.clone(),
             settings.ai.clone(),
             settings.weather.clone(),
@@ -601,7 +621,13 @@ pub fn run(smoke_mode: bool) -> bool {
                 match harness.tick(&shell, sequence) {
                     Ok(true)
                         if state.borrow().as_ref().is_some_and(|s| s.valid)
-                            && shell.draws.iter().all(|d| d.get() >= 3) =>
+                            && shell
+                                .settings
+                                .borrow()
+                                .modules
+                                .iter()
+                                .filter(|m| m.visible)
+                                .all(|m| shell.draws[m.id.index()].get() >= 3) =>
                     {
                         if let Some(path) = std::env::var_os("XRG_SMOKE_IMAGE")
                             && let Err(error) = shell.snapshot(&PathBuf::from(path))
@@ -669,114 +695,16 @@ pub(super) fn limit_dropdown(dropdown: &gtk::DropDown) {
     });
     dropdown.set_factory(Some(&factory));
 }
-fn color(context: &gtk::cairo::Context, color: [f64; 4]) {
-    context.set_source_rgba(color[0], color[1], color[2], color[3]);
-}
 fn draw(
     context: &gtk::cairo::Context,
-    (width, height): (i32, i32),
+    size: (i32, i32),
     theme: &Theme,
     title: &str,
     panel: Option<&Panel>,
     units: xrg_ng_linux::temperature::Units,
-    (style, bars): (GraphStyle, &settings::ActivityBars),
+    appearance: (GraphStyle, &settings::ActivityBars),
 ) {
-    // Compose translucent Classic colors over an opaque base; repainting never
-    // accumulates alpha from previous frames.
-    context.set_source_rgb(theme.colors[0][0], theme.colors[0][1], theme.colors[0][2]);
-    let _ = context.paint();
-    color(context, theme.colors[1]);
-    context.rectangle(0., 0., width as f64, height as f64);
-    let _ = context.fill();
-    color(context, theme.colors[5]);
-    context.set_line_width(1.);
-    context.rectangle(
-        0.5,
-        0.5,
-        (width as f64 - 1.).max(0.),
-        (height as f64 - 1.).max(0.),
-    );
-    let _ = context.stroke();
-    color(context, theme.colors[6]);
-    context.select_font_face(
-        "monospace",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Normal,
-    );
-    context.set_font_size(13.);
-    context.move_to(10., 20.);
-    let _ = context.show_text(title);
-    context.move_to(10., 39.);
-    context.set_font_size(12.);
-    let bar_count = panel
-        .filter(|_| bars.visible)
-        .map_or(0, |p| p.series.len().min(3));
-    let bar_width = bar_count as f64 * 10.;
-    let _ = context.save();
-    context.rectangle(
-        8.,
-        24.,
-        (width as f64
-            - 26.
-            - if bar_count > 0 {
-                bar_width.max(18.)
-            } else {
-                0.
-            })
-        .max(0.),
-        20.,
-    );
-    context.clip();
-    context.move_to(10., 39.);
-    let _ = context.show_text(
-        panel
-            .map(|p| p.display_label(units))
-            .unwrap_or_else(|| "Waiting for sample…".into())
-            .as_ref(),
-    );
-    let _ = context.restore();
-    if bar_count > 0 {
-        context.set_font_size(9.);
-        context.move_to(width as f64 - 9. - bar_width.max(18.), 39.);
-        let _ = context.show_text("now");
-    }
-    let Some(panel) = panel else {
-        return;
-    };
-    let (minimum, maximum) = panel.scale.bounds(&panel.series);
-    let bottom = height as f64 - 6.;
-    let top = 49.;
-    if bottom <= top || width <= 20 {
-        return;
-    }
-    let _ = xrg_ng_linux::graph::draw(
-        context,
-        &panel.series,
-        &theme.colors[2..5],
-        xrg_ng_linux::graph::Plot {
-            left: 8.,
-            top,
-            right: width as f64 - 8. - if bar_count > 0 { bar_width + 8. } else { 0. },
-            bottom,
-            lower: minimum,
-            upper: maximum,
-        },
-        style,
-    );
-    let _ = xrg_ng_linux::graph::draw_bars(
-        context,
-        &panel.series,
-        xrg_ng_linux::graph::Plot {
-            left: width as f64 - 8. - bar_width,
-            right: width as f64 - 8.,
-            top,
-            bottom,
-            lower: minimum,
-            upper: maximum,
-        },
-        bars,
-        theme.colors[5],
-    );
+    dashboard::draw(context, size, theme, title, panel, units, appearance);
 }
 
 fn save_snapshot(
@@ -795,10 +723,23 @@ fn save_snapshot(
 }
 
 fn apply_shell_theme(provider: &gtk::CssProvider, theme: &Theme) {
-    let background = theme.colors[0];
-    let text = theme.colors[6];
+    let rgb = |value: [f64; 4]| {
+        format!(
+            "rgb({:.0}, {:.0}, {:.0})",
+            value[0] * 255.,
+            value[1] * 255.,
+            value[2] * 255.
+        )
+    };
+    let border = theme.colors[5];
+    let base = theme.colors[0];
+    let opaque = [
+        border[0] * border[3] + base[0] * (1. - border[3]),
+        border[1] * border[3] + base[1] * (1. - border[3]),
+        border[2] * border[3] + base[2] * (1. - border[3]),
+        1.,
+    ];
     provider.load_from_data(&format!(
-        ".xrg-shell {{ background-color: rgb({:.0}, {:.0}, {:.0}); color: rgb({:.0}, {:.0}, {:.0}); }} .xrg-graph:focus-visible {{ outline: 2px solid currentColor; outline-offset: -2px; }}",
-        background[0] * 255., background[1] * 255., background[2] * 255.,
-        text[0] * 255., text[1] * 255., text[2] * 255.));
+        ".xrg-shell {{ background-color: {}; color: {}; padding: 4px; border-radius: 5px; }} .xrg-title {{ background-color: {}; font: 11px Sans; min-height: 18px; }} .xrg-title button {{ padding: 0 3px; margin: 0; min-height: 16px; min-width: 12px; border: none; background: none; box-shadow: none; color: inherit; }} .xrg-shell scrollbar {{ background: {}; min-width: 3px; min-height: 3px; }} .xrg-shell scrollbar slider {{ min-width: 3px; min-height: 3px; margin: 0; background: {}; border: none; }} .xrg-graph:focus-visible {{ outline: 1px solid currentColor; outline-offset: -1px; }}",
+        rgb(opaque),rgb(theme.colors[6]),rgb(base),rgb(base),rgb(opaque)));
 }

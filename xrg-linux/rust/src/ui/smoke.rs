@@ -51,6 +51,18 @@ impl Harness {
         ));
         fs::create_dir(&root).map_err(|e| e.to_string())?;
         fs::write(root.join("settings.conf"), "theme=Midnight\n").map_err(|e| e.to_string())?;
+        if let Ok(name) = std::env::var("XRG_SMOKE_STYLE") {
+            let settings = Settings {
+                theme: ThemeChoice::Builtin { name },
+                ..Settings::default()
+            };
+            settings.validate()?;
+            fs::write(
+                root.join("settings.conf"),
+                serde_json::to_vec(&settings).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         fs::write(root.join("invalid.json"), "{broken").map_err(|e| e.to_string())?;
         fs::write(root.join("legacy.ini"), LEGACY_FIXTURE).map_err(|e| e.to_string())?;
         fs::write(
@@ -234,6 +246,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if std::env::var_os("XRG_SMOKE_STYLE").is_some() {
+            return "compact-style live Linux readings";
+        }
         if self.process_actions.is_some() {
             "process-controls=signals"
         } else {
@@ -243,6 +258,47 @@ impl Harness {
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
         if let Some(harness) = &mut self.process_actions {
             return harness.tick(shell);
+        }
+        if std::env::var_os("XRG_SMOKE_STYLE").is_some() {
+            if sequence < 8 {
+                return Ok(false);
+            }
+            require(
+                shell.window.width() <= 180,
+                "Compact window is wider than the Mac strip",
+            )?;
+            require(
+                !shell.status.is_visible(),
+                "Routine status takes up graph space",
+            )?;
+            let settings = shell.settings.borrow();
+            for module in settings.modules.iter().filter(|m| m.visible) {
+                let area = &shell.areas[module.id.index()];
+                require(
+                    area.width() >= 140 && area.height() == 90,
+                    "Compact graph geometry changed",
+                )?;
+            }
+            let last = settings.modules.iter().rev().find(|m| m.visible).unwrap();
+            let bounds = shell.areas[last.id.index()]
+                .compute_bounds(&shell.window)
+                .ok_or("No graph bounds")?;
+            require(
+                bounds.y() + bounds.height() <= shell.window.height() as f32,
+                "Last graph is clipped",
+            )?;
+            let state = shell.state.borrow();
+            let cpu = &state.as_ref().ok_or("No snapshot")?.panels[Module::Cpu.index()];
+            require(
+                cpu.readout.top.len() == 4 && !cpu.readout.cores.is_empty(),
+                "CPU compact readings missing",
+            )?;
+            require(
+                shell.window.lookup_action("preferences").is_some()
+                    && shell.chooser.parent().is_some(),
+                "Menu lost preferences or theme access",
+            )?;
+            return Ok(true);
         }
         let before = self.stage;
         if let Some(panel) = &self.neural_panel {
@@ -278,7 +334,15 @@ impl Harness {
                 shell.chooser.set_selected(2);
                 self.stage = 2;
             }
-            2 if sequence >= 4 && shell.draws.iter().all(|d| d.get() >= 3) => {
+            2 if sequence >= 4
+                && shell
+                    .settings
+                    .borrow()
+                    .modules
+                    .iter()
+                    .filter(|m| m.visible)
+                    .all(|m| shell.draws[m.id.index()].get() >= 3) =>
+            {
                 let before = shell.settings.borrow().clone();
                 let dialog = shell.preferences();
                 dialog.select_preset(4);
@@ -492,7 +556,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 13 && loaded.processes.limit == 20,
+                    loaded.version == 14 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -900,7 +964,7 @@ impl Harness {
                 require(
                     shell.settings.borrow().modules[1].id == Module::Cpu
                         && shell.graphs.first_child().as_ref()
-                            == Some(shell.areas[Module::Memory.index()].upcast_ref()),
+                            == Some(shell.areas[original.modules[1].id.index()].upcast_ref()),
                     "Menu move-down did not reorder the graph widgets",
                 )?;
                 menu_action(shell, "graph-up", Some(Module::Cpu));
@@ -930,8 +994,12 @@ impl Harness {
                 )?;
                 live_details.window.close();
                 menu_action(shell, "show-all", None);
+                let mut shown = original.clone();
+                for module in &mut shown.modules {
+                    module.visible = true;
+                }
                 require(
-                    *shell.settings.borrow() == original,
+                    *shell.settings.borrow() == shown,
                     "Show-all changed source, weather, theme or graph order preferences",
                 )?;
                 menu_action(shell, "preferences", None);
@@ -1131,6 +1199,7 @@ impl Harness {
                 dialog.layout.set_selected(1);
                 dialog.temperature_units.set_selected(1);
                 dialog.height.set_value(136.);
+                dialog.width.set_value(360.);
                 for module in Module::ALL {
                     dialog.check(module).set_active(matches!(
                         module,
@@ -1612,6 +1681,7 @@ impl Harness {
                         ],
                         scale: xrg_ng_linux::engine::Scale::Percent,
                         temperature_text: None,
+                        readout: Default::default(),
                     };
                     area.set_draw_func(move |_, context, width, height| {
                         super::draw(
@@ -1824,6 +1894,7 @@ impl Harness {
                         ],
                         scale: xrg_ng_linux::engine::Scale::Percent,
                         temperature_text: None,
+                        readout: Default::default(),
                     };
                     let area = gtk::DrawingArea::new();
                     area.set_content_width(600);
@@ -2011,10 +2082,9 @@ impl Harness {
                     "Reset graph heights did not persist",
                 )?;
                 require(
-                    shell
-                        .areas
-                        .iter()
-                        .all(|a| a.content_height() == 112 && a.height() == 112),
+                    shell.areas.iter().all(|a| {
+                        a.content_height() == 112 && (!a.is_visible() || a.height() == 112)
+                    }),
                     "Reset graph heights did not resume default sizing",
                 )?;
                 let dialog = shell.preferences();
@@ -2047,7 +2117,8 @@ impl Harness {
                 require(
                     candidate.activity_bars.visible
                         && candidate.activity_bars.style == GraphStyle::Pixel
-                        && candidate.activity_bars.color == [0.5, 0.25, 0.75, 0.5],
+                        && candidate.activity_bars.color == [0.5, 0.25, 0.75, 0.5]
+                        && !candidate.activity_bars.use_series_colors,
                     "Activity controls missed draft",
                 )?;
                 dialog.cancel.emit_clicked();
@@ -2175,9 +2246,11 @@ impl Harness {
                         series,
                         scale,
                         temperature_text: None,
+                        readout: Default::default(),
                     };
                     let theme = shell.settings.borrow().theme.palette()?;
                     let bars = xrg_ng_linux::settings::ActivityBars {
+                        use_series_colors: false,
                         visible: true,
                         style: GraphStyle::ALL[index.min(3)],
                         color: [0.2, 1., 0.3, 1.],
@@ -2249,6 +2322,7 @@ impl Harness {
                 ] {
                     let theme = shell.settings.borrow().theme.palette()?;
                     let bars = xrg_ng_linux::settings::ActivityBars {
+                        use_series_colors: false,
                         visible: true,
                         ..Settings::default().activity_bars
                     };
@@ -2324,10 +2398,9 @@ impl Harness {
                     "Graph width did not persist",
                 )?;
                 require(
-                    shell
-                        .areas
-                        .iter()
-                        .all(|a| a.content_width() == 1000 && a.width() >= 1000),
+                    shell.areas.iter().all(|a| {
+                        a.content_width() == 1000 && (!a.is_visible() || a.width() >= 1000)
+                    }),
                     "Wide vertical graphs lost minimum width",
                 )?;
                 let range = shell.scroll.hadjustment();
@@ -2391,7 +2464,7 @@ impl Harness {
                 let dialog = shell.preferences();
                 dialog.reset.emit_clicked();
                 require(
-                    dialog.draft().graph_width == 360,
+                    dialog.draft().graph_width == 140,
                     "Restoring defaults retained a custom width",
                 )?;
                 dialog.cancel.emit_clicked();

@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 14;
+    value.version = 15;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -235,7 +235,11 @@ fn all_hidden_and_module_moves_keep_a_valid_stable_layout() {
     assert_eq!(
         value.modules.iter().map(|m| m.id).collect::<Vec<_>>(),
         std::iter::once(Module::Tpu)
-            .chain(Module::ALL.into_iter().filter(|m| *m != Module::Tpu))
+            .chain(
+                Settings::default_order()
+                    .into_iter()
+                    .filter(|m| *m != Module::Tpu)
+            )
             .collect::<Vec<_>>()
     );
     for module in &mut value.modules {
@@ -382,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        13
+        14
     );
 }
 #[test]
@@ -465,7 +469,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 13);
+    assert_eq!(migrated.version, 14);
     assert_eq!(migrated.modules.len(), 12);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -608,7 +612,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        13
+        14
     );
 }
 

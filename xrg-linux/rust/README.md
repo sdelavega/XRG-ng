@@ -9,7 +9,23 @@ TPU/NPU neural accelerator, VRAM pool and fan RPM graphs, with per-core/interfac
 sortable, filterable process table.
 An opt-in **Weather** window shows station observations using the shared Swift
 METAR decoder, with saved station, units and refresh controls.
+The main window follows the macOS strip: a draggable hostname band with a compact
+menu, plots with overlaid readings, thin separators and the same six Swift theme
+palettes. New profiles default to **Classic**, 140-pixel graph width and 90-pixel
+height. CPU, GPU, NPU and memory lead the default order; process counts, VRAM and
+fans remain available through Preferences. Existing saved profiles retain their
+sizes, order, visibility, sources, colors and theme. Window dimensions follow
+layout changes; both axes still scroll when the desktop or a manual resize limits
+space. Preferences, theme selection, process tools, AI, weather and Quit are in
+the title-band menu; graph actions remain available by right-click or Shift+F10.
+Linux compositor decorations, fonts and placement behavior can differ from macOS.
 This is an initial vertical slice, not feature parity with the C application.
+
+[Classic preview](../../screenshots/linux-compact-classic.png) ·
+[Midnight preview](../../screenshots/linux-compact-midnight.png).
+These are actual GTK4 release-build captures in a Linux X11 validation VM;
+GPU/NPU, battery and sensors absent from that VM show unavailable states.
+
 
 ## Hardware support and feedback
 
@@ -67,6 +83,17 @@ steal separately, plus system-wide 1/5/15-minute load averages, runnable/total
 scheduling entities (including threads) and uptime including suspend. Selecting
 one logical CPU changes its curves; load and uptime keep their exposed `/proc`
 scope. Those counters may exceed a container's assigned CPU capacity.
+
+The compact CPU face shows total **core-percent** (average × logical CPU count),
+the aggregate 0–100% **Average**, one-minute load and uptime. When selecting one
+CPU, the total and average both refer to that CPU. Activity bars along the bottom
+show up to 64 logical CPUs with stable IDs; unreadable/regressed intervals stay
+blank. Memory displays Linux used, available, cached and swap-used byte counts,
+without inventing macOS wired memory. Net/Disk faces show kernel lifetime totals
+(normally since boot) and the latest rates. Compact B/K/M/G/T suffixes use powers
+of 1024; totals are neither disk capacity nor transfers since launching the app.
+Full labels, accounting semantics and source details remain in accessibility,
+tooltips and Live details.
 
 Load averages are task counts, including uninterruptible I/O wait, not utilization
 percentages. Uptime's cumulative idle value can exceed elapsed uptime on multicore
@@ -444,7 +471,7 @@ while a read is in flight prevents a late preview or draft change.
 
 ## Graph and theme preferences
 
-The toolbar provides all six built-in presets and **Preferences…**. The Custom
+The title-band menu provides all six built-in presets and **Preferences…**. The Custom
 entry opens the editor when a built-in preset is active. In Preferences:
 
 - Check which graphs to show; use **Up/Down** to arrange them.
@@ -457,7 +484,7 @@ entry opens the editor when a built-in preset is active. In Preferences:
 - Set **Minimum graph width** between 100 and 1200 pixels. Graphs can expand to
   fill available space. A width larger than the viewport scrolls horizontally in
   either layout without forcing the whole window wider. The default stays at
-  360 pixels. Width changes keep sources, sampled histories, graph order, colors
+  140 pixels. Width changes keep sources, sampled histories, graph order, colors
   and individual heights. Apply/Cancel and Restore defaults cover this control.
 - Set the **Default graph height** between 64 and 240 pixels. Expand **Individual
   graph heights**, select a graph and uncheck **Use default height** to give it
@@ -466,8 +493,9 @@ entry opens the editor when a built-in preset is active. In Preferences:
   the overrides in the draft and keeps the default value. Sizes apply in both
   layouts; horizontal graphs align at the top rather than stretching shorter
   graphs. Ordering, hiding, sources, themes and styles preserve size choices.
-- Expand **Activity bars** to show/hide the compact **now** indicators and choose
-  their independent Solid/Pixel/Dot/Hollow style and RGBA color. Up to three bars
+- Expand **Activity bars** to show/hide the compact current-value indicators and choose
+  their independent Solid/Pixel/Dot/Hollow style and RGBA color, or inherit graph
+  series colors (the new default). Up to three bars
   follow graph series order, left to right. Each shows the latest sample on the
   **same axis as its graph**: percentage graphs use 0–100%; rates/counts use the
   recent-history scale, not hardware capacity; temperatures use the graph's signed
@@ -508,7 +536,7 @@ presentation while each graph retains its original collector. An all-hidden layo
 shows a recovery message and keeps Preferences accessible. Headless diagnostics
 continue reporting all collectors independently of these presentation preferences.
 Graph heights are minimum requests; small windows scroll. Graphs retain their
-chosen minimum width (360 pixels by default) in either layout and scroll sideways
+chosen minimum width (140 pixels by default) in either layout and scroll sideways
 when necessary, with vertical scrolling when needed.
 Window placement/pinning is not part of these preferences.
 
@@ -556,8 +584,8 @@ overrides are embedded in preferences and stay intact when loading/saving a them
 Settings use version 13 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
-them in Preferences. An all-hidden layout stays hidden. New installations show all
-twelve graphs by default. Version 3 layouts also load, adding default AI source
+them in Preferences. An all-hidden layout stays hidden. New installations show nine
+compact graphs; process counts, VRAM and fans are optional. Version 3 layouts also load, adding default AI source
 controls. Versions 1–4 gain weather settings with requests **disabled**. Existing
 AI sources, layouts and themes are preserved. Versions 1–5 gain vertical layout
 and Celsius defaults; existing settings are upgraded without immediate writes.
@@ -580,16 +608,19 @@ build does not serialize its per-graph height fields; legacy import keeps curren
 graph sizes instead of treating saved window geometry as graph dimensions.
 Versions 1–10 without activity-bar fields, and the original `theme=…` format,
 keep bars hidden to preserve their appearance. New installations and Restore
-defaults enable Solid bars in the C app's electric green. Bar preferences are
+defaults enable Solid bars using graph series colors. Explicit legacy bar colors
+disable series-color inheritance. Bar preferences are
 stored separately from graph styles/colors and the exchanged theme document.
 Versions 1–11 gain empty optional temperature/fan curve slots, retaining their
 saved primary sources and automatic behavior. The two optional slots require a
 primary, distinct valid source identities and exactly two nullable entries.
 Malformed new fields reject the whole file; migration writes only on explicit save.
-Versions 1–12 gain the existing 360-pixel minimum graph width without an immediate
+Versions 1–12 without an explicit width gain the 140-pixel minimum graph width without an immediate
 write. Invalid widths reject the whole document. The C app does not serialize its
 `graph_width` field; legacy import preserves the current minimum rather than
 mistaking saved window geometry for graph width.
+Version 14 adds optional activity-bar series-color inheritance; older saved bar
+colors stay explicit. Existing dimensions and ordering are not rewritten.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

@@ -36,6 +36,7 @@ pub(super) struct Dialog {
     pub graph_heights: super::graph_heights::Editor,
     pub activity: gtk::Expander,
     pub activity_visible: gtk::CheckButton,
+    activity_series: gtk::CheckButton,
     pub activity_style: gtk::DropDown,
     pub activity_color: gtk::ColorDialogButton,
     pub layout: gtk::DropDown,
@@ -144,13 +145,16 @@ impl Dialog {
         form.append(&graph_heights.widget);
         let activity_content = gtk::Box::new(gtk::Orientation::Vertical, 8);
         let activity_description = gtk::Label::new(Some(
-            "One current-value bar per series, on the graph’s axis. Rate/count bars scale to recent history, not capacity. Temperature bars show a display range, not a thermal limit. Missing readings stay blank; measured zero has an empty track.",
+            "CPU shows up to 64 logical-core bars. Other graphs show one current-value bar per series, on the graph’s axis. Rate/count bars scale to recent history, not capacity. Temperature bars show a display range, not a thermal limit. Missing readings stay blank; measured zero has an empty track.",
         ));
         activity_description.set_wrap(true);
         activity_description.set_xalign(0.);
         activity_content.append(&activity_description);
         let activity_visible = gtk::CheckButton::with_label("Show current-value activity bars");
         activity_content.append(&activity_visible);
+        let activity_series =
+            gtk::CheckButton::with_label("Use graph series colors for activity bars");
+        activity_content.append(&activity_series);
         let activity_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let activity_style = gtk::DropDown::from_strings(&GraphStyle::ALL.map(GraphStyle::name));
         activity_style.update_property(&[gtk::accessible::Property::Label("Activity bar style")]);
@@ -303,6 +307,7 @@ impl Dialog {
             graph_heights,
             activity,
             activity_visible,
+            activity_series,
             activity_style,
             activity_color,
             layout,
@@ -319,6 +324,14 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.activity_series.connect_toggled(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().activity_bars.use_series_colors = control.is_active();
+            }
+        });
         let weak = Rc::downgrade(&dialog);
         dialog.activity_visible.connect_toggled(move |control| {
             if let Some(dialog) = weak.upgrade()
@@ -345,6 +358,8 @@ impl Dialog {
             if let Some(dialog) = weak.upgrade()
                 && !dialog.updating.get()
             {
+                dialog.draft.borrow_mut().activity_bars.use_series_colors = false;
+                dialog.activity_series.set_active(false);
                 let rgba = control.rgba();
                 dialog.draft.borrow_mut().activity_bars.color = [
                     rgba.red() as f64,
@@ -664,6 +679,8 @@ impl Dialog {
         self.height.set_value(settings.graph_height as f64);
         self.width.set_value(settings.graph_width as f64);
         self.graph_heights.refresh(&settings);
+        self.activity_series
+            .set_active(settings.activity_bars.use_series_colors);
         self.activity_visible
             .set_active(settings.activity_bars.visible);
         self.activity_style

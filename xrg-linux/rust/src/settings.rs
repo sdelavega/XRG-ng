@@ -102,6 +102,7 @@ pub struct ActivityBars {
     pub visible: bool,
     pub style: GraphStyle,
     pub color: [f64; 4],
+    pub use_series_colors: bool,
 }
 impl Default for ActivityBars {
     fn default() -> Self {
@@ -110,6 +111,7 @@ impl Default for ActivityBars {
             visible: false,
             style: GraphStyle::Solid,
             color: [0.2, 1., 0.3, 1.],
+            use_series_colors: false,
         }
     }
 }
@@ -419,29 +421,30 @@ pub struct Settings {
     pub weather: crate::weather::Preferences,
 }
 fn default_graph_width() -> u32 {
-    360
+    140
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 13,
+            version: 14,
             theme: ThemeChoice::Builtin {
-                name: "Midnight".into(),
+                name: "Classic".into(),
             },
-            modules: Module::ALL
+            modules: Self::default_order()
                 .into_iter()
                 .map(|id| ModuleSetting {
                     id,
-                    visible: true,
+                    visible: !matches!(id, Module::Processes | Module::GpuMemory | Module::Fans),
                     style: GraphStyle::Solid,
                     colors: GraphColors::default(),
                     height: None,
                 })
                 .collect(),
-            graph_height: 100,
+            graph_height: 90,
             graph_width: default_graph_width(),
             activity_bars: ActivityBars {
                 visible: true,
+                use_series_colors: true,
                 ..ActivityBars::default()
             },
             layout: Layout::default(),
@@ -454,8 +457,36 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    pub fn default_order() -> [Module; 12] {
+        [
+            Module::Cpu,
+            Module::Gpu,
+            Module::Tpu,
+            Module::Memory,
+            Module::Battery,
+            Module::Temperature,
+            Module::Network,
+            Module::Disk,
+            Module::Ai,
+            Module::Processes,
+            Module::GpuMemory,
+            Module::Fans,
+        ]
+    }
+    pub fn module(&self, id: Module) -> &ModuleSetting {
+        self.modules
+            .iter()
+            .find(|m| m.id == id)
+            .expect("Validated module set")
+    }
+    pub fn module_mut(&mut self, id: Module) -> &mut ModuleSetting {
+        self.modules
+            .iter_mut()
+            .find(|m| m.id == id)
+            .expect("Validated module set")
+    }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 13 {
+        if self.version != 14 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -511,6 +542,7 @@ impl Settings {
                 .ok_or("Unrecognized settings format")?;
             let mut defaults = Self::default();
             defaults.activity_bars.visible = false;
+            defaults.activity_bars.use_series_colors = false;
             for module in &mut defaults.modules {
                 module.style = GraphStyle::Hollow;
             }
@@ -567,6 +599,9 @@ impl Settings {
         }
         if result.version == 12 {
             result.version = 13;
+        }
+        if result.version == 13 {
+            result.version = 14;
         }
         result.validate()?;
         Ok(result)

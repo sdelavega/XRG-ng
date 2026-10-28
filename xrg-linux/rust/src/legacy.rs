@@ -198,6 +198,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 .ok_or_else(|| format!("{label}: expected an activity bar style from 0 to 3"))?;
             imported.push(format!("{label} = {}", settings.activity_bars.style.name()));
         } else if group == "Colors" && key == "activity_bar" {
+            settings.activity_bars.use_series_colors = false;
             settings.activity_bars.color =
                 color(&unescape(value).map_err(|e| format!("{label}: {e}"))?)
                     .map_err(|e| format!("{label}: {e}"))?;

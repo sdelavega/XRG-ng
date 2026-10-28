@@ -134,9 +134,15 @@ pub(super) fn install(shell: &Rc<Shell>) -> gtk::MenuButton {
     app.append(Some("About XRG-ng"), Some("win.about"));
     app.append(Some("Quit"), Some("win.quit"));
     menu.append_section(None, &app);
+    let theme_item = gio::MenuItem::new(None, None);
+    theme_item.set_attribute_value("custom", Some(&"theme-selector".to_variant()));
+    menu.prepend_item(&theme_item);
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.add_child(&shell.chooser, "theme-selector");
     let button = gtk::MenuButton::builder()
-        .icon_name("open-menu-symbolic")
-        .menu_model(&menu)
+        .label("⋮")
+        .direction(gtk::ArrowType::None)
+        .popover(&popover)
         .build();
     button.set_tooltip_text(Some("Application menu"));
     button.update_property(&[gtk::accessible::Property::Label("Application menu")]);

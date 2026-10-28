@@ -305,6 +305,10 @@ impl Display {
             self.preferences = Some(preferences.clone());
         }
         let mut detail = vec!["Token totals cover locally retained logs/database rows, not account billing. Graph: observed token-counter change per second, sampled every 5 s; log writes may arrive in bursts. Costs are shown only when recorded by the source.".to_owned()];
+        let mut readout = crate::dashboard::Readout::default();
+        readout
+            .top
+            .push(crate::dashboard::Row::new("AI tokens", "tok/s"));
         let mut count = 0;
         let mut rate = 0u64;
         let mut total = 0u64;
@@ -327,6 +331,9 @@ impl Display {
                         counter.source = reading.source.clone();
                     }
                     let (_, current) = counter.rates.sample(0, reading.usage.total, time);
+                    readout
+                        .top
+                        .push(crate::dashboard::Row::new(name, compact(current as u64)));
                     rate += current as u64;
                     if let Some(sum) = total.checked_add(reading.usage.total) {
                         total = sum;
@@ -344,6 +351,7 @@ impl Display {
                     counter.previous = Some(reading);
                 }
                 Err(error) => {
+                    readout.top.push(crate::dashboard::Row::new(name, "n/a"));
                     counter.rates = Rates::new();
                     let last = counter
                         .previous
@@ -382,6 +390,7 @@ impl Display {
             },
             scale: Scale::Automatic,
             temperature_text: None,
+            readout,
             detail: detail.join("\n\n"),
         }
     }
@@ -505,6 +514,7 @@ pub fn waiting() -> Panel {
         series: Vec::new(),
         scale: Scale::Automatic,
         temperature_text: None,
+        readout: Default::default(),
         detail: "AI usage collection runs independently of system collection.".into(),
     }
 }

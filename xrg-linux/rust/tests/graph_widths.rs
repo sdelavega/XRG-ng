@@ -51,14 +51,14 @@ fn previous_settings_keep_the_original_minimum_without_an_early_write() {
     let (mut store, loaded, error) = Store::open(Some(f.path()));
     assert!(error.is_none());
     assert_eq!(loaded, expected);
-    assert_eq!(loaded.graph_width, 360);
+    assert_eq!(loaded.graph_width, 140);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     store.save(&loaded).unwrap();
     assert_eq!(
         Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
         expected
     );
-    assert_eq!(Settings::parse(b"theme=Ocean").unwrap().graph_width, 360);
+    assert_eq!(Settings::parse(b"theme=Ocean").unwrap().graph_width, 140);
 }
 #[test]
 fn width_round_trips_in_both_layouts_independently_of_source_color_order_and_height() {

@@ -281,3 +281,24 @@ fn optional_readers_are_bounded_and_reject_symlinks_special_files_and_invalid_en
     assert!(presentation::overview(&f.0).load.is_err());
     assert!(presentation::overview(&f.0).uptime.is_ok());
 }
+
+#[test]
+fn compact_cpu_face_keeps_core_identity_gaps_and_average_distinct_from_core_percent() {
+    use xrg_ng_linux::temperature::Units;
+    let mut view = View::default();
+    let first = view.panel(records(0, true), &overview(), None, 1.).0;
+    assert_eq!(first.readout.cores, vec![(0, None), (2, None)]);
+    let next = view.panel(records(1, true), &overview(), None, 2.).0;
+    assert_eq!(next.readout.cores, vec![(0, Some(45.)), (2, Some(45.))]);
+    assert_eq!(next.readout.top[0].right.render(Units::Celsius), "90%");
+    assert_eq!(next.readout.top[1].right.render(Units::Celsius), "45.0%");
+    assert_eq!(next.readout.top[2].right.render(Units::Celsius), "1.25");
+    let selected = view.panel(records(2, true), &overview(), Some(2), 3.).0;
+    assert_eq!(selected.readout.cores, vec![(2, Some(45.))]);
+    assert_eq!(selected.readout.top[0].right.render(Units::Celsius), "45%");
+    let failed = view
+        .panel(Err("read failed".into()), &overview(), None, 4.)
+        .0;
+    assert!(failed.readout.cores.is_empty());
+    assert_eq!(failed.readout.top[0].right.render(Units::Celsius), "n/a");
+}
