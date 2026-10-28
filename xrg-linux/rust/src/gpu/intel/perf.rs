@@ -71,45 +71,8 @@ impl Open for Native {
     fn open(&mut self, spec: &Spec, event: &Event) -> Result<Box<dyn Counter>, String> {
         #[cfg(target_os = "linux")]
         {
-            use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-            let attr = Attr {
-                kind: spec.event_type,
-                size: 64,
-                config: event.config,
-                read_format: 3,
-                ..Default::default()
-            };
-            let fd = unsafe {
-                libc::syscall(
-                    libc::SYS_perf_event_open,
-                    &attr,
-                    -1i32,
-                    spec.cpu as i32,
-                    -1i32,
-                    8u64,
-                )
-            };
-            if fd < 0 {
-                let error = std::io::Error::last_os_error();
-                return Err(match error.raw_os_error() {
-                    Some(libc::EPERM) | Some(libc::EACCES) => {
-                        format!("i915 PMU permission denied by kernel/sandbox: {error}")
-                    }
-                    _ => format!("Open i915 PMU: {error}"),
-                });
-            }
-            let handle = unsafe { OwnedFd::from_raw_fd(fd as i32) };
-            let flags = unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_GETFL) };
-            if flags < 0
-                || unsafe {
-                    libc::fcntl(handle.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK)
-                } < 0
-            {
-                return Err(format!(
-                    "Configure PMU handle: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
+            let handle = open_event(spec.event_type, spec.cpu, event.config, -1, false, 3)
+                .map_err(|error| format!("i915 {error}"))?;
             Ok(Box::new(Handle(handle)))
         }
         #[cfg(not(target_os = "linux"))]
@@ -119,7 +82,56 @@ impl Open for Native {
         }
     }
 }
-pub(super) fn available(sys: &std::path::Path) -> bool {
+#[cfg(target_os = "linux")]
+pub(in crate::gpu) fn open_event(
+    kind: u32,
+    cpu: u32,
+    config: u64,
+    group: i32,
+    disabled: bool,
+    read_format: u64,
+) -> Result<std::os::fd::OwnedFd, String> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let attr = Attr {
+        kind,
+        size: 64,
+        config,
+        read_format,
+        flags: u64::from(disabled),
+        ..Default::default()
+    };
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_perf_event_open,
+            &attr,
+            -1i32,
+            cpu as i32,
+            group,
+            8u64,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        return Err(match error.raw_os_error() {
+            Some(libc::EPERM) | Some(libc::EACCES) => {
+                format!("PMU permission denied by kernel/sandbox: {error}")
+            }
+            _ => format!("Open PMU: {error}"),
+        });
+    }
+    let handle = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    let flags = unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0
+        || unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
+        return Err(format!(
+            "Configure PMU handle: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(handle)
+}
+pub(in crate::gpu) fn available(sys: &std::path::Path) -> bool {
     #[cfg(target_os = "linux")]
     {
         if sys != std::path::Path::new("/sys") {

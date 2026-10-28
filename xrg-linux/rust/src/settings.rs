@@ -303,6 +303,8 @@ pub struct MetricSelection {
     pub disk: Option<String>,
     /// Collector-provided identity, compared with inventory; never used as a path.
     pub gpu: Option<String>,
+    /// Opt-in: Xe engine PMU descriptors can keep the GPU awake.
+    pub xe_pmu: bool,
     pub temperature: Option<String>,
     pub fan: Option<String>,
     /// Optional curves 2/3. A primary source is required; holes retain color slots.
@@ -363,7 +365,8 @@ impl MetricSelection {
             Module::Cpu => self.cpu == other.cpu,
             Module::Network => self.network == other.network,
             Module::Disk => self.disk == other.disk,
-            Module::Gpu | Module::GpuMemory => self.gpu == other.gpu,
+            Module::Gpu => self.gpu == other.gpu && self.xe_pmu == other.xe_pmu,
+            Module::GpuMemory => self.gpu == other.gpu,
             Module::Temperature => {
                 self.temperature == other.temperature
                     && self.temperature_extra == other.temperature_extra
@@ -455,7 +458,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 20,
+            version: 21,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -524,7 +527,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 20 {
+        if self.version != 21 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -683,6 +686,9 @@ impl Settings {
         }
         if result.version == 19 {
             result.version = 20;
+        }
+        if result.version == 20 {
+            result.version = 21;
         }
         result.validate()?;
         Ok(result)

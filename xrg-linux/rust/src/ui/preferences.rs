@@ -741,6 +741,17 @@ impl Dialog {
         }
         self.targets.temperature_extra[0].widget.grab_focus();
     }
+    pub fn reveal_xe_policy(&self) {
+        self.targets.xe_policy.set_expanded(true);
+        if let Some(point) = self
+            .targets
+            .xe_policy
+            .compute_point(&self.form, &gtk::graphene::Point::new(0., 0.))
+        {
+            self.scroll.vadjustment().set_value(point.y() as f64);
+        }
+        self.targets.xe_pmu.grab_focus();
+    }
     pub fn reveal_network_scale(&self) {
         self.network_scale.widget.set_expanded(true);
         if let Some(point) = self

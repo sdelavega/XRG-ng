@@ -3,6 +3,7 @@
 mod arm;
 mod clients;
 mod intel;
+mod xe;
 use crate::hardware::{self, Readings};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -430,6 +431,7 @@ pub struct GpuCollector {
     command: crate::command::BoundedCommand,
     arm: arm::ArmCollector,
     intel: intel::Collector,
+    xe: xe::Collector,
     proc: Option<PathBuf>,
     clients: clients::ClientCollector,
 }
@@ -438,9 +440,11 @@ impl GpuCollector {
     pub fn new(sys: impl Into<PathBuf>, nvidia_program: Option<PathBuf>) -> Self {
         let sys = sys.into();
         let intel = intel::Collector::new(&sys);
+        let xe = xe::Collector::new(&sys);
         Self {
             sys,
             intel,
+            xe,
             program: nvidia_program,
             retry_at: Instant::now(),
             last_error: String::new(),
@@ -450,6 +454,9 @@ impl GpuCollector {
             proc: None,
             clients: clients::ClientCollector::default(),
         }
+    }
+    pub fn set_xe_pmu(&mut self, enabled: bool) {
+        self.xe.set_enabled(enabled);
     }
     pub fn with_proc_root(mut self, proc: impl Into<PathBuf>) -> Self {
         self.proc = Some(proc.into());
@@ -463,6 +470,7 @@ impl GpuCollector {
             Ok(value) => value,
             Err(error) => {
                 self.intel.clear();
+                self.xe.clear();
                 self.clients.clear();
                 return Err(error);
             }
@@ -502,6 +510,7 @@ impl GpuCollector {
             self.clients.collect(proc, &mut devices, time);
         }
         self.intel.collect(&self.sys, &mut devices, time);
+        self.xe.collect(&self.sys, &mut devices, time);
         if !ids.is_empty() {
             let response = self.nvidia(&ids);
             match response {

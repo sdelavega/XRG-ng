@@ -254,6 +254,10 @@ impl Sampler {
             self.gpu_histories.clear();
             self.gpu_memory.reset();
         }
+        if self.metrics.selection().xe_pmu != selection.xe_pmu {
+            self.gpu_histories.clear();
+        }
+        self.gpu.set_xe_pmu(selection.xe_pmu);
         self.metrics.set_selection(selection)
     }
     pub fn sample(&mut self) -> Snapshot {
@@ -864,12 +868,15 @@ pub(crate) fn bytes_per_second(value: f64) -> String {
 }
 
 #[derive(Clone)]
-pub struct SelectionControl(Arc<Mutex<Option<MetricSelection>>>);
+pub struct SelectionControl(
+    Arc<Mutex<Option<MetricSelection>>>,
+    crate::sampling::Control,
+);
 impl SelectionControl {
     pub fn set(&self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
         *self.0.lock().unwrap() = Some(selection);
-        Ok(())
+        self.1.request()
     }
 }
 pub struct Worker {
@@ -926,6 +933,17 @@ impl Worker {
             settings.sampling_interval_ms,
         )
     }
+    pub fn start_with_system_sources(
+        source: LinuxSources,
+        settings: &crate::settings::Settings,
+    ) -> Self {
+        settings.validate().expect("Validated settings");
+        Self::spawn(
+            settings.metrics.clone(),
+            settings.sampling_interval_ms,
+            move |_, _| Sampler::with_sources(source),
+        )
+    }
     fn start_timed(
         ai_enabled: bool,
         initial: MetricSelection,
@@ -969,7 +987,10 @@ impl Worker {
         let ai_updates = ai.clone();
         let weather = crate::weather::Control::default();
         let weather_updates = weather.clone();
-        let selection = SelectionControl(Arc::new(Mutex::new(None::<MetricSelection>)));
+        let selection = SelectionControl(
+            Arc::new(Mutex::new(None::<MetricSelection>)),
+            sampling.clone(),
+        );
         let updates = selection.clone();
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
@@ -1197,5 +1218,55 @@ mod npu_client_history_tests {
         let device = sampler.tpu_panel_from(report("two", Some(10.), Some(30.)));
         assert_eq!(&device.series[0][118..], &[0., 30.]);
         assert!(!device.label.contains("clients"));
+    }
+}
+
+#[cfg(test)]
+mod xe_policy_wake_tests {
+    use super::*;
+    #[test]
+    fn policy_changes_wake_the_same_worker_and_publish_the_new_selection() {
+        use std::{
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        };
+        let builds = Arc::new(AtomicUsize::new(0));
+        let count = builds.clone();
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+            count.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("xrg-xe-absent-roots-{}", std::process::id()));
+            Sampler::with_sources(LinuxSources::with_roots(
+                root.join("proc"),
+                root.join("sys"),
+            ))
+        });
+        let wait = |expected: bool, minimum: u64| {
+            let end = Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(snapshot) = worker.latest.lock().unwrap().take()
+                    && snapshot.sequence >= minimum
+                    && snapshot.selection.xe_pmu == expected
+                {
+                    return;
+                }
+                assert!(
+                    Instant::now() < end,
+                    "Policy change slept until the ten-second deadline"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait(false, 1);
+        worker
+            .set_selection(MetricSelection {
+                xe_pmu: true,
+                ..Default::default()
+            })
+            .unwrap();
+        wait(true, 2);
+        worker.set_selection(MetricSelection::default()).unwrap();
+        wait(false, 3);
+        assert_eq!(builds.load(Ordering::Relaxed), 1);
     }
 }

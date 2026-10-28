@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 21;
+    value.version = 22;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -386,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        20
+        21
     );
 }
 #[test]
@@ -469,7 +469,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 20);
+    assert_eq!(migrated.version, 21);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -628,7 +628,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        20
+        21
     );
 }
 
@@ -1000,5 +1000,46 @@ fn invalid_network_floors_do_not_replace_saved_preferences() {
         let mut wire = serde_json::to_value(&value).unwrap();
         wire["network_min_scale"] = bad;
         assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
+}
+
+#[test]
+fn version_twenty_migrates_with_xe_pmu_disabled_and_rejects_non_boolean_policies() {
+    let f = Fixture::new();
+    let expected = Settings::default();
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 20.into();
+    wire["metrics"].as_object_mut().unwrap().remove("xe_pmu");
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert!(!loaded.metrics.xe_pmu);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.metrics.xe_pmu = true;
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+    let report = xrg_ng_linux::legacy::parse(b"[Modules]\nshow_cpu=true\n", &loaded).unwrap();
+    assert!(report.settings.metrics.xe_pmu);
+    for bad in [
+        serde_json::json!(null),
+        serde_json::json!(1),
+        serde_json::json!("true"),
+    ] {
+        let mut wire = serde_json::to_value(&loaded).unwrap();
+        wire["metrics"]["xe_pmu"] = bad;
+        assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
+}
+#[test]
+fn xe_policy_invalidates_only_gpu_activity_snapshots() {
+    let old = xrg_ng_linux::settings::MetricSelection::default();
+    let mut next = old.clone();
+    next.xe_pmu = true;
+    for module in Module::ALL {
+        assert_eq!(old.matches(&next, module), module != Module::Gpu);
     }
 }

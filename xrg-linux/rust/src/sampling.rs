@@ -2,7 +2,11 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Wakeable system sampling cadence; collectors keep their elapsed-time baselines.
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 pub const MIN_MS: u32 = 250;
@@ -59,12 +63,22 @@ enum Message {
 #[derive(Clone)]
 pub struct Control {
     pending: Arc<Mutex<Option<Duration>>>,
+    immediate: Arc<AtomicBool>,
     wake: mpsc::SyncSender<Message>,
 }
 impl Control {
     pub fn set(&self, milliseconds: u32) -> Result<(), String> {
         let period = interval(milliseconds)?;
         *self.pending.lock().unwrap() = Some(period);
+        match self.wake.try_send(Message::Wake) {
+            Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Err("System sampling worker is closed".into())
+            }
+        }
+    }
+    pub(crate) fn request(&self) -> Result<(), String> {
+        self.immediate.store(true, Ordering::Release);
         match self.wake.try_send(Message::Wake) {
             Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(_)) => {
@@ -88,6 +102,7 @@ impl Timer {
             schedule: Schedule::new(milliseconds, Instant::now())?,
             control: Control {
                 pending: Arc::new(Mutex::new(None)),
+                immediate: Arc::new(AtomicBool::new(false)),
                 wake,
             },
             receiver,
@@ -105,6 +120,9 @@ impl Timer {
                 Ok(Message::Wake) => {
                     if let Some(period) = self.control.pending.lock().unwrap().take() {
                         self.schedule.change(period, Instant::now());
+                    }
+                    if self.control.immediate.swap(false, Ordering::AcqRel) {
+                        self.schedule.next = Instant::now();
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => return true,
@@ -222,5 +240,25 @@ mod tests {
         );
         control.stop();
         worker.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+    #[test]
+    fn explicit_requests_wake_long_waits_and_coalesce_without_changing_the_period() {
+        let mut timer = Timer::new(10000).unwrap();
+        timer.sampled(Instant::now());
+        let control = timer.control();
+        for _ in 0..100 {
+            control.request().unwrap();
+        }
+        assert!(timer.wait());
+        assert_eq!(timer.schedule.period, Duration::from_secs(10));
+        timer.sampled(Instant::now());
+        assert!(timer.schedule.remaining(Instant::now()) > Duration::from_secs(9));
+        control.stop();
+        assert!(!timer.wait());
     }
 }

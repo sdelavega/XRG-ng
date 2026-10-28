@@ -24,6 +24,7 @@ mod weather;
 mod weather_graph_smoke;
 mod window_size;
 mod window_size_smoke;
+mod xe_pmu_smoke;
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -646,11 +647,24 @@ pub fn run(smoke_mode: bool) -> bool {
         } else {
             settings::preferences_path()
         };
+        let fixture_sys = smoke.as_ref().map(|h| {
+            h.preferences_path()
+                .parent()
+                .unwrap()
+                .join("xe-policy-sysfs")
+        });
         let (store, settings, error) = Store::open(path);
-        let monitor = Worker::start_with_settings(
-            !smoke_mode || std::env::var_os("XRG_SMOKE_STYLE").is_some(),
-            &settings,
-        );
+        let monitor = if smoke_mode && std::env::var("XRG_SMOKE_XE_PMU").as_deref() == Ok("1") {
+            Worker::start_with_system_sources(
+                xrg_ng_linux::collectors::LinuxSources::with_roots("/proc", fixture_sys.unwrap()),
+                &settings,
+            )
+        } else {
+            Worker::start_with_settings(
+                !smoke_mode || std::env::var_os("XRG_SMOKE_STYLE").is_some(),
+                &settings,
+            )
+        };
         let selection = monitor.selection_control();
         let ai_control = monitor.ai_control();
         let weather_control = monitor.weather_control();

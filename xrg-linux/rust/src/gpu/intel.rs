@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Kernel i915 PMU engine activity. Custom roots never open host perf events.
-mod discovery;
-mod perf;
+pub(super) mod discovery;
+pub(super) mod perf;
 use super::{Device, EngineActivity, pci_id};
 use discovery::Spec;
 use perf::{Counter, Open, Reading};

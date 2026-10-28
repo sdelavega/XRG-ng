@@ -23,6 +23,7 @@ pub(super) struct Harness {
     opacity: Option<super::opacity_smoke::Harness>,
     window_size: Option<super::window_size_smoke::Harness>,
     network_scale: Option<super::network_scale_smoke::Harness>,
+    xe_pmu: Option<super::xe_pmu_smoke::Harness>,
     process_details: Option<super::process_details_smoke::Harness>,
     weather_graph: Option<super::weather_graph_smoke::Harness>,
     process_actions: Option<super::process_actions_smoke::Harness>,
@@ -88,6 +89,28 @@ impl Harness {
             )
             .map_err(|e| e.to_string())?;
         }
+        if std::env::var("XRG_SMOKE_XE_PMU").as_deref() == Ok("1") {
+            // Preserve real proc/disk counter validation without exposing DRM
+            // or PMU sysfs. These are names/directories, never device links.
+            let block = root.join("xe-policy-sysfs/block");
+            fs::create_dir_all(&block).map_err(|e| e.to_string())?;
+            for entry in fs::read_dir("/sys/block")
+                .map_err(|e| e.to_string())?
+                .take(4097)
+            {
+                let entry = entry.map_err(|e| e.to_string())?;
+                fs::create_dir(block.join(entry.file_name())).map_err(|e| e.to_string())?;
+            }
+            let settings = Settings {
+                sampling_interval_ms: 10000,
+                ..Settings::default()
+            };
+            fs::write(
+                root.join("settings.conf"),
+                serde_json::to_vec(&settings).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         if std::env::var("XRG_SMOKE_NETWORK_SCALE").as_deref() == Ok("1") {
             fs::write(
                 root.join("settings.conf"),
@@ -141,6 +164,8 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            xe_pmu: (std::env::var("XRG_SMOKE_XE_PMU").as_deref() == Ok("1"))
+                .then(super::xe_pmu_smoke::Harness::new),
             network_scale: (std::env::var("XRG_SMOKE_NETWORK_SCALE").as_deref() == Ok("1"))
                 .then(super::network_scale_smoke::Harness::new),
             window_size: (std::env::var("XRG_SMOKE_WINDOW_SIZE").as_deref() == Ok("1"))
@@ -330,6 +355,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if self.xe_pmu.is_some() {
+            return "xe-policy=opt-in-cancel-defaults-persist-worker-wake";
+        }
         if self.network_scale.is_some() {
             return "network-scale=cached-axis-history-cancel-apply-persist";
         }
@@ -364,6 +392,16 @@ impl Harness {
         }
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.xe_pmu {
+            let done = harness.tick(shell, sequence, &self.root)?;
+            if done {
+                require(
+                    harness.tick(shell, sequence, &self.root)?,
+                    "Xe smoke completion was not stable",
+                )?;
+            }
+            return Ok(done);
+        }
         if let Some(harness) = &mut self.network_scale {
             let finished = harness.tick(shell, sequence, &self.root)?;
             if finished {
@@ -725,7 +763,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 20 && loaded.processes.limit == 20,
+                    loaded.version == 21 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;

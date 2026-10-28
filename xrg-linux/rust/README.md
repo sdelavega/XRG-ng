@@ -228,7 +228,7 @@ when available. Power reported by hwmon may cover a whole SoC, including its CPU
 | AMD amdgpu | Documented busy percentage, VRAM bytes, GPU hwmon telemetry |
 | NVIDIA nvidia | One bounded `nvidia-smi` query, matched by PCI address |
 | Intel i915 | Kernel PMU busiest-engine activity where permitted; readable DRM-client engine times/allocations, reported clock and hwmon |
-| Intel xe | Readable DRM-client busy/total cycle activity and resident allocations; available hwmon telemetry |
+| Intel xe | Opt-in PMU active/total-tick busiest-engine activity; readable DRM-client busy/total cycles and resident allocations; available hwmon |
 | Mali panfrost / panthor | Owned devfreq clocks/load when provided, readable DRM-client activity and resident allocations; client activity needs profiling |
 | Mali lima / vendor Mali | Identification, owned devfreq/hwmon, vendor devfreq load where provided, readable DRM-client stats where exported |
 | Adreno mainline MSM | Owned GPU devfreq/hwmon and readable DRM-client engine stats |
@@ -326,10 +326,48 @@ capacity and can include system/GTT memory.
 
 Xe fdinfo collection opens no DRM device or perf counter. The kernel's fdinfo
 callback may temporarily wake the GPU during a read; runtime-suspended adapters
-are skipped before scanning. Persistent Xe PMU collection is deferred because
-upstream holds runtime-PM/forcewake references for the lifetime of each engine
-event. An explicit power-policy choice is needed before using that interface in
-a background monitor. See the kernel's
+are skipped before scanning.
+
+**Intel Xe PMU activity is opt-in**, under Preferences → Metric sources →
+**Intel Xe PMU power policy**. It is off for new and migrated settings. Enabling
+it can keep active Xe GPUs awake and increase power consumption: the driver holds
+runtime-PM/forcewake references for the lifetime of engine events. The preference
+applies to all active Xe adapters, independently of the displayed GPU source.
+Disabling wakes a sleeping system worker and closes its Xe counters at the next
+control boundary; in-flight collection must finish first. Source-selection Apply
+also wakes the same worker without rebuilding the other collectors or changing
+the configured sampling period.
+
+The backend maps the PCI-qualified `xe_*` PMU and render node, verifies device
+numbers/driver identity, and uses the read-only [`DRM_XE_DEVICE_QUERY_ENGINES` API](https://docs.kernel.org/gpu/driver-uapi.html)
+for engine class, instance and GT IDs. It validates exported event bit layouts and
+pairs `engine-active-ticks` with `engine-total-ticks` in perf groups. Activity is
+`100 × Δactive ticks / Δtotal ticks`; host time and GPU frequency are not the
+utilization denominator. The graph plots the busiest engine, never their sum.
+The first interval and missing/zero/regressed totals remain unavailable. A valid
+zero active delta is measured idle. Group IDs, enabled/running time, rebinds,
+suspend, CPU/PMU changes and clock gaps are checked. Multiplexed/incomplete
+intervals are rejected. Up to 5% active/total read skew clamps to 100%; larger
+overshoot is rejected. Counter open/read failures release the whole adapter's event set and back
+off for 30 seconds. Existing readable-client activity remains the fallback.
+
+Known-suspended adapters, VFs and PFs with enabled SR-IOV VFs are deferred. Current
+native acquisition targets Linux x86_64/ARM64 with real `/sys`; custom sysfs roots
+never open host DRM/perf. Query sizes are bounded to 64 hardware engines per
+adapter, and Xe sessions have a conservative 256-descriptor budget. Acquisition
+and read loops have cooperative 100 ms budgets; an individual kernel call is not
+forcibly interrupted. Render nodes are opened read-only with no-follow and
+nonblocking flags. No GPU work is submitted and no kernel permissions/sysctls are
+changed. Missing event support or denied access stays explicit.
+
+Xe support is **best effort and has not been physically validated on Xe
+hardware**. Feedback and sanitized device reports are welcome and encouraged.
+Fixtures cover ABI records, pair math, topology/identity checks, handle release,
+clock/reset behavior, permissions and custom-root gating. The separate GTK policy
+gate uses live proc with custom sysfs containing only copied block-device names,
+verifies Apply/Cancel/defaults/persistence,
+and checks that policy changes wake a ten-second wait; it opens no GPU counters.
+See the kernel's
 [Xe client implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/xe/xe_drm_client.c),
 [i915 client implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/i915/i915_drm_client.c)
 and [Xe PMU implementation](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/xe/xe_pmu.c).
@@ -793,7 +831,7 @@ events; XRG-ng enforces these limits while building values.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 20 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 21 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show nine
@@ -870,6 +908,11 @@ conversion, rejected input, Cancel, draft-only defaults, exact persistence,
 reopening, instant cached graph/bar/detail updates and retained rate history.
 It then restores automatic scaling; no live throughput or physical link speed
 is inferred from this fixture.
+Version 21 adds the opt-in `metrics.xe_pmu` boolean. Missing fields default to
+false, including every older schema; migration does not write until save.
+Malformed policies reject the whole document. Legacy import preserves this
+choice. Policy changes invalidate GPU activity snapshots/history; VRAM and other
+metric-source choices retain their separate state.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:
@@ -1329,7 +1372,7 @@ automated tests use fixtures and make no weather requests.
 
 ## Remaining migration
 
-1. Xe PMU activity, additional vendor counters, board-specific conversion for raw
+1. Additional vendor counters, Xe virtualization/topology coverage, board-specific conversion for raw
    thermistor/diode inputs, and optional process priority controls.
 2. Safe Codex model attribution where cumulative records permit it, incremental
    I/O for very large logs beyond the verified append-parsing cache, and optional price tables.

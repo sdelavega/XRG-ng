@@ -69,6 +69,7 @@ jobs:
             ${{ steps.verify.outputs.results }}/window-size-preferences.png
             ${{ steps.verify.outputs.results }}/network-scale-preferences.png
             ${{ steps.verify.outputs.results }}/network-scale.png
+            ${{ steps.verify.outputs.results }}/xe-pmu-preferences.png
             ${{ steps.verify.outputs.results }}/p3-imported.png
             ${{ steps.verify.outputs.results }}/processes-smoke.png
             ${{ steps.verify.outputs.results }}/ai-smoke.png

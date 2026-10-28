@@ -25,7 +25,7 @@ pub(super) struct Spec {
     pub device_identity: (u64, u64),
     pub pmu_identity: (u64, u64),
 }
-pub(super) fn identity(path: &Path) -> Result<(u64, u64), String> {
+pub(in crate::gpu) fn identity(path: &Path) -> Result<(u64, u64), String> {
     use std::os::unix::fs::MetadataExt;
     let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
     if !metadata.is_dir() {
@@ -83,7 +83,7 @@ fn ranges(text: &str) -> Result<Vec<(u32, u32)>, String> {
     }
     Ok(ranges)
 }
-pub(super) fn cpu(allowed: Option<&str>, online: &str) -> Result<u32, String> {
+pub(in crate::gpu) fn cpu(allowed: Option<&str>, online: &str) -> Result<u32, String> {
     let online = ranges(online)?;
     let allowed = allowed
         .map(ranges)

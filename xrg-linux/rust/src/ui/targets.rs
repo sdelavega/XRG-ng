@@ -105,6 +105,8 @@ pub(super) struct Targets {
     pub network: Rc<Picker<String>>,
     pub disk: Rc<Picker<String>>,
     pub gpu: Rc<Picker<String>>,
+    pub xe_pmu: gtk::CheckButton,
+    pub xe_policy: gtk::Expander,
     pub temperature: Rc<Picker<String>>,
     pub fan: Rc<Picker<String>>,
     pub curves: gtk::Expander,
@@ -190,6 +192,22 @@ impl Targets {
             row.append(picker);
             widget.append(&row);
         }
+        let xe_pmu =
+            gtk::CheckButton::with_label("Enable Intel Xe PMU activity for all Xe adapters");
+        xe_pmu.set_active(selection.xe_pmu);
+        let power = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        power.append(&xe_pmu);
+        let note = gtk::Label::new(Some(
+            "Off by default. Engine perf events can keep active Intel Xe GPUs awake and increase power use while open. Disabling wakes the system worker to close them; any in-flight collection finishes first. Suspended adapters are skipped. Kernel permissions are unchanged. Missing or denied counters fall back to readable-client activity when available.",
+        ));
+        note.set_wrap(true);
+        note.set_xalign(0.);
+        power.append(&note);
+        let xe_policy = gtk::Expander::builder()
+            .label("Intel Xe PMU power policy")
+            .child(&power)
+            .build();
+        widget.append(&xe_policy);
         let temperature_extra = std::array::from_fn(|i| {
             Picker::new(
                 "Not graphed",
@@ -245,6 +263,8 @@ impl Targets {
             network,
             disk,
             gpu,
+            xe_pmu,
+            xe_policy,
             temperature,
             fan,
             curves,
@@ -277,6 +297,7 @@ impl Targets {
             network: self.network.value(),
             disk: self.disk.value(),
             gpu: self.gpu.value(),
+            xe_pmu: self.xe_pmu.is_active(),
             temperature: self.temperature.value(),
             fan: self.fan.value(),
             temperature_extra: if self.temperature.value().is_some() {
@@ -291,7 +312,13 @@ impl Targets {
             },
         }
     }
+    fn set_pmu(&self, enabled: bool) {
+        self.updating.set(true);
+        self.xe_pmu.set_active(enabled);
+        self.updating.set(false);
+    }
     pub fn set(&self, value: &MetricSelection) {
+        self.set_pmu(value.xe_pmu);
         self.cpu.select(value.cpu);
         self.network.select(value.network.clone());
         self.disk.select(value.disk.clone());
@@ -305,6 +332,7 @@ impl Targets {
         self.synchronize();
     }
     pub fn refresh(&self, inventory: &Inventory, value: &MetricSelection) {
+        self.set_pmu(value.xe_pmu);
         self.cpu.replace(
             inventory
                 .cpus
@@ -385,6 +413,8 @@ impl Targets {
                 callback();
             }
         });
+        let cb = callback.clone();
+        self.xe_pmu.connect_toggled(move |_| cb());
         for register in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
             let cb = callback.clone();
             match register {
