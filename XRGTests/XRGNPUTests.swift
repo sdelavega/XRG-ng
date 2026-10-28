@@ -115,8 +115,8 @@ import Testing
         now=2;sample=reading(2,500);view.graphUpdate(nil)
         #expect(view.fullReading().contains("Power: 0.500 W") && view.labels.rightLabel.stringValue.contains("W"))
         view.setFrameSize(NSSize(width:86,height:90))
-        #expect(view.labels.leftLabel.stringValue == "NPU\nANE")
-        #expect(view.labels.rightLabel.stringValue.contains("16c"))
+        #expect(view.labels.leftLabel.stringValue == "NPU\nPwr↑")
+        #expect(view.labels.rightLabel.stringValue.contains("n/a%"))
         #expect(!view.labels.leftLabel.frame.intersects(view.labels.rightLabel.frame))
         let watts = view.labels.rightLabel.stringValue.components(separatedBy:"\n")[0]
         let attributes = view.labels.rightLabel.attributedStringValue.attributes(at:0,effectiveRange:nil)
@@ -132,6 +132,100 @@ import Testing
         for reading in readings {
             #expect(Set(reading.devices.map(\.id)).count == reading.devices.count)
             #expect(reading.energy?.allSatisfy { $0.value >= 0 && $0.joulesPerUnit != nil } ?? true)
+            #expect(reading.activity?.activeFraction.map { (0...1).contains($0) } ?? true)
         }
+    }
+    @Test func activeResidencyIsBusiestClusterShareAndRejectsUnknownOrEmptyCounters() {
+        let first = XRGNPUClusterResidency(id:"ANE0",states:["ACT":25,"IDLE":75])
+        let second = XRGNPUClusterResidency(id:"ANE1",states:["ACT":60,"OFF":40])
+        #expect(XRGNPUActivityInterval(start:1,end:2,clusters:[first,second]).activeFraction == 0.6)
+        #expect(XRGNPUClusterResidency(id:"ANE",states:["ACT":0,"IDLE":100]).activeFraction == 0)
+        for states: [String:UInt64] in [["ACT":0,"IDLE":0],["ACT":100],["BUSY":100,"IDLE":0],
+                                      ["ACT":1,"UNKNOWN":1],["ACT":UInt64.max,"IDLE":1]] {
+            #expect(XRGNPUClusterResidency(id:"ANE",states:states).activeFraction == nil)
+        }
+        for interval in [XRGNPUActivityInterval(start:1,end:1,clusters:[first]),
+                         .init(start:2,end:1,clusters:[first]),.init(start:0,end:301,clusters:[first]),
+                         .init(start:.nan,end:2,clusters:[first]),.init(start:1,end:2,clusters:[]),
+                         .init(start:1,end:2,clusters:[first,first])] { #expect(interval.activeFraction == nil) }
+        for name in ["ANE","ANE0","ANE12","ANE0_1","DIE0 ANE0","DIE_1_ANE0","DIE1_ANE0"] {
+            #expect(XRGNPUActivityReader.isClusterChannel(name))
+        }
+        for name in ["ANEX","LANE0","ANE SRAM","ANE0 RD","ANE_THROTTLE_PPT_TRIG","ANE²","DIE0 GPU0"] {
+            #expect(!XRGNPUActivityReader.isClusterChannel(name))
+        }
+    }
+    @Test func directActivitySurvivesMissingPowerAndNeverUsesPowerAsAPercentage() {
+        var now=1.0, sample: XRGNPUReading? = reading(1,nil)
+        let miner=XRGNPUMiner(source:{sample},clock:{now});miner.setDataSize(4)
+        now=2;sample=reading(2,nil)
+        sample?.activity = .init(start:1,end:2,clusters:[.init(id:"ANE0",states:["ACT":25,"IDLE":75])])
+        miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == 0.25 && miner.powerWatts == nil)
+        #expect(miner.activityDataSet.orderedValues.last == 25)
+        #expect(miner.fullReading().contains("Active time: 25.00%"))
+        #expect(miner.secondsSinceActivity == 0)
+        now=3;sample=reading(3,nil)
+        sample?.activity = .init(start:2,end:3,clusters:[.init(id:"ANE0",states:["ACT":0,"IDLE":100])])
+        miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == 0 && miner.secondsSinceActivity == 1)
+        #expect(miner.fullReading().contains("idle during the last interval"))
+        now=4;sample=reading(4,1000);miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == nil)
+        now=5;sample=reading(5,2000);miner.getLatestNPUInfo()
+        #expect(miner.powerWatts == 1 && miner.activeFraction == nil)
+        #expect(miner.fullReading().contains("energy increase detected (inferred)"))
+        #expect(miner.secondsSinceActivity == 0)
+        now=6;sample=reading(6,2000);miner.getLatestNPUInfo()
+        #expect(miner.fullReading().contains("utilization unknown"))
+        #expect(miner.secondsSinceActivity == 1)
+        now=12;sample=nil;miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == nil && miner.powerWatts == nil)
+        #expect(miner.activityDataSet.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        #expect(miner.secondsSinceActivity == 7)
+    }
+    @Test func malformedOverlappingAndReplacedActivityIntervalsDoNotInventUtilization() {
+        var now=2.0,sample=reading(2,nil)
+        let cluster=XRGNPUClusterResidency(id:"ANE",states:["ACT":1,"IDLE":1])
+        sample.activity = .init(start:1,end:2,clusters:[cluster])
+        let miner=XRGNPUMiner(source:{sample},clock:{now})
+        #expect(miner.activeFraction == 0.5)
+        for invalid in [XRGNPUActivityInterval(start:1,end:3,clusters:[cluster]),
+                        .init(start:3,end:6,clusters:[cluster]),.init(start:2,end:2,clusters:[cluster])] {
+            now+=1;sample=reading(now,nil);sample.activity=invalid;miner.getLatestNPUInfo()
+            #expect(miner.activeFraction == nil)
+        }
+        now=6;sample=reading(6,nil);sample.activity = .init(start:5,end:6,clusters:[cluster]);miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == 0.5)
+        now=7;sample=XRGNPUReading(time:7,devices:[],appleSilicon:true,energy:nil,error:nil);miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == nil && miner.lastActivityTime == nil)
+        now=8;sample=reading(8,nil);sample.activity = .init(start:7,end:8,clusters:[cluster]);miner.getLatestNPUInfo()
+        #expect(miner.activeFraction == 0.5)
+        miner.setDataSize(6)
+        #expect(Array(miner.activityDataSet.orderedValues.suffix(1)) == [50])
+    }
+    @Test func compactActivityLabelsKeepPercentAndWattsSeparate() throws {
+        let domain="XRG.npu.activity.\(UUID().uuidString)"
+        let defaults=try #require(UserDefaults(suiteName:domain))
+        defer { defaults.removePersistentDomain(forName:domain) }
+        let settings=XRGSettings(defaults:defaults)
+        var now=2.0,sample=reading(2,0)
+        sample.activity = .init(start:1,end:2,clusters:[.init(id:"ANE",states:["ACT":1,"IDLE":199])])
+        let miner=XRGNPUMiner(source:{sample},clock:{now})
+        let view=XRGNPUView(frame:NSRect(x:0,y:0,width:86,height:90),miner:miner,settings:settings,defaults:defaults)
+        #expect(view.labels.leftLabel.stringValue == "NPU\nBusy")
+        #expect(view.labels.rightLabel.stringValue == "0.5%\nn/a")
+        now=3;sample=reading(3,500);sample.activity = .init(start:2,end:3,clusters:[.init(id:"ANE",states:["ACT":100,"IDLE":0])])
+        view.graphUpdate(nil)
+        #expect(view.labels.rightLabel.stringValue == "100%\n0.5W")
+        #expect(!view.labels.leftLabel.frame.intersects(view.labels.rightLabel.frame))
+        let attributes=view.labels.rightLabel.attributedStringValue.attributes(at:0,effectiveRange:nil)
+        for line in view.labels.rightLabel.stringValue.components(separatedBy:"\n") {
+            #expect((line as NSString).size(withAttributes:attributes).width+4 <= view.labels.rightLabel.frame.width)
+        }
+        now=4;sample=reading(4,500);sample.activity = .init(start:3,end:4,clusters:[.init(id:"ANE",states:["ACT":1,"IDLE":9999])])
+        view.graphUpdate(nil)
+        #expect(view.labels.rightLabel.stringValue.hasPrefix("<0.1%"))
+        #expect(("<0.1%" as NSString).size(withAttributes:attributes).width+4 <= view.labels.rightLabel.frame.width)
     }
 }

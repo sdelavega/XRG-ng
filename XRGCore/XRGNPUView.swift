@@ -81,14 +81,23 @@ public final class XRGNPUView: NSView, XRGModuleView {
     public func fullReading() -> String { miner.fullReading() }
     public func shouldDrawMiniGraph() -> Bool { XRGGraphLabels.shouldDrawMiniGraph(in: bounds, settings: settings) }
     private func updateLabels() {
-        let cores = miner.devices.compactMap(\.cores)
         let compact = bounds.width < 140
         // Keep the W suffix visible in the narrow default graph. The tooltip
         // and accessibility reading retain three decimal places.
         let watts = miner.powerWatts.map { String(format: compact ? ($0 < 10 ? "%.1fW" : "%.0fW") : "%.2f W", $0) } ?? "n/a"
-        let detail = cores.isEmpty ? "ANE" : "\(cores.reduce(0,+))\(cores.count == miner.devices.count ? "" : "+")\(compact ? "c" : " cores")"
-        labels.layoutColumnText("NPU\nANE", centerText: nil,
-                      rightText: "\(watts)\n\(detail)", in: XRGGraphLabels.paddedTextRect(for: bounds),
+        let status: String, values: String
+        if let fraction = miner.activeFraction {
+            status = fraction > 0 ? "Busy" : "Idle"
+            let percent = fraction > 0 && fraction < 0.001 ? "<0.1%"
+                : String(format: fraction > 0 && fraction < 0.01 ? "%.1f%%" : "%.0f%%", fraction * 100)
+            values = "\(percent)\n\(watts)"
+        } else {
+            // An energy change is evidence of activity, but cannot define a percentage.
+            status = (miner.powerWatts ?? 0) > 0 ? "Pwr↑" : "Pwr"
+            values = "\(watts)\nn/a%"
+        }
+        labels.layoutColumnText("NPU\n\(status)", centerText: nil,
+                      rightText: values, in: XRGGraphLabels.paddedTextRect(for: bounds),
                       mini: shouldDrawMiniGraph(), settings: settings)
         toolTip = fullReading(); setAccessibilityElement(true); setAccessibilityLabel(fullReading())
     }
@@ -96,7 +105,10 @@ public final class XRGNPUView: NSView, XRGModuleView {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
         settings.graphBGColor.set(); context.cgContext.fill(bounds)
-        if miner.powerWatts != nil {
+        if miner.activeFraction != nil {
+            XRGGraphRenderer.drawDataSet(miner.activityDataSet, upperBound: 100, lowerBound: 0,
+                                        in: bounds, flipped: false, filled: true, color: settings.graphFG1Color)
+        } else if miner.powerWatts != nil {
             XRGGraphRenderer.drawDataSet(miner.powerDataSet, upperBound: max(1, miner.powerDataSet.max * 1.1), lowerBound: 0,
                                         in: bounds, flipped: false, filled: true, color: settings.graphFG1Color)
         }

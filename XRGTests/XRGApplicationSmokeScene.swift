@@ -107,7 +107,9 @@ private final class SmokePreferencesOwner: NSObject {
         let npu = XRGNPUMiner(source: {
             source.npuReads += 1
             return XRGNPUReading(time: source.time, devices: [XRGNPUDevice(id: 7, cores: 16, architecture: "Fixture", firmwareLoaded: true)], appleSilicon: true,
-                                 energy: [XRGNPUEnergy(id: "fixture-ane", unit: "mJ", value: Int64(source.npuReads * 250))], error: nil)
+                                 energy: [XRGNPUEnergy(id: "fixture-ane", unit: "mJ", value: Int64(source.npuReads * 250))], error: nil,
+                                 activity: source.time > 0 ? .init(start: max(0, source.time - 0.5), end: source.time,
+                                     clusters: [.init(id: "fixture-ane", states: ["ACT": 25, "IDLE": 75])]) : nil)
         }, clock: { source.time })
         let memory = XRGMemoryMiner(pageSize: 4096, source: {
             source.memoryReads += 1
@@ -206,6 +208,7 @@ private final class SmokePreferencesOwner: NSObject {
         inputs.time += 2; window.graphUpdate(nil); window.fastUpdate(nil); window.min5Update(nil); window.min30Update(nil)
         window.weatherView?.min30UpdatePostProcessing()
         try smokeCheck(inputs.cpuReads > 0 && inputs.gpuReads > 0 && inputs.npuReads > 0 && inputs.memoryReads > 0 && inputs.netReads > 0 && inputs.diskReads > 0 && inputs.batteryReads > 0, "Fixture collector dispatch failed")
+        try smokeCheck(window.npuView?.fullReading().contains("Active time: 25.00%") == true, "Neural Engine active-time fixture did not reach the production panel")
         for panel in panels {
             try smokeCheck(panel.frame.width.isFinite && panel.frame.height.isFinite && panel.frame.width > 0 && panel.frame.height > 0, "Invalid panel layout")
         }

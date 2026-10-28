@@ -36,6 +36,15 @@ public final class XRGNPUMiner: NSObject {
     @nonobjc var staleAfter: TimeInterval = 5
     @nonobjc private(set) var devices: [XRGNPUDevice] = []
     @nonobjc public private(set) var powerWatts: Double?
+    @nonobjc private(set) var activeFraction: Double?
+    @nonobjc private(set) var lastActivityTime: TimeInterval?
+    private var lastActivitySource: String?
+    private var lastActivityIntervalEnd: TimeInterval?
+    @nonobjc var secondsSinceActivity: TimeInterval? {
+        guard let lastActivityTime, clock().isFinite else { return nil }
+        return max(0, clock() - lastActivityTime)
+    }
+    @objc public private(set) var activityDataSet = XRGDataSet()
     @objc public private(set) var powerDataSet = XRGDataSet()
     @objc public private(set) var numSamples = 1
 
@@ -50,26 +59,46 @@ public final class XRGNPUMiner: NSObject {
     @objc public func setDataSize(_ count: Int) {
         guard (0...20_000).contains(count), numSamples != count else { return }
         numSamples = count; powerDataSet.resize(count, fillingWith: XRGGraphRenderer.missingValue)
+        activityDataSet.resize(count, fillingWith: XRGGraphRenderer.missingValue)
     }
     private func resetHistory() {
         powerDataSet = XRGDataSet(); powerDataSet.resize(numSamples)
         powerDataSet.setAllValues(XRGGraphRenderer.missingValue)
+    }
+    private func resetActivity() {
+        activeFraction = nil
+        activityDataSet.resize(numSamples, fillingWith: XRGGraphRenderer.missingValue)
+        activityDataSet.setAllValues(XRGGraphRenderer.missingValue)
+    }
+    private func acceptActivity(_ reading: XRGNPUReading) {
+        guard !reading.devices.isEmpty, let interval = reading.activity, let fraction = interval.activeFraction,
+              interval.end <= reading.time, reading.time - interval.end <= 5,
+              lastActivityIntervalEnd.map({ interval.end > $0 && interval.start >= $0 }) ?? true else {
+            resetActivity(); return
+        }
+        lastActivityIntervalEnd = interval.end; activeFraction = fraction
+        activityDataSet.setNextValue(fraction * 100)
+        if fraction > 0 { lastActivityTime = interval.end; lastActivitySource = "active residency" }
     }
     @objc public func getLatestNPUInfo() {
         if let worker {
             worker.request { [weak self] reading in self?.accept(reading); self?.onUpdate?() }
         } else if let reading = source?() { accept(reading) }
         if let lastReading, clock() - lastReading > max(5, staleAfter.isFinite ? staleAfter : 5) {
-            powerWatts = nil; previous = nil; issue = "ANE power sample is stale"; resetHistory()
+            powerWatts = nil; previous = nil; issue = "ANE sample is stale"; resetHistory(); resetActivity()
         }
     }
     private func accept(_ reading: XRGNPUReading) {
         guard reading.time.isFinite, reading.time >= 0, clock().isFinite,
               reading.time <= clock() + 1, clock() - reading.time <= 5 else {
-            powerWatts = nil; previous = nil; issue = "Invalid/stale ANE sample time"; resetHistory(); return
+            powerWatts = nil; previous = nil; issue = "Invalid/stale ANE sample time"; resetHistory(); resetActivity(); return
         }
         if let lastReading, reading.time <= lastReading { return }
+        if current?.devices.map(\.id).sorted() != reading.devices.map(\.id).sorted() {
+            lastActivityIntervalEnd = nil; lastActivityTime = nil; lastActivitySource = nil; resetActivity()
+        }
         devices = reading.devices; current = reading; lastReading = reading.time
+        acceptActivity(reading)
         let old = previous
         previous = nil; powerWatts = nil
         guard let energy = reading.energy, !energy.isEmpty, energy.count <= 16,
@@ -96,6 +125,7 @@ public final class XRGNPUMiner: NSObject {
         let watts = joules / (reading.time - old.time)
         guard watts.isFinite, watts >= 0 else { issue = "Invalid ANE energy delta"; resetHistory(); return }
         powerWatts = watts; powerDataSet.setNextValue(watts)
+        if activeFraction == nil, watts > 0 { lastActivityTime = reading.time; lastActivitySource = "energy increase (inferred)" }
         issue = reading.error ?? "Measured ANE power"
     }
     @objc public func fullReading() -> String {
@@ -110,8 +140,19 @@ public final class XRGNPUMiner: NSObject {
             lines.append(line)
         }
         lines.append(powerWatts.map { String(format: "Power: %.3f W", $0) } ?? "Power: unavailable")
+        if let fraction = activeFraction {
+            lines.append(String(format: "Active time: %.2f%% (busiest ANE cluster, software residency)", fraction * 100))
+            lines.append(fraction > 0 ? "Activity: active during the last interval" : "Activity: idle during the last interval")
+        } else {
+            lines.append("Active time: unavailable")
+            lines.append(powerWatts.map { $0 > 0 ? "Activity: energy increase detected (inferred)" : "Activity: no energy increase reported; utilization unknown" }
+                         ?? "Activity: unavailable")
+        }
+        if let elapsed = secondsSinceActivity {
+            lines.append("Last detected activity: \(Int(min(elapsed, Double(Int32.max)))) s ago · \(lastActivitySource ?? "unknown source")")
+        } else { lines.append("Last detected activity: none observed this session") }
         lines.append(issue)
-        lines.append("IOReport energy delta / elapsed seconds. Power is not utilization or inference throughput. Detection/firmware do not verify inference capability.")
+        lines.append("Active time measures ACT state residency, not compute-core occupancy or inference throughput. Power is not utilization; zero power alone does not prove idle. Unavailable counters remain unknown.")
         return lines.joined(separator: "\n")
     }
 }

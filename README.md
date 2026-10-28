@@ -42,22 +42,37 @@ Silicon; General Preferences provides a **Neural Engine** visibility checkbox.
 Intel Macs keep it hidden by default. Existing module sizes, visibility choices,
 themes and XTF load/save continue to work.
 
-The graph shows **ANE power in watts**, from IOReport energy-counter changes over
-elapsed monotonic time. Power is not a utilization percentage, inference rate or
-estimate derived from a chip's maximum power. The vertical scale follows observed
-power. Tooltips/context menu and accessibility text report ANE endpoint identity,
-core count/architecture and firmware state when exposed. Detection and firmware
-presence do not verify inference execution.
+The graph shows **active time (%)** when macOS exposes an ANE `ACT` residency
+counter under IOReport **SoC Stats → Cluster Power States**. The scale is fixed
+at 0–100%, with **Busy/Idle** and power in watts beside it. Active time is the
+busiest ANE cluster's software active-state share over the sampling interval;
+it does not measure compute-core occupancy, operations per second or inference
+throughput. Overlapping clusters are never added together.
+
+Where residency is unavailable, the graph shows **ANE power in watts**, from
+energy-counter changes over elapsed monotonic time, and **n/a%**. **Pwr↑** marks
+an energy increase: an inferred activity signal, not a utilization percentage.
+The fallback scale follows observed watts. A zero energy delta means only that
+the counter reported no increase; it does **not** prove the NPU was idle.
+Tooltips/context menu and accessibility text include the last detected activity
+and its source, endpoint identity, core count/architecture and firmware state.
+Detection, firmware presence and open client connections do not prove execution.
 
 Acquisition is read-only, runs on a serial background queue and coalesces requests
 to at most one per second. It opens no accelerator user client, loads no models,
 and needs no root helper, `powermetrics`, network service or extra dependency.
-The optional private IOReport symbols are resolved at runtime. Only recognized
-ANE energy channels/units are used; aggregate counters take precedence over their
-indexed components, and counter identities must be unique. The first sample,
-counter resets, source/unit changes, stale data and failures show **n/a** and
-establish a fresh interval; measured zero remains **0.00 W**. Missing data creates
-no synthetic idle samples. Registry discovery is bounded to 16 endpoints.
+The optional private IOReport symbols are resolved at runtime. Residency and
+energy use independent subscriptions; unavailable power does not hide valid
+active-time readings. State intervals use `IOReportCreateSamplesDelta`, reject
+counter resets and unknown state layouts, and require positive total residency
+before reporting even 0%. Only recognized ANE channels/units are used; energy
+aggregates take precedence over their indexed components and counter identities
+must be unique. The first sample, resets, source/unit changes, stale data and
+failures establish a fresh interval. Missing data creates no synthetic idle
+samples. Registry discovery is bounded to 16 endpoints.
+
+See [macOS NPU telemetry notes](Tools/macos-npu-telemetry.md) for the private API
+investigation, hardware limitations and a read-only diagnostic command.
 
 Apple's private interfaces can differ across chips and macOS versions. This is
 best-effort support: unavailable metrics remain explicit, and device feedback is
@@ -73,7 +88,7 @@ XRG-ng displays real-time graphs for:
 
 - **CPU Usage** - Per-core utilization and load averages
 - **GPU Usage** - GPU utilization and memory (Apple Silicon & Intel)
-- **Neural Engine (NPU)** - Measured Apple ANE power, between GPU and Memory on macOS
+- **Neural Engine (NPU)** - Apple ANE active-time percentage where exposed, power and recent activity, between GPU and Memory on macOS
 - **Memory** - RAM usage, swap, page ins/outs
 - **Network** - Upload/download rates per interface
 - **Disk Activity** - Read/write operations per volume
