@@ -54,7 +54,7 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         fs::write(f.path(), &original).unwrap();
         let (mut store, loaded, error) = Store::open(Some(f.path()));
         assert!(error.is_none(), "version {version}: {error:?}");
-        assert_eq!(loaded.version, 8);
+        assert_eq!(loaded.version, 9);
         assert!(
             loaded
                 .modules

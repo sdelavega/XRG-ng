@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod ai;
+mod graph_colors;
 mod legacy_import;
 mod menus;
 mod preferences;
@@ -156,23 +157,20 @@ impl Shell {
             area.set_draw_func(move |_, context, width, height| {
                 draw_count.set(draw_count.get() + 1);
                 let state = state.borrow();
+                let active = settings.borrow();
+                let appearance = active.modules.iter().find(|m| m.id == module).unwrap();
+                let palette = appearance.colors.palette(&theme.borrow());
                 draw(
                     context,
                     (width, height),
-                    &theme.borrow(),
+                    &palette,
                     module.title(),
                     state
                         .as_ref()
-                        .filter(|s| snapshot_matches(s, &settings.borrow(), module))
+                        .filter(|s| snapshot_matches(s, &active, module))
                         .and_then(|s| s.panels.get(module.index())),
-                    settings.borrow().temperature_units,
-                    settings
-                        .borrow()
-                        .modules
-                        .iter()
-                        .find(|m| m.id == module)
-                        .unwrap()
-                        .style,
+                    active.temperature_units,
+                    appearance.style,
                 );
             });
             graphs.append(&area);

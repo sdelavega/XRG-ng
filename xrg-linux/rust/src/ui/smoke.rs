@@ -400,7 +400,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 8 && loaded.processes.limit == 20,
+                    loaded.version == 9 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1492,6 +1492,221 @@ impl Harness {
             40 if self.since.elapsed() > Duration::from_millis(300) => {
                 let (window, paintable) = self.style_preview.take().unwrap();
                 if let Some(path) = std::env::var_os("XRG_SMOKE_STYLES_IMAGE") {
+                    super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
+                }
+                window.close();
+                let before = shell.settings.borrow().clone();
+                let dialog = shell.preferences();
+                dialog
+                    .graph_colors
+                    .module
+                    .set_selected(Module::Memory.index() as u32);
+                dialog.graph_colors.inherit[1].set_active(false);
+                dialog.graph_colors.colors[1].set_rgba(&gtk::gdk::RGBA::new(0.85, 0.1, 0.15, 0.6));
+                require(
+                    !dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .find(|m| m.id == Module::Memory)
+                        .unwrap()
+                        .colors
+                        .is_inherited(),
+                    "Graph color edit did not reach draft",
+                )?;
+                require(
+                    *shell.settings.borrow() == before,
+                    "Graph color edit applied before Apply",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelling graph colors changed active settings",
+                )?;
+                let dialog = shell.preferences();
+                dialog
+                    .graph_colors
+                    .module
+                    .set_selected(Module::Memory.index() as u32);
+                for (index, rgba) in [(0, [0.02, 0.03, 0.04, 0.9]), (1, [0.85, 0.1, 0.15, 0.6])] {
+                    dialog.graph_colors.inherit[index].set_active(false);
+                    dialog.graph_colors.colors[index]
+                        .set_rgba(&gtk::gdk::RGBA::new(rgba[0], rgba[1], rgba[2], rgba[3]));
+                }
+                let overrides = dialog
+                    .draft()
+                    .modules
+                    .iter()
+                    .find(|m| m.id == Module::Memory)
+                    .unwrap()
+                    .colors
+                    .clone();
+                dialog.select_preset(0);
+                require(
+                    dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .find(|m| m.id == Module::Memory)
+                        .unwrap()
+                        .colors
+                        == overrides,
+                    "Theme preset discarded graph overrides",
+                )?;
+                dialog
+                    .graph_colors
+                    .module
+                    .set_selected(Module::Network.index() as u32);
+                require(
+                    dialog.graph_colors.inherit.iter().all(|c| c.is_active()),
+                    "A graph inherited another graph's overrides",
+                )?;
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                self.stage = 41;
+            }
+            41 if shell.saved_revision.get() == shell.revision.get() => {
+                let (_, saved, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&saved) == self.expected.as_ref(),
+                    "Graph color overrides did not persist",
+                )?;
+                let dialog = shell.preferences();
+                dialog
+                    .graph_colors
+                    .module
+                    .set_selected(Module::Memory.index() as u32);
+                require(
+                    !dialog.graph_colors.inherit[0].is_active()
+                        && !dialog.graph_colors.inherit[1].is_active()
+                        && dialog.graph_colors.inherit[2].is_active()
+                        && dialog.graph_colors.inherit[3].is_active(),
+                    "Reopening lost per-color inheritance",
+                )?;
+                let base = saved.theme.palette()?;
+                require(
+                    dialog.graph_colors.colors[2].rgba()
+                        == gtk::gdk::RGBA::new(
+                            base.colors[3][0] as f32,
+                            base.colors[3][1] as f32,
+                            base.colors[3][2] as f32,
+                            base.colors[3][3] as f32,
+                        ),
+                    "Inherited graph color did not follow new theme",
+                )?;
+                dialog.graph_colors.widget.set_expanded(true);
+                self.dialog = Some(dialog);
+                self.stage = 42;
+            }
+            42 if self.since.elapsed() > Duration::from_millis(300) => {
+                self.dialog.as_ref().unwrap().reveal_graph_colors();
+                self.stage = 43;
+            }
+            43 if self.since.elapsed() > Duration::from_millis(300) => {
+                let dialog = self.dialog.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_GRAPH_COLORS_PREFS_IMAGE") {
+                    dialog.snapshot(&PathBuf::from(path))?;
+                }
+                dialog.graph_colors.inherit[1].set_active(true);
+                require(
+                    dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .find(|m| m.id == Module::Memory)
+                        .unwrap()
+                        .colors
+                        .series[0]
+                        .is_none(),
+                    "Use theme did not clear a single override",
+                )?;
+                dialog.graph_colors.reset.emit_clicked();
+                require(
+                    dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .find(|m| m.id == Module::Memory)
+                        .unwrap()
+                        .colors
+                        .is_inherited(),
+                    "Graph reset did not clear overrides",
+                )?;
+                dialog.cancel.emit_clicked();
+                let dialog = shell.preferences();
+                dialog.reset.emit_clicked();
+                require(
+                    dialog
+                        .draft()
+                        .modules
+                        .iter()
+                        .all(|m| m.colors.is_inherited()),
+                    "Restore defaults did not clear graph colors in draft",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    Some(&*shell.settings.borrow()) == self.expected.as_ref(),
+                    "Cancelling graph-color resets changed active settings",
+                )?;
+                let settings = shell.settings.borrow().clone();
+                let base = settings.theme.palette()?;
+                let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+                content.set_margin_top(12);
+                content.set_margin_bottom(12);
+                content.set_margin_start(12);
+                content.set_margin_end(12);
+                for (module, title) in [
+                    (Module::Cpu, "CPU · theme colors"),
+                    (
+                        Module::Memory,
+                        "Memory · custom background and primary series",
+                    ),
+                ] {
+                    let appearance = settings.modules.iter().find(|m| m.id == module).unwrap();
+                    let palette = appearance.colors.palette(&base);
+                    let style = appearance.style;
+                    let panel = xrg_ng_linux::engine::Panel {
+                        title: "Color fixture",
+                        label: "Fixture data · remaining colors inherit the theme".into(),
+                        detail: String::new(),
+                        series: vec![
+                            vec![60., 80., 65., 90., 70., 80.],
+                            vec![30., 45., 25., 60., 30., 55.],
+                            vec![10., 15., 5., 30., 10., 20.],
+                        ],
+                        scale: xrg_ng_linux::engine::Scale::Percent,
+                        temperature_text: None,
+                    };
+                    let area = gtk::DrawingArea::new();
+                    area.set_content_width(600);
+                    area.set_content_height(150);
+                    area.set_draw_func(move |_, context, width, height| {
+                        super::draw(
+                            context,
+                            (width, height),
+                            &palette,
+                            title,
+                            Some(&panel),
+                            Units::Celsius,
+                            style,
+                        )
+                    });
+                    content.append(&area);
+                }
+                let window = gtk::Window::builder()
+                    .application(&shell.window.application().unwrap())
+                    .transient_for(&shell.window)
+                    .title("Per-graph colors · fixture preview")
+                    .child(&content)
+                    .build();
+                let paintable = gtk::WidgetPaintable::new(Some(&window));
+                window.present();
+                self.style_preview = Some((window, paintable));
+                self.stage = 44;
+            }
+            44 if self.since.elapsed() > Duration::from_millis(300) => {
+                let (window, paintable) = self.style_preview.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_GRAPH_COLORS_IMAGE") {
                     super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
                 }
                 window.close();

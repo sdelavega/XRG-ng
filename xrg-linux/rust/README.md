@@ -387,17 +387,21 @@ transfers `[Display] layout_orientation` (0 vertical, 1 horizontal) and
 `[Temperature] units` (0 Celsius, 1 Fahrenheit). `[GraphStyles]` transfers the
 CPU, memory, network, disk, GPU, battery, temperature, AI-token and TPU style keys:
 0 Solid, 1 Pixel, 2 Dot and 3 Hollow. Missing style entries retain the draft's
-choices; invalid supported style values reject the whole import. Imported
+choices; invalid supported style values reject the whole import. Imported global
 colors become an embedded custom theme, retaining alpha and black/zero values.
 The legacy theme name supplies a label only; palettes are never guessed from a
-matching preset name. A name without color entries leaves the current theme intact.
+matching preset name. A name without global color entries leaves the current theme intact.
+The thirteen `[Colors]` keys written by the C app for Memory, Network, Disk and
+AI-token backgrounds/series import as overrides for those graph components.
+Missing components keep their current override or theme inheritance; module-only
+color imports leave the global palette intact.
 Partial files keep current draft values for missing fields. New VRAM/Fans
 visibility, graph order/height, metric sources, process filters, AI sources and
 weather remain as configured. A legacy weather visibility flag does not enable
 requests. The main window background stays opaque as with other custom themes.
 
-Window geometry/pinning/opacity, activity bars, module-specific
-colors, billing and unrecognized entries are listed as
+Window geometry/pinning/opacity, activity bars,
+billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
 supported booleans, colors, layout or unit values reject the entire import and
 leave the draft unchanged.
@@ -436,6 +440,12 @@ entry opens the editor when a built-in preset is active. In Preferences:
   sensor, and a fan RPM channel. **Refresh
   source lists** uses the latest collector inventory without discarding the draft.
 - Select a preset, name a custom palette and edit its seven colors.
+- Expand **Per-graph colors**, select a graph and uncheck **Use theme** for a
+  background or series color to customize it, including opacity. Every component
+  initially inherits the global palette. Checking Use theme resumes inheritance;
+  **Use theme for this graph** clears only that graph's overrides. Theme changes
+  update inherited components and preserve explicit overrides. Window background,
+  text and border colors remain global. Style/source changes preserve overrides.
 - Use **Load theme…** and **Save theme…** for local portable JSON files.
 - **Apply** uses the draft and saves preferences; **Cancel** keeps the active layout
   and colors. **Restore defaults** changes the draft until Apply is pressed.
@@ -483,7 +493,10 @@ original imported file. XTF conversion remains follow-up work; legacy Linux impo
 is available as described above. The macOS application's
 XTF load/save behavior is unchanged.
 
-Settings use version 8 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Theme files continue to exchange only the global seven-color palette. Per-graph
+overrides are embedded in preferences and stay intact when loading/saving a theme.
+
+Settings use version 9 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
@@ -498,7 +511,10 @@ The earlier Rust `theme=Ocean` format also keeps Hollow styles. New installation
 and **Restore defaults** use Solid styles, matching the C application's default.
 Each module's style is stored with its identity and visibility, so reordering or
 hiding graphs does not move their style choices. Formats upgrade only when
-preferences are next saved.
+preferences are next saved. Versions 1–8 gain inherited per-graph colors, preserving
+their existing global palette and styles. Module color overrides follow module
+identity through ordering/visibility changes and round-trip without quantizing
+untouched RGBA values. Restore defaults clears all overrides in the draft.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

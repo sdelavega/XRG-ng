@@ -144,6 +144,21 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         ("aitoken_style", Module::Ai),
         ("tpu_style", Module::Tpu),
     ];
+    let graph_colors = [
+        ("memory_bg", Module::Memory, 0),
+        ("memory_fg1", Module::Memory, 1),
+        ("memory_fg2", Module::Memory, 2),
+        ("memory_fg3", Module::Memory, 3),
+        ("network_bg", Module::Network, 0),
+        ("network_fg1", Module::Network, 1),
+        ("network_fg2", Module::Network, 2),
+        ("disk_bg", Module::Disk, 0),
+        ("disk_fg1", Module::Disk, 1),
+        ("disk_fg2", Module::Disk, 2),
+        ("aitoken_bg", Module::Ai, 0),
+        ("aitoken_fg1", Module::Ai, 1),
+        ("aitoken_fg2", Module::Ai, 2),
+    ];
     for ((group, key), value) in &entries {
         let label = format!("[{group}] {key}");
         if group == "Modules"
@@ -191,6 +206,19 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 .style = *style;
             imported.push(format!("{label} = {}", style.name()));
         } else if group == "Colors"
+            && let Some((_, id, index)) = graph_colors.iter().find(|(name, _, _)| name == key)
+        {
+            let rgba = color(&unescape(value).map_err(|e| format!("{label}: {e}"))?)
+                .map_err(|e| format!("{label}: {e}"))?;
+            settings
+                .modules
+                .iter_mut()
+                .find(|m| m.id == *id)
+                .expect("Validated module set")
+                .colors
+                .set(*index, Some(rgba))?;
+            imported.push(format!("{label} ({} override)", id.title()));
+        } else if group == "Colors"
             && let Some(index) = color_keys.iter().position(|k| k == key)
         {
             colors[index] = color(&unescape(value).map_err(|e| format!("{label}: {e}"))?)
@@ -209,7 +237,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         }
     }
     if imported.is_empty() {
-        return Err("No supported legacy visibility, global color, layout, graph-style or temperature-unit entries found".into());
+        return Err("No supported legacy visibility, color, layout, graph-style or temperature-unit entries found".into());
     }
     if has_colors {
         let name = entries

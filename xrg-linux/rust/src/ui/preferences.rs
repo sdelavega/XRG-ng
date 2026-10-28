@@ -28,6 +28,7 @@ pub(super) struct Dialog {
     closed: Cell<bool>,
     import_review: RefCell<Option<Rc<super::legacy_import::Review>>>,
     form: gtk::Box,
+    scroll: gtk::ScrolledWindow,
     modules: gtk::Box,
     rows: Vec<Row>,
     pub height: gtk::SpinButton,
@@ -35,6 +36,7 @@ pub(super) struct Dialog {
     pub temperature_units: gtk::DropDown,
     pub name: gtk::Entry,
     pub colors: Vec<gtk::ColorDialogButton>,
+    pub graph_colors: super::graph_colors::Editor,
     preset: gtk::DropDown,
     preset_names: gtk::StringList,
     message: gtk::Label,
@@ -192,6 +194,8 @@ impl Dialog {
             form.append(&row);
             colors.push(color);
         }
+        let graph_colors = super::graph_colors::Editor::new();
+        form.append(&graph_colors.widget);
         let scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -237,6 +241,7 @@ impl Dialog {
             closed: Cell::new(false),
             import_review: RefCell::new(None),
             form,
+            scroll,
             modules,
             rows,
             height,
@@ -244,6 +249,7 @@ impl Dialog {
             temperature_units,
             name,
             colors,
+            graph_colors,
             preset,
             preset_names,
             message,
@@ -253,6 +259,12 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.graph_colors.connect(Rc::new(move |change| {
+            if let Some(dialog) = weak.upgrade() {
+                dialog.graph_color_changed(change);
+            }
+        }));
         for row in &dialog.rows {
             let weak = Rc::downgrade(&dialog);
             let id = row.id;
@@ -488,6 +500,12 @@ impl Dialog {
     pub fn draft(&self) -> Settings {
         self.draft.borrow().clone()
     }
+    pub fn reveal_graph_colors(&self) {
+        self.graph_colors.widget.set_expanded(true);
+        self.graph_colors.module.grab_focus();
+        let adjustment = self.scroll.vadjustment();
+        adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.));
+    }
     pub fn message(&self) -> String {
         self.message.text().to_string()
     }
@@ -524,13 +542,7 @@ impl Dialog {
         }
         self.height.set_value(settings.graph_height as f64);
         self.targets.set(&settings.metrics);
-        let palette = match &settings.theme {
-            ThemeChoice::Custom { theme } => shared::Theme {
-                name: theme.name.clone(),
-                colors: theme.colors,
-            },
-            _ => settings.theme.palette().expect("Known built-in theme"),
-        };
+        let palette = Self::preview_palette(&settings);
         self.name.set_text(&palette.name);
         for (button, rgba) in self.colors.iter().zip(palette.colors) {
             button.set_rgba(&gtk::gdk::RGBA::new(
@@ -540,6 +552,7 @@ impl Dialog {
                 rgba[3] as f32,
             ));
         }
+        self.graph_colors.refresh(&settings, &palette);
         let (selected, custom_name) = match &settings.theme {
             ThemeChoice::Builtin { name } => (
                 shared::themes()
@@ -554,6 +567,50 @@ impl Dialog {
             self.preset_names.splice(6, 1, &[&custom_name]);
         }
         self.preset.set_selected(selected as u32);
+        self.updating.set(false);
+    }
+    fn preview_palette(settings: &Settings) -> shared::Theme {
+        match &settings.theme {
+            ThemeChoice::Custom { theme } => shared::Theme {
+                name: theme.name.clone(),
+                colors: theme.colors,
+            },
+            choice => choice.palette().expect("Known preset"),
+        }
+    }
+    fn graph_color_changed(&self, change: super::graph_colors::Change) {
+        if self.updating.get() {
+            return;
+        }
+        let Some(id) = self.graph_colors.selected() else {
+            return;
+        };
+        use super::graph_colors::Change;
+        let result = (|| {
+            let mut draft = self.draft.borrow_mut();
+            let base = Self::preview_palette(&draft);
+            let module = draft.modules.iter_mut().find(|m| m.id == id).unwrap();
+            match change {
+                Change::Scope => {}
+                Change::Reset => module.colors = Default::default(),
+                Change::Color(index, rgba) => module.colors.set(index, Some(rgba))?,
+                Change::Inherit(index, true) => module.colors.set(index, None)?,
+                Change::Inherit(index, false) => {
+                    let palette = module.colors.palette(&base);
+                    let rgba = *palette.colors.get(index + 1).ok_or("Unknown graph color")?;
+                    module.colors.set(index, Some(rgba))?;
+                }
+            }
+            Ok::<_, String>(())
+        })();
+        if let Err(error) = result {
+            self.set_message(&error);
+            return;
+        }
+        self.updating.set(true);
+        let draft = self.draft.borrow();
+        let palette = Self::preview_palette(&draft);
+        self.graph_colors.refresh(&draft, &palette);
         self.updating.set(false);
     }
     fn customize(&self, changed: Option<usize>) {

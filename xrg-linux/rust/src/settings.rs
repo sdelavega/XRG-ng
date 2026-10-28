@@ -95,6 +95,58 @@ impl GraphStyle {
         Self::ALL.iter().position(|s| *s == self).unwrap()
     }
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GraphColors {
+    pub background: Option<[f64; 4]>,
+    pub series: [Option<[f64; 4]>; 3],
+}
+impl GraphColors {
+    /// Graph background followed by the three series; None inherits the theme.
+    pub fn components(&self) -> [Option<[f64; 4]>; 4] {
+        [
+            self.background,
+            self.series[0],
+            self.series[1],
+            self.series[2],
+        ]
+    }
+    pub fn is_inherited(&self) -> bool {
+        self.components().iter().all(Option::is_none)
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .components()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+        {
+            return Err("Graph RGBA components must be finite numbers between 0 and 1".into());
+        }
+        Ok(())
+    }
+    pub fn set(&mut self, index: usize, color: Option<[f64; 4]>) -> Result<(), String> {
+        if color.is_some_and(|c| c.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))) {
+            return Err("Invalid graph color".into());
+        }
+        match index {
+            0 => self.background = color,
+            1..=3 => self.series[index - 1] = color,
+            _ => return Err("Unknown graph color component".into()),
+        }
+        Ok(())
+    }
+    pub fn palette(&self, base: &Theme) -> Theme {
+        let mut result = base.clone();
+        for (index, color) in self.components().into_iter().enumerate() {
+            if let Some(color) = color {
+                result.colors[index + 1] = color;
+            }
+        }
+        result
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ModuleSetting {
@@ -102,6 +154,8 @@ pub struct ModuleSetting {
     pub visible: bool,
     #[serde(default)]
     pub style: GraphStyle,
+    #[serde(default, skip_serializing_if = "GraphColors::is_inherited")]
+    pub colors: GraphColors,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -296,7 +350,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 8,
+            version: 9,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -306,6 +360,7 @@ impl Default for Settings {
                     id,
                     visible: true,
                     style: GraphStyle::Solid,
+                    colors: GraphColors::default(),
                 })
                 .collect(),
             graph_height: 100,
@@ -320,7 +375,7 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 8 {
+        if self.version != 9 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -331,6 +386,9 @@ impl Settings {
             return Err("Settings must contain each graph exactly once".into());
         }
         self.theme.palette()?;
+        for module in &self.modules {
+            module.colors.validate()?;
+        }
         self.metrics.validate()?;
         self.processes.validate()?;
         self.ai.validate()?;
@@ -384,6 +442,7 @@ impl Settings {
                     id,
                     visible: false,
                     style: GraphStyle::Hollow,
+                    colors: GraphColors::default(),
                 }));
             result.version = 5;
         }
@@ -398,6 +457,9 @@ impl Settings {
         }
         if result.version == 7 {
             result.version = 8;
+        }
+        if result.version == 8 {
+            result.version = 9;
         }
         result.validate()?;
         Ok(result)

@@ -6,7 +6,7 @@ The **Swift/Rust + GTK4 replacement** is under active development in [rust/](rus
 It currently provides CPU, memory, network, disk, battery, temperature, GPU, AI
 token-rate, process-count and TPU/NPU neural accelerator graphs, with shared macOS Swift histories, rate tracking, provider parsers
 and themes. The new Preferences editor saves graph visibility/order/height,
-per-graph Solid/Pixel/Dot/Hollow styles and custom colors, with built-in presets
+per-graph Solid/Pixel/Dot/Hollow styles and color overrides, with built-in presets
 and JSON theme load/save. Layout can be
 vertical or horizontal, with Celsius/Fahrenheit system temperature display.
 Per-core/interface/disk/GPU selectors and a sortable process table with name/UID
@@ -31,7 +31,7 @@ Right-click a graph (or use Shift+F10) for live details, settings and hide/reord
 actions. The application menu can show all graphs again without resetting sources
 or themes; see [graph actions](rust/README.md#graph-actions-and-live-details).
 Preferences also offers a reviewed, read-only [legacy settings import](rust/README.md#importing-legacy-linux-settings)
-for the C app's graph visibility, graph styles, global colors, layout and temperature units. Unsupported entries are listed;
+for the C app's graph visibility, graph styles, global/module colors, layout and temperature units. Unsupported entries are listed;
 the old configuration is preserved.
 
 The **TPU / NPU** category includes onboard Intel, AMD XDNA, Apple ANE, Rockchip
