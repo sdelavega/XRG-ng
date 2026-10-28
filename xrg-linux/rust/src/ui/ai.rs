@@ -30,7 +30,7 @@ pub(super) struct Window {
     status: gtk::Label,
     pub tabs: gtk::Notebook,
     paintable: gtk::WidgetPaintable,
-    last_report: RefCell<Option<Arc<xrg_ng_linux::ai::Report>>>,
+    last_report: RefCell<Option<(Arc<xrg_ng_linux::ai::Report>, bool)>>,
 }
 fn entry_row(form: &gtk::Box, title: &str, placeholder: &str) -> gtk::Entry {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -176,7 +176,11 @@ impl Window {
             last_report: RefCell::new(None),
         });
         result.fill(&shell.settings.borrow().ai);
-        result.update(None, &shell.settings.borrow().ai);
+        result.update(
+            None,
+            &shell.settings.borrow().ai,
+            shell.settings.borrow().ai_show_model_breakdown,
+        );
         let weak = Rc::downgrade(&result);
         result.apply.connect_clicked(move |_| {
             if let Some(view) = weak.upgrade() {
@@ -268,24 +272,27 @@ impl Window {
                     self.update(
                         shell.state.borrow().as_ref().and_then(|s| s.ai.as_ref()),
                         &shell.settings.borrow().ai,
+                        shell.settings.borrow().ai_show_model_breakdown,
                     );
                     self.status.set_text("Sources applied. Saving status appears in the main window. The AI worker updates on its next poll.");
                 }
             }
         }
     }
-    pub fn update(&self, update: Option<&Update>, active: &Preferences) {
+    pub fn update(&self, update: Option<&Update>, active: &Preferences, show_models: bool) {
         if let Some(update) = update.filter(|u| &u.preferences == active) {
             if self
                 .last_report
                 .borrow()
                 .as_ref()
-                .is_some_and(|old| Arc::ptr_eq(old, &update.report))
+                .is_some_and(|(old, shown)| {
+                    Arc::ptr_eq(old, &update.report) && *shown == show_models
+                })
             {
                 return;
             }
-            *self.last_report.borrow_mut() = Some(update.report.clone());
-            self.usage.buffer().set_text(&update.detail);
+            *self.last_report.borrow_mut() = Some((update.report.clone(), show_models));
+            self.usage.buffer().set_text(update.detail_for(show_models));
         } else if self.last_report.borrow_mut().take().is_some()
             || self.usage.buffer().char_count() == 0
         {

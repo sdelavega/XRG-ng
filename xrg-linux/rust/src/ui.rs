@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 mod ai;
+mod ai_view_smoke;
 mod dashboard;
 mod graph_colors;
 mod graph_heights;
@@ -456,6 +457,14 @@ impl Shell {
         for view in self.details.borrow().values() {
             view.update(self.state.borrow().as_ref(), &self.settings.borrow());
         }
+        if let Some(window) = self.ai_window.borrow().as_ref() {
+            let settings = self.settings.borrow();
+            window.update(
+                self.state.borrow().as_ref().and_then(|s| s.ai.as_ref()),
+                &settings.ai,
+                settings.ai_show_model_breakdown,
+            );
+        }
     }
     fn ai(self: &Rc<Self>) -> Rc<ai::Window> {
         if let Some(window) = self.ai_window.borrow().as_ref() {
@@ -466,6 +475,7 @@ impl Shell {
         window.update(
             self.state.borrow().as_ref().and_then(|s| s.ai.as_ref()),
             &self.settings.borrow().ai,
+            self.settings.borrow().ai_show_model_breakdown,
         );
         *self.ai_window.borrow_mut() = Some(window.clone());
         window.window.present();
@@ -603,11 +613,6 @@ pub fn run(smoke_mode: bool) -> bool {
             if let Some(snapshot) = latest.lock().unwrap().take() {
                 if let Some(window) = shell.processes.borrow().as_ref() {
                     window.update(&snapshot.processes);
-                }
-                if let (Some(window), Some(update)) =
-                    (shell.ai_window.borrow().as_ref(), snapshot.ai.as_ref())
-                {
-                    window.update(Some(update), &shell.settings.borrow().ai);
                 }
                 *state.borrow_mut() = Some(snapshot);
                 shell.update_panel_text();

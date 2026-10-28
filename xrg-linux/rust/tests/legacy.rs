@@ -348,3 +348,26 @@ fn invalid_drafts_are_not_replaced_and_long_theme_labels_fit_new_format() {
     );
     assert!(matches!(import.settings.theme, ThemeChoice::Custom { .. }));
 }
+
+#[test]
+fn model_breakdown_import_is_display_only_and_rejects_invalid_booleans_atomically() {
+    let base = rich_base();
+    for show in [false, true] {
+        let source = format!("[AIToken]\nshow_model_breakdown={show}\nclaude_cap=123456\n");
+        let report = legacy::parse(source.as_bytes(), &base).unwrap();
+        let mut expected = base.clone();
+        expected.ai_show_model_breakdown = show;
+        assert_eq!(report.settings, expected);
+        assert_eq!(report.imported.len(), 1);
+        assert_eq!(report.skipped, ["[AIToken] claude_cap"]);
+    }
+    for bad in ["False", "0", "1", "", "false #comment", "yes"] {
+        let source = format!("[Modules]\nshow_cpu=false\n[AIToken]\nshow_model_breakdown={bad}\n");
+        assert!(legacy::parse(source.as_bytes(), &base).is_err());
+    }
+    assert_eq!(base, rich_base());
+    let source = b"[AIToken]\nshow_model_breakdown=false\n[AIToken]\nshow_model_breakdown=true\n";
+    let report = legacy::parse(source, &base).unwrap();
+    assert!(report.settings.ai_show_model_breakdown);
+    assert_eq!(report.repeated_keys, 1);
+}

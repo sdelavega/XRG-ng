@@ -427,16 +427,21 @@ pub struct Settings {
     pub processes: ProcessView,
     #[serde(default)]
     pub ai: crate::ai::Preferences,
+    #[serde(default = "default_ai_model_breakdown")]
+    pub ai_show_model_breakdown: bool,
     #[serde(default)]
     pub weather: crate::weather::Preferences,
 }
 fn default_graph_width() -> u32 {
     140
 }
+fn default_ai_model_breakdown() -> bool {
+    true
+}
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 15,
+            version: 16,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -465,6 +470,7 @@ impl Default for Settings {
             metrics: MetricSelection::default(),
             processes: ProcessView::default(),
             ai: crate::ai::Preferences::default(),
+            ai_show_model_breakdown: default_ai_model_breakdown(),
             weather: crate::weather::Preferences::default(),
         }
     }
@@ -500,7 +506,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 15 {
+        if self.version != 16 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -636,6 +642,9 @@ impl Settings {
                 height: None,
             });
             result.version = 15;
+        }
+        if result.version == 15 {
+            result.version = 16;
         }
         result.validate()?;
         Ok(result)

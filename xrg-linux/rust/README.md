@@ -553,11 +553,16 @@ visibility, graph order/height, metric sources, process filters, AI sources and
 weather remain as configured. A legacy weather visibility flag does not enable
 requests. The main window background stays opaque as with other custom themes.
 
+`[AIToken] show_model_breakdown` transfers independently as a display preference:
+`true` shows recorded per-model token rows in AI monitoring; `false` keeps grouped
+provider totals. Missing values preserve the draft choice, and malformed booleans
+reject the entire import. This does not alter AI sources or their histories.
+
 Window geometry/pinning/opacity, billing and unrecognized entries are listed as
 not transferred. Unsupported values are not echoed in the preview. Invalid
 supported booleans, colors, layout or unit values reject the entire import and
 leave the draft unchanged.
-Files containing no supported visibility/color/layout/unit/style/activity-bar entries are rejected.
+Files containing no supported visibility/color/layout/unit/style/activity-bar/model-display entries are rejected.
 
 Parsing follows the C writer's GLib key-file layout: UTF-8, case-sensitive grouped
 keys, `#` comments, lower-case `true`/`false`, repeated-group merging and last-key
@@ -610,6 +615,12 @@ entry opens the editor when a built-in preset is active. In Preferences:
   Graph labels, tooltips, accessibility text and open live details update together.
   Collector/history values stay Celsius; unit changes preserve history and graph
   shape. Missing readings stay unavailable. Weather has its own units setting.
+- Toggle **Show per-model token details in AI monitoring** to show recorded model
+  attribution or grouped provider totals in the AI window. Both views retain
+  source-recorded costs, availability messages and Ollama inventory. This changes
+  the display immediately on Apply, without re-polling sources or resetting graph
+  history; Cancel and Restore defaults follow the usual draft behavior. Existing
+  Rust settings keep model details enabled; legacy import honors its explicit flag.
 - Choose aggregate or individual CPU, network, disk and GPU sources, a temperature
   sensor, and a fan RPM channel. **Refresh
   source lists** uses the latest collector inventory without discarding the draft.
@@ -715,7 +726,7 @@ events; XRG-ng enforces these limits while building values.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 13 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 16 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show nine
@@ -759,6 +770,13 @@ does not enable requests. Invalid older module sets remain rejected; migration
 writes only when preferences are saved.
 Version 14 adds optional activity-bar series-color inheritance; older saved bar
 colors stay explicit. Existing dimensions and ordering are not rewritten.
+Version 16 adds the display-only AI model-breakdown preference. Older Rust files
+default to showing model rows, preserving their existing view. Migration retains
+sources, layout and colors and writes only on explicit save. Invalid
+model-display booleans reject the entire file. Grouped and expanded detail text is
+prepared by the AI worker; GTK switches between cached views without collection
+or JSON parsing. A dedicated GTK gate checks Apply/Cancel, reopening, Restore
+defaults, persistence, immediate cached updates and retained rate history.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

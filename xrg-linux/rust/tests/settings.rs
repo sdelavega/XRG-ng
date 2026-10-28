@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 16;
+    value.version = 17;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -386,7 +386,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        15
+        16
     );
 }
 #[test]
@@ -469,7 +469,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 15);
+    assert_eq!(migrated.version, 16);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -628,7 +628,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        15
+        16
     );
 }
 
@@ -709,4 +709,38 @@ fn weather_module_upgrade_preserves_old_graphs_and_sources_without_enabling_requ
     );
     settings.modules.pop();
     assert!(Settings::parse(&serde_json::to_vec(&settings).unwrap()).is_err());
+}
+
+#[test]
+fn previous_settings_keep_model_details_and_new_display_choice_round_trips_without_writes() {
+    let f = Fixture::new();
+    let mut expected = Settings::default();
+    expected.metrics.cpu = Some(2);
+    expected.ai.enabled = [true, false, true, false];
+    expected.graph_height = 164;
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 15.into();
+    wire.as_object_mut()
+        .unwrap()
+        .remove("ai_show_model_breakdown");
+    let original = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &original).unwrap();
+    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+    expected.ai_show_model_breakdown = false;
+    store.save(&expected).unwrap();
+    assert_eq!(
+        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
+        expected
+    );
+    for invalid in [
+        serde_json::json!(0),
+        serde_json::json!("false"),
+        serde_json::Value::Null,
+    ] {
+        wire["ai_show_model_breakdown"] = invalid;
+        assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
 }

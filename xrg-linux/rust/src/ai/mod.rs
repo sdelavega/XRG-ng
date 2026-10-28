@@ -410,22 +410,37 @@ pub struct Update {
     pub panel: Panel,
     pub report: Arc<Report>,
     pub detail: String,
+    summary_detail: String,
 }
 impl Update {
     pub fn new(preferences: Preferences, panel: Panel, report: Report) -> Self {
-        let detail = report_detail(&report, &preferences, &panel);
+        let detail = report_detail(&report, &preferences, &panel, true);
+        let summary_detail = report_detail(&report, &preferences, &panel, false);
         Self {
             preferences,
             panel,
             detail,
+            summary_detail,
             report: Arc::new(report),
         }
     }
+    pub fn detail_for(&self, show_models: bool) -> &str {
+        if show_models {
+            &self.detail
+        } else {
+            &self.summary_detail
+        }
+    }
 }
-fn report_detail(report: &Report, preferences: &Preferences, panel: &Panel) -> String {
+fn report_detail(
+    report: &Report,
+    preferences: &Preferences,
+    panel: &Panel,
+    show_models: bool,
+) -> String {
     let mut text = vec![panel.detail.clone()];
     for (index, name) in ["Claude", "Codex", "Gemini", "Hermes"].iter().enumerate() {
-        if !preferences.enabled[index] {
+        if !show_models || !preferences.enabled[index] {
             continue;
         }
         let Ok(reading) = &report.providers[index] else {

@@ -13,11 +13,12 @@ use xrg_ng_linux::settings::{
     GraphStyle, Layout, Module, Settings, Store, ThemeChoice, ThemeDocument,
 };
 use xrg_ng_linux::temperature::{Text, Units};
-const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\nactivity_bar=rgba(0,255,128,0.5)\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\nactivity_bar_style=2\n[Temperature]\nunits=1\n[GraphStyles]\ncpu_style=2\n[AIToken]\nclaude_cap=123456\n";
+const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow_cpu=false\nshow_network=false\nshow_aitoken=false\n[Colors]\nbackground=rgba(8,16,32,0.9)\ngraph_fg1=rgba(0,128,255,0.75)\ntext=#eeeeee\nactivity_bar=rgba(0,255,128,0.5)\n[Appearance]\ntheme=Legacy fixture\n[Window]\nx=25\nopacity=0.6\n[Display]\nlayout_orientation=1\nshow_activity_bars=true\nactivity_bar_style=2\n[Temperature]\nunits=1\n[GraphStyles]\ncpu_style=2\n[AIToken]\nshow_model_breakdown=false\nclaude_cap=123456\n";
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
     theme_import: Option<super::theme_import_smoke::Harness>,
+    ai_view: Option<super::ai_view_smoke::Harness>,
     process_details: Option<super::process_details_smoke::Harness>,
     weather_graph: Option<super::weather_graph_smoke::Harness>,
     process_actions: Option<super::process_actions_smoke::Harness>,
@@ -93,6 +94,8 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            ai_view: (std::env::var("XRG_SMOKE_AI_VIEW").as_deref() == Ok("1"))
+                .then(super::ai_view_smoke::Harness::new),
             theme_import: (std::env::var("XRG_SMOKE_XTF_THEME").as_deref() == Ok("1"))
                 .then(super::theme_import_smoke::Harness::new),
             process_details: (std::env::var("XRG_SMOKE_PROCESS_DETAILS").as_deref() == Ok("1"))
@@ -272,6 +275,9 @@ impl Harness {
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
     pub fn summary(&self) -> &'static str {
+        if self.ai_view.is_some() {
+            return "ai-view=grouped-cached-history-preserved";
+        }
         if self.theme_import.is_some() {
             return "xtf-theme=import-cancel-apply-export";
         }
@@ -291,6 +297,9 @@ impl Harness {
         }
     }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.ai_view {
+            return harness.tick(shell, sequence, &self.root);
+        }
         if let Some(harness) = &mut self.theme_import {
             return harness.tick(shell, sequence, &self.root);
         }
@@ -600,7 +609,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 15 && loaded.processes.limit == 20,
+                    loaded.version == 16 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -714,7 +723,7 @@ impl Harness {
                 let mut panel = xrg_ng_linux::ai::waiting();
                 panel.detail = "Automated UI fixture — not live usage\n\nRetained token totals by recorded model.".into();
                 let fixture = Update::new(active.clone(), panel, report);
-                window.update(Some(&fixture), &active);
+                window.update(Some(&fixture), &active, true);
                 require(
                     window.usage_text().contains("fixture-model")
                         && window.usage_text().contains("fixture-claude")
@@ -728,7 +737,7 @@ impl Harness {
                 )?;
                 let mut stale = active.clone();
                 stale.ollama = !stale.ollama;
-                window.update(Some(&fixture), &stale);
+                window.update(Some(&fixture), &stale, true);
                 require(
                     !window.usage_text().contains("fixture-model")
                         && !window.usage_text().contains("fixture-claude")
@@ -736,7 +745,7 @@ impl Harness {
                         && window.usage_text().contains("Waiting for the AI worker"),
                     "Stale AI report survived a source change",
                 )?;
-                window.update(Some(&fixture), &active);
+                window.update(Some(&fixture), &active, true);
                 self.stage = 14;
             }
             14 if self.since.elapsed() > Duration::from_millis(200) => {
@@ -1137,6 +1146,9 @@ impl Harness {
                     .ok_or("Valid import did not open a preview")?;
                 require(
                     review.report().contains("[Modules] show_cpu = false")
+                        && review
+                            .report()
+                            .contains("[AIToken] show_model_breakdown = false")
                         && review.report().contains("[Window] opacity")
                         && review.report().contains("[AIToken] claude_cap"),
                     "Import preview omitted mapped values or unsupported entries",
@@ -1189,6 +1201,7 @@ impl Harness {
                         && candidate.weather == self.expected.as_ref().unwrap().weather
                         && candidate.metrics == self.expected.as_ref().unwrap().metrics
                         && candidate.activity_bars.visible
+                        && !candidate.ai_show_model_breakdown
                         && candidate.activity_bars.style == GraphStyle::Dot
                         && candidate.activity_bars.color == [0., 1., 128. / 255., 0.5],
                     "Import changed current service or metric source choices",

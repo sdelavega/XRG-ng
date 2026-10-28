@@ -23,7 +23,7 @@ pub struct Import {
 impl Import {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout and system temperature units transfer when present. Graph order/sizes, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
+            "{} entries ready to import; {} entries not transferred.\n\nImport into draft changes only this Preferences draft. Apply in Preferences to use and save it. The source file is never changed.\n\nMissing fields keep the current draft values. Graph styles, activity bar visibility/style/color, layout, system temperature units and per-model token display transfer when present. Graph order/sizes, metric sources, process filters, AI source settings and weather remain unchanged. VRAM and Fans keep their current visibility. Imported colors retain alpha; the main window background remains opaque.\n\nReady to import:\n{}",
             self.imported.len(),
             self.skipped.len(),
             self.imported.join("\n")
@@ -203,6 +203,13 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
                 color(&unescape(value).map_err(|e| format!("{label}: {e}"))?)
                     .map_err(|e| format!("{label}: {e}"))?;
             imported.push(format!("{label} (activity bar color)"));
+        } else if group == "AIToken" && key == "show_model_breakdown" {
+            settings.ai_show_model_breakdown = match value.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err(format!("{label}: expected true or false")),
+            };
+            imported.push(format!("{label} = {}", settings.ai_show_model_breakdown));
         } else if group == "Temperature" && key == "units" {
             settings.temperature_units = match value.parse::<i32>() {
                 Ok(0) => Units::Celsius,
@@ -257,7 +264,7 @@ pub fn parse(bytes: &[u8], base: &Settings) -> Result<Import, String> {
         }
     }
     if imported.is_empty() {
-        return Err("No supported legacy visibility, color, layout, graph-style, activity-bar or temperature-unit entries found".into());
+        return Err("No supported legacy visibility, color, layout, graph-style, activity-bar, model-breakdown or temperature-unit entries found".into());
     }
     if has_colors {
         let name = entries

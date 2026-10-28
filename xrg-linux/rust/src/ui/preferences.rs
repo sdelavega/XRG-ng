@@ -41,6 +41,7 @@ pub(super) struct Dialog {
     pub activity_color: gtk::ColorDialogButton,
     pub layout: gtk::DropDown,
     pub temperature_units: gtk::DropDown,
+    pub ai_models: gtk::CheckButton,
     pub name: gtk::Entry,
     pub colors: Vec<gtk::ColorDialogButton>,
     pub graph_colors: super::graph_colors::Editor,
@@ -188,6 +189,10 @@ impl Dialog {
             row.append(control);
             form.append(&row);
         }
+        let ai_models =
+            gtk::CheckButton::with_label("Show per-model token details in AI monitoring");
+        ai_models.set_tooltip_text(Some("Show recorded token attribution. Provider totals, Ollama inventory, source polling and graph history stay the same."));
+        form.append(&ai_models);
         let targets = Rc::new(super::targets::Targets::new(
             &shell.inventory(),
             &shell.settings.borrow().metrics,
@@ -318,6 +323,7 @@ impl Dialog {
             activity_color,
             layout,
             temperature_units,
+            ai_models,
             name,
             colors,
             graph_colors,
@@ -330,6 +336,14 @@ impl Dialog {
             paintable,
         });
         dialog.refresh();
+        let weak = Rc::downgrade(&dialog);
+        dialog.ai_models.connect_toggled(move |control| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().ai_show_model_breakdown = control.is_active();
+            }
+        });
         let weak = Rc::downgrade(&dialog);
         dialog.activity_series.connect_toggled(move |control| {
             if let Some(dialog) = weak.upgrade()
@@ -662,6 +676,7 @@ impl Dialog {
         self.layout.set_selected(u32::from(horizontal));
         self.temperature_units
             .set_selected(u32::from(settings.temperature_units == Units::Fahrenheit));
+        self.ai_models.set_active(settings.ai_show_model_breakdown);
         let mut previous = None::<gtk::Box>;
         for (index, module) in settings.modules.iter().enumerate() {
             let row = &self.rows[module.id.index()];

@@ -753,3 +753,39 @@ fn model_display_limit_reports_omissions_without_losing_provider_totals() {
             && !update.detail.contains("m128")
     );
 }
+
+#[test]
+fn grouped_details_preserve_provider_totals_cost_inventory_and_rate_history() {
+    let preferences = ai::Preferences::default();
+    let mut display = Display::default();
+    let mut r = report(42, "display fixture");
+    r.providers[0].as_mut().unwrap().models = Some(vec![ai::ModelUsage {
+        model: Some("fixture-token-model".into()),
+        usage: Usage {
+            total: 42,
+            ..Default::default()
+        },
+        cost: Some(0.25),
+    }]);
+    r.providers[0].as_mut().unwrap().cost = Some(0.25);
+    r.models.installed = Ok(vec!["fixture-installed-model".into()]);
+    let panel = display.panel_for(r.clone(), 1., &preferences);
+    let first = ai::Update::new(preferences.clone(), panel, r);
+    assert!(first.detail_for(true).contains("fixture-token-model"));
+    assert!(!first.detail_for(false).contains("fixture-token-model"));
+    assert!(
+        !first
+            .detail_for(false)
+            .contains("per-model token attribution unavailable")
+    );
+    assert!(first.detail_for(false).contains("42 tokens"));
+    assert!(first.detail_for(false).contains("source cost $0.2500"));
+    assert!(first.detail_for(false).contains("fixture-installed-model"));
+    assert_eq!(first.detail_for(true), first.detail);
+    // Switching cached views never sends collector preferences or touches Display.
+    for show in [false, true, false, true] {
+        assert!(!first.detail_for(show).is_empty());
+    }
+    let next = display.panel_for(report(52, "display fixture"), 6., &preferences);
+    assert_eq!(next.series[0].last(), Some(&2.));
+}
