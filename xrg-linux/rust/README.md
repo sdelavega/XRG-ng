@@ -318,6 +318,14 @@ three pinned channels, duplicate rejection, Apply/Cancel, missing-source refresh
 persistence/reopen and fixture previews collected through the production sampler.
 Sensor regressions cover reordered/duplicate labels, stopped fans, independent
 histories, thermal-zone selection, disappearance/replacement and scan failures.
+A second GTK smoke invocation (`XRG_SMOKE_PROCESS_ACTIONS=1 --smoke-test`) has its
+own unchanged twenty-second deadline and targets only disposable child processes.
+It checks row/action state, a frozen context-menu target, cancel, pause/resume,
+selection through sorting, parent-close cancellation, terminate and force kill.
+Its process-menu, confirmation and controls screenshots are exported separately.
+Kernel-backed Rust regressions also verify stale start/UID/directory rejection,
+fixture refusal and exited pidfds without numeric-PID fallback. These tests never
+signal pre-existing user processes.
 The main window, preferences, process table, both AI tabs, weather window, graph
 menu, live details and legacy import preview are
 exported as PNGs. Smoke
@@ -691,7 +699,7 @@ threads doing work under a sleeping leader do not increment that count. Its
 tooltip and accessibility details list the top ten processes by
 CPU and RSS, with PID, name, real UID when readable, threads, state and nice value.
 Names come from `/proc/PID/stat`; command-line arguments and environments are not
-read. **Processes…** in the toolbar opens a read-only table with PID, name, real
+read. **Processes…** in the toolbar opens a selectable table with PID, name, real
 UID, CPU percentage, resident MiB, threads and state. Sort by CPU or RSS descending,
 PID ascending or name A–Z; filter by case-insensitive name substring and numeric
 real UID, with **My UID** as a shortcut. Filters apply before the 10–200 row limit.
@@ -719,8 +727,32 @@ limit, an 8 KiB stat limit and 64 KiB status/memory limits. A read window rotate
 when a pass cannot cover every PID. Counts and rankings describe that pass's
 readable subset; partial coverage, protected/malformed tasks and ordinary process
 exits are reported separately. Mount options such as hidepid and container PID
-namespaces restrict visibility. No process-control actions are implemented.
-See the kernel's [proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
+namespaces restrict visibility.
+
+Select a row to use **Terminate (SIGTERM)**, **Force Kill (SIGKILL)**, **Pause
+(SIGSTOP)** or **Resume (SIGCONT)**. The same actions appear on right-click and
+**Menu / Shift+F10**. Pause/Resume availability follows the sampled state. Selection
+follows process identity through sorting and refreshes; filtering out or losing the
+selected process clears it. Context menus capture their original target even if
+selection later changes. Each action opens a confirmation naming the process,
+PID and UID, with Cancel as the default. No signal is sent before confirmation.
+Closing a review or its parent discards an unconfirmed action. Once confirmed,
+results report signal delivery, not a promise that the process exited or obeyed it.
+Failures remain visible independently of refreshing process statistics.
+
+Controls require a live `/proc` mount matching the caller's PID namespace and
+Linux `pidfd_open` / `pidfd_send_signal` support (normally Linux 5.3+; sandbox
+policy may restrict them). Parsed fixture records and alternate proc roots cannot
+be control targets. PID 0, PID 1, the monitor itself, exited processes and records
+with unknown ownership are refused. The collector records proc directory identity
+in addition to PID, start time and UID. Opening a review pins a pidfd, revalidates
+those fields and checks kernel permission without delivering a signal. Confirmation
+rechecks identity, ownership and name, then sends only the chosen signal through
+that pinned handle. It never falls back to a numeric-PID signal or a process
+group, escalates privileges, invokes a shell or retries with a stronger signal.
+See the Linux [pidfd_open](https://man7.org/linux/man-pages/man2/pidfd_open.2.html)
+and [pidfd_send_signal](https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html)
+manuals and the kernel's [proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html).
 
 ## TPU / NPU neural accelerators
 
@@ -874,7 +906,7 @@ automated tests use fixtures and make no weather requests.
 ## Remaining migration
 
 1. Intel GPU PMU utilization, additional vendor counters, calibrated thermistor
-   support and detailed process controls.
+   support and optional process priority/detail controls.
 2. Safe Codex model attribution where cumulative records permit it, append-offset
    scanning for very large logs and optional price tables.
 3. Deeper metric preferences, XTF conversion and broader legacy-field mappings

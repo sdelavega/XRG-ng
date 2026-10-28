@@ -9,7 +9,10 @@ use std::{
     sync::Arc,
 };
 use xrg_ng_linux::{
-    process::{Listing, Report, Sort},
+    process::{
+        Listing, Process, Report, Sort,
+        control::{self, Action, Target},
+    },
     settings::ProcessView,
 };
 const SORTS: [Sort; 4] = [Sort::Cpu, Sort::Memory, Sort::Pid, Sort::Name];
@@ -25,7 +28,8 @@ pub(super) struct Window {
     pub sort: gtk::DropDown,
     pub limit: gtk::SpinButton,
     status: gtk::Label,
-    list: gtk::ListBox,
+    pub list: gtk::ListBox,
+    column_sizes: Vec<gtk::SizeGroup>,
     rows: RefCell<Vec<Row>>,
     source: RefCell<Option<Arc<Report>>>,
     view: RefCell<ProcessView>,
@@ -39,6 +43,16 @@ pub(super) struct Window {
     shown: Cell<usize>,
     closed: Cell<bool>,
     paintable: gtk::WidgetPaintable,
+    displayed: RefCell<Vec<Process>>,
+    selected: RefCell<Option<Process>>,
+    selecting: Cell<bool>,
+    action_busy: Cell<bool>,
+    pub actions: [gtk::Button; 4],
+    selection: gtk::Label,
+    action_status: gtk::Label,
+    context: RefCell<Option<gtk::PopoverMenu>>,
+    context_paintable: RefCell<Option<gtk::WidgetPaintable>>,
+    pending: RefCell<Option<Rc<super::process_actions::Confirmation>>>,
 }
 impl Window {
     pub fn new(shell: &Rc<Shell>) -> Rc<Self> {
@@ -84,7 +98,12 @@ impl Window {
         options.append(&limit);
         content.append(&options);
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        for (title, width) in [
+        header.set_margin_start(2);
+        header.set_margin_end(2);
+        let column_sizes: Vec<_> = (0..7)
+            .map(|_| gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal))
+            .collect();
+        for (index, (title, width)) in [
             ("PID", 8),
             ("Name", 24),
             ("UID", 10),
@@ -92,7 +111,10 @@ impl Window {
             ("RSS MiB", 11),
             ("Threads", 7),
             ("State", 6),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let label = gtk::Label::new(Some(title));
             label.set_width_chars(width);
             label.set_xalign(0.);
@@ -100,11 +122,12 @@ impl Window {
                 label.set_hexpand(true);
             }
             label.add_css_class("heading");
+            column_sizes[index].add_widget(&label);
             header.append(&label);
         }
         content.append(&header);
         let list = gtk::ListBox::new();
-        list.set_selection_mode(gtk::SelectionMode::None);
+        list.set_selection_mode(gtk::SelectionMode::Single);
         list.add_css_class("boxed-list");
         let scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
@@ -113,6 +136,24 @@ impl Window {
             .child(&list)
             .build();
         content.append(&scroll);
+        let selection = gtk::Label::new(Some("Select a process to manage it."));
+        selection.set_xalign(0.);
+        selection.set_wrap(true);
+        content.append(&selection);
+        let action_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let actions = Action::ALL.map(|action| {
+            let button = gtk::Button::with_label(action.name());
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(action.explanation()));
+            action_row.append(&button);
+            button
+        });
+        content.append(&action_row);
+        let action_status = gtk::Label::new(None);
+        action_status.set_xalign(0.);
+        action_status.set_wrap(true);
+        action_status.set_visible(false);
+        content.append(&action_status);
         let status = gtk::Label::new(Some("Waiting for process data…"));
         status.set_xalign(0.);
         status.set_wrap(true);
@@ -129,7 +170,7 @@ impl Window {
             .transient_for(&shell.window)
             .destroy_with_parent(true)
             .default_width(940)
-            .default_height(560)
+            .default_height(660)
             .child(&content)
             .build();
         let paintable = gtk::WidgetPaintable::new(Some(&window));
@@ -142,6 +183,7 @@ impl Window {
             limit,
             status,
             list,
+            column_sizes,
             rows: RefCell::new(Vec::new()),
             source: RefCell::new(None),
             view: RefCell::new(shell.settings.borrow().processes.clone()),
@@ -155,7 +197,64 @@ impl Window {
             shown: Cell::new(0),
             closed: Cell::new(false),
             paintable,
+            displayed: RefCell::new(Vec::new()),
+            selected: RefCell::new(None),
+            selecting: Cell::new(false),
+            action_busy: Cell::new(false),
+            actions,
+            selection,
+            action_status,
+            context: RefCell::new(None),
+            context_paintable: RefCell::new(None),
+            pending: RefCell::new(None),
         });
+        let weak = Rc::downgrade(&result);
+        result.list.connect_row_selected(move |_, row| {
+            if let Some(window) = weak.upgrade()
+                && !window.selecting.get()
+            {
+                *window.selected.borrow_mut() =
+                    row.and_then(|r| window.displayed.borrow().get(r.index() as usize).cloned());
+                window.update_actions();
+            }
+        });
+        for (button, action) in result.actions.iter().zip(Action::ALL) {
+            let weak = Rc::downgrade(&result);
+            button.connect_clicked(move |_| {
+                if let Some(window) = weak.upgrade()
+                    && let Some(process) = window.selected.borrow().clone()
+                {
+                    window.begin_action(process, action);
+                }
+            });
+        }
+        let click = gtk::GestureClick::new();
+        click.set_button(3);
+        let weak = Rc::downgrade(&result);
+        click.connect_pressed(move |_, _, x, y| {
+            if let Some(window) = weak.upgrade()
+                && let Some(row) = window.list.row_at_y(y as i32)
+            {
+                window.list.select_row(Some(&row));
+                window.popup(x as i32, y as i32);
+            }
+        });
+        result.list.add_controller(click);
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(&result);
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            if (key == gtk::gdk::Key::Menu
+                || (key == gtk::gdk::Key::F10
+                    && modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK)))
+                && let Some(window) = weak.upgrade()
+                && let Some(row) = window.list.selected_row()
+            {
+                window.popup(12, row.allocation().y() + row.height() / 2);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        result.list.add_controller(keys);
         result.set_view(shell.settings.borrow().processes.clone());
         let weak = Rc::downgrade(&result);
         result.filter.connect_changed(move |_| {
@@ -191,6 +290,11 @@ impl Window {
         result.window.connect_close_request(move |_| {
             if let Some(window) = weak.upgrade() {
                 window.closed.set(true);
+                window.close_context();
+                let pending = window.pending.borrow().clone();
+                if let Some(dialog) = pending {
+                    dialog.window.close();
+                }
                 if let Some(shell) = window.shell.upgrade() {
                     shell.processes.borrow_mut().take();
                 }
@@ -336,11 +440,15 @@ impl Window {
         ));
     }
     fn show_rows(&self, processes: &[xrg_ng_linux::process::Process]) {
+        self.selecting.set(true);
+        let prior = self.selected.borrow().clone();
+        self.list.unselect_all();
+        *self.displayed.borrow_mut() = processes.to_vec();
         let mut rows = self.rows.borrow_mut();
         while rows.len() < processes.len() {
             let widget = gtk::ListBoxRow::new();
             widget.set_activatable(false);
-            widget.set_selectable(false);
+            widget.set_selectable(true);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             row.set_margin_top(4);
             row.set_margin_bottom(4);
@@ -354,6 +462,7 @@ impl Window {
                     label.set_max_width_chars(30);
                     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 }
+                self.column_sizes[index].add_widget(&label);
                 row.append(&label);
                 labels.push(label);
             }
@@ -402,6 +511,202 @@ impl Window {
             row.widget.set_tooltip_text(Some(&format!("{summary}\nVirtual memory: {} bytes · nice {} · start ticks {}\nAn unavailable CPU value is waiting for a valid interval.",process.virtual_bytes,process.nice,process.start_ticks)));
         }
         self.shown.set(processes.len());
+        let selected = prior.and_then(|old| processes.iter().position(|p| p.same_instance(&old)));
+        *self.selected.borrow_mut() = selected.map(|i| processes[i].clone());
+        if let Some(i) = selected {
+            self.list.select_row(Some(&rows[i].widget));
+        }
+        self.selecting.set(false);
+        self.update_actions();
+    }
+    fn update_actions(&self) {
+        let selected = self.selected.borrow();
+        for (button, action) in self.actions.iter().zip(Action::ALL) {
+            button.set_sensitive(
+                !self.action_busy.get() && selected.as_ref().is_some_and(|p| action.enabled(p)),
+            );
+        }
+        self.selection.set_text(
+            &selected
+                .as_ref()
+                .map(|p| {
+                    let identity = format!(
+                        "{} · PID {} · UID {}",
+                        p.name,
+                        p.pid,
+                        p.uid.map_or("unknown".into(), |u| u.to_string())
+                    );
+                    match control::eligible(p) {
+                        Ok(()) => identity,
+                        Err(error) => format!("{identity}\n{error}"),
+                    }
+                })
+                .unwrap_or_else(|| "Select a process to manage it.".into()),
+        );
+    }
+    fn begin_action(self: &Rc<Self>, process: Process, action: Action) {
+        if self.closed.get() || self.action_busy.get() || !action.enabled(&process) {
+            return;
+        }
+        self.action_busy.set(true);
+        self.update_actions();
+        self.action_status.set_text("Checking selected process…");
+        self.action_status.set_visible(true);
+        let task = gio::spawn_blocking(move || Target::prepare(&process));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let result = task
+                .await
+                .unwrap_or_else(|_| Err("Process identity check stopped unexpectedly".into()));
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if window.closed.get() {
+                return;
+            }
+            match result {
+                Err(error) => {
+                    window.action_busy.set(false);
+                    window.action_status.set_text(&error);
+                    window.update_actions();
+                }
+                Ok(target) => {
+                    let summary = format!(
+                        "{} sent to {} (PID {}).",
+                        action.name(),
+                        target.process().name,
+                        target.process().pid
+                    );
+                    let weak = Rc::downgrade(&window);
+                    let dialog = super::process_actions::Confirmation::new(
+                        &window.window,
+                        target,
+                        action,
+                        move |result| {
+                            if let Some(window) = weak.upgrade() {
+                                window.pending.borrow_mut().take();
+                                window.action_busy.set(false);
+                                if !window.closed.get() {
+                                    window.action_status.set_text(&match result {
+                                        super::process_actions::Outcome::Cancelled => {
+                                            "Process action cancelled; no signal sent.".into()
+                                        }
+                                        super::process_actions::Outcome::Sent => summary.clone(),
+                                        super::process_actions::Outcome::Failed(error) => error,
+                                    });
+                                    window.update_actions();
+                                }
+                            }
+                        },
+                    );
+                    *window.pending.borrow_mut() = Some(dialog);
+                }
+            }
+        });
+    }
+    pub fn popup(self: &Rc<Self>, x: i32, y: i32) {
+        let Some(process) = self.selected.borrow().clone() else {
+            return;
+        };
+        let group = gio::SimpleActionGroup::new();
+        let entries = gio::Menu::new();
+        for action in Action::ALL {
+            let item = gio::SimpleAction::new(action.id(), None);
+            item.set_enabled(!self.action_busy.get() && action.enabled(&process));
+            let weak = Rc::downgrade(self);
+            let process = process.clone();
+            item.connect_activate(move |_, _| {
+                if let Some(window) = weak.upgrade() {
+                    window.begin_action(process.clone(), action);
+                }
+            });
+            group.add_action(&item);
+            entries.append(
+                Some(action.name()),
+                Some(&format!("process.{}", action.id())),
+            );
+        }
+        let menu = gio::Menu::new();
+        menu.append_section(
+            Some(&format!("{} · PID {}", process.name, process.pid)),
+            &entries,
+        );
+        if let Some(old) = self.context.borrow_mut().take() {
+            old.popdown();
+            if old.parent().is_some() {
+                old.unparent();
+            }
+        }
+        let Some(row) = self.list.selected_row() else {
+            return;
+        };
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_has_arrow(false);
+        popover.set_parent(&row);
+        popover.insert_action_group("process", Some(&group));
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+            x,
+            y - row.allocation().y(),
+            1,
+            1,
+        )));
+        popover.connect_closed(|p| {
+            if p.parent().is_some() {
+                p.unparent();
+            }
+        });
+        popover.popup();
+        popover.present();
+        *self.context_paintable.borrow_mut() = Some(gtk::WidgetPaintable::new(Some(&popover)));
+        *self.context.borrow_mut() = Some(popover);
+    }
+    pub fn activate_context(&self, action: Action) -> Result<(), String> {
+        self.context
+            .borrow()
+            .as_ref()
+            .ok_or("Process menu missing")?
+            .activate_action(&format!("process.{}", action.id()), None)
+            .map_err(|e| e.to_string())
+    }
+    pub fn close_context(&self) {
+        if let Some(popover) = self.context.borrow().as_ref() {
+            popover.popdown();
+        }
+    }
+    pub fn snapshot_context(&self, path: &Path) -> Result<(), String> {
+        let context = self.context.borrow();
+        let context = context.as_ref().ok_or("Process menu missing")?;
+        if context.width() == 0 || context.height() == 0 || !context.is_mapped() {
+            return Err("Process menu is not mapped or has no layout".into());
+        }
+        save_snapshot(
+            context,
+            self.context_paintable
+                .borrow()
+                .as_ref()
+                .ok_or("Menu paintable missing")?,
+            path,
+        )
+    }
+    pub fn select_pid(&self, pid: u32) -> bool {
+        if let Some(index) = self.displayed.borrow().iter().position(|p| p.pid == pid) {
+            self.list
+                .select_row(self.list.row_at_index(index as i32).as_ref());
+            return true;
+        }
+        false
+    }
+    pub fn selected_pid(&self) -> Option<u32> {
+        self.selected.borrow().as_ref().map(|p| p.pid)
+    }
+    pub fn confirmation(&self) -> Option<Rc<super::process_actions::Confirmation>> {
+        self.pending.borrow().clone()
+    }
+    pub fn action_message(&self) -> String {
+        self.action_status.text().to_string()
+    }
+    pub fn busy(&self) -> bool {
+        self.action_busy.get()
     }
     pub fn settled(&self) -> bool {
         !self.running.get()

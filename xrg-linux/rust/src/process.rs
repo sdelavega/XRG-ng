@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Readable processes in the selected proc/PID namespace. No command lines,
-//! environments, NSS lookups, privilege escalation, signals or subprocesses.
+//! environments, NSS lookups or subprocesses. Acquisition remains read-only;
+//! explicit signal delivery is isolated in control.
+pub mod control;
 use crate::{hardware::short_label, system_file};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -27,6 +29,20 @@ pub struct Process {
     pub uid: Option<u32>,
     pub nice: i32,
     pub threads: u64,
+    identity: Option<Identity>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Identity {
+    device: u64,
+    inode: u64,
+}
+impl Process {
+    pub fn same_instance(&self, other: &Self) -> bool {
+        self.pid == other.pid
+            && self.start_ticks == other.start_ticks
+            && self.uid == other.uid
+            && self.identity == other.identity
+    }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -333,10 +349,19 @@ pub fn parse_stat(bytes: &[u8], expected_pid: u32, page_size: u64) -> Result<Pro
         uid: None,
         nice: fields[16].parse().map_err(|_| "Invalid nice value")?,
         threads: number(17)?,
+        identity: None,
     })
 }
 fn read_process(root: &Path, pid: u32, page_size: u64) -> io::Result<Process> {
     let path = root.join(pid.to_string());
+    use std::os::unix::fs::MetadataExt;
+    let before_directory = fs::symlink_metadata(&path)?;
+    if !before_directory.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Expected a process directory",
+        ));
+    }
     let stat = path.join("stat");
     let parse = |b: &[u8]| {
         parse_stat(b, pid, page_size).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -352,14 +377,38 @@ fn read_process(root: &Path, pid: u32, page_size: u64) -> io::Result<Process> {
                 .and_then(|v| v.parse::<u32>().ok())
         });
     let mut after = parse(&system_file::read(&stat, 8192)?)?;
-    if before.start_ticks != after.start_ticks {
+    let after_directory = fs::symlink_metadata(&path)?;
+    if before.start_ticks != after.start_ticks
+        || before_directory.dev() != after_directory.dev()
+        || before_directory.ino() != after_directory.ino()
+    {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "PID reused while reading",
         ));
     }
     after.uid = uid;
+    if live_namespace(root) {
+        after.identity = Some(Identity {
+            device: after_directory.dev(),
+            inode: after_directory.ino(),
+        });
+    }
     Ok(after)
+}
+
+fn live_namespace(root: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        root == Path::new("/proc")
+            && fs::read_link(root.join("self")).ok()
+                == Some(PathBuf::from(std::process::id().to_string()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = root;
+        false
+    }
 }
 
 #[cfg(test)]

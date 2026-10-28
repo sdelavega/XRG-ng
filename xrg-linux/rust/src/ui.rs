@@ -6,6 +6,8 @@ mod graph_heights;
 mod legacy_import;
 mod menus;
 mod preferences;
+mod process_actions;
+mod process_actions_smoke;
 mod processes;
 mod smoke;
 mod targets;
@@ -613,15 +615,16 @@ pub fn run(smoke_mode: bool) -> bool {
                             return glib::ControlFlow::Break;
                         }
                         println!(
-                            "GTK_SMOKE_OK samples={sequence} draws={} preferences=roundtrip",
-                            shell.draws.iter().map(|d| d.get()).sum::<u32>()
+                            "GTK_SMOKE_OK samples={sequence} draws={} {}",
+                            shell.draws.iter().map(|d| d.get()).sum::<u32>(),
+                            harness.summary()
                         );
                         passed.set(true);
                         app.quit();
                         return glib::ControlFlow::Break;
                     }
                     Err(error) => {
-                        eprintln!("GTK preferences smoke failed: {error}");
+                        eprintln!("GTK smoke failed: {error}");
                         app.quit();
                         return glib::ControlFlow::Break;
                     }

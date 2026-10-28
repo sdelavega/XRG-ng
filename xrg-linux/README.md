@@ -12,6 +12,8 @@ vertical or horizontal, with Celsius/Fahrenheit system temperature display.
 Per-core/interface/disk/GPU selectors and a sortable process table with name/UID
 filters are available in the new UI. Temperature and fan graphs can pin up to three
 independent channels, preserving color slots when selected readings disappear.
+The process table also offers confirmed terminate, force-kill, pause and resume
+actions through Linux pidfds, with kernel permission checks and no privilege escalation.
 CPU curves include total, user and system time, with load averages, scheduling-task
 counts and uptime in Live details.
 Driver-reported VRAM and fan RPM graphs, plus battery health/time details, use available

@@ -17,6 +17,7 @@ const LEGACY_FIXTURE: &str = "# Automated legacy import fixture\n[Modules]\nshow
 pub(super) struct Harness {
     root: PathBuf,
     stage: u8,
+    process_actions: Option<super::process_actions_smoke::Harness>,
     dialog: Option<Rc<Dialog>>,
     process: Option<Rc<super::processes::Window>>,
     ai: Option<Rc<super::ai::Window>>,
@@ -60,6 +61,11 @@ impl Harness {
         Ok(Self {
             root,
             stage: 0,
+            process_actions: if std::env::var("XRG_SMOKE_PROCESS_ACTIONS").as_deref() == Ok("1") {
+                Some(super::process_actions_smoke::Harness::new()?)
+            } else {
+                None
+            },
             dialog: None,
             process: None,
             ai: None,
@@ -227,7 +233,17 @@ impl Harness {
         dialog.name.set_text("Smoke custom");
         dialog.colors[2].set_rgba(&gtk::gdk::RGBA::new(0.2, 0.8, 0.9, 0.85));
     }
+    pub fn summary(&self) -> &'static str {
+        if self.process_actions.is_some() {
+            "process-controls=signals"
+        } else {
+            "preferences=roundtrip"
+        }
+    }
     pub fn tick(&mut self, shell: &Rc<Shell>, sequence: u64) -> Result<bool, String> {
+        if let Some(harness) = &mut self.process_actions {
+            return harness.tick(shell);
+        }
         let before = self.stage;
         if let Some(panel) = &self.neural_panel {
             if let Some(snapshot) = shell.state.borrow_mut().as_mut() {
