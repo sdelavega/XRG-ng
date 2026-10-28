@@ -492,7 +492,7 @@ impl Harness {
                     "Metric/process preferences did not persist",
                 )?;
                 require(
-                    loaded.version == 12 && loaded.processes.limit == 20,
+                    loaded.version == 13 && loaded.processes.limit == 20,
                     "Settings upgrade/process options lost",
                 )?;
                 self.stage = 12;
@@ -1245,7 +1245,7 @@ impl Harness {
                 )?;
                 require(
                     shell.graphs.orientation() == gtk::Orientation::Vertical
-                        && shell.scroll.hscrollbar_policy() == gtk::PolicyType::Never
+                        && shell.scroll.hscrollbar_policy() == gtk::PolicyType::Automatic
                         && loaded.temperature_units == Units::Celsius,
                     "Switching back to vertical/Celsius failed",
                 )?;
@@ -2286,6 +2286,119 @@ impl Harness {
                     super::save_snapshot(&window, &paintable, &PathBuf::from(path))?;
                 }
                 window.close();
+                let before = shell.settings.borrow().clone();
+                let dialog = shell.preferences();
+                dialog.width.set_value(1000.);
+                require(
+                    dialog.draft().graph_width == 1000,
+                    "Width control missed draft",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelled width applied",
+                )?;
+                let dialog = shell.preferences();
+                dialog.width.set_value(1000.);
+                dialog.layout.set_selected(0);
+                dialog.apply.emit_clicked();
+                let mut expected = before;
+                expected.graph_width = 1000;
+                expected.layout = Layout::Vertical;
+                require(
+                    *shell.settings.borrow() == expected,
+                    "Width changed unrelated preferences",
+                )?;
+                self.expected = Some(expected);
+                shell.window.set_default_size(680, 700);
+                shell.scroll.hadjustment().set_value(0.);
+                shell.scroll.vadjustment().set_value(0.);
+                self.stage = 53;
+            }
+            53 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&loaded) == self.expected.as_ref(),
+                    "Graph width did not persist",
+                )?;
+                require(
+                    shell
+                        .areas
+                        .iter()
+                        .all(|a| a.content_width() == 1000 && a.width() >= 1000),
+                    "Wide vertical graphs lost minimum width",
+                )?;
+                let range = shell.scroll.hadjustment();
+                require(
+                    range.upper() > range.page_size(),
+                    "Wide vertical graph clipped without a scroll range",
+                )?;
+                require(
+                    shell.window.width() < 1000,
+                    "Minimum graph width forced the whole window wider",
+                )?;
+                if let Some(path) = std::env::var_os("XRG_SMOKE_WIDTHS_VERTICAL_IMAGE") {
+                    shell.snapshot(&PathBuf::from(path))?;
+                }
+                let dialog = shell.preferences();
+                require(
+                    dialog.width.value_as_int() == 1000,
+                    "Reopened width control lost saved value",
+                )?;
+                self.dialog = Some(dialog);
+                self.stage = 54;
+            }
+            54 if self.since.elapsed() > Duration::from_millis(300) => {
+                let dialog = self.dialog.take().unwrap();
+                if let Some(path) = std::env::var_os("XRG_SMOKE_WIDTHS_PREFS_IMAGE") {
+                    dialog.snapshot(&PathBuf::from(path))?;
+                }
+                dialog.width.set_value(240.);
+                dialog.layout.set_selected(1);
+                for module in Module::ALL {
+                    dialog.check(module).set_active(matches!(
+                        module,
+                        Module::Cpu | Module::Memory | Module::Network
+                    ));
+                }
+                dialog.apply.emit_clicked();
+                self.expected = Some(shell.settings.borrow().clone());
+                shell.window.set_default_size(1000, 600);
+                shell.scroll.hadjustment().set_value(0.);
+                self.stage = 55;
+            }
+            55 if shell.saved_revision.get() == shell.revision.get()
+                && self.since.elapsed() > Duration::from_millis(300) =>
+            {
+                let (_, loaded, error) = Store::open(Some(self.preferences_path()));
+                require(
+                    error.is_none() && Some(&loaded) == self.expected.as_ref(),
+                    "Compact horizontal width did not persist",
+                )?;
+                for module in [Module::Cpu, Module::Memory, Module::Network] {
+                    let area = &shell.areas[module.index()];
+                    require(
+                        area.content_width() == 240 && area.width() >= 240 && area.width() < 1000,
+                        "Horizontal minimum width did not apply",
+                    )?;
+                }
+                if let Some(path) = std::env::var_os("XRG_SMOKE_WIDTHS_HORIZONTAL_IMAGE") {
+                    shell.snapshot(&PathBuf::from(path))?;
+                }
+                let before = shell.settings.borrow().clone();
+                let dialog = shell.preferences();
+                dialog.reset.emit_clicked();
+                require(
+                    dialog.draft().graph_width == 360,
+                    "Restoring defaults retained a custom width",
+                )?;
+                dialog.cancel.emit_clicked();
+                require(
+                    *shell.settings.borrow() == before,
+                    "Cancelled width defaults applied",
+                )?;
                 return Ok(true);
             }
             _ => (),

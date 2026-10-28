@@ -323,7 +323,9 @@ own unchanged twenty-second deadline and targets only disposable child processes
 It checks row/action state, a frozen context-menu target, cancel, pause/resume,
 selection through sorting, parent-close cancellation, terminate and force kill.
 Its process-menu, confirmation and controls screenshots are exported separately.
-Kernel-backed Rust regressions also verify stale start/UID/directory rejection,
+Width smoke checks exercise draft cancellation, Apply/reopen, default restoration,
+wide vertical scrolling and compact horizontal allocations, with screenshots of
+both layouts and the control. Kernel-backed Rust regressions also verify stale start/UID/directory rejection,
 fixture refusal and exited pidfds without numeric-PID fallback. These tests never
 signal pre-existing user processes.
 The main window, preferences, process table, both AI tabs, weather window, graph
@@ -452,6 +454,11 @@ entry opens the editor when a built-in preset is active. In Preferences:
   including for negative temperatures. Curves remain independent rather than
   stacked, and their outlines stay visible above overlapping fills. Theme colors
   and opacity apply to every style. Style changes keep the sampled histories.
+- Set **Minimum graph width** between 100 and 1200 pixels. Graphs can expand to
+  fill available space. A width larger than the viewport scrolls horizontally in
+  either layout without forcing the whole window wider. The default stays at
+  360 pixels. Width changes keep sources, sampled histories, graph order, colors
+  and individual heights. Apply/Cancel and Restore defaults cover this control.
 - Set the **Default graph height** between 64 and 240 pixels. Expand **Individual
   graph heights**, select a graph and uncheck **Use default height** to give it
   an independent height in the same range. Changing the default resizes inherited
@@ -500,8 +507,9 @@ Hidden graphs continue sampling, preserving their histories. Ordering changes th
 presentation while each graph retains its original collector. An all-hidden layout
 shows a recovery message and keeps Preferences accessible. Headless diagnostics
 continue reporting all collectors independently of these presentation preferences.
-Graph heights are minimum requests; small windows scroll. Horizontal graphs retain at
-least 360 pixels each and scroll sideways, with vertical scrolling when needed.
+Graph heights are minimum requests; small windows scroll. Graphs retain their
+chosen minimum width (360 pixels by default) in either layout and scroll sideways
+when necessary, with vertical scrolling when needed.
 Window placement/pinning is not part of these preferences.
 
 CPU choices use logical core IDs. Network choices include loopback, while the
@@ -545,7 +553,7 @@ XTF load/save behavior is unchanged.
 Theme files continue to exchange only the global seven-color palette. Per-graph
 overrides are embedded in preferences and stay intact when loading/saving a theme.
 
-Settings use version 12 JSON in the existing `settings.conf` path. Version 1/2 JSON
+Settings use version 13 JSON in the existing `settings.conf` path. Version 1/2 JSON
 still loads, preserving graph order/visibility, theme and existing source/process
 controls. VRAM and Fans are appended **hidden** when upgrading these layouts; enable
 them in Preferences. An all-hidden layout stays hidden. New installations show all
@@ -578,6 +586,10 @@ Versions 1–11 gain empty optional temperature/fan curve slots, retaining their
 saved primary sources and automatic behavior. The two optional slots require a
 primary, distinct valid source identities and exactly two nullable entries.
 Malformed new fields reject the whole file; migration writes only on explicit save.
+Versions 1–12 gain the existing 360-pixel minimum graph width without an immediate
+write. Invalid widths reject the whole document. The C app does not serialize its
+`graph_width` field; legacy import preserves the current minimum rather than
+mistaking saved window geometry for graph width.
 Writes use private temporary files and atomic replacement; a single background
 writer coalesces pending changes and flushes the latest value on normal shutdown.
 Invalid, unreadable or unsupported settings files are preserved for the session:

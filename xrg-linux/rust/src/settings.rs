@@ -401,6 +401,8 @@ pub struct Settings {
     pub theme: ThemeChoice,
     pub modules: Vec<ModuleSetting>,
     pub graph_height: u32,
+    #[serde(default = "default_graph_width")]
+    pub graph_width: u32,
     #[serde(default)]
     pub activity_bars: ActivityBars,
     #[serde(default)]
@@ -416,10 +418,13 @@ pub struct Settings {
     #[serde(default)]
     pub weather: crate::weather::Preferences,
 }
+fn default_graph_width() -> u32 {
+    360
+}
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 12,
+            version: 13,
             theme: ThemeChoice::Builtin {
                 name: "Midnight".into(),
             },
@@ -434,6 +439,7 @@ impl Default for Settings {
                 })
                 .collect(),
             graph_height: 100,
+            graph_width: default_graph_width(),
             activity_bars: ActivityBars {
                 visible: true,
                 ..ActivityBars::default()
@@ -449,11 +455,14 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 12 {
+        if self.version != 13 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
             return Err("Graph height must be between 64 and 240 pixels".into());
+        }
+        if !(100..=1200).contains(&self.graph_width) {
+            return Err("Minimum graph width must be between 100 and 1200 pixels".into());
         }
         let ids: std::collections::BTreeSet<_> = self.modules.iter().map(|m| m.id).collect();
         if ids.len() != Module::ALL.len() || self.modules.len() != Module::ALL.len() {
@@ -555,6 +564,9 @@ impl Settings {
         }
         if result.version == 11 {
             result.version = 12;
+        }
+        if result.version == 12 {
+            result.version = 13;
         }
         result.validate()?;
         Ok(result)

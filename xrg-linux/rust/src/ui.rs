@@ -138,8 +138,9 @@ impl Shell {
         empty.set_margin_end(16);
         content.append(&empty);
         let scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .overlay_scrolling(false)
             .vexpand(true)
             .child(&graphs)
             .build();
@@ -148,7 +149,7 @@ impl Shell {
         let mut draws = Vec::new();
         for module in Module::ALL {
             let area = gtk::DrawingArea::new();
-            area.set_content_width(360);
+            area.set_content_width(settings.borrow().graph_width as i32);
             area.set_hexpand(true);
             area.add_css_class("xrg-graph");
             area.update_property(&[gtk::accessible::Property::Label(module.title())]);
@@ -290,18 +291,13 @@ impl Shell {
             gtk::Orientation::Vertical
         });
         self.graphs.set_valign(gtk::Align::Start);
-        self.scroll.set_policy(
-            if horizontal {
-                gtk::PolicyType::Automatic
-            } else {
-                gtk::PolicyType::Never
-            },
-            gtk::PolicyType::Automatic,
-        );
+        self.scroll
+            .set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
         let mut previous = None::<gtk::DrawingArea>;
         for module in &settings.modules {
             let area = &self.areas[module.id.index()];
             area.set_visible(module.visible);
+            area.set_content_width(settings.graph_width as i32);
             area.set_content_height(module.effective_height(settings.graph_height) as i32);
             area.set_valign(gtk::Align::Start);
             area.set_vexpand(false);

@@ -32,6 +32,7 @@ pub(super) struct Dialog {
     modules: gtk::Box,
     rows: Vec<Row>,
     pub height: gtk::SpinButton,
+    pub width: gtk::SpinButton,
     pub graph_heights: super::graph_heights::Editor,
     pub activity: gtk::Expander,
     pub activity_visible: gtk::CheckButton,
@@ -111,6 +112,23 @@ impl Dialog {
             });
         }
         form.append(&modules);
+        let width_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let width_label = gtk::Label::new(Some("Minimum graph width (pixels)"));
+        width_label.set_hexpand(true);
+        width_label.set_xalign(0.);
+        let width = gtk::SpinButton::with_range(100., 1200., 20.);
+        width.update_property(&[gtk::accessible::Property::Label(
+            "Minimum graph width in pixels",
+        )]);
+        width_row.append(&width_label);
+        width_row.append(&width);
+        form.append(&width_row);
+        let width_note = gtk::Label::new(Some(
+            "Graphs can expand to fill available space. Wider graphs scroll horizontally in either layout; window size is separate.",
+        ));
+        width_note.set_wrap(true);
+        width_note.set_xalign(0.);
+        form.append(&width_note);
         let graph_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let label = gtk::Label::new(Some("Default graph height (pixels)"));
         label.set_hexpand(true);
@@ -281,6 +299,7 @@ impl Dialog {
             modules,
             rows,
             height,
+            width,
             graph_heights,
             activity,
             activity_visible,
@@ -388,6 +407,14 @@ impl Dialog {
                 });
             }
         }
+        let weak = Rc::downgrade(&dialog);
+        dialog.width.connect_value_changed(move |width| {
+            if let Some(dialog) = weak.upgrade()
+                && !dialog.updating.get()
+            {
+                dialog.draft.borrow_mut().graph_width = width.value_as_int() as u32;
+            }
+        });
         let weak = Rc::downgrade(&dialog);
         dialog.height.connect_value_changed(move |height| {
             if let Some(dialog) = weak.upgrade()
@@ -635,6 +662,7 @@ impl Dialog {
             previous = Some(row.widget.clone());
         }
         self.height.set_value(settings.graph_height as f64);
+        self.width.set_value(settings.graph_width as f64);
         self.graph_heights.refresh(&settings);
         self.activity_visible
             .set_active(settings.activity_bars.visible);
