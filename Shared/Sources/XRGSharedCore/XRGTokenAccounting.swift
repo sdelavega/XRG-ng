@@ -24,7 +24,7 @@
 import Foundation
 
 /// A source's cumulative usage. A total may include tokens without a known split.
-public struct XRGTokenUsage: Equatable, Sendable {
+public struct XRGTokenUsage: Codable, Equatable, Sendable {
     public var input: UInt64
     public var output: UInt64
     public var total: UInt64
@@ -38,7 +38,7 @@ public struct XRGTokenUsage: Equatable, Sendable {
 /// First reads, replaced sources and decreasing totals establish a new baseline.
 /// Missing reads break continuity. Model metadata never adds to the provider total.
 public struct XRGTokenAccounting: Sendable {
-    public struct Delta: Equatable, Sendable {
+    public struct Delta: Encodable, Equatable, Sendable {
         public let usage: XRGTokenUsage
         public let models: [String: UInt64]
     }

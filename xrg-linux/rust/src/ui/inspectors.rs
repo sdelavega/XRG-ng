@@ -178,6 +178,15 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
     }
     if app.show_ai {
         app.show_ai = window(ctx, "ai", "XRG-ng · AI usage", [720., 600.], |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Reset session counters").clicked() {
+                    app.worker.ai_control().reset_session();
+                }
+                if ui.button("Reset daily counters").clicked() {
+                    app.worker.ai_control().reset_daily();
+                }
+            });
+            ui.label("Counter resets preserve graphs and historical provider totals. The next complete sample establishes a new baseline.");
             let mut show_models = app.settings.ai_show_model_breakdown;
             if ui
                 .checkbox(&mut show_models, "Show model breakdown")
@@ -193,7 +202,10 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
                 .snapshot
                 .as_ref()
                 .and_then(|s| s.ai.as_ref())
-                .filter(|a| a.preferences == app.settings.ai)
+                .filter(|a| {
+                    a.preferences == app.settings.ai
+                        && a.control_revision == app.worker.ai_control().revision()
+                })
             {
                 report_text(ui, update.detail_for(show_models));
             } else {

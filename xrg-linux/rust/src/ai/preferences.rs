@@ -17,6 +17,7 @@ pub enum ClaudeSource {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
+    pub accounting: super::accounting::Preferences,
     pub enabled: [bool; 4],
     pub ollama: bool,
     pub claude_source: ClaudeSource,
@@ -31,6 +32,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            accounting: super::accounting::Preferences::default(),
             enabled: [true; 4],
             ollama: true,
             claude_source: ClaudeSource::Auto,
@@ -45,7 +47,15 @@ impl Default for Preferences {
     }
 }
 impl Preferences {
+    pub fn same_sources(&self, other: &Self) -> bool {
+        let mut a = self.clone();
+        let mut b = other.clone();
+        a.accounting = Default::default();
+        b.accounting = Default::default();
+        a == b
+    }
     pub fn validate(&self) -> Result<(), String> {
+        self.accounting.validate()?;
         for path in [
             &self.claude_logs,
             &self.claude_database,

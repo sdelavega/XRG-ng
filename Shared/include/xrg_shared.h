@@ -36,6 +36,18 @@ int32_t xrg_history_copy(void *handle, double *output, uint32_t capacity);
 void *xrg_rate_create(void);
 void xrg_rate_free(void *handle);
 uint32_t xrg_rate_sample(void *handle, uint32_t key, uint64_t counter, double time, uint64_t *delta);
+/* Observed token deltas: thread-confined ledger; reset changes baselines only.
+ * JSON request {provider,source,usage:{input,output,total}|null,models:{name:count}}.
+ * Max 1 MiB input, provider 1..64 bytes, source <=4096, <=256 named models,
+ * names 1..1024 UTF-8 bytes, no controls. JSON response {delta?:{usage,models}};
+ * absent delta means baseline/no growth. Missing/invalid usage breaks continuity.
+ * Returns response byte count, -1 invalid args, -2 short buffer. Failure leaves
+ * output AND ledger unchanged, so callers can retry with a larger buffer. */
+void *xrg_accounting_create(void);
+void xrg_accounting_free(void *handle);
+int32_t xrg_accounting_reset(void *handle);
+int32_t xrg_accounting_sample(void *handle, const uint8_t *bytes, uint32_t length,
+    uint8_t *output, uint32_t capacity);
 uint32_t xrg_theme_count(void);
 int32_t xrg_theme_name(uint32_t index, uint8_t *output, uint32_t capacity);
 /* Seven RGBA colors (28 doubles) in background, graphBG, FG1, FG2, FG3, border, text order. */

@@ -8,9 +8,10 @@ also rejects those libraries in the ELF runtime dependency closure.
 The compact dashboard retains the macOS layout and the original **Classic**
 palette: 140-pixel graph width, 90-pixel default height, draggable hostname band,
 overlaid readings, thin separators and optional current-value / CPU-core bars.
-All thirteen modules remain available. Saved schema-21 settings, source identities,
-module order, colors, heights, JSON themes and original XRG XTF imports are reused.
-No settings migration or automatic preference write is needed for the toolkit change.
+All thirteen modules remain available. Schema-21 settings migrate in memory to
+schema 22 with observed AI accounting and desktop alerts disabled by default;
+the next normal preferences save writes the new schema. Existing source identities,
+module order, colors, heights, JSON themes and original XRG XTF imports are retained.
 
 The C/GTK3 application, its CMake build and the uncompiled GTK4 reference tree
 have been retired from the checkout. The current application has no fallback
@@ -94,7 +95,7 @@ and contributions are welcome. See the [project support policy](../../README.md#
   `Shared/include/xrg_shared.h` documents ownership and capacities. No C
   implementation or shared Swift/Rust object layout is required. The first ABI
   exposes histories, rates, themes, provider usage records, local metrics and model
-  inventories, model-attributed usage records, station validation and dated METAR observations. Missing weather
+  inventories, model-attributed usage records, observed token deltas, station validation and dated METAR observations. Missing weather
   values have explicit validity flags, so a valid zero is not treated as absent.
 - **Rust:** owns `/proc` and `/sys` collection, egui painting, configuration and
   lifecycle. System and AI workers create/own their mutable Swift handles. They send only copied
@@ -687,9 +688,49 @@ reports. Preferences retains provider enablement, Claude source selection, optio
 log/database paths, loopback metrics/Ollama endpoints and the display-only model
 breakdown. The display toggle preserves sources and token histories. Scanning,
 SQLite, HTTP and Swift parsing remain outside the UI thread. Disabled, unsupported
-attribution and unavailable cost/activity states remain explicit. Detailed backend
-accounting and historical validation are recorded in the historical documentation;
-the toolkit change does not modify those collectors.
+attribution and unavailable cost/activity states remain explicit.
+
+### Observed session/daily counters and budgets
+
+Enable **Track observed session/daily usage** in Preferences → AI. The separate
+desktop-alert checkbox is also off by default. The AI usage inspector provides
+independent session/daily resets, exact input/output and unknown-split counts,
+available daily model/provider aggregates, budget progress, persistence errors and
+notification status. Compact AI graphs show session and daily totals. Accounting
+continues in the AI worker while the graph is hidden; UI refreshes cannot drop
+usage events. Budget or aggregation changes preserve provider graphs and rates.
+
+The delta ledger is the same portable Swift implementation used by macOS, reached
+through a bounded, thread-confined ABI. First complete samples establish baselines
+without importing historical usage. Failed reads, source/counter changes and
+tracking transitions break continuity. Session/daily resets discard observations
+already in flight and establish fresh baselines while preserving graph histories
+and historical provider totals. Midnight auto-reset uses the local calendar day;
+tokens are assigned when observed, not by reconstructing event timestamps. Gaps,
+log edits and baseline transitions can undercount activity. These are not invoices.
+Ollama inventories supply no token counter. Model metadata never adds tokens to
+the provider total; late/inconsistent attribution stays unknown.
+
+Daily totals and the once-per-day alert marker are saved atomically with private
+file permissions in `$XDG_STATE_HOME/xrg-ng/ai-usage.json`, falling back to
+`~/.local/state/xrg-ng/ai-usage.json`. Session counters start at zero each launch.
+A separate advisory lock allows one owner; competing instances retain in-memory
+counters with an explicit persistence warning and no desktop alerts. Invalid,
+unsupported, unreadable or externally changed files are preserved. Save failures
+are shown in the inspector and suppress notifications. Daily model aggregates
+retain at most 256 names; truncation is marked without losing provider totals.
+Disabling aggregation retains earlier rows and stops adding new ones until enabled.
+
+A positive budget and desktop-alert opt-in enable one attempt per local day
+(or after Reset Daily), once the observed threshold is crossed. The marker is
+saved before delivery. Alerts use the
+[freedesktop notification interface](https://specifications.freedesktop.org/notification/latest/)
+directly through Rust/zbus, without GTK, GLib or libnotify. Connection and reply
+share a one-second deadline. Missing services, denials and timeouts are explicit;
+there is no automatic retry that day. Acceptance by the service does not guarantee
+a visible banner; desktop policy, do-not-disturb and notification settings apply.
+Fixtures exercise a private D-Bus daemon; normal tests do not contact the user's
+notification service or change desktop preferences.
 
 ### Resumable JSONL scans
 

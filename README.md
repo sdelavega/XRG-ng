@@ -165,9 +165,22 @@ Use **Allow Budget Notifications…** in Mac AI preferences to request macOS ale
 permission. A positive daily budget emits at most one threshold alert per day
 (or after Reset Daily); zero disables it. Delivery follows macOS authorization and
 notification settings. A denied alert is not retried for that day's threshold.
-Permission is never requested by background sampling or smoke tests. Linux still
-has observed provider rates/model details; persistent daily budgets and desktop
-budget alerts remain a parity task.
+Permission is never requested by background sampling or smoke tests.
+
+Linux now has the same observed session/daily accounting rules, independent
+resets and token budgets. Enable tracking in **Preferences → AI**; desktop alerts
+have a separate, default-off checkbox. **AI usage…** shows exact totals, unknown
+splits, daily model/provider aggregates, persistence errors and notification
+status, with Reset Session and Reset Daily buttons. Linux collection continues
+while the graph is hidden. Its daily state lives in
+`$XDG_STATE_HOME/xrg-ng/ai-usage.json` (default `~/.local/state/xrg-ng`); session
+totals restart with the app. An exclusive lock prevents competing instances from
+overwriting daily totals or duplicating alerts. Corrupt or externally changed
+state is preserved, counters continue in memory, and alerts are suppressed until
+state can be saved. Linux alerts use the standard desktop D-Bus interface directly
+from Rust, without GTK or libnotify; a notification service must be running.
+Delivery is attempted once per threshold day, with a one-second deadline and no
+automatic retry. Desktop notification settings determine whether a banner appears.
 
 ### How It Works
 

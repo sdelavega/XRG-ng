@@ -63,15 +63,24 @@ Implemented in development for monitoring tools:
   delta helper covers counter corrections and attribution bounds. Mac native budget
   alerts have an explicit permission action and respect OS authorization. Mac cost
   menus now label estimates and source values instead of claiming current pricing.
+- Linux now uses the same Swift delta ledger through an additive, thread-confined
+  ABI. AI preferences enable observed accounting and optional desktop alerts;
+  the AI inspector has independent session/daily resets, exact splits/unknowns,
+  daily aggregates and persistence/delivery status. Daily state is private and
+  locked against competing instances; invalid/changed files are preserved and
+  persistence failures suppress alerts. Resets/settings changes arriving during
+  collection discard that observation. Budget changes preserve graph histories
+  and rate baselines. Native notifications use Rust D-Bus with a one-second
+  deadline, independent of the egui redraw cycle and graph visibility.
 
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
    source selection, counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
-2. AI accounting: expose the shared delta contract to Rust and add Linux persistent
-   daily/session counters, resets, budgets and native notifications. Align source
-   continuity/model attribution and Mac/Linux observed windows. Mac Codex still
+2. AI accounting: align source continuity/model attribution and Mac/Linux observed
+   windows. Linux samples independently of graph visibility; Mac still needs its
+   AI graph sampled. Mac Codex still
    lacks model/input-output attribution; Ollama inventory is not token accounting.
    Mac log scans retain their last complete snapshot through failed scans, while
    database/endpoint failure breaks accounting continuity. Keep cost estimates

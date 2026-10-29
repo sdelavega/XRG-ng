@@ -37,7 +37,7 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["version"],
-        21
+        22
     );
     std::fs::remove_dir_all(&root).unwrap();
     assert!(

@@ -3,6 +3,16 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_accounting_create() -> *mut c_void;
+    fn xrg_accounting_free(handle: *mut c_void);
+    fn xrg_accounting_reset(handle: *mut c_void) -> i32;
+    fn xrg_accounting_sample(
+        handle: *mut c_void,
+        bytes: *const u8,
+        length: u32,
+        output: *mut u8,
+        capacity: u32,
+    ) -> i32;
     fn xrg_provider_details_parse(
         bytes: *const u8,
         length: u32,
@@ -327,7 +337,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
@@ -436,5 +446,67 @@ pub fn metrics_sample(text: &str) -> Option<(u64, Option<f64>)> {
         None
     } else {
         Some((tokens, (flags & 2 != 0).then_some(cost)))
+    }
+}
+
+/// Thread-confined Swift ledger, shared with the Mac counters.
+pub struct TokenLedger {
+    handle: NonNull<c_void>,
+    _local: PhantomData<Rc<()>>,
+}
+#[derive(Clone, Debug, serde::Deserialize, PartialEq)]
+pub struct TokenDelta {
+    pub usage: Usage,
+    pub models: std::collections::BTreeMap<String, u64>,
+}
+impl Default for TokenLedger {
+    fn default() -> Self {
+        Self {
+            handle: NonNull::new(unsafe { xrg_accounting_create() })
+                .expect("token ledger allocation"),
+            _local: PhantomData,
+        }
+    }
+}
+impl TokenLedger {
+    pub fn reset(&mut self) {
+        assert_eq!(unsafe { xrg_accounting_reset(self.handle.as_ptr()) }, 0);
+    }
+    pub fn sample(
+        &mut self,
+        provider: &str,
+        source: &str,
+        usage: Option<Usage>,
+        models: &std::collections::BTreeMap<String, u64>,
+    ) -> Result<Option<TokenDelta>, String> {
+        let request =
+            serde_json::json!({"provider":provider,"source":source,"usage":usage,"models":models});
+        let bytes = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+        let mut output = vec![0u8; 1_048_576];
+        let length = u32::try_from(bytes.len()).map_err(|_| "Token ledger input too large")?;
+        let count = unsafe {
+            xrg_accounting_sample(
+                self.handle.as_ptr(),
+                bytes.as_ptr(),
+                length,
+                output.as_mut_ptr(),
+                output.len() as u32,
+            )
+        };
+        if count < 0 {
+            return Err("Token accounting rejected invalid source data".into());
+        }
+        #[derive(serde::Deserialize)]
+        struct Response {
+            delta: Option<TokenDelta>,
+        }
+        serde_json::from_slice::<Response>(&output[..count as usize])
+            .map(|r| r.delta)
+            .map_err(|e| e.to_string())
+    }
+}
+impl Drop for TokenLedger {
+    fn drop(&mut self) {
+        unsafe { xrg_accounting_free(self.handle.as_ptr()) }
     }
 }

@@ -191,6 +191,11 @@ impl Harness {
                 }
                 1 if std::env::var_os("XRG_SMOKE_STYLE").is_none() => {
                     app.preferences();
+                    if std::env::var_os("XRG_SMOKE_AI_PREFS").is_some()
+                        && let Some(editor) = &mut app.preferences
+                    {
+                        editor.tab = 3;
+                    }
                     app.show_processes = true;
                     app.show_sensors = true;
                     app.show_ai = true;

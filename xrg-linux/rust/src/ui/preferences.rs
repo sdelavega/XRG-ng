@@ -19,7 +19,7 @@ enum Loaded {
 }
 pub(super) struct Editor {
     pub draft: Settings,
-    tab: usize,
+    pub(super) tab: usize,
     theme_path: PathField,
     legacy_path: PathField,
     pub(super) picker: Option<Picker>,
@@ -680,6 +680,38 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
 }
 fn ai(ui: &mut egui::Ui, s: &mut Settings) {
     ui.heading("AI monitoring");
+    ui.checkbox(
+        &mut s.ai.accounting.enabled,
+        "Track observed session/daily usage",
+    );
+    ui.checkbox(
+        &mut s.ai.accounting.auto_reset,
+        "Reset daily counters at local midnight",
+    );
+    ui.horizontal(|ui| {
+        let label = ui.label("Daily token budget (0 disables)");
+        ui.add(egui::DragValue::new(&mut s.ai.accounting.daily_budget).range(0..=u64::MAX))
+            .labelled_by(label.id);
+    });
+    ui.horizontal(|ui| {
+        let label = ui.label("Budget alert threshold (%)");
+        ui.add(egui::DragValue::new(&mut s.ai.accounting.notify_percent).range(1..=100))
+            .labelled_by(label.id);
+    });
+    ui.checkbox(
+        &mut s.ai.accounting.notifications,
+        "Send desktop budget alerts",
+    );
+    ui.checkbox(
+        &mut s.ai.accounting.by_model,
+        "Aggregate daily usage by model",
+    );
+    ui.checkbox(
+        &mut s.ai.accounting.by_provider,
+        "Aggregate daily usage by provider",
+    );
+    ui.label("Counters exclude initial history; gaps/edits can undercount. Collection continues while the graph is hidden. Desktop alerts require a notification service and follow desktop settings.");
+    ui.separator();
     for (i, name) in ["Claude", "Codex", "Gemini", "Hermes"]
         .into_iter()
         .enumerate()

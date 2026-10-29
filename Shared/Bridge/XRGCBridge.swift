@@ -183,3 +183,43 @@ import Foundation
     cost.pointee = result.cost
     return (result.hasTokenSamples ? 1 : 0) | (result.hasCostSamples ? 2 : 0)
 }
+
+// Additive ABI v1 accounting. Copy the value ledger before sampling so a short
+// output buffer cannot consume a delta. No Swift value layout crosses the ABI.
+private final class TokenLedgerBox {
+    var ledger = XRGTokenAccounting()
+}
+private struct TokenLedgerRequest: Decodable {
+    let provider: String
+    let source: String
+    let usage: XRGTokenUsage?
+    let models: [String: UInt64]
+}
+private struct TokenLedgerResponse: Encodable { let delta: XRGTokenAccounting.Delta? }
+@c(xrg_accounting_create) public func accountingCreate() -> UnsafeMutableRawPointer {
+    Unmanaged.passRetained(TokenLedgerBox()).toOpaque()
+}
+@c(xrg_accounting_free) public func accountingFree(_ handle: UnsafeMutableRawPointer?) {
+    if let handle { Unmanaged<TokenLedgerBox>.fromOpaque(handle).release() }
+}
+@c(xrg_accounting_reset) public func accountingReset(_ handle: UnsafeMutableRawPointer?) -> Int32 {
+    guard let handle else { return -1 }
+    Unmanaged<TokenLedgerBox>.fromOpaque(handle).takeUnretainedValue().ledger = XRGTokenAccounting()
+    return 0
+}
+@c(xrg_accounting_sample) public func accountingSample(_ handle: UnsafeMutableRawPointer?,
+    _ bytes: UnsafePointer<UInt8>?, _ length: UInt32, _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
+    guard let handle, let bytes, let output, length <= 1_048_576,
+          let request = try? JSONDecoder().decode(TokenLedgerRequest.self, from: Data(bytes: bytes, count: Int(length))),
+          !request.provider.isEmpty, request.provider.utf8.count <= 64, request.source.utf8.count <= 4096,
+          request.models.count <= 256,
+          request.models.keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 1024 && $0.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) } }) else { return -1 }
+    let box = Unmanaged<TokenLedgerBox>.fromOpaque(handle).takeUnretainedValue()
+    var ledger = box.ledger
+    let delta = ledger.sample(provider: request.provider, source: request.source, usage: request.usage, models: request.models)
+    guard let data = try? JSONEncoder().encode(TokenLedgerResponse(delta: delta)) else { return -1 }
+    guard data.count <= capacity else { return -2 }
+    for (index, byte) in data.enumerated() { output[index] = byte }
+    box.ledger = ledger
+    return Int32(data.count)
+}

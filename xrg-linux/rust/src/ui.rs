@@ -97,7 +97,13 @@ impl App {
     fn panel(&self, module: Module) -> Option<&Panel> {
         self.snapshot
             .as_ref()
-            .filter(|s| snapshot_matches(s, &self.settings, module))
+            .filter(|s| {
+                snapshot_matches(s, &self.settings, module)
+                    && (module != Module::Ai
+                        || s.ai.as_ref().is_none_or(|a| {
+                            a.control_revision == self.worker.ai_control().revision()
+                        }))
+            })
             .and_then(|s| s.panels.get(module.index()))
     }
     fn preferences(&mut self) {

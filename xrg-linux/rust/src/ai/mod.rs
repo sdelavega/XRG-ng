@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Optional AI monitoring. A separate worker prevents scans/SQLite/local APIs
 //! from delaying system collection or the UI. Tests inject roots and API responses.
+pub mod accounting;
 pub mod database;
+mod desktop_alert;
 pub mod logs;
 mod models;
 mod preferences;
@@ -303,10 +305,14 @@ impl Display {
         self.panel_for(report, time, &Preferences::default())
     }
     pub fn panel_for(&mut self, report: Report, time: f64, preferences: &Preferences) -> Panel {
-        if self.preferences.as_ref() != Some(preferences) {
+        if self
+            .preferences
+            .as_ref()
+            .is_none_or(|p| !p.same_sources(preferences))
+        {
             *self = Self::default();
-            self.preferences = Some(preferences.clone());
         }
+        self.preferences = Some(preferences.clone());
         let mut detail = vec!["Token totals cover locally retained logs/database rows, not account billing. Graph: observed token-counter change per second, sampled every 5 s; log writes may arrive in bursts. Costs are shown only when recorded by the source.".to_owned()];
         let mut readout = crate::dashboard::Readout::default();
         readout
@@ -398,19 +404,60 @@ impl Display {
         }
     }
 }
+enum Wake {
+    Refresh,
+    Stop,
+}
+#[derive(Default)]
+struct ControlState {
+    preferences: Option<Preferences>,
+    session: bool,
+    daily: bool,
+    revision: u64,
+    wake: Option<mpsc::Sender<Wake>>,
+    wake_pending: bool,
+}
 #[derive(Clone, Default)]
-pub struct Control(Arc<Mutex<Option<Preferences>>>);
+pub struct Control(Arc<Mutex<ControlState>>);
+impl ControlState {
+    fn signal(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        if !self.wake_pending {
+            if let Some(wake) = &self.wake {
+                let _ = wake.send(Wake::Refresh);
+            }
+            self.wake_pending = true;
+        }
+    }
+}
 impl Control {
     pub fn set(&self, preferences: Preferences) -> Result<(), String> {
         preferences.validate()?;
-        *self.0.lock().unwrap() = Some(preferences);
+        let mut state = self.0.lock().unwrap();
+        state.preferences = Some(preferences);
+        state.signal();
         Ok(())
+    }
+    pub fn reset_session(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.session = true;
+        state.signal();
+    }
+    pub fn reset_daily(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.daily = true;
+        state.signal();
+    }
+    pub fn revision(&self) -> u64 {
+        self.0.lock().unwrap().revision
     }
 }
 #[derive(Clone, Debug)]
 pub struct Update {
     pub preferences: Preferences,
     pub graph_generation: u64,
+    pub control_revision: u64,
+    pub accounting: accounting::Snapshot,
     pub panel: Panel,
     pub report: Arc<Report>,
     pub detail: String,
@@ -423,6 +470,8 @@ impl Update {
         Self {
             preferences,
             graph_generation: 0,
+            control_revision: 0,
+            accounting: accounting::Snapshot::default(),
             panel,
             detail,
             summary_detail,
@@ -560,7 +609,7 @@ pub fn waiting() -> Panel {
 pub struct Worker {
     pub latest: Arc<Mutex<Option<Update>>>,
     graph_generation: Arc<std::sync::atomic::AtomicU64>,
-    stop: Option<mpsc::Sender<()>>,
+    stop: Option<mpsc::Sender<Wake>>,
     join: Option<thread::JoinHandle<()>>,
 }
 impl Worker {
@@ -576,13 +625,30 @@ impl Worker {
         Self::controlled_with_api(config, Preferences::default(), Control::default(), api)
     }
     pub fn controlled(config: Config, preferences: Preferences, control: Control) -> Self {
-        Self::controlled_with_api(config, preferences, control, CurlApi::default())
+        Self::controlled_impl(
+            config,
+            preferences,
+            control,
+            CurlApi::default(),
+            accounting::state_path(),
+            desktop_alert::send,
+        )
     }
     fn controlled_with_api(
+        config: Config,
+        preferences: Preferences,
+        control: Control,
+        api: impl LocalApi + Send + 'static,
+    ) -> Self {
+        Self::controlled_impl(config, preferences, control, api, None, |_| Ok(()))
+    }
+    fn controlled_impl(
         config: Config,
         mut preferences: Preferences,
         control: Control,
         mut api: impl LocalApi + Send + 'static,
+        state_path: Option<PathBuf>,
+        mut notify: impl FnMut(f64) -> Result<(), String> + Send + 'static,
     ) -> Self {
         preferences.validate().expect("Validated AI preferences");
         let latest = Arc::new(Mutex::new(None));
@@ -590,33 +656,109 @@ impl Worker {
         let graph_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let graph_updates = graph_generation.clone();
         let (stop, receiver) = mpsc::channel();
+        control.0.lock().unwrap().wake = Some(stop.clone());
         let join = thread::spawn(move || {
             let mut collector = Collector::configured(config.clone(), preferences.clone())
                 .expect("Validated AI preferences");
             let mut display = Display::default();
             let start = Instant::now();
             let mut generation = 0;
+            let mut accountant: Option<accounting::Accountant> = None;
             loop {
                 let next = Instant::now() + Duration::from_secs(5);
-                if let Some(next) = control.0.lock().unwrap().take() {
+                let (requested_preferences, session_reset, daily_reset, revision) = {
+                    let mut state = control.0.lock().unwrap();
+                    while let Ok(message) = receiver.try_recv() {
+                        if matches!(message, Wake::Stop) {
+                            return;
+                        }
+                    }
+                    state.wake_pending = false;
+                    (
+                        state.preferences.take(),
+                        std::mem::take(&mut state.session),
+                        std::mem::take(&mut state.daily),
+                        state.revision,
+                    )
+                };
+                if let Some(next) = requested_preferences {
+                    if !preferences.same_sources(&next) {
+                        collector = Collector::configured(config.clone(), next.clone())
+                            .expect("Validated AI update");
+                        display = Display::default();
+                    }
                     preferences = next;
-                    collector = Collector::configured(config.clone(), preferences.clone())
-                        .expect("Validated AI update");
-                    display = Display::default();
+                }
+                let day = accounting::local_day();
+                if (preferences.accounting.enabled || session_reset || daily_reset)
+                    && accountant.is_none()
+                    && let Ok(day) = &day
+                {
+                    accountant = Some(accounting::Accountant::open(
+                        state_path.clone(),
+                        preferences.clone(),
+                        day,
+                    ));
+                }
+                if let Some(a) = &mut accountant {
+                    a.configure(&preferences);
+                    if let Ok(day) = &day {
+                        a.reset(session_reset, daily_reset, day);
+                    }
                 }
                 let report = collector.sample(&mut api);
+                // A reset/settings change arriving during a scan invalidates that
+                // entire observation. The next complete read is a fresh baseline.
+                if control.revision() != revision {
+                    continue;
+                }
+                let mut counters = accounting::Snapshot::default();
+                if let Some(a) = &mut accountant {
+                    match accounting::local_day() {
+                        Ok(day) => {
+                            if let Some(percent) = a.observe(&report, &day)
+                                && control.revision() == revision
+                            {
+                                a.set_notification_status(notify(percent));
+                            }
+                        }
+                        Err(error) => a.break_continuity(error),
+                    }
+                    counters = a.snapshot();
+                } else if preferences.accounting.enabled {
+                    counters.enabled = true;
+                    counters.persistence_error = day.err();
+                }
                 let requested = graph_updates.load(std::sync::atomic::Ordering::Acquire);
                 if requested != generation {
                     display.clear_graph();
                     generation = requested;
                 }
-                let panel =
+                let mut panel =
                     display.panel_for(report.clone(), start.elapsed().as_secs_f64(), &preferences);
+                panel.detail.push_str("\n\n");
+                panel
+                    .detail
+                    .push_str(&counters.detail(&preferences.accounting));
+                if counters.enabled {
+                    panel.readout.bottom.push(crate::dashboard::Row::new(
+                        "Session",
+                        compact(counters.session.total()),
+                    ));
+                    panel.readout.bottom.push(crate::dashboard::Row::new(
+                        "Daily",
+                        compact(counters.daily.total()),
+                    ));
+                }
                 let mut update = Update::new(preferences.clone(), panel, report);
                 update.graph_generation = generation;
-                *output.lock().unwrap() = Some(update);
+                update.control_revision = revision;
+                update.accounting = counters;
+                if control.revision() == revision {
+                    *output.lock().unwrap() = Some(update);
+                }
                 match receiver.recv_timeout(next.saturating_duration_since(Instant::now())) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => (),
+                    Ok(Wake::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => (),
                     _ => break,
                 }
             }
@@ -632,7 +774,7 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
+            let _ = stop.send(Wake::Stop);
         }
         if let Some(join) = self.join.take() {
             join.join().expect("AI worker panicked");
@@ -864,3 +1006,6 @@ mod tests {
         server.join().unwrap();
     }
 }
+
+#[cfg(test)]
+mod worker_accounting_tests;

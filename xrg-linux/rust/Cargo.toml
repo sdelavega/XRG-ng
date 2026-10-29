@@ -10,6 +10,9 @@ default = []
 egui-ui = ["dep:eframe", "dep:png", "dep:raw-window-handle"]
 
 [dependencies]
+async-io = "2.6.0"
+futures-lite = "2.6.1"
+zbus = { version = "5.19.0", default-features = false, features = ["async-io"] }
 libc = "0.2"
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "wayland", "x11"], optional = true }
 png = { version = "0.18", optional = true }
