@@ -21,9 +21,43 @@ sudo apt-get update
 sudo apt-get install libgl1 libegl1 libgl1-mesa-dri libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-6 libxcursor1 libxi6 libxrandr2 libstdc++6 libgcc-s1 python3 curl ca-certificates
 ```
 
-Python 3.11+ is only used by the optional install/uninstall scripts. Running directly
+Python 3.11+ is only used by the optional archive install/uninstall scripts. Running directly
 from the extracted archive requires a POSIX shell and coreutils, not Python.
 Graphical launch needs a desktop session. The desktop binary loads its windowing/graphics libraries even in headless mode.
+
+## Native Ubuntu package (preview)
+
+Each architecture's CI artifact includes a `.deb` and `.deb.sha256` alongside the
+existing archive. Native packages target **fully updated Ubuntu 24.04**, with
+`amd64` for x86-64 and `arm64` for aarch64. Other distributions are not validated.
+Choose the matching package, check its checksum, then install it with APT so
+system dependencies are resolved:
+
+```sh
+sha256sum -c xrg-ng_*.deb.sha256
+sudo apt install ./xrg-ng_*_amd64.deb
+# On ARM64, use the matching *_arm64.deb instead.
+/usr/bin/xrg-ng-linux
+```
+
+The application and private Swift runtime install under `/usr/lib/xrg-ng`; the
+launcher, desktop entry and icon use standard `/usr` paths. No Swift, Rust or
+Python toolchain is needed to run it. Source, provenance and license notices are
+included under `/usr/share/doc/xrg-ng`. Systems configured to exclude
+documentation during installation may omit those installed files; the `.deb`
+still contains them and `dpkg-deb --extract` can recover them.
+
+Native package versions include the source commit timestamp/hash and a packaging
+revision, for example `0.1.0~preview.<timestamp>.g<commit>-1`; the application still
+reports `0.1.0`. Install a newer package with the same `apt install ./...deb`
+command. To remove it, use `sudo apt remove xrg-ng` (or `sudo apt purge xrg-ng`).
+User preferences, provider data, the legacy app and per-user archive installations
+remain untouched. An existing `~/.local` installation can still take precedence in
+your PATH or application menu; use that installation's own uninstall script if
+you want the system package to become the default.
+
+These are unsigned preview packages with corruption checksums, not a signed APT
+repository or tagged Linux release. The archive remains supported independently.
 
 ## Verify, extract and run
 
@@ -43,7 +77,7 @@ executable alone will lose its private libraries. The launcher also works after
 moving the extracted directory, including paths with spaces.
 
 Use **AI…** for provider totals, recorded Claude/Gemini/Hermes token breakdowns by
-model, Ollama inventories and saved source settings.
+model, evidence-based Codex model breakdowns, Ollama inventories and saved source settings.
 Preferences → AI can disable providers, override local data paths and select local
 HTTP endpoints. These controls and their limits are described in
 `share/doc/xrg-ng/DEVELOPMENT.md`.

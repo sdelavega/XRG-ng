@@ -512,6 +512,31 @@ python3 Tools/package-linux.py --binary /absolute/path/to/release/xrg-ng-linux \
   --swift-library /absolute/path/to/libXRGSharedCore.so
 ```
 
+Add `--deb` on Ubuntu 24.04 to also create an `amd64` or `arm64` native preview
+from the same verified payload. CI publishes both formats and their checksums.
+The `.deb` includes the private runtime, corresponding source and notices, uses
+standard `/usr` paths and has no maintainer scripts or configuration files in
+user homes. `--deb-revision N` selects a positive packaging revision (default 1).
+System-library lower bounds conservatively match the installed build-image
+packages; graphics/windowing dependencies loaded at runtime are declared
+explicitly. A newly linked system library without a package mapping stops the
+native build. Packages target fully updated Ubuntu 24.04, not arbitrary Debian
+derivatives. See the [preview guide](../preview/README.md#native-ubuntu-package-preview)
+for installation, removal and coexistence with a per-user archive installation.
+
+Native packaging uses [dpkg-deb](https://manpages.debian.org/trixie/dpkg/dpkg-deb.1.en.html)
+with root ownership metadata and a source-commit timestamp/hash in its preview
+version. Standard-library unit tests cover input integrity, missing source/notices,
+ELF architecture, control metadata, ownership, version ordering and deterministic
+wrapping of identical fixture inputs. These do not establish reproducibility of
+the entire application build. Runtime-only CI lets APT resolve the package's
+dependencies, verifies the installed payload, and launches the desktop and chooser
+flows under an ordinary UID. It tests a synthetic higher packaging revision with
+the same application bytes, removal/purge, and preservation of user/legacy data.
+Ubuntu's minimal container excludes documentation by default; the test passes
+package-specific include options to retain and verify all source/notices without
+editing global dpkg settings. Both native and archive gates remain required.
+
 ## Graph actions and live details
 
 Drag the hostname to move the dashboard. The title menu opens Preferences,
@@ -816,6 +841,7 @@ forecast. Requests remain off by default. No location detection is performed.
   raw thermistor calibration and optional process priority controls.
 - Broader large-log/discovery coverage and Codex protocol compatibility,
   optional price tables, broader XTF color spaces and legacy-field mappings.
-- Signed/tagged Linux releases and native distribution packages before retiring
-  the preview distribution path. Hardware support remains best effort;
+- Signed/tagged Linux releases, a signed package repository and additional native
+  distribution formats. Ubuntu 24.04 `.deb` previews now accompany the archives;
+  both installation paths remain supported. Hardware support remains best effort;
   feedback is welcome and encouraged.

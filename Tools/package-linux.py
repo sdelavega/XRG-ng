@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from linux_deb import build_deb
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -68,6 +69,7 @@ def package(args):
     if status and not args.allow_dirty:
         raise ValueError("Package a clean committed checkout, or use --allow-dirty for local development")
     revision = run("git", "-C", str(ROOT), "rev-parse", "HEAD")
+    epoch = int(run("git", "-C", str(ROOT), "show", "-s", "--format=%ct", revision))
     metadata = json.loads(run("cargo", "metadata", "--manifest-path", str(ROOT / "xrg-linux/rust/Cargo.toml"),
                               "--locked", "--all-features", "--format-version", "1"))
     project = next(p for p in metadata["packages"] if p["name"] == "xrg-ng-linux" and p["source"] is None)
@@ -200,6 +202,7 @@ def package(args):
         manifest = {
             "format": "xrg-ng-linux-preview", "version": project["version"],
             "architecture": arch, "revision": revision, "dirty": bool(status),
+            "source_epoch": epoch,
             "swift": target["compilerVersion"], "rust": run("rustc", "--version"),
             "baseline": "Ubuntu 24.04; glibc; OpenGL / EGL; X11 or Wayland; no GTK/GSK/Cairo",
             "bundled_libraries": sorted(bundled),
@@ -208,12 +211,17 @@ def package(args):
             "files": {str(p.relative_to(bundle)): digest(p) for p in sorted(bundle.rglob("*")) if p.is_file()},
         }
         (bundle / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        native = build_deb(bundle, output, epoch, revision=args.deb_revision, allow_dirty=args.allow_dirty) if args.deb else None
         make_tar(bundle, archive)
     checksum.write_text(f"{digest(archive)}  {archive.name}\n")
     print(f"LINUX_PACKAGE_OK {archive}")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write(f"archive={archive}\nchecksum={checksum}\n")
+            if native:
+                stream.write(f"deb={native[0]}\ndeb_checksum={native[1]}\n")
+    if native:
+        print(f"LINUX_DEB_PACKAGE_OK {native[0]}")
 
 
 def main():
@@ -222,6 +230,8 @@ def main():
     parser.add_argument("--swift-library", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "dist/linux")
     parser.add_argument("--allow-dirty", action="store_true", help="Local development only; mark the source snapshot as dirty")
+    parser.add_argument("--deb", action="store_true", help="Also build a native Ubuntu 24.04 preview package")
+    parser.add_argument("--deb-revision", type=int, default=1, help="Native packaging revision (default: 1)")
     package(parser.parse_args())
 
 

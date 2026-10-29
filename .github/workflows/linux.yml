@@ -34,7 +34,9 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Test shared Swift core, Rust collectors and egui application
         id: verify
-        run: bash Tools/ci-linux.sh "${{ matrix.configuration }}"
+        run: |
+          python3 -m unittest discover -s Tools/tests -p test_linux_deb.py -v
+          bash Tools/ci-linux.sh "${{ matrix.configuration }}"
       - name: Package tested Linux preview
         if: matrix.configuration == 'release'
         id: package
@@ -44,8 +46,8 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           python3 Tools/package-linux.py \
             --binary "${{ steps.verify.outputs.binary }}" \
-            --swift-library "${{ steps.verify.outputs.swift_library }}"
-      - name: Upload Linux preview archive and checksum
+            --swift-library "${{ steps.verify.outputs.swift_library }}" --deb
+      - name: Upload Linux preview archive, native package and checksums
         if: matrix.configuration == 'release'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -55,6 +57,8 @@ jobs:
           path: |
             ${{ steps.package.outputs.archive }}
             ${{ steps.package.outputs.checksum }}
+            ${{ steps.package.outputs.deb }}
+            ${{ steps.package.outputs.deb_checksum }}
       - name: Upload validation log
         if: always() && steps.verify.outputs.results != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -84,10 +88,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install runtime and smoke tools only
+      - name: Install smoke tools only
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgl1 libegl1 libgl1-mesa-dri libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-6 libxcursor1 libxi6 libxrandr2 libstdc++6 libgcc-s1 python3 curl ca-certificates xvfb xauth dbus-x11 desktop-file-utils
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 xvfb xauth dbus-x11 desktop-file-utils
           useradd --uid 10001 --create-home xrg-preview
           mkdir -p /tmp/xrg-preview-results
           chown xrg-preview /tmp/xrg-preview-results
@@ -96,6 +100,11 @@ jobs:
         with:
           name: linux-${{ matrix.runner }}-preview
           path: /tmp/xrg-preview-download
+      - name: Install, launch, upgrade and remove native package without toolchains
+        run: >-
+          python3 Tools/deb-smoke-linux.py --disposable-system
+          --package /tmp/xrg-preview-download/*.deb
+          --results /tmp/xrg-preview-results/native
       - name: Install, relocate, launch, upgrade and uninstall without toolchains
         run: >-
           runuser -u xrg-preview -- python3 Tools/preview-smoke-linux.py
