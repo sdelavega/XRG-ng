@@ -227,7 +227,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         return lines.joined(separator: "\n")
     }
     @nonobjc func color(for provider: XRGAIViewProvider) -> NSColor {
-        let first = settings?.graphFG1Color ?? .clear, second = settings?.graphFG2Color ?? .clear, third = settings?.graphFG3Color ?? .clear
+        let first = settings?.graphColor(.ai, component: 1) ?? .clear, second = settings?.graphColor(.ai, component: 2) ?? .clear, third = settings?.graphColor(.ai, component: 3) ?? .clear
         switch provider {
         case .claude: return first
         case .codex: return second
@@ -296,20 +296,20 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     public override func draw(_ dirtyRect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
-        updateLabels(); settings.graphBGColor.set(); bounds.fill(using: .copy)
+        updateLabels(); settings.graphColor(.ai, component: 0).set(); bounds.fill(using: .copy)
         context.shouldAntialias = settings.antiAliasing
         let snapshot = source.viewSnapshot(), layers = historyLayers(snapshot)
         let highest = layers.first?.data.max ?? 0
         let maximum: CGFloat = highest.isFinite && highest > 0 ? highest : 1000
         if shouldDrawMiniGraph() {
-            if let total = layers.first { XRGGraphRenderer.drawDataSet(total.data, upperBound: maximum, lowerBound: 0, in: bounds, flipped: false, filled: true, color: settings.graphFG1Color) }
+            if let total = layers.first { XRGGraphRenderer.drawCurve(total.data, upperBound: maximum, lowerBound: 0, in: bounds, flipped: false, filled: true, color: settings.graphColor(.ai, component: 1), style: settings.curveStyle(.ai)) }
             return
         }
         let graph = historyRect(in: bounds)
-        if settings.graphStyle == 2 { XRGGraphRenderer.drawPixelGrid(graph, spacing: 4, color: settings.borderColor) }
-        for layer in layers { XRGGraphRenderer.drawDataSet(layer.data, upperBound: maximum, lowerBound: 0, in: graph, flipped: false, filled: true, color: color(for: layer.provider)) }
-        if settings.graphStyle == 1 { XRGGraphRenderer.drawScanlines(graph) }
-        if settings.graphStyle == 3 {
+        if settings.graphEffect(.ai) == 2 { XRGGraphRenderer.drawPixelGrid(graph, spacing: 4, color: settings.borderColor) }
+        for layer in layers { XRGGraphRenderer.drawCurve(layer.data, upperBound: maximum, lowerBound: 0, in: graph, flipped: false, filled: true, color: color(for: layer.provider), style: settings.curveStyle(.ai)) }
+        if settings.graphEffect(.ai) == 1 { XRGGraphRenderer.drawScanlines(graph) }
+        if settings.graphEffect(.ai) == 3 {
             for layer in layers { XRGGraphRenderer.drawPixelDataSet(layer.data, upperBound: maximum, in: graph, color: color(for: layer.provider), dotSize: 2) }
         }
         if XRGGraphRenderer.validRect(graph) {

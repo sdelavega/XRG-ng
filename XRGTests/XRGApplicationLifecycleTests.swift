@@ -99,6 +99,31 @@ struct XRGApplicationLifecycleTests {
         #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: domain) ?? [:]).isEqual(to: before))
     }
 
+    @Test func graphOptionsApplyToTheLiveModulesAndKeepLegacyVisibilityControlsInSync() throws {
+        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
+        scene.delegate.showPrefs(nil)
+        let pref = try #require(scene.delegate.prefController)
+        pref.selectPanel(named: "Graphs")
+        let editor = try #require(pref.graphsEditor)
+        editor.customHeight.state = .on; editor.heightField.integerValue = 128
+        editor.curvePicker.selectItem(at: 2); editor.moveGraphDown(nil)
+        #expect(defaults.data(forKey: XRGGraphPreferences.key) == nil)
+        #expect(editor.apply(nil))
+        let manager = try #require(scene.window.moduleManager)
+        #expect(manager.displayList().prefix(2).compactMap(\.name) == ["GPU", "CPU"])
+        #expect(scene.window.appSettings?.curveStyle(.cpu) == .pixel)
+        let index = try #require(editor.draft.orderedIDs.firstIndex(of: .network))
+        let checkbox = try #require(editor.table.view(atColumn: 0, row: index, makeIfNecessary: true) as? NSButton)
+        checkbox.state = .off
+        #expect(NSApp.sendAction(try #require(checkbox.action), to: checkbox.target, from: checkbox))
+        #expect(editor.apply(nil))
+        #expect(manager.getModule(byName: "Network")?.isDisplayed == false && pref.showNetGraph?.state == .off)
+        #expect(pref.persistPreferences() && !defaults.bool(forKey: "showNetworkGraph"))
+        let restored = XRGSettings(defaults: defaults)
+        #expect(restored.graphPreferences[.cpu].height == 128 && restored.graphPreferences[.cpu].curve == .pixel)
+    }
+
     @Test func injectedUnknownSensorPolicyAndLazyNibFailuresDoNotFallBackToGlobalHardware() throws {
         let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
         var loaded: [String] = [], errors = 0

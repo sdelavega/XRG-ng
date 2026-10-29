@@ -236,25 +236,25 @@ public final class XRGMemoryView: NSView, XRGModuleView {
               XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        settings.graphBGColor.set()
+        settings.graphColor(.memory, component: 0).set()
         context.cgContext.fill(bounds)
         context.shouldAntialias = settings.antiAliasing
         let mini = shouldDrawMiniGraph(), rects = statusRects(in: bounds, mini: mini)
         if !mini, settings.showMemoryPagingGraph {
             let layers = pagingLayers()
-            for (data, color) in zip(layers.values, [settings.graphFG3Color, settings.graphFG2Color, settings.graphFG1Color]) {
-                XRGGraphRenderer.drawDataSet(data, upperBound: layers.maximum, lowerBound: 0,
-                    in: rects.paging, flipped: false, filled: true, color: color)
+            for (data, color) in zip(layers.values, [settings.graphColor(.memory, component: 3), settings.graphColor(.memory, component: 2), settings.graphColor(.memory, component: 1)]) {
+                XRGGraphRenderer.drawCurve(data, upperBound: layers.maximum, lowerBound: 0,
+                    in: rects.paging, flipped: false, filled: true, color: color, style: settings.curveStyle(.memory))
             }
         }
         settings.borderColor.set()
         for rect in rects.borders { rect.fill(using: .copy) }
-        for (rect, color) in zip(rects.ram, [settings.graphFG1Color, settings.graphFG2Color, settings.graphFG3Color]) {
+        for (rect, color) in zip(rects.ram, [settings.graphColor(.memory, component: 1), settings.graphColor(.memory, component: 2), settings.graphColor(.memory, component: 3)]) {
             color.set(); rect.fill(using: .copy)
         }
-        settings.graphFG1Color.set(); rects.swap.fill(using: .copy)
+        settings.graphColor(.memory, component: 1).set(); rects.swap.fill(using: .copy)
         updateLabels()
-        if !mini { XRGGraphRenderer.drawStyle(in: bounds, settings: settings) }
+        if !mini { XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .memory) }
     }
 
     @nonobjc static func processMemoryText(_ kibibytes: UInt64) -> String {

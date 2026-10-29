@@ -233,17 +233,17 @@ public final class XRGNetView: NSView, XRGModuleView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         updateLabels()
-        settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        settings.graphColor(.network, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
-            XRGGraphRenderer.drawMiniValues(miniValues(), upperBound: Double(graphScale(fast: true)), lowerBound: 0, in: bounds, settings: settings)
+            XRGGraphRenderer.drawGraphBars(miniValues(), upperBound: Double(graphScale(fast: true)), lowerBound: 0, in: bounds, settings: settings, module: .network)
             return
         }
         context.shouldAntialias = settings.antiAliasing
-        for (plot, color) in zip(plots(), [settings.graphFG2Color, settings.graphFG1Color]) {
-            XRGGraphRenderer.drawDataSet(plot.data, upperBound: graphScale(), lowerBound: 0,
-                in: bounds, flipped: plot.flipped, filled: true, color: color)
+        for (plot, color) in zip(plots(), [settings.graphColor(.network, component: 2), settings.graphColor(.network, component: 1)]) {
+            XRGGraphRenderer.drawCurve(plot.data, upperBound: graphScale(), lowerBound: 0,
+                in: bounds, flipped: plot.flipped, filled: true, color: color, style: settings.curveStyle(.network))
         }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .network)
     }
     public func convertHeight(_ value: Int) -> Int {
         let height = max(0, bounds.height - XRGGraphLabels.lineHeight(settings) * 2)

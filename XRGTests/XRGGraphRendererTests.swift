@@ -53,6 +53,28 @@ struct XRGGraphRendererTests {
         #expect(XRGGraphRenderer.ordered([], currentIndex: -1).isEmpty)
     }
 
+    @Test func explicitCurveStylesPreserveMissingIntervalsAndRetainLegacyRenderingWhenInherited() throws {
+        let runs = XRGGraphRenderer.curveRuns([20, .nan, 80, 60], upper: 100, lower: 0, in: rect, flipped: false)
+        #expect(runs.count == 2 && runs[0].count == 1 && runs[1].count == 2)
+        #expect(runs[0][0].x == rect.minX && runs[1][1].x == rect.maxX)
+        let data = XRGDataSet(); data.resize(3)
+        for value in [CGFloat(50), 50, 50] { data.setNextValue(value) }
+        let bounds = NSRect(x: 4, y: 4, width: 56, height: 56)
+        let legacy = try bitmap { XRGGraphRenderer.drawDataSet(data, upperBound: 100, lowerBound: 0, in: bounds, flipped: false, filled: true, color: .red) }
+        let inherited = try bitmap { XRGGraphRenderer.drawCurve(data, upperBound: 100, lowerBound: 0, in: bounds, flipped: false, filled: true, color: .red, style: nil) }
+        #expect(inherited == legacy)
+        var renderings: [[UInt8]] = []
+        for style in XRGCurveStyle.allCases {
+            let image = try bitmap { XRGGraphRenderer.drawCurve(data, upperBound: 100, lowerBound: 0, in: bounds, flipped: false, filled: true, color: .red, style: style) }
+            #expect(image.contains { $0 != 255 })
+            renderings.append(image)
+        }
+        for i in renderings.indices { for j in renderings.indices where j > i { #expect(renderings[i] != renderings[j]) } }
+        let extreme = XRGGraphRenderer.curveRuns([0, 50, 100], upper: 100, lower: 0,
+            in: NSRect(x: 0, y: 0, width: 1e300, height: 1e300), flipped: false)
+        #expect(extreme.flatMap { $0 }.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+    }
+
     @Test(arguments: [false, true])
     func filledAndFlippedGeometryRetainsBounds(flipped: Bool) {
         let points = XRGGraphRenderer.graphPoints([-10, 25, 200], upper: 100, lower: 0, in: rect, flipped: flipped, filled: true)

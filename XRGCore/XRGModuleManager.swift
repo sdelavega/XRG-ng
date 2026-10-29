@@ -40,6 +40,7 @@ import AppKit
 public final class XRGModuleManager: NSObject {
     private var allModules: [XRGModule] = []
     private weak var window: (any XRGModuleWindow)?
+    private var laidOutSize: NSSize?
     public var graphOrientationVertical = true
     public var moduleSeparatorWidth: CGFloat = 2
 
@@ -53,9 +54,15 @@ public final class XRGModuleManager: NSObject {
 
     private var displayed: [XRGModule] {
         // Stable ties preserve registration order, including nonsequential orders.
-        allModules.enumerated().filter { $0.element.isDisplayed }
+        let customOrder = window?.appSettings?.graphPreferences.order
+        return allModules.enumerated().filter { $0.element.isDisplayed }
             .sorted {
-                $0.element.displayOrder == $1.element.displayOrder
+                if let customOrder {
+                    let a = XRGGraphID(name: $0.element.name).flatMap { customOrder.firstIndex(of: $0) } ?? Int.max
+                    let b = XRGGraphID(name: $1.element.name).flatMap { customOrder.firstIndex(of: $0) } ?? Int.max
+                    if a != b { return a < b }
+                }
+                return $0.element.displayOrder == $1.element.displayOrder
                     ? $0.offset < $1.offset : $0.element.displayOrder < $1.element.displayOrder
             }.map(\.element)
     }
@@ -63,6 +70,24 @@ public final class XRGModuleManager: NSObject {
     private var border: CGFloat { max(0, CGFloat(window?.borderWidth ?? 0)) }
     private var titleHeight: CGFloat { XRGModule.dimension(window?.appSettings?.textRectHeight ?? 0) }
     private var separator: CGFloat { XRGModule.dimension(moduleSeparatorWidth) }
+    private func fixedHeight(_ module: XRGModule) -> CGFloat? {
+        guard let id = XRGGraphID(name: module.name), let height = window?.appSettings?.graphPreferences[id].height else { return nil }
+        return max(XRGModule.dimension(module.minHeight), CGFloat(height))
+    }
+    private func dividerIsResizable(_ first: XRGModule, _ second: XRGModule) -> Bool {
+        guard graphOrientationVertical else { return true }
+        return [first, second].allSatisfy { module in
+            guard let preferred = fixedHeight(module) else { return true }
+            return abs(module.currentSize.height - preferred) < 1 && (64...240).contains(module.currentSize.height)
+        }
+    }
+
+    /// Called only after a validated presentation change; hidden modules retain their order and overrides.
+    @nonobjc func presentationChanged() {
+        updateWindowMinimum(); window?.checkWindowSize()
+        if let window { windowChanged(to: window.frame.size) }
+        redisplayModules()
+    }
 
     @objc(addModule:)
     public func addModule(_ module: XRGModule) { updateModule(module) }
@@ -139,6 +164,7 @@ public final class XRGModuleManager: NSObject {
     @objc(windowChangedToSize:)
     public func windowChanged(to size: NSSize) {
         guard window?.minimized != true, size.width.isFinite, size.height.isFinite else { return }
+        laidOutSize = size
         // Zero-size panels can still expose descendants to accessibility clients.
         for module in allModules { module.reference?.isHidden = !module.isDisplayed }
         for module in allModules where !module.isDisplayed {
@@ -149,10 +175,31 @@ public final class XRGModuleManager: NSObject {
         let count = CGFloat(modules.count)
         let width = max(0, size.width - border * 2)
         let height = max(0, size.height - border * 2)
-        let graphSize = graphOrientationVertical
-            ? NSSize(width: width, height: max(0, height - titleHeight - separator * count) / count)
-            : NSSize(width: max(0, width - titleHeight - separator * count) / count, height: height)
-        for module in modules { apply(graphSize, to: module) }
+        if graphOrientationVertical {
+            let available = max(0, height - titleHeight - separator * count)
+            let automatic = modules.filter { fixedHeight($0) == nil }.count
+            if automatic == modules.count {
+                for module in modules { apply(NSSize(width: width, height: available / count), to: module) }
+            } else {
+                // Reserve every graph's minimum first. Preferred heights consume
+                // remaining space before automatic graphs, and compress together
+                // instead of forcing a window larger than the display.
+                let autoMinimum = modules.filter { fixedHeight($0) == nil }.map { XRGModule.dimension($0.minHeight) }.max() ?? 0
+                let minima = modules.map { fixedHeight($0) == nil ? autoMinimum : XRGModule.dimension($0.minHeight) }
+                let base = minima.reduce(0, +)
+                let extra = max(0, available - base)
+                let requested = zip(modules, minima).reduce(CGFloat(0)) { $0 + max(0, (fixedHeight($1.0) ?? $1.1) - $1.1) }
+                let factor = requested > 0 ? min(1, extra / requested) : 0
+                let automaticExtra = automatic > 0 ? max(0, extra - requested) / CGFloat(automatic) : 0
+                for (module, minimum) in zip(modules, minima) {
+                    let value = fixedHeight(module).map { minimum + max(0, $0 - minimum) * factor } ?? (minimum + automaticExtra)
+                    apply(NSSize(width: width, height: base > available && base > 0 ? minimum * available / base : value), to: module)
+                }
+            }
+        } else {
+            let unit = max(0, width - titleHeight - separator * count) / count
+            for module in modules { apply(NSSize(width: unit, height: min(height, fixedHeight(module) ?? height)), to: module) }
+        }
         positionModules()
         redisplayModules()
     }
@@ -169,9 +216,15 @@ public final class XRGModuleManager: NSObject {
     }
     private func positionModules() {
         var origin = NSPoint(x: border, y: border)
+        if graphOrientationVertical, let size = laidOutSize {
+            let used = layoutModules.reduce(CGFloat(0)) { $0 + $1.currentSize.height + separator }
+            origin.y += max(0, size.height - border * 2 - titleHeight - used)
+        }
         if !graphOrientationVertical { origin.x += titleHeight + separator }
         for module in spatialModules where module.reference != nil {
-            module.reference?.setFrameOrigin(origin)
+            var point = origin
+            if !graphOrientationVertical, let size = laidOutSize { point.y = border + max(0, size.height - border * 2 - module.currentSize.height) }
+            module.reference?.setFrameOrigin(point)
             if graphOrientationVertical { origin.y += module.currentSize.height + separator }
             else { origin.x += module.currentSize.width + separator }
         }
@@ -214,6 +267,7 @@ public final class XRGModuleManager: NSObject {
         guard window?.minimized != true, delta.isFinite, index >= 0,
               Int(index) < modules.count - 1 else { return 0 }
         let first = modules[Int(index)], second = modules[Int(index) + 1]
+        guard dividerIsResizable(first, second) else { return 0 }
         let a = graphOrientationVertical ? first.currentSize.height : first.currentSize.width
         let b = graphOrientationVertical ? second.currentSize.height : second.currentSize.width
         let minA = XRGModule.dimension(graphOrientationVertical ? first.minHeight : first.minWidth)
@@ -221,13 +275,25 @@ public final class XRGModuleManager: NSObject {
         guard a.isFinite, b.isFinite else { return 0 }
         // Preserve the pair's total extent and return the distance actually moved.
         // Never shrink a module that is already at or below its minimum.
-        let lower = min(0, minA - a), upper = max(0, b - minB)
+        var lower = min(0, minA - a), upper = max(0, b - minB)
+        if graphOrientationVertical {
+            if fixedHeight(first) != nil { lower = max(lower, 64 - a); upper = min(upper, 240 - a) }
+            if fixedHeight(second) != nil { lower = max(lower, b - 240); upper = min(upper, b - 64) }
+        }
+        guard lower <= upper else { return 0 }
         let movement = min(max(CGFloat(delta), lower), upper)
         var sizeA = first.currentSize, sizeB = second.currentSize
         if graphOrientationVertical { sizeA.height += movement; sizeB.height -= movement }
         else { sizeA.width += movement; sizeB.width -= movement }
         apply(sizeA, to: first)
         apply(sizeB, to: second)
+        if graphOrientationVertical, let settings = window?.appSettings {
+            var value = settings.graphPreferences
+            for module in [first, second] where fixedHeight(module) != nil {
+                if let id = XRGGraphID(name: module.name) { value[id].height = Int(module.currentSize.height.rounded()) }
+            }
+            if value != settings.graphPreferences { try? settings.applyGraphPreferences(value) }
+        }
         positionModules()
         redisplayModules()
         return Float(movement)
@@ -237,9 +303,10 @@ public final class XRGModuleManager: NSObject {
         let modules = spatialModules
         guard modules.count > 1 else { return [] }
         var origin = NSPoint(x: border, y: border)
+        if graphOrientationVertical { origin.y = modules.first?.reference?.frame.minY ?? border }
         if !graphOrientationVertical { origin.x += titleHeight + separator }
         var rectangles: [NSValue] = []
-        for module in modules.dropLast() where module.reference != nil {
+        for (index, module) in modules.dropLast().enumerated() where module.reference != nil {
             let size = module.currentSize
             let rect: NSRect
             if graphOrientationVertical {
@@ -247,10 +314,10 @@ public final class XRGModuleManager: NSObject {
                 rect = NSRect(x: origin.x, y: origin.y - 2, width: size.width, height: separator + 2)
             } else {
                 origin.x += size.width
-                rect = NSRect(x: origin.x - 2, y: origin.y, width: separator + 2, height: size.height)
+                rect = NSRect(x: origin.x - 2, y: module.reference?.frame.minY ?? origin.y, width: separator + 2, height: size.height)
                 origin.x += separator
             }
-            rectangles.append(NSValue(rect: rect))
+            rectangles.append(NSValue(rect: dividerIsResizable(module, modules[index + 1]) ? rect : .zero))
         }
         return rectangles
     }

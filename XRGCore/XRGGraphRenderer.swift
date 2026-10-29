@@ -108,6 +108,76 @@ public final class XRGGraphRenderer: NSObject {
              in: rect, flipped: flipped, filled: filled, color: color)
     }
 
+    @nonobjc static func curveRuns(_ values: [CGFloat], upper: CGFloat, lower: CGFloat,
+                                   in rect: NSRect, flipped: Bool) -> [[NSPoint]] {
+        guard validRect(rect), !values.isEmpty, let (low, high) = limits(upper: upper, lower: lower, tolerance: 0.001) else { return [] }
+        var result: [[NSPoint]] = [], run: [NSPoint] = []
+        for (index, value) in values.enumerated() {
+            guard value.isFinite, value != missingValue else {
+                if !run.isEmpty { result.append(run); run = [] }; continue
+            }
+            let fraction = (min(high, max(low, value)) - low) / (high - low)
+            run.append(NSPoint(x: rect.minX + (CGFloat(index) / CGFloat(max(1, values.count - 1))) * rect.width,
+                               y: rect.minY + (flipped ? 1 - fraction : fraction) * rect.height))
+        }
+        if !run.isEmpty { result.append(run) }
+        return result
+    }
+
+    @nonobjc private static func drawCurveValues(_ values: [CGFloat], upper: CGFloat, lower: CGFloat,
+                                                in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?) {
+        guard let style else { draw(values, upper: upper, lower: lower, in: rect, flipped: flipped, filled: filled, color: color); return }
+        guard let color, NSGraphicsContext.current != nil,
+              let (low, high) = limits(upper: upper, lower: lower, tolerance: 0.001), validRect(rect) else { return }
+        let runs = curveRuns(values, upper: upper, lower: lower, in: rect, flipped: flipped)
+        let zero = (min(high, max(low, 0)) - low) / (high - low)
+        let baseline = rect.minY + (flipped ? 1 - zero : zero) * rect.height
+        NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: rect).addClip(); color.set()
+        var remaining = 100_000
+        for run in runs {
+            guard let first = run.first, let last = run.last else { continue }
+            if style == .solid || style == .hollow {
+                let path = NSBezierPath(); path.lineWidth = 1.2
+                if style == .solid { path.move(to: NSPoint(x: first.x, y: baseline)); path.line(to: first) }
+                else { path.move(to: first) }
+                for point in run.dropFirst() { path.line(to: point) }
+                if style == .solid { path.line(to: NSPoint(x: last.x, y: baseline)); path.close(); path.fill() }
+                else { path.stroke() }
+            } else {
+                let step: CGFloat = style == .pixel ? 6 : 3
+                let dot: CGFloat = style == .pixel ? 3 : 1.5
+                guard rect.width / step <= 100_000, rect.height / step <= 100_000 else { return }
+                for (a, b) in zip(run, run.dropFirst()) where b.x > a.x {
+                    var x = rect.minX + ceil((a.x - rect.minX) / step) * step
+                    while x < b.x {
+                        let y = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x)
+                        var row = rect.minY + ceil((min(y, baseline) - rect.minY) / step) * step
+                        while row < max(y, baseline) {
+                            guard remaining > 0 else { return }; remaining -= 1
+                            let cell = NSRect(x: x, y: row, width: dot, height: dot)
+                            if style == .dot { NSBezierPath(ovalIn: cell).fill() } else { cell.fill() }
+                            let next = row + step; guard next > row else { break }; row = next
+                        }
+                        let next = x + step; guard next > x else { break }; x = next
+                    }
+                }
+            }
+        }
+    }
+
+    @nonobjc static func drawCurve(_ dataSet: XRGDataSet?, upperBound: CGFloat, lowerBound: CGFloat,
+                                   in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?) {
+        drawCurveValues(dataSet?.orderedValues ?? [], upper: upperBound, lower: lowerBound,
+                        in: rect, flipped: flipped, filled: filled, color: color, style: style)
+    }
+    @nonobjc static func drawCurveSamples(_ pointer: UnsafePointer<CGFloat>?, count: Int, currentIndex: Int,
+                                          upperBound: CGFloat, lowerBound: CGFloat, in rect: NSRect,
+                                          flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?) {
+        drawCurveValues(samples(pointer, count: count, currentIndex: currentIndex), upper: upperBound, lower: lowerBound,
+                        in: rect, flipped: flipped, filled: filled, color: color, style: style)
+    }
+
     @nonobjc static func miniBars(_ values: [Double], upper: Double, lower: Double, in rect: NSRect) -> [NSRect?] {
         guard validRect(rect), !values.isEmpty, upper.isFinite, lower.isFinite, upper >= lower else { return [] }
         // Preserve the mini graph's historical zero-range policy and one-pixel minimum.
@@ -137,9 +207,27 @@ public final class XRGGraphRenderer: NSObject {
         }
     }
 
+    @nonobjc static func drawGraphBars(_ values: [NSNumber], upperBound: Double, lowerBound: Double,
+                                       in rect: NSRect, settings: XRGSettings?, module: XRGGraphID) {
+        guard let settings, let context = NSGraphicsContext.current else { return }
+        NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
+        context.shouldAntialias = settings.antiAliasing
+        for (index, bar) in miniBars(values.map(\.doubleValue), upper: upperBound, lower: lowerBound, in: rect).enumerated() {
+            guard let bar else { continue }
+            settings.graphColor(module, component: index == 1 && values.count == 2 ? 2 : 1).set()
+            context.cgContext.fill(bar)
+        }
+    }
+
     @objc(drawStyleInRect:settings:)
     public static func drawStyle(in rect: NSRect, settings: XRGSettings?) {
-        switch settings?.graphStyle ?? 0 {
+        drawEffect(in: rect, effect: settings?.graphStyle ?? 0, settings: settings)
+    }
+    @nonobjc static func drawGraphEffect(in rect: NSRect, settings: XRGSettings?, module: XRGGraphID) {
+        drawEffect(in: rect, effect: settings?.graphEffect(module) ?? 0, settings: settings)
+    }
+    @nonobjc private static func drawEffect(in rect: NSRect, effect: Int, settings: XRGSettings?) {
+        switch effect {
         case 1: drawScanlines(rect)
         case 2: drawPixelGrid(rect, spacing: 4, color: settings?.borderColor)
         case 3: drawRetroDots(rect, color: settings?.borderColor)

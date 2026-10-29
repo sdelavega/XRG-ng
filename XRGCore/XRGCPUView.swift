@@ -223,22 +223,22 @@ public final class XRGCPUView: NSView, XRGModuleView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         updateLabels()
-        settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        settings.graphColor(.cpu, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
-            XRGGraphRenderer.drawMiniValues(sortedCoreUsage().map { NSNumber(value: Double($0)) }, upperBound: 100, lowerBound: 0, in: bounds, settings: settings)
+            XRGGraphRenderer.drawGraphBars(sortedCoreUsage().map { NSNumber(value: Double($0)) }, upperBound: 100, lowerBound: 0, in: bounds, settings: settings, module: .cpu)
         } else { drawGraph(bounds) }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .cpu)
     }
     public func drawGraph(_ rect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(rect) else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         context.shouldAntialias = settings.antiAliasing
-        settings.graphFG1Color.set()
+        settings.graphColor(.cpu, component: 1).set()
         for bar in fastBarRects(in: rect) { bar.fill(using: .copy) }
-        let colors = settings.separateCPUColor ? [settings.graphFG3Color, settings.graphFG2Color, settings.graphFG1Color] : [settings.graphFG1Color]
+        let colors = settings.separateCPUColor ? [settings.graphColor(.cpu, component: 3), settings.graphColor(.cpu, component: 2), settings.graphColor(.cpu, component: 1)] : [settings.graphColor(.cpu, component: 1)]
         for (data, color) in zip(historyLayers(), colors) {
-            XRGGraphRenderer.drawDataSet(data, upperBound: 100, lowerBound: 0, in: historyRect(in: rect), flipped: false, filled: true, color: color)
+            XRGGraphRenderer.drawCurve(data, upperBound: 100, lowerBound: 0, in: historyRect(in: rect), flipped: false, filled: true, color: color, style: settings.curveStyle(.cpu))
         }
     }
     @nonobjc func makeMenu() -> NSMenu {

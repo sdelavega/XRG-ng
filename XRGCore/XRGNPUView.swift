@@ -106,22 +106,22 @@ public final class XRGNPUView: NSView, XRGModuleView {
     public override func draw(_ dirtyRect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
-        settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        settings.graphColor(.tpu, component: 0).set(); context.cgContext.fill(bounds)
         if miner.activeFraction != nil {
-            XRGGraphRenderer.drawDataSet(miner.activityDataSet, upperBound: 100, lowerBound: 0,
-                                        in: bounds, flipped: false, filled: true, color: settings.graphFG1Color)
+            XRGGraphRenderer.drawCurve(miner.activityDataSet, upperBound: 100, lowerBound: 0,
+                                        in: bounds, flipped: false, filled: true, color: settings.graphColor(.tpu, component: 1), style: settings.curveStyle(.tpu))
         } else if miner.powerWatts != nil {
-            XRGGraphRenderer.drawDataSet(miner.powerDataSet, upperBound: max(1, miner.powerDataSet.max * 1.1), lowerBound: 0,
-                                        in: bounds, flipped: false, filled: true, color: settings.graphFG1Color)
+            XRGGraphRenderer.drawCurve(miner.powerDataSet, upperBound: max(1, miner.powerDataSet.max * 1.1), lowerBound: 0,
+                                        in: bounds, flipped: false, filled: true, color: settings.graphColor(.tpu, component: 1), style: settings.curveStyle(.tpu))
         }
         if miner.activeFraction == nil, miner.trafficObserved != nil {
             // A narrow presence band cannot be mistaken for a 100% capacity
             // meter. The main graph keeps its watt scale and n/a% label.
             let band = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: min(6, bounds.height * 0.12))
-            XRGGraphRenderer.drawDataSet(miner.trafficDataSet, upperBound: max(1, miner.trafficDataSet.max * 1.1), lowerBound: 0,
-                                        in: band, flipped: false, filled: true, color: settings.graphFG2Color)
+            XRGGraphRenderer.drawCurve(miner.trafficDataSet, upperBound: max(1, miner.trafficDataSet.max * 1.1), lowerBound: 0,
+                                        in: band, flipped: false, filled: true, color: settings.graphColor(.tpu, component: 2), style: settings.curveStyle(.tpu))
         }
-        updateLabels(); XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        updateLabels(); XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .tpu)
     }
     public override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu(title: "Neural Engine")

@@ -249,12 +249,12 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         updateLabels()
-        settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        settings.graphColor(.temperature, component: 0).set(); context.cgContext.fill(bounds)
         if emptyMessage() == nil {
             if shouldDrawMiniGraph() {
-                XRGGraphRenderer.drawMiniValues(miniValues(), upperBound: 100, lowerBound: 0, in: bounds, settings: settings)
+                XRGGraphRenderer.drawGraphBars(miniValues(), upperBound: 100, lowerBound: 0, in: bounds, settings: settings, module: .temperature)
             } else {
-                settings.graphFG1Color.set()
+                settings.graphColor(.temperature, component: 1).set()
                 for bar in headerBarRects(in: bounds) { context.cgContext.fill(bar) }
                 let height = XRGGraphLabels.lineHeight(settings)
                 settings.borderColor.set()
@@ -265,13 +265,13 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
                 }
                 context.shouldAntialias = settings.antiAliasing
                 for row in rows() where row.hasRange {
-                    let color = [settings.graphFG1Color, settings.graphFG2Color, settings.graphFG3Color][row.slot]
-                    XRGGraphRenderer.drawDataSet(row.sensor.dataSet, upperBound: row.upper, lowerBound: row.lower,
-                        in: historyRect(in: bounds), flipped: false, filled: row.slot == 0, color: color)
+                    let color = [settings.graphColor(.temperature, component: 1), settings.graphColor(.temperature, component: 2), settings.graphColor(.temperature, component: 3)][row.slot]
+                    XRGGraphRenderer.drawCurve(row.sensor.dataSet, upperBound: row.upper, lowerBound: row.lower,
+                        in: historyRect(in: bounds), flipped: false, filled: row.slot == 0, color: color, style: settings.curveStyle(.temperature))
                 }
             }
         }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .temperature)
     }
     @nonobjc func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Temperature View")

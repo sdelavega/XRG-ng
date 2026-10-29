@@ -217,6 +217,26 @@ fields and unsupported versions. Theme files contain palettes, not complete
 cross-platform preference profiles. Shared compatibility fixtures exercise the
 Swift and Rust readers against the same valid and invalid documents.
 
+## Graph presentation (macOS development build)
+
+Open **Preferences → Graphs** to reorder modules, toggle visibility, and customize
+each graph. **Preferred height** accepts 64–240 points. Vertical layouts compress
+these heights when space is limited; automatic graphs retain their minimum space.
+Horizontal layouts align graphs at the top. Hidden graphs keep their position
+and customizations for when you enable them again.
+
+Each graph can override its background and three series colors, including opacity,
+or inherit the global theme. **Curve fill** offers Solid, Pixel, Dot and Hollow;
+**Inherit existing curves** preserves the original rendering. **Display effect**
+independently selects Normal, Scanlines, Pixel Grid or Retro Dots, or inherits the
+global Appearance setting.
+
+**Apply** saves this panel; **Cancel** discards its draft. **Reset Selected** clears
+the selected graph's presentation overrides. **Reset All** also restores the
+original ordering; both leave visibility unchanged until you edit it explicitly.
+Presentation overrides stay local and are not included in XTF or portable JSON
+palette files. These controls are not included in the published macOS 0.1.0 app.
+
 ## Building
 
 ### macOS

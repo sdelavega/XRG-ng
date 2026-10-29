@@ -236,22 +236,22 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         updateLabels()
-        settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        settings.graphColor(.battery, component: 0).set(); context.cgContext.fill(bounds)
         let status = batteryMiner.batteryStatus()
         guard status != .unknown && status != .noBattery else { return }
         context.shouldAntialias = settings.antiAliasing
         let bars = bars(in: bounds, mini: shouldDrawMiniGraph())
-        settings.graphFG1Color.set(); bars.charge.fill(using: .copy)
-        settings.graphFG2Color.set(); bars.charging.fill(using: .copy); bars.power.fill(using: .copy)
+        settings.graphColor(.battery, component: 1).set(); bars.charge.fill(using: .copy)
+        settings.graphColor(.battery, component: 2).set(); bars.charging.fill(using: .copy); bars.power.fill(using: .copy)
         settings.borderColor.set()
         for border in bars.borders { border.fill(using: .copy) }
         if bars.history.height > 0 {
-            XRGGraphRenderer.drawDataSet(batteryMiner.chargeWatts, upperBound: wattScale, lowerBound: 0,
-                in: bars.history, flipped: false, filled: true, color: settings.graphFG1Color)
-            XRGGraphRenderer.drawDataSet(batteryMiner.dischargeWatts, upperBound: wattScale, lowerBound: 0,
-                in: bars.history, flipped: true, filled: true, color: settings.graphFG2Color)
+            XRGGraphRenderer.drawCurve(batteryMiner.chargeWatts, upperBound: wattScale, lowerBound: 0,
+                in: bars.history, flipped: false, filled: true, color: settings.graphColor(.battery, component: 1), style: settings.curveStyle(.battery))
+            XRGGraphRenderer.drawCurve(batteryMiner.dischargeWatts, upperBound: wattScale, lowerBound: 0,
+                in: bars.history, flipped: true, filled: true, color: settings.graphColor(.battery, component: 2), style: settings.curveStyle(.battery))
         }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .battery)
     }
     @nonobjc func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Battery View")

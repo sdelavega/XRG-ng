@@ -307,7 +307,7 @@ public final class XRGStockView: NSView, XRGModuleView {
             let frame = NSRect(x: rect.minX, y: y, width: rect.width, height: max(0, min(rowHeight, bounds.maxY - y)))
             let right = stock.priceString() + (settings?.stockShowChange == true ? "\n" + stock.changeString() : "")
             quoteLabels[index].layoutColumnText(stock.label ?? stock.symbol, rightText: right, in: frame, mini: false, settings: settings)
-            if index == 0 && stockObjects.count > 1, let color = settings?.graphFG3Color {
+            if index == 0 && stockObjects.count > 1, let color = settings?.graphColor(.stock, component: 3) {
                 for label in [quoteLabels[index].leftLabel, quoteLabels[index].rightLabel] {
                     let text = NSMutableAttributedString(attributedString: label.attributedStringValue)
                     text.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: text.length))
@@ -333,23 +333,23 @@ public final class XRGStockView: NSView, XRGModuleView {
     public override func draw(_ dirtyRect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
-        updateLabels(); settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        updateLabels(); settings.graphColor(.stock, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph(), !gettingData, stockObjects.indices.contains(stockToShow) {
             let stock = stockObjects[stockToShow], values = periodValues(stock)
             if let low = values.min(), let high = values.max(), let price = stock.getCurrentPriceAndChange()?.first, price.doubleValue.isFinite {
-                XRGGraphRenderer.drawMiniValues([price], upperBound: Double(high), lowerBound: Double(low), in: bounds, settings: settings)
+                XRGGraphRenderer.drawGraphBars([price], upperBound: Double(high), lowerBound: Double(low), in: bounds, settings: settings, module: .stock)
             }
         } else if !shouldDrawMiniGraph() {
             context.shouldAntialias = settings.antiAliasing
             for plot in plots() {
                 plot.values.withUnsafeBufferPointer { values in
-                    XRGGraphRenderer.drawSamples(values.baseAddress, count: values.count, currentIndex: values.count - 1,
+                    XRGGraphRenderer.drawCurveSamples(values.baseAddress, count: values.count, currentIndex: values.count - 1,
                         upperBound: plot.upper, lowerBound: plot.lower, in: bounds, flipped: false, filled: plot.filled,
-                        color: plot.filled ? settings.graphFG1Color : settings.graphFG2Color)
+                        color: plot.filled ? settings.graphColor(.stock, component: 1) : settings.graphColor(.stock, component: 2), style: settings.curveStyle(.stock))
                 }
             }
         }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .stock)
     }
     public func convertHeight(_ value: Int32) -> Int32 {
         let result = Double(max(0, value)) / 100 * Double(max(0, bounds.height))

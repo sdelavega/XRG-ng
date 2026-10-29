@@ -238,11 +238,11 @@ public final class XRGGPUView: NSView, XRGModuleView {
               XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        settings.graphBGColor.set()
+        settings.graphColor(.gpu, component: 0).set()
         context.cgContext.fill(bounds)
         let cards = cards()
         if shouldDrawMiniGraph() {
-            XRGGraphRenderer.drawMiniValues(miniValues(cards).0, upperBound: 100, lowerBound: 0, in: bounds, settings: settings)
+            XRGGraphRenderer.drawGraphBars(miniValues(cards).0, upperBound: 100, lowerBound: 0, in: bounds, settings: settings, module: .gpu)
         } else {
             context.shouldAntialias = settings.antiAliasing
             for (index, card) in cards.enumerated() {
@@ -250,17 +250,17 @@ public final class XRGGPUView: NSView, XRGModuleView {
                 if card.validMemory, let used = XRGDataSet(contentsOfOtherDataSet: card.total) {
                     used.subtractOtherDataSetValues(card.free)
                     if used.max > 0 {
-                        XRGGraphRenderer.drawDataSet(used, upperBound: card.total.max, lowerBound: 0, in: rect,
-                            flipped: false, filled: true, color: settings.graphFG1Color)
+                        XRGGraphRenderer.drawCurve(used, upperBound: card.total.max, lowerBound: 0, in: rect,
+                            flipped: false, filled: true, color: settings.graphColor(.gpu, component: 1), style: settings.curveStyle(.gpu))
                     }
                 }
                 let data = card.hasUtilization ? card.utilization : card.wait
-                XRGGraphRenderer.drawDataSet(data, upperBound: card.hasUtilization ? 100 : max(data.max, 100),
-                    lowerBound: 0, in: rect, flipped: false, filled: false, color: settings.graphFG2Color)
+                XRGGraphRenderer.drawCurve(data, upperBound: card.hasUtilization ? 100 : max(data.max, 100),
+                    lowerBound: 0, in: rect, flipped: false, filled: false, color: settings.graphColor(.gpu, component: 2), style: settings.curveStyle(.gpu))
             }
         }
         layoutLabels(cards)
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .gpu)
     }
 
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

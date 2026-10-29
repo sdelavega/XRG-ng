@@ -188,8 +188,36 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         }
         setUpGeneralPanel(); setUpColorPanel(); setUpCPUPanel(); setUpMemoryPanel(); setUpTemperaturePanel()
         setUpNetworkPanel(); setUpDiskPanel(); setUpWeatherPanel(); setUpStockPanel(); setUpAIPanel()
+        prepareGraphsPanel()
     }
     private var settings: XRGSettings? { xrgGraphWindow?.appSettings }
+    @nonobjc private(set) var graphsEditor: XRGGraphPreferencesEditor?
+
+    private func graphVisibility() -> [XRGGraphID: Bool] {
+        Dictionary(uniqueKeysWithValues: XRGGraphID.allCases.map { id in
+            (id, xrgGraphWindow?.moduleManager?.getModule(byName: id.name)?.isDisplayed ?? defaults.bool(forKey: id.visibilityKey))
+        })
+    }
+    private func prepareGraphsPanel() {
+        if graphsEditor == nil {
+            graphsEditor = XRGGraphPreferencesEditor(manager: xrgGraphWindow?.moduleManager, settings: settings,
+                visibility: { [weak self] in self?.graphVisibility() ?? [:] },
+                apply: { [weak self] value, visibility in
+                    guard let self, let graph = self.xrgGraphWindow, let settings = graph.appSettings else { throw XRGGraphPreferences.invalid }
+                    try settings.applyGraphPreferences(value)
+                    for id in XRGGraphID.allCases {
+                        let visible = visibility[id] == true
+                        self.defaults.set(visible, forKey: id.visibilityKey)
+                        if graph.moduleManager?.getModule(byName: id.name)?.isDisplayed != visible {
+                            graph.moduleManager?.setModule(id.name, isDisplayed: visible)
+                        }
+                    }
+                    graph.moduleManager?.presentationChanged()
+                    self.setUpGeneralPanel(); self.redrawGraphs()
+                })
+        }
+        graphsEditor?.reload()
+    }
     private func bind(_ control: NSControl?, _ action: Selector, target: AnyObject? = nil) {
         control?.target = target ?? xrgGraphWindow; control?.action = action
     }
@@ -284,7 +312,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         else {
             panel.setFrameSize(NSSize(width: panel.frame.width, height: panel.frame.height + 60))
             for view in panel.subviews { view.setFrameOrigin(NSPoint(x: view.frame.minX, y: view.frame.minY + 60)) }
-            let label = NSTextField(labelWithString: "Graph Style:"); label.frame = NSRect(x: 20, y: 20, width: 80, height: 17); panel.addSubview(label)
+            let label = NSTextField(labelWithString: "Display Effect:"); label.frame = NSRect(x: 15, y: 20, width: 90, height: 17); panel.addSubview(label)
             style = NSPopUpButton(frame: NSRect(x: 105, y: 15, width: 150, height: 26)); style.tag = 1010
             style.addItems(withTitles: ["Normal", "Scanlines", "Pixel Grid", "Retro Dots"]); panel.addSubview(style)
         }
@@ -622,14 +650,15 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
     }
 
-    @nonobjc static let panels = ["General", "Appearance", "CPU", "RAM", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"]
-    @nonobjc var panelViews: [NSView?] { [GeneralPrefView, ColorPrefView, CPUPrefView, MemoryPrefView, TemperaturePrefView, NetworkPrefView, DiskPrefView, WeatherPrefView, StockPrefView, AIPrefView] }
+    @nonobjc static let panels = ["General", "Appearance", "Graphs", "CPU", "RAM", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"]
+    @nonobjc var panelViews: [NSView?] { [GeneralPrefView, ColorPrefView, graphsEditor, CPUPrefView, MemoryPrefView, TemperaturePrefView, NetworkPrefView, DiskPrefView, WeatherPrefView, StockPrefView, AIPrefView] }
     @objc(selectPanelNamed:)
     public func selectPanel(named name: String) {
         guard let index = Self.panels.firstIndex(of: name) else { return }
         selectPanel(index)
     }
     private func selectPanel(_ index: Int) {
+        if Self.panels.indices.contains(index), Self.panels[index] == "Graphs" { graphsEditor?.refreshIfClean() }
         guard let window, panelViews.indices.contains(index), let view = panelViews[index] else { return }
         if currentView !== view {
             let top = window.frame.maxY
@@ -637,27 +666,28 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             var target = window.frameRect(forContentRect: NSRect(origin: .zero, size: size)); target.origin = NSPoint(x: window.frame.minX, y: top - target.height)
             window.contentView = view; window.setFrame(target, display: true, animate: animate); currentView = view
         }
-        let title = ["General", "Appearance", "CPU", "Memory", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Token"][index]
+        let title = ["General", "Appearance", "Graphs", "CPU", "Memory", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Token"][index]
         window.title = title + " Preferences"; toolbar?.selectedItemIdentifier = .init(Self.panels[index])
     }
     @objc(General:) @IBAction public func general(_ sender: Any?) { selectPanel(0) }
     @objc(Colors:) @IBAction public func colors(_ sender: Any?) { selectPanel(1) }
-    @objc(CPU:) @IBAction public func cpu(_ sender: Any?) { selectPanel(2) }
-    @objc(RAM:) @IBAction public func ram(_ sender: Any?) { selectPanel(3) }
-    @objc(Temperature:) @IBAction public func temperature(_ sender: Any?) { selectPanel(4) }
-    @objc(Network:) @IBAction public func network(_ sender: Any?) { selectPanel(5) }
-    @objc(Disk:) @IBAction public func disk(_ sender: Any?) { selectPanel(6) }
-    @objc(Weather:) @IBAction public func weather(_ sender: Any?) { selectPanel(7) }
-    @objc(Stocks:) @IBAction public func stocks(_ sender: Any?) { selectPanel(8) }
-    @objc(AI:) @IBAction public func ai(_ sender: Any?) { selectPanel(9) }
+    @objc(Graphs:) @IBAction public func graphs(_ sender: Any?) { selectPanel(named: "Graphs") }
+    @objc(CPU:) @IBAction public func cpu(_ sender: Any?) { selectPanel(named: "CPU") }
+    @objc(RAM:) @IBAction public func ram(_ sender: Any?) { selectPanel(named: "RAM") }
+    @objc(Temperature:) @IBAction public func temperature(_ sender: Any?) { selectPanel(named: "Temperature") }
+    @objc(Network:) @IBAction public func network(_ sender: Any?) { selectPanel(named: "Network") }
+    @objc(Disk:) @IBAction public func disk(_ sender: Any?) { selectPanel(named: "Disk") }
+    @objc(Weather:) @IBAction public func weather(_ sender: Any?) { selectPanel(named: "Weather") }
+    @objc(Stocks:) @IBAction public func stocks(_ sender: Any?) { selectPanel(named: "Stocks") }
+    @objc(AI:) @IBAction public func ai(_ sender: Any?) { selectPanel(named: "AI") }
     public func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.panels.map { NSToolbarItem.Identifier($0) } }
     public func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     public func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     public func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         guard let index = Self.panels.firstIndex(of: identifier.rawValue) else { return nil }
-        let labels = ["General", "Appearance", "CPU", "Memory", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"]
-        let symbols = ["gearshape", "paintbrush", "cpu", "memorychip", "thermometer", "network", "externaldrive", "cloud.sun", "chart.line.uptrend.xyaxis", "brain"]
-        let selectors = [#selector(general(_:)), #selector(colors(_:)), #selector(cpu(_:)), #selector(ram(_:)), #selector(temperature(_:)), #selector(network(_:)), #selector(disk(_:)), #selector(weather(_:)), #selector(stocks(_:)), #selector(ai(_:))]
+        let labels = ["General", "Appearance", "Graphs", "CPU", "Memory", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"]
+        let symbols = ["gearshape", "paintbrush", "rectangle.3.group", "cpu", "memorychip", "thermometer", "network", "externaldrive", "cloud.sun", "chart.line.uptrend.xyaxis", "brain"]
+        let selectors = [#selector(general(_:)), #selector(colors(_:)), #selector(graphs(_:)), #selector(cpu(_:)), #selector(ram(_:)), #selector(temperature(_:)), #selector(network(_:)), #selector(disk(_:)), #selector(weather(_:)), #selector(stocks(_:)), #selector(ai(_:))]
         let item = NSToolbarItem(itemIdentifier: identifier); item.label = labels[index]; item.paletteLabel = labels[index]; item.toolTip = labels[index] + " Graph Options"
         item.image = NSImage(systemSymbolName: symbols[index], accessibilityDescription: labels[index]); item.target = self; item.action = selectors[index]
         toolbarItems[identifier] = item; return item

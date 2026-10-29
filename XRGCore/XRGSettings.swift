@@ -35,6 +35,14 @@ import Foundation
 public final class XRGSettings: NSObject {
     @MainActor public static let sharedSettings = XRGSettings()
     private let defaults: UserDefaults
+    @nonobjc private(set) var graphPreferences = XRGGraphPreferences()
+    @nonobjc private(set) var graphPreferencesError: String?
+
+    @nonobjc func applyGraphPreferences(_ value: XRGGraphPreferences) throws {
+        let data = try value.encoded()
+        defaults.set(data, forKey: XRGGraphPreferences.key)
+        graphPreferences = value; graphPreferencesError = nil
+    }
 
     private var backgroundColorStorage = NSColor.clear
     public var backgroundColor: NSColor {
@@ -262,6 +270,10 @@ public final class XRGSettings: NSObject {
 
     public init(defaults: UserDefaults) {
         self.defaults = defaults
+        if let data = defaults.data(forKey: XRGGraphPreferences.key) {
+            do { graphPreferences = try XRGGraphPreferences(data: data) }
+            catch { graphPreferencesError = "Saved graph options are invalid. Apply valid options to replace them." }
+        }
         super.init()
         alignRight.alignment = .right
         alignLeft.alignment = .left

@@ -12,11 +12,15 @@ invent readings to make different kernel/hardware interfaces look identical.
   Rust fixtures check strict schema acceptance and color precision.
 - This has not shipped in macOS 0.1.0. A future Mac release must also include the
   already-implemented Neural Engine graphs and corrected Classic palette.
-- Next: configurable module order, per-graph heights/colors and matching chart
-  presentation options on Mac. Keep curve fill styles separate from display
-  effects: Mac Normal/Scanlines/Pixel Grid/Retro Dots and Linux
-  Solid/Pixel/Dot/Hollow currently represent different operations.
-- Define common presentation defaults and a versioned portable subset. Provider
+- Implemented in development: Mac Graphs preferences provide persistent module
+  ordering, visibility, per-graph preferred heights, RGBA colors and
+  Solid/Pixel/Dot/Hollow curve fills. Display effects remain independent, with
+  per-graph overrides or global inheritance. Apply/Cancel preserve draft changes;
+  original rendering and ordering remain the defaults.
+- Mac preferred heights compress in small windows to preserve visible modules;
+  Linux uses fixed heights in its scrolling layout. Mac mini bars retain bar
+  geometry and adopt the module palette; curve fills affect history plots.
+- Next: define common presentation defaults and a versioned portable subset. Provider
   paths, network devices and sensor identities stay platform-local. JSON themes
   continue to contain palettes only.
 

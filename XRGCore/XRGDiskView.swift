@@ -220,17 +220,17 @@ public final class XRGDiskView: NSView, XRGModuleView {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         updateLabels()
-        settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        settings.graphColor(.disk, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
-            XRGGraphRenderer.drawMiniValues(miniValues(), upperBound: Double(max(1_048_576, fastScale)), lowerBound: 0, in: bounds, settings: settings)
+            XRGGraphRenderer.drawGraphBars(miniValues(), upperBound: Double(max(1_048_576, fastScale)), lowerBound: 0, in: bounds, settings: settings, module: .disk)
             return
         }
         context.shouldAntialias = settings.antiAliasing
-        for (plot, color) in zip(plots(), [settings.graphFG2Color, settings.graphFG1Color]) {
-            XRGGraphRenderer.drawDataSet(plot.data, upperBound: graphScale(), lowerBound: 0,
-                in: bounds, flipped: plot.flipped, filled: true, color: color)
+        for (plot, color) in zip(plots(), [settings.graphColor(.disk, component: 2), settings.graphColor(.disk, component: 1)]) {
+            XRGGraphRenderer.drawCurve(plot.data, upperBound: graphScale(), lowerBound: 0,
+                in: bounds, flipped: plot.flipped, filled: true, color: color, style: settings.curveStyle(.disk))
         }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .disk)
     }
     public func convertHeight(_ value: Int32) -> Int32 {
         let height = max(0, bounds.height - XRGGraphLabels.lineHeight(settings) * 2)

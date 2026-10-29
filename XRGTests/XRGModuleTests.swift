@@ -182,6 +182,60 @@ struct XRGModuleTests {
         }
     }
 
+    @Test func savedOrderAndPreferredHeightsRestoreWithoutLosingHiddenModulesOrStarvingAutomaticGraphs() throws {
+        try withDefaults { defaults in
+            let window = ModuleWindow(defaults: defaults)
+            let layout = XRGModuleManager(window: window)
+            let cpu = module("CPU", 0, defaults: defaults), gpu = module("GPU", 1, defaults: defaults), memory = module("Memory", 2, defaults: defaults)
+            layout.addModule(cpu); layout.addModule(gpu); layout.addModule(memory)
+            var prefs = XRGGraphPreferences(); prefs.order = [.memory, .gpu, .cpu] + XRGGraphID.allCases.filter { ![.memory, .gpu, .cpu].contains($0) }
+            prefs[.cpu].height = 128
+            try window.appSettings!.applyGraphPreferences(prefs)
+            layout.windowChanged(to: NSSize(width: 200, height: 500))
+            #expect(layout.displayList().compactMap(\.name) == ["Memory", "GPU", "CPU"])
+            #expect(cpu.currentSize.height == 128)
+            #expect(memory.reference!.frame.minY > gpu.reference!.frame.minY && gpu.reference!.frame.minY > cpu.reference!.frame.minY)
+            layout.setModule("GPU", isDisplayed: false)
+            layout.windowChanged(to: NSSize(width: 200, height: 500))
+            #expect(cpu.currentSize.height == 128 && gpu.reference?.isHidden == true)
+            layout.setModule("GPU", isDisplayed: true)
+            layout.windowChanged(to: NSSize(width: 200, height: 500))
+            #expect(layout.displayList().compactMap(\.name) == ["Memory", "GPU", "CPU"])
+            prefs[.cpu].height = 240; prefs[.gpu].height = 240
+            try window.appSettings!.applyGraphPreferences(prefs)
+            layout.windowChanged(to: NSSize(width: 200, height: 180))
+            #expect([cpu, gpu, memory].allSatisfy { $0.currentSize.height >= 30 })
+            #expect(cpu.currentSize.height < 240 && gpu.currentSize.height < 240)
+            #expect(abs([cpu, gpu, memory].reduce(CGFloat(0)) { $0 + $1.currentSize.height } - 150) < 0.001)
+            #expect(window.appSettings!.graphPreferences[.cpu].height == 240)
+            layout.graphOrientationVertical = false
+            layout.windowChanged(to: NSSize(width: 500, height: 300))
+            #expect(cpu.currentSize.height == 240 && gpu.currentSize.height == 240)
+            #expect(cpu.reference?.frame.maxY == memory.reference?.frame.maxY)
+        }
+    }
+
+    @Test func preferredHeightDividersPersistClampedSizesAndDisableWhileCompressed() throws {
+        try withDefaults { defaults in
+            let window = ModuleWindow(defaults: defaults)
+            let manager = XRGModuleManager(window: window)
+            let cpu = module("CPU", 0, defaults: defaults), gpu = module("GPU", 1, defaults: defaults)
+            manager.addModule(cpu); manager.addModule(gpu)
+            var value = XRGGraphPreferences(); value[.cpu].height = 128; value[.gpu].height = 128
+            try window.appSettings!.applyGraphPreferences(value)
+            manager.windowChanged(to: NSSize(width: 200, height: 400))
+            #expect(manager.resizeModule(number: 0, byDelta: 50) == 50)
+            #expect(window.appSettings!.graphPreferences[.gpu].height == 178)
+            #expect(window.appSettings!.graphPreferences[.cpu].height == 78)
+            #expect(manager.resizeModule(number: 0, byDelta: 100) == 14)
+            #expect(XRGSettings(defaults: defaults).graphPreferences[.cpu].height == 64)
+            manager.windowChanged(to: NSSize(width: 200, height: 100))
+            #expect(manager.resizeRects().count == 1 && manager.resizeRects()[0].rectValue == .zero)
+            #expect(manager.resizeModule(number: 0, byDelta: 10) == 0)
+            #expect(window.appSettings!.graphPreferences[.gpu].height == 192)
+        }
+    }
+
     @Test func disabledPanelsAreHiddenAndCollapsedLayoutCannotRevealThem() throws {
         try withDefaults { defaults in
             let window = ModuleWindow(defaults: defaults)

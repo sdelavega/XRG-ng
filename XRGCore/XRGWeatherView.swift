@@ -302,22 +302,22 @@ public final class XRGWeatherView: NSView, XRGModuleView {
     public override func draw(_ dirtyRect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
-        updateLabels(); settings.graphBGColor.set(); context.cgContext.fill(bounds)
+        updateLabels(); settings.graphColor(.weather, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
             if let value = current?.temperatureC, let high, let low {
-                XRGGraphRenderer.drawMiniValues([NSNumber(value: value)], upperBound: high, lowerBound: low, in: bounds, settings: settings)
+                XRGGraphRenderer.drawGraphBars([NSNumber(value: value)], upperBound: high, lowerBound: low, in: bounds, settings: settings, module: .weather)
             }
         } else {
             context.shouldAntialias = settings.antiAliasing
             for plot in plots() {
                 plot.values.withUnsafeBufferPointer { values in
-                    XRGGraphRenderer.drawSamples(values.baseAddress, count: values.count, currentIndex: values.count - 1,
+                    XRGGraphRenderer.drawCurveSamples(values.baseAddress, count: values.count, currentIndex: values.count - 1,
                         upperBound: plot.upper, lowerBound: plot.lower, in: bounds, flipped: false, filled: plot.filled,
-                        color: plot.filled ? settings.graphFG1Color : settings.graphFG2Color)
+                        color: plot.filled ? settings.graphColor(.weather, component: 1) : settings.graphColor(.weather, component: 2), style: settings.curveStyle(.weather))
                 }
             }
         }
-        XRGGraphRenderer.drawStyle(in: bounds, settings: settings)
+        XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .weather)
     }
     @nonobjc func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Weather View")

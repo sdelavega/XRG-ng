@@ -119,11 +119,11 @@ struct XRGPrefControllerTests {
         #expect(f.pref.ColorPrefView?.subviews.filter { $0.tag == 1010 }.count == 1)
         #expect(f.pref.ColorPrefView?.subviews.filter { $0.tag == 1011 }.count == 1)
     }
-    @Test(arguments: Array(0...9))
+    @Test(arguments: Array(0...10))
     func toolbarRoutesAllPanelsAndPreservesTheWindowTop(index: Int) throws {
         let f = try PreferencesFixture(); defer { f.cleanUp() }
         let toolbar = try #require(f.pref.toolbar), identifiers = f.pref.toolbarDefaultItemIdentifiers(toolbar)
-        #expect(identifiers.map(\.rawValue) == ["General", "Appearance", "CPU", "RAM", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"])
+        #expect(identifiers.map(\.rawValue) == ["General", "Appearance", "Graphs", "CPU", "RAM", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"])
         let id = identifiers[index]
         let item = try #require(f.pref.toolbar(toolbar, itemForItemIdentifier: id, willBeInsertedIntoToolbar: true))
         let top = f.pref.window!.frame.maxY
