@@ -69,6 +69,8 @@ def build_rpm(bundle, output, epoch, *, revision=1, allow_dirty=False):
     manifest = prepare(bundle, epoch, revision, allow_dirty)
     arch = manifest["architecture"]
     release = f"0.preview.{label(manifest, epoch)}.{revision}"
+    if manifest.get("channel") == "release":
+        release = str(revision)
     full = f"{manifest['version']}-{release}"
     path = destination(output, f"xrg-ng-{full}.{arch}.rpm")
     with tempfile.TemporaryDirectory(prefix="xrg-rpm-") as temporary:
@@ -79,7 +81,7 @@ def build_rpm(bundle, output, epoch, *, revision=1, allow_dirty=False):
         spec = top / "xrg-ng.spec"
         spec.write_text(
             f"Name: xrg-ng\nVersion: {manifest['version']}\nRelease: {release}\n"
-            "Summary: System resource monitor (Linux preview)\nLicense: GPL-3.0-or-later\n"
+            "Summary: System resource monitor for Linux\nLicense: GPL-3.0-or-later\n"
             "URL: https://github.com/sdelavega/XRG-ng\n"
             f"BuildArch: {arch}\nAutoReqProv: no\nRequires: {', '.join(RPM_DEPENDS)}\n"
             "%global debug_package %{nil}\n%global __os_install_post %{nil}\n"
@@ -102,6 +104,8 @@ def build_arch(bundle, output, epoch, *, revision=1, allow_dirty=False):
     manifest = prepare(bundle, epoch, revision, allow_dirty)
     arch = manifest["architecture"]
     version = f"{manifest['version']}pre.{label(manifest, epoch)}-{revision}"
+    if manifest.get("channel") == "release":
+        version = f"{manifest['version']}-{revision}"
     path = destination(output, f"xrg-ng-{version}-{arch}.pkg.tar.zst")
     with tempfile.TemporaryDirectory(prefix="xrg-arch-") as temporary:
         stage = Path(temporary) / "root"
@@ -110,7 +114,7 @@ def build_arch(bundle, output, epoch, *, revision=1, allow_dirty=False):
         size = sum(p.stat().st_size for p in stage.rglob("*") if p.is_file() and not p.is_symlink())
         (stage / ".PKGINFO").write_text(
             f"pkgname = xrg-ng\npkgbase = xrg-ng\npkgver = {version}\n"
-            "pkgdesc = System resource monitor (Linux preview)\n"
+            "pkgdesc = System resource monitor for Linux\n"
             "url = https://github.com/sdelavega/XRG-ng\n"
             f"builddate = {epoch}\npackager = Stephen de la Vega\nsize = {size}\narch = {arch}\n"
             "license = GPL-3.0-or-later\nxdata = pkgtype=pkg\n" +
@@ -142,6 +146,8 @@ def build_appimage(bundle, output, epoch, *, revision=1, allow_dirty=False):
     manifest = prepare(bundle, epoch, revision, allow_dirty)
     arch = manifest["architecture"]
     version = f"{manifest['version']}-preview.{label(manifest, epoch)}.{revision}"
+    if manifest.get("channel") == "release":
+        version = manifest["version"]
     path = destination(output, f"XRG-ng-{version}-{arch}.AppImage")
     pins = json.loads((ROOT / "Tools/appimage-runtime.json").read_text())
     with tempfile.TemporaryDirectory(prefix="xrg-appimage-") as temporary:

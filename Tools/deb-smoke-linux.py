@@ -60,7 +60,7 @@ def smoke(args):
         fields[field] = run(["dpkg-deb", "--field", package, field], results / f"control-{field}.log").strip()
     require(fields["Package"] == "xrg-ng", "Unexpected package name")
     require(fields["Architecture"] == {"x86_64": "amd64", "aarch64": "arm64"}[platform.machine()], "Architecture mismatch")
-    require("~preview." in fields["Version"], "Missing preview version marker")
+    require(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:~preview\.[A-Za-z0-9.]+)?-[0-9]+", fields["Version"]), "Unexpected package version")
     require(not any(name in fields["Depends"] for name in ["swift", "rustc", "cargo", "python", "libgtk", "libglib", "libcairo"]),
             "Unexpected native application dependency")
     # Inspect archive metadata before allowing a system-wide install.

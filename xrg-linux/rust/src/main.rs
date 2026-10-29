@@ -12,6 +12,19 @@ fn main() -> ExitCode {
         println!("XRG-ng {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
+    if args == ["--check-settings"] {
+        let (_, settings, error) =
+            xrg_ng_linux::settings::Store::open(xrg_ng_linux::settings::preferences_path());
+        if let Some(error) = error {
+            eprintln!("Preferences invalid: {error}");
+            return ExitCode::FAILURE;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&settings).expect("validated settings")
+        );
+        return ExitCode::SUCCESS;
+    }
     if args.first().is_some_and(|arg| arg == "--headless") {
         let count = match args.as_slice() {
             [_] => 3,
@@ -66,7 +79,7 @@ fn main() -> ExitCode {
 }
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: xrg-ng-linux [--version | --headless [--samples 2..3600] | --smoke-test]\nBuild with --features egui-ui for the desktop application."
+        "Usage: xrg-ng-linux [--version | --check-settings | --headless [--samples 2..3600] | --smoke-test]\nBuild with --features egui-ui for the desktop application."
     );
     ExitCode::from(2)
 }

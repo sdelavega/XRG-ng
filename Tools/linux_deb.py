@@ -32,6 +32,10 @@ def version(manifest, epoch, revision):
     if type(revision) is not int or not 1 <= revision <= 999999:
         raise ValueError("Debian revision must be between 1 and 999999")
     dirty = ".dirty" if manifest["dirty"] else ""
+    if manifest.get("channel") == "release":
+        if manifest["dirty"]:
+            raise ValueError("Release packages require clean sources")
+        return f"{manifest['version']}-{revision}"
     return f"{manifest['version']}~preview.{epoch}.g{manifest['revision'][:12]}{dirty}-{revision}"
 
 
@@ -77,7 +81,7 @@ def build_deb(bundle, output, epoch, *, revision=1, allow_dirty=False):
             "Section: utils\nPriority: optional\n"
             f"Installed-Size: {size}\nDepends: {dependencies(manifest)}\n"
             "Homepage: https://github.com/sdelavega/XRG-ng\n"
-            "Description: system resource monitor (Linux preview)\n"
+            "Description: system resource monitor for Linux\n"
             " Rust/Swift and egui system graphs, process tools and AI monitoring.\n"
             " Includes its private Swift runtime and corresponding project sources.\n")
         checks = []

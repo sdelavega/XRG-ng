@@ -1,13 +1,22 @@
-# XRG-ng Linux preview
+# XRG-ng Linux installation
 
-This is the Rust/Swift + egui application, version 0.1.0. It is an early preview.
+This is the Rust/Swift + egui application, version 0.2.0.
 The C/GTK implementation has been retired; see the retirement notes in the source
 repository. Existing legacy installations and settings are not removed automatically.
+
+Tagged `linux-v0.2.0` release downloads use stable package versions and the
+[dedicated release signing identity](../../signing/README.md). Verify
+`SHA256SUMS.asc` and the checksums before installing. RPMs also have native
+signatures and Arch packages have `.sig` files. This is standalone package
+distribution, with no configured package repository. Development CI artifacts
+remain unsigned previews with timestamp/commit package versions. The installation
+and removal steps below apply to both channels.
 
 ## Requirements
 
 Use the archive matching `uname -m`: **x86_64** or **aarch64** (ARM64).
-The preview is built and tested on **Ubuntu 24.04**, using glibc and **OpenGL / EGL**.
+The application is built on **Ubuntu 24.04**, using glibc and **OpenGL / EGL**.
+Native package runtime checks also cover Fedora 44, Arch Linux and Arch Linux ARM.
 Other distributions with compatible libraries may work but are not validated.
 These archives do not target musl/Alpine or older glibc systems. They include the
 required Swift libraries; Swift, Rust and development packages are not needed.
@@ -25,7 +34,7 @@ Python 3.11+ is only used by the optional archive install/uninstall scripts. Run
 from the extracted archive requires a POSIX shell and coreutils, not Python.
 Graphical launch needs a desktop session. The desktop binary loads its windowing/graphics libraries even in headless mode.
 
-## Native Ubuntu package (preview)
+## Native Ubuntu package
 
 Each architecture's CI artifact includes a `.deb` and `.deb.sha256` alongside the
 existing archive. Native packages target **fully updated Ubuntu 24.04**, with
@@ -47,26 +56,27 @@ included under `/usr/share/doc/xrg-ng`. Systems configured to exclude
 documentation during installation may omit those installed files; the `.deb`
 still contains them and `dpkg-deb --extract` can recover them.
 
-Native package versions include the source commit timestamp/hash and a packaging
-revision, for example `0.1.0~preview.<timestamp>.g<commit>-1`; the application still
-reports `0.1.0`. Install a newer package with the same `apt install ./...deb`
+Stable packages use versions such as `0.2.0-1`. Preview package versions include the source commit timestamp/hash and a packaging
+revision, for example `0.2.0~preview.<timestamp>.g<commit>-1`; the application still
+reports `0.2.0`. Install a newer package with the same `apt install ./...deb`
 command. To remove it, use `sudo apt remove xrg-ng` (or `sudo apt purge xrg-ng`).
 User preferences, provider data, the legacy app and per-user archive installations
 remain untouched. An existing `~/.local` installation can still take precedence in
 your PATH or application menu; use that installation's own uninstall script if
 you want the system package to become the default.
 
-These are unsigned preview packages with corruption checksums, not a signed APT
-repository or tagged Linux release. The archive remains supported independently.
+Verify stable packages using the release key and signed checksums. CI previews
+only have corruption checksums. Neither channel configures an APT repository.
+The archive remains supported independently.
 
-## RPM, Arch and AppImage previews
+## RPM, Arch and AppImage packages
 
 The same architecture-specific CI artifacts also contain `.rpm`, `.pkg.tar.zst`
 and `.AppImage` files with individual `.sha256` checksums. Each retains the tested
 Rust/Swift application, private Swift libraries, corresponding source and notices.
-These are unsigned prebuilt previews; no signed package repository is configured.
-The application version remains 0.1.0; package versions also identify the source
-commit and packaging revision.
+Stable release packages carry the signatures described above. CI previews remain
+unsigned; no package repository is configured. The application version remains
+0.2.0; preview package versions also identify the source commit and packaging revision.
 
 **RPM:** validated on Fedora 44, for `x86_64` and `aarch64`:
 

@@ -3,6 +3,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: Build release package versions for local signing
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -13,7 +18,7 @@ jobs:
     name: ${{ matrix.runner }} ${{ matrix.configuration }}
     runs-on: ${{ matrix.runner }}
     container: swift:6.4.1-noble
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +33,7 @@ jobs:
       - name: Install windowing dependencies and Rust
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential curl pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth dbus-x11 python3 patchelf desktop-file-utils weston fluxbox picom xdotool x11-utils imagemagick rpm zstd libarchive-tools squashfs-tools
+          DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential curl pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth dbus-x11 python3 patchelf desktop-file-utils weston fluxbox picom xdotool x11-utils imagemagick rpm zstd libarchive-tools squashfs-tools gnupg
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.99.1 --component clippy --component rustfmt
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -40,11 +45,16 @@ jobs:
       - name: Package tested Linux preview
         if: matrix.configuration == 'release'
         id: package
+        shell: bash
+        env:
+          XRG_RELEASE_CANDIDATE: ${{ inputs.release_candidate == true }}
         run: |
           # Checkout configures trust under its temporary HOME. The container's
           # later Git commands need the same exact workspace in their own HOME.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          python3 Tools/package-linux.py \
+          channel=()
+          if [[ "$XRG_RELEASE_CANDIDATE" == true ]]; then channel=(--release); fi
+          python3 Tools/package-linux.py "${channel[@]}" \
             --binary "${{ steps.verify.outputs.binary }}" \
             --swift-library "${{ steps.verify.outputs.swift_library }}" --deb --rpm --arch --appimage
       - name: Upload Linux preview archive, native package and checksums
@@ -65,6 +75,18 @@ jobs:
             ${{ steps.package.outputs.arch_checksum }}
             ${{ steps.package.outputs.appimage }}
             ${{ steps.package.outputs.appimage_checksum }}
+      - name: Build frozen previous application for real-version upgrade checks
+        if: matrix.configuration == 'release'
+        run: bash Tools/build-upgrade-baseline.sh "$RUNNER_TEMP/xrg-upgrade-baseline"
+      - name: Upload previous application fixture
+        if: matrix.configuration == 'release'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.runner }}-upgrade-baseline
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/xrg-upgrade-baseline/*.tar.gz
+            ${{ runner.temp }}/xrg-upgrade-baseline/*.sha256
       - name: Upload validation log
         if: always() && steps.verify.outputs.results != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -106,11 +128,22 @@ jobs:
         with:
           name: linux-${{ matrix.runner }}-preview
           path: /tmp/xrg-preview-download
+      - name: Download frozen previous application
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: linux-${{ matrix.runner }}-upgrade-baseline
+          path: /tmp/xrg-upgrade-baseline
       - name: Install, launch, upgrade and remove native package without toolchains
         run: >-
           python3 Tools/deb-smoke-linux.py --disposable-system
           --package /tmp/xrg-preview-download/*.deb
           --results /tmp/xrg-preview-results/native
+      - name: Upgrade application 0.1.0 to 0.2.0 and verify effective preferences
+        run: >-
+          runuser -u xrg-preview -- python3 Tools/application-upgrade-linux.py
+          --baseline /tmp/xrg-upgrade-baseline/*.tar.gz
+          --current /tmp/xrg-preview-download/*.tar.gz
+          --results /tmp/xrg-preview-results/application-upgrade
       - name: Install, relocate, launch, upgrade and uninstall without toolchains
         run: >-
           runuser -u xrg-preview -- python3 Tools/preview-smoke-linux.py

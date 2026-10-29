@@ -69,6 +69,8 @@ def package(args):
     status = run("git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all")
     if status and not args.allow_dirty:
         raise ValueError("Package a clean committed checkout, or use --allow-dirty for local development")
+    if args.release and (status or args.allow_dirty):
+        raise ValueError("Release packages require a clean checkout without --allow-dirty")
     revision = run("git", "-C", str(ROOT), "rev-parse", "HEAD")
     epoch = int(run("git", "-C", str(ROOT), "show", "-s", "--format=%ct", revision))
     metadata = json.loads(run("cargo", "metadata", "--manifest-path", str(ROOT / "xrg-linux/rust/Cargo.toml"),
@@ -94,6 +96,8 @@ def package(args):
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     label = f"xrg-ng-{project['version']}-linux-{arch}-preview"
+    if args.release:
+        label = f"xrg-ng-{project['version']}-linux-{arch}"
     archive = output / f"{label}.tar.gz"
     checksum = output / f"{label}.sha256"
     if archive.exists() or checksum.exists():
@@ -130,6 +134,8 @@ def package(args):
         desktop = bundle / "share/applications/com.sdelavega.xrg-ng.desktop"
         desktop.parent.mkdir(parents=True)
         shutil.copy2(ROOT / "xrg-linux/preview/com.sdelavega.xrg-ng.desktop", desktop)
+        if args.release:
+            desktop.write_text(desktop.read_text().replace("Name=XRG-ng Preview", "Name=XRG-ng"))
         run("desktop-file-validate", str(desktop))
         icon = bundle / "share/icons/hicolor/scalable/apps/com.sdelavega.xrg-ng.svg"
         icon.parent.mkdir(parents=True)
@@ -204,6 +210,7 @@ def package(args):
             "format": "xrg-ng-linux-preview", "version": project["version"],
             "architecture": arch, "revision": revision, "dirty": bool(status),
             "source_epoch": epoch,
+            "channel": "release" if args.release else "preview",
             "swift": target["compilerVersion"], "rust": run("rustc", "--version"),
             "baseline": "Ubuntu 24.04; glibc; OpenGL / EGL; X11 or Wayland; no GTK/GSK/Cairo",
             "bundled_libraries": sorted(bundled),
@@ -239,6 +246,7 @@ def main():
     parser.add_argument("--swift-library", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=ROOT / "dist/linux")
     parser.add_argument("--allow-dirty", action="store_true", help="Local development only; mark the source snapshot as dirty")
+    parser.add_argument("--release", action="store_true", help="Use release versions/names; requires clean sources")
     parser.add_argument("--deb", action="store_true", help="Also build a native Ubuntu 24.04 preview package")
     parser.add_argument("--deb-revision", type=int, default=1, help="Native packaging revision (default: 1)")
     parser.add_argument("--rpm", action="store_true", help="Also create an RPM preview for Fedora")

@@ -18,6 +18,24 @@ class FormatTests(unittest.TestCase):
     put = fixtures.NativePackageTests.put
     seal = fixtures.NativePackageTests.seal
 
+    def test_release_versions_and_metadata_are_distinct_from_previews(self):
+        self.manifest.update(channel="release", version="0.2.0")
+        self.seal()
+        manifest = formats.prepare(self.bundle, 1700000000, 1, False)
+        self.assertEqual(formats.deb_version(manifest, 1700000000, 1), "0.2.0-1")
+        self.assertEqual(formats.deb_version(manifest, 1700000000, 2), "0.2.0-2")
+        self.manifest["dirty"] = True
+        self.seal()
+        with self.assertRaisesRegex(ValueError, "[Rr]elease"):
+            formats.prepare(self.bundle, 1700000000, 1, True)
+
+    def test_unknown_or_non_scalar_channel_is_rejected(self):
+        for channel in ["nightly", ["release"]]:
+            self.manifest["channel"] = channel
+            self.seal()
+            with self.assertRaises(ValueError):
+                formats.prepare(self.bundle, 1700000000, 1, False)
+
     def test_arch_container_doc_override_preserves_signature_and_repository_settings(self):
         spec = importlib.util.spec_from_file_location("format_smoke", Path(formats.__file__).with_name("formats-smoke-linux.py"))
         smoke = importlib.util.module_from_spec(spec); spec.loader.exec_module(smoke)

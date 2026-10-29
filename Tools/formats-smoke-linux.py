@@ -163,13 +163,15 @@ def smoke(args):
                     run(["dnf", "install", "-y", "rpm-build"], "upgrade-tools.log")
                     upgraded, _ = build_rpm(bundle, work / "upgrade", manifest["source_epoch"], revision=2)
                     run(["dnf", "--setopt=tsflags=", "install", "-y", upgraded], "upgrade.log")
-                    require(run(["rpm", "-q", "--queryformat", "%{RELEASE}", "xrg-ng"], "upgrade-version.log").strip().endswith(".2"), "RPM upgrade did not apply")
+                    release = run(["rpm", "-q", "--queryformat", "%{RELEASE}", "xrg-ng"], "upgrade-version.log").strip()
+                    require(release == "2" or release.endswith(".2"), "RPM upgrade did not apply")
                     run(verify, "upgraded-verify.log")
                     run(["dnf", "remove", "-y", "xrg-ng"], "remove.log")
                 else:
                     upgraded, _ = build_arch(bundle, work / "upgrade", manifest["source_epoch"], revision=2)
-                    require(int(run(["vercmp", manifest["version"], meta["version"].rsplit("-", 1)[0]], "version-order.log").strip()) > 0,
-                            "Final release must sort after an Arch preview")
+                    comparison = int(run(["vercmp", manifest["version"], meta["version"].rsplit("-", 1)[0]], "version-order.log").strip())
+                    require(comparison == 0 if manifest.get("channel") == "release" else comparison > 0,
+                            "Unexpected Arch release/preview version ordering")
                     run(["pacman", "--config", config, "--disable-sandbox", "-U", "--noconfirm", upgraded], "upgrade.log")
                     require(run(["pacman", "-Q", "xrg-ng"], "upgrade-version.log").strip().endswith("-2"), "ALPM upgrade did not apply")
                     run(verify, "upgraded-verify.log")

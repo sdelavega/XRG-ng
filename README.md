@@ -9,7 +9,7 @@ A real-time system resource monitor for **macOS and Linux** with customizable fl
 🍎 **macOS**: Native Swift/Objective-C AppKit implementation (macOS 26+, Intel and Apple silicon)
 🐧 **Linux**: Swift/Rust + egui application; the C/GTK implementation has been retired.
 See the [new Linux build and migration status](xrg-linux/rust/README.md).
-The Linux preview includes an opt-in [station weather window](xrg-linux/rust/README.md#weather-observations)
+The Linux build includes an opt-in [station weather window](xrg-linux/rust/README.md#weather-observations)
 using the same Swift METAR decoder as macOS.
 
 
@@ -259,9 +259,11 @@ cargo run --manifest-path xrg-linux/rust/Cargo.toml --features egui-ui
 cargo run --manifest-path xrg-linux/rust/Cargo.toml -- --headless --samples 3
 ```
 
-Native CI produces relocatable preview archives with the Swift runtime included;
-see the [preview installation guide](xrg-linux/preview/README.md). No Swift or Rust
-toolchain is needed to run those archives.
+Linux 0.2.0 release packaging supports x86-64 and ARM64 `.deb`, `.rpm`,
+`.pkg.tar.zst`, `.AppImage` and relocatable archives with the Swift runtime included.
+See the [installation guide](xrg-linux/preview/README.md) and
+[release verification instructions](signing/README.md). No Swift or Rust toolchain
+is needed to run the packages. CI continues to produce unsigned development previews.
 
 The obsolete C/GTK application and archived GTK frontend have been retired from
 the checkout. The Rust/Swift implementation is the only Linux build path.

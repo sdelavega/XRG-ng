@@ -38,6 +38,8 @@ def validate(bundle, allow_dirty):
         raise ValueError("Native package input does not match the preview manifest")
     if type(manifest.get("dirty")) is not bool or (manifest["dirty"] and not allow_dirty):
         raise ValueError("Native CI packages require a clean source snapshot")
+    if manifest.get("channel", "preview") not in ("preview", "release") or (manifest.get("channel") == "release" and manifest["dirty"]):
+        raise ValueError("Invalid package channel or dirty release")
     if not isinstance(manifest.get("version"), str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", manifest["version"]):
         raise ValueError("Native previews require an x.y.z application version")
     if not isinstance(manifest.get("revision"), str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", manifest["revision"]):
