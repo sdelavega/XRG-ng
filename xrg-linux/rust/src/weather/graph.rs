@@ -48,8 +48,23 @@ impl Graph {
             panel.label = "Weather disabled".into();
             return panel;
         }
-        let metric = update.preferences.units == Units::Metric;
-        panel.scale = Scale::Weather(if metric {
+        let metric = update
+            .preferences
+            .distance_units
+            .unwrap_or(update.preferences.units)
+            == Units::Metric;
+        let temperature_metric = update
+            .preferences
+            .temperature_units
+            .unwrap_or(update.preferences.units)
+            == Units::Metric;
+        let pressure_metric = update
+            .preferences
+            .pressure_units
+            .unwrap_or(update.preferences.units)
+            == Units::Metric;
+        let wind_units = update.preferences.wind_system();
+        panel.scale = Scale::Weather(if temperature_metric {
             temperature::Units::Celsius
         } else {
             temperature::Units::Fahrenheit
@@ -153,11 +168,7 @@ impl Graph {
                         .unwrap_or_else(|| "?".into());
                     format!(
                         "{direction} {}",
-                        number(
-                            Some(speed),
-                            if metric { 1.852 } else { 1.150779448 },
-                            if metric { "km/h" } else { "mph" }
-                        )
+                        number(Some(speed), wind_units.factor(), wind_units.suffix())
                     )
                 }
             })
@@ -180,7 +191,7 @@ impl Graph {
             })
             .unwrap_or_else(|| "n/a".into());
         panel.readout.top.push(Row::new("Visibility", visibility));
-        let pressure = if metric {
+        let pressure = if pressure_metric {
             number(current.and_then(|r| r.pressure_hpa), 1., "hPa")
         } else {
             current
@@ -198,8 +209,8 @@ impl Graph {
             "Gust",
             number(
                 current.and_then(|r| r.gust_knots),
-                if metric { 1.852 } else { 1.150779448 },
-                if metric { "km/h" } else { "mph" },
+                wind_units.factor(),
+                wind_units.suffix(),
             ),
         ));
         let temperatures: Vec<_> = self
@@ -227,7 +238,7 @@ impl Graph {
                 "{}/{}°{}",
                 abbreviated(high),
                 abbreviated(low),
-                if metric { "C" } else { "F" }
+                if temperature_metric { "C" } else { "F" }
             ),
         ));
         panel

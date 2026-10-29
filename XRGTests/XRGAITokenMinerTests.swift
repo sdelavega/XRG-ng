@@ -5,6 +5,24 @@ import Testing
 
 @Suite @MainActor
 struct XRGAITokenMinerTests {
+    @Test func pauseCancelsEndpointAndRebasesAccountingWithoutErasingGraphs() async throws {
+        let request = XRGURL(timeoutInterval: 2, transport: { _ in
+            try await Task.sleep(for: .seconds(30))
+            return Data("claude_code_input_tokens_total 999".utf8)
+        })
+        let miner = XRGAITokenMiner(home: "/nonexistent-xrg-pause-fixture", clock: { 0 }, otelRequest: request)
+        miner.setDataSize(3); miner.hermesTokenData().setAllValues(8)
+        miner.totalHermesTokens = 100
+        _ = miner.fetchFromOTelEndpoint()
+        #expect(request.isLoading)
+        miner.pauseCollection()
+        #expect(!request.isLoading && !request.isDataReady())
+        #expect(miner.hermesTokenData().orderedValues == [8, 8, 8] && miner.totalHermesTokens == 100)
+        miner.publish(time: 1, hermesReady: true)
+        #expect(miner.hermesTokenRate() == 0)
+        miner.reset()
+    }
+
     @Test func strategyAndDatabaseCostSurvivePublication() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let directory = root.appendingPathComponent(".claude/monitoring")

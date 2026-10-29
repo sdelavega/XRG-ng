@@ -223,3 +223,59 @@ fn stale_observations_clock_errors_and_invalid_responses_never_become_fresh_data
     let failed = collector.sample(0., WALL, false, &mut api);
     assert!(failed.observation.is_none() && failed.detail.contains("2 MiB"));
 }
+
+#[test]
+fn weather_override_migration_is_opt_in_and_rejects_invalid_unit_values() {
+    let mut settings = xrg_ng_linux::settings::Settings::default();
+    settings.weather.units = Units::Us;
+    let mut wire = serde_json::to_value(&settings).unwrap();
+    wire["version"] = 22.into();
+    let migrated =
+        xrg_ng_linux::settings::Settings::parse(&serde_json::to_vec(&wire).unwrap()).unwrap();
+    assert_eq!(migrated.weather.temperature_units, None);
+    assert_eq!(migrated.weather.pressure_units, None);
+    assert_eq!(
+        migrated.weather.wind_system(),
+        xrg_ng_linux::weather::WindUnits::Mph
+    );
+    wire["weather"]["wind_units"] = "knots".into();
+    wire["weather"]["temperature_units"] = "metric".into();
+    wire["weather"]["pressure_units"] = "us".into();
+    let mixed =
+        xrg_ng_linux::settings::Settings::parse(&serde_json::to_vec(&wire).unwrap()).unwrap();
+    assert_eq!(mixed.weather.temperature_units, Some(Units::Metric));
+    assert_eq!(
+        mixed.weather.wind_system(),
+        xrg_ng_linux::weather::WindUnits::Knots
+    );
+    wire["weather"]["pressure_units"] = "invented".into();
+    assert!(xrg_ng_linux::settings::Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+}
+
+#[test]
+fn mixed_units_reformat_cached_inspector_without_a_new_request() {
+    struct Count(usize);
+    impl Fetcher for Count {
+        fn get(&mut self, station: &str) -> Result<Vec<u8>, String> {
+            self.0 += 1;
+            Ok(body(station))
+        }
+    }
+    let mut preferences = enabled();
+    let mut collector = Collector::new(preferences.clone()).unwrap();
+    let mut fetcher = Count(0);
+    collector.sample(0., WALL, false, &mut fetcher);
+    preferences.temperature_units = Some(Units::Us);
+    preferences.distance_units = Some(Units::Us);
+    preferences.pressure_units = Some(Units::Metric);
+    preferences.wind_units = Some(xrg_ng_linux::weather::WindUnits::Knots);
+    collector.configure(preferences).unwrap();
+    let update = collector.sample(1., WALL, false, &mut fetcher);
+    assert_eq!(fetcher.0, 1);
+    assert!(!update.stale);
+    assert_eq!(update.observation.as_ref().unwrap().temperature_c, Some(0.));
+    assert!(update.detail.contains("Temperature: 32.0 °F"));
+    assert!(update.detail.contains("Wind speed: 10.0 kt"));
+    assert!(update.detail.contains("Visibility: <0.25 mi"));
+    assert!(update.detail.contains("Pressure: 1016 hPa"));
+}

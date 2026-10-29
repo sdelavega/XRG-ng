@@ -56,6 +56,7 @@ func smokeCheck(_ condition: @autoclosure () -> Bool, _ message: String) throws 
 @MainActor private final class SmokeTokens: XRGAITokenViewSource {
     var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)?
     func resetAccountingBaseline() {}
+    func pauseCollection() {}
     func setAccountingEnabled(_ enabled: Bool) {}
     var updates = 0
     func setDataSize(_ count: Int) {}

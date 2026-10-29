@@ -8,9 +8,11 @@ also rejects those libraries in the ELF runtime dependency closure.
 The compact dashboard retains the macOS layout and the original **Classic**
 palette: 140-pixel graph width, 90-pixel default height, draggable hostname band,
 overlaid readings, thin separators and optional current-value / CPU-core bars.
-All thirteen modules remain available. Schema-21 settings migrate in memory to
-schema 22 with observed AI accounting and desktop alerts disabled by default;
-the next normal preferences save writes the new schema. Existing source identities,
+All thirteen modules remain available. Supported older settings migrate in memory
+to schema 23; missing battery/weather options preserve charge-percent history and
+the saved weather unit system. Existing AI tracking/alert choices are retained;
+those missing from older profiles remain disabled. The next normal preferences
+save writes the new schema. Existing source identities,
 module order, colors, heights, JSON themes and original XRG XTF imports are retained.
 
 The C/GTK3 application, its CMake build and the uncompiled GTK4 reference tree
@@ -962,3 +964,26 @@ forecast. Requests remain off by default. No location detection is performed.
   best effort; feedback is welcome and encouraged.
 - Remaining cross-platform presentation and workflow gaps are tracked in
   [PLATFORM_PARITY.md](../../PLATFORM_PARITY.md).
+
+
+## Battery power mode and independent weather units
+
+Preferences → Graphs → Battery → Battery history offers **Charge (%)** (the
+existing default) and **Charging/discharging power (W)**. The power curve uses
+reported watts (or the collector's existing current/voltage conversion) with
+charging above zero and discharging below it. The symmetric axis spans at least
+±30 W, matching the Mac power view's minimum range. Unknown direction or missing
+power stays a gap, while reported zero stays zero. Up to three batteries retain
+separate curves. Both histories collect together; switching display mode preserves
+their units and values. Clearing the battery graph clears both histories. Battery
+power is not wall power; charging limits and hardware controls are never written.
+Driver fields follow the [kernel power-supply class](https://docs.kernel.org/power/power_supply_class.html).
+
+Preferences → Weather retains its Metric/US default unit system and adds
+independent overrides for temperature (°C/°F), visibility (km/mi), pressure
+(hPa/inHg), and wind/gusts (knots/km/h/mph). Wind defaults to the visibility unit
+system until overridden. These choices change labels/axes and inspector text,
+without changing Celsius observations or making another network request. Saved
+profiles without overrides keep their prior readings. Missing/stale data and
+visibility qualifiers retain their previous meaning. History-window and secondary
+curve parity remain open; the current graph still retains received observations.

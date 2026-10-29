@@ -420,6 +420,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         min30Timer = nil; min5Timer = nil; graphTimer = nil; fastTimer = nil
         xrgCheckURL?.cancelLoading(); xrgCheckURL = nil
         weatherView?.cancelLoading()
+        aiTokenView?.suspendCollection()
         if let wakeObserver { wakeCenter.removeObserver(wakeObserver) }
         wakeObserver = nil; runtimeStarted = false
     }

@@ -52,6 +52,7 @@ struct XRGAITokenViewSnapshot {
 @MainActor protocol XRGAITokenViewSource: AnyObject {
     var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)? { get set }
     func resetAccountingBaseline()
+    func pauseCollection()
     func setAccountingEnabled(_ enabled: Bool)
     func setDataSize(_ count: Int)
     func getLatestTokenInfo()
@@ -89,6 +90,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     private weak var host: (any XRGAITokenViewHost)?
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
+    private var isSampling = false
     private var accountingGeneration: UUID?
     private var historyWidth: Int?
     private var cachedLayers: [XRGDataSet] = []
@@ -129,6 +131,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     private func bindToWindow() {
         let next = window as? any XRGAITokenViewHost
         if host !== next || registeredManager !== next?.moduleManager {
+            if isSampling { suspendCollection() }
             if host?.aiTokenView === self { host?.aiTokenView = nil }
             if let module { registeredManager?.removeModule(module) }
             registeredManager = nil; module = nil; host = next
@@ -138,6 +141,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         let module = XRGModule(name: "AI Tokens", reference: self, defaults: defaults)
         module.displayOrder = 10; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
+        module.alwaysDoesGraphUpdate = true
         module.isDisplayed = defaults.bool(forKey: "showAITokenGraph")
         self.module = module; registeredManager = manager
         host.aiTokenView = self; host.initTimers()
@@ -159,10 +163,19 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         updateLabels()
     }
     public func graphUpdate(_ timer: Timer?) {
+        let tracking = defaults.bool(forKey: "aiTokensTrackingEnabled")
+        source.setAccountingEnabled(tracking)
+        guard module?.isDisplayed != false || tracking else {
+            if isSampling { suspendCollection() }
+            return
+        }
+        isSampling = true
         let generation = observer.accountingGeneration
         if accountingGeneration != generation { source.resetAccountingBaseline(); accountingGeneration = generation }
-        source.setAccountingEnabled(defaults.bool(forKey: "aiTokensTrackingEnabled"))
         source.getLatestTokenInfo(); updateLabels(); needsDisplay = true
+    }
+    @nonobjc func suspendCollection() {
+        source.pauseCollection(); isSampling = false
     }
     public func fastUpdate(_ timer: Timer?) {}
     public func min5Update(_ timer: Timer?) {}

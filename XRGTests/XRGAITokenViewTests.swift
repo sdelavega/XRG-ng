@@ -48,6 +48,9 @@ private final class AITokenPanelNibOwner: NSObject {}
 
 @MainActor final class AITokenPanelSource: XRGAITokenViewSource {
     var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)?
+    var pauses = 0
+    var onUpdate: (() -> Void)?
+    func pauseCollection() { pauses += 1 }
     var accountingResets = 0
     var trackingStates: [Bool] = []
     func resetAccountingBaseline() { accountingResets += 1 }
@@ -66,7 +69,7 @@ private final class AITokenPanelNibOwner: NSObject {}
         state.totalCost = 20; state.costPerHour = 2; state.projectedDailyCost = 48
     }
     func setDataSize(_ count: Int) { sizes.append(count); for provider in state.providers { provider.history.resize(count) } }
-    func getLatestTokenInfo() { updates += 1 }
+    func getLatestTokenInfo() { updates += 1; onUpdate?() }
     func viewSnapshot() -> XRGAITokenViewSnapshot { state }
     func seed() { for item in state.providers { item.history.setAllValues(CGFloat(item.rate)) } }
 }
@@ -102,6 +105,72 @@ struct XRGAITokenViewTests {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return try #require(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    @Test func hiddenAccountingDeliversBudgetThroughTheInjectedNotificationTransport() async throws {
+        _ = NSApplication.shared
+        let suite = "XRG.hidden-budget." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "showAITokenGraph")
+        defaults.set(true, forKey: "aiTokensTrackingEnabled")
+        defaults.set(true, forKey: "aiTokensDailyAutoReset")
+        defaults.set(10, forKey: "aiTokensDailyBudget")
+        defaults.set(80, forKey: "aiTokensBudgetNotifyPercent")
+        let settings = XRGSettings(defaults: defaults)
+        settings.graphFont = NSFont.systemFont(ofSize: 10)
+        let center = NotificationCenter()
+        let observer = XRGAITokensObserver(defaults: defaults, center: center, calendar: .current, now: Date.init)
+        let source = AITokenPanelSource()
+        var delivered: [Double] = []
+        let transport = XRGAIBudgetNotifications(events: center, authorized: { true }, deliver: { delivered.append($0) })
+        transport.start(); defer { transport.stop() }
+        let host = AITokenPanelHost(settings: settings); defer { host.close() }
+        let view = panel(settings, defaults, observer, source)
+        source.onUpdate = { [weak source] in source?.usageEventHandler?("Codex", .init(usage: .init(total: 5), models: [:])) }
+        host.contentView?.addSubview(view); view.awakeFromNib()
+        let manager = try #require(host.moduleManager)
+        manager.windowChanged(to: host.frame.size)
+        manager.graphUpdate(); manager.graphUpdate(); manager.graphUpdate()
+        for _ in 0..<100 { if !delivered.isEmpty { break }; try await Task.sleep(for: .milliseconds(5)) }
+        #expect(delivered == [100] && observer.dailyTotalTokens == 15 && view.isHidden)
+        view.suspendCollection()
+    }
+
+    @Test func hiddenGraphCollectsOnlyWhileTrackingAndNeverDoubleDispatches() throws {
+        try withFixture { settings, defaults, observer, source in
+            defaults.set(false, forKey: "showAITokenGraph")
+            defaults.set(false, forKey: "aiTokensTrackingEnabled")
+            let host = AITokenPanelHost(settings: settings)
+            defer { host.close() }
+            let view = panel(settings, defaults, observer, source)
+            host.contentView?.addSubview(view); view.awakeFromNib()
+            let manager = try #require(host.moduleManager)
+            #expect(view.module?.alwaysDoesGraphUpdate == true)
+            manager.windowChanged(to: host.frame.size)
+            #expect(view.isHidden && view.frame.size == .zero)
+            source.onUpdate = { [weak source] in
+                source?.usageEventHandler?("Codex", .init(usage: .init(total: 5), models: [:]))
+            }
+            manager.graphUpdate()
+            #expect(source.updates == 0 && observer.sessionTotalTokens == 0)
+            defaults.set(true, forKey: "aiTokensTrackingEnabled")
+            manager.graphUpdate(); manager.graphUpdate()
+            #expect(source.updates == 2 && observer.dailyTotalTokens == 10)
+            host.minimized = true; manager.graphUpdate()
+            #expect(source.updates == 3 && observer.sessionTotalTokens == 15)
+            defaults.set(false, forKey: "aiTokensTrackingEnabled")
+            manager.graphUpdate(); manager.graphUpdate()
+            #expect(source.updates == 3 && source.pauses == 1 && observer.dailyTotalTokens == 15)
+            host.minimized = false
+            manager.setModule("AI Tokens", isDisplayed: true)
+            #expect(source.updates == 4 && observer.dailyTotalTokens == 15)
+            manager.graphUpdate()
+            #expect(source.updates == 5) // visible + always-update is still one recipient.
+            view.removeFromSuperview()
+            #expect(source.pauses == 2)
+            manager.graphUpdate(); #expect(source.updates == 5)
+        }
     }
 
     @Test func programmaticRegistrationVisibilityFontAndDetachment() throws {

@@ -73,20 +73,39 @@ Implemented in development for monitoring tools:
   and rate baselines. Native notifications use Rust D-Bus with a one-second
   deadline, independent of the egui redraw cycle and graph visibility.
 
+Implemented in this pass:
+
+- Mac AI modules continue accounting through the existing graph timer while hidden
+  or collapsed, with no duplicate visible-module dispatch. Hidden modules with
+  tracking disabled cancel outstanding scans/HTTP work and rebaseline on resume;
+  detachment and application shutdown also stop collection. Budget delivery remains
+  independent of visibility. Mac uses its configured graph cadence; Linux uses its
+  separate five-second AI worker.
+- Linux Battery offers its existing charge-percent history and an optional signed
+  power history. Charging is positive, discharging negative, with a symmetric
+  axis of at least ±30 W. Missing power or ambiguous direction remains a gap;
+  genuine zero is preserved. Separate histories are collected together and both
+  clear with graph reset. No charging settings are written.
+- Linux weather temperature, visibility and pressure can use independent units;
+  wind/gusts additionally support knots. Missing overrides inherit the saved unit
+  system, preserving old profiles. Unit changes reformat cached observations and
+  plots without fetching again or clearing station history.
+
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
    source selection, counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
 2. AI accounting: align source continuity/model attribution and Mac/Linux observed
-   windows. Linux samples independently of graph visibility; Mac still needs its
-   AI graph sampled. Mac Codex still
+   windows and sampling cadence. Both now account with hidden graphs. Mac Codex still
    lacks model/input-output attribution; Ollama inventory is not token accounting.
    Mac log scans retain their last complete snapshot through failed scans, while
    database/endpoint failure breaks accounting continuity. Keep cost estimates
    optional and labeled; neither platform's observed counters are billing records.
 3. Weather/battery/Stocks: align history windows, secondary weather curves, unit
-   choices and battery graph modes. Port Stocks if retained in the common set.
+   choices still absent on either side, battery presentation/cadence and multiple
+   battery behavior. Linux now has charge/power modes and independent weather units.
+   Port Stocks if retained in the common set.
 4. Desktop behavior: Linux collapse/hover expansion and supported window controls;
    preserve explicit compositor limitations. Align history duration and sampling
    controls without equating different OS memory or NPU measurements.

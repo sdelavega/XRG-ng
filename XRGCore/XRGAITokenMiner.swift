@@ -183,6 +183,12 @@ public final class XRGAITokenMiner: NSObject {
         for scan in [claudeScan, codexScan, geminiScan] { scan.reset() }
         claudeReady = false; codexReady = false; geminiReady = false
     }
+    func pauseCollection() {
+        resetAccountingBaseline()
+        for request in [otelRequest, tagsRequest, runningRequest] { request.cancelLoading() }
+        tracker.reset()
+        lastOllamaPoll = nil
+    }
     func setAccountingEnabled(_ enabled: Bool) {
         if accountingEnabled != enabled { resetAccountingBaseline(); accountingEnabled = enabled }
     }

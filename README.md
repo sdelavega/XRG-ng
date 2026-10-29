@@ -145,8 +145,10 @@ XRG-ng displays real-time graphs for:
 - **Background Collection** - Incremental file caches and background scans keep log parsing off the UI thread
 
 Mac AI preferences now apply session/daily accounting and token budgets to all
-four collected usage providers. Enable **AI Token Tracking** and keep the AI
-graph displayed to sample usage. The first complete read establishes a baseline;
+four collected usage providers. Enable **AI Token Tracking** to keep sampling
+even while its graph is hidden. When tracking is off and the graph is hidden,
+pending collection is cancelled; visible graphs retain their normal monitoring.
+The first complete read establishes a baseline;
 historical files are excluded from these counters. New tokens are assigned to the
 day they are observed, not reconstructed by event timestamp. Source changes,
 decreasing counters and failed database/endpoint reads establish fresh baselines;
@@ -171,8 +173,8 @@ Linux now has the same observed session/daily accounting rules, independent
 resets and token budgets. Enable tracking in **Preferences → AI**; desktop alerts
 have a separate, default-off checkbox. **AI usage…** shows exact totals, unknown
 splits, daily model/provider aggregates, persistence errors and notification
-status, with Reset Session and Reset Daily buttons. Linux collection continues
-while the graph is hidden. Its daily state lives in
+status, with Reset Session and Reset Daily buttons. Both platforms continue accounting
+while the graph is hidden when tracking is enabled. Its daily state lives in
 `$XDG_STATE_HOME/xrg-ng/ai-usage.json` (default `~/.local/state/xrg-ng`); session
 totals restart with the app. An exclusive lock prevents competing instances from
 overwriting daily totals or duplicating alerts. Corrupt or externally changed

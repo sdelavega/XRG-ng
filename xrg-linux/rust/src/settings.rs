@@ -307,6 +307,7 @@ impl ThemeChoice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct MetricSelection {
+    pub battery_mode: crate::battery::Mode,
     /// None selects the aggregate; a number selects one logical CPU.
     pub cpu: Option<u32>,
     pub network: Option<String>,
@@ -372,6 +373,7 @@ impl MetricSelection {
     }
     pub fn matches(&self, other: &Self, module: Module) -> bool {
         match module {
+            Module::Battery => self.battery_mode == other.battery_mode,
             Module::Cpu => self.cpu == other.cpu,
             Module::Network => self.network == other.network,
             Module::Disk => self.disk == other.disk,
@@ -468,7 +470,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 22,
+            version: 23,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -537,7 +539,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 22 {
+        if self.version != 23 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -702,6 +704,9 @@ impl Settings {
         }
         if result.version == 21 {
             result.version = 22;
+        }
+        if result.version == 22 {
+            result.version = 23;
         }
         result.validate()?;
         Ok(result)

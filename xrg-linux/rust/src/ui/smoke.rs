@@ -196,6 +196,23 @@ impl Harness {
                     {
                         editor.tab = 3;
                     }
+                    if let Some(editor) = &mut app.preferences {
+                        match std::env::var("XRG_SMOKE_PREFS_TAB").as_deref() {
+                            Ok("weather") => {
+                                editor.tab = 4;
+                                editor.draft.weather.temperature_units =
+                                    Some(xrg_ng_linux::weather::Units::Us);
+                                editor.draft.weather.distance_units =
+                                    Some(xrg_ng_linux::weather::Units::Metric);
+                                editor.draft.weather.pressure_units =
+                                    Some(xrg_ng_linux::weather::Units::Metric);
+                                editor.draft.weather.wind_units =
+                                    Some(xrg_ng_linux::weather::WindUnits::Knots);
+                            }
+                            Ok("graphs") => editor.tab = 1,
+                            _ => (),
+                        }
+                    }
                     app.show_processes = true;
                     app.show_sensors = true;
                     app.show_ai = true;

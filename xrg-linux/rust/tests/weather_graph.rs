@@ -171,3 +171,49 @@ fn clear_history_retains_latest_observation_and_older_response_guard() {
     assert_eq!(older.series[0][0], 2.);
     assert!(older.series[0][1].is_nan());
 }
+
+#[test]
+fn independent_units_change_presentation_without_replacing_history() {
+    use xrg_ng_linux::weather::WindUnits;
+    let mut value = update("KSEA", "KSEA 271200Z 21010G20KT 10SM 20/10 A3000");
+    let mut graph = Graph::default();
+    let original = graph.panel(Some(&value)).series[0].clone();
+    value.preferences.temperature_units = Some(Units::Us);
+    value.preferences.distance_units = Some(Units::Metric);
+    value.preferences.pressure_units = Some(Units::Metric);
+    value.preferences.wind_units = Some(WindUnits::Knots);
+    let panel = graph.panel(Some(&value));
+    assert_eq!(panel.series[0], original);
+    assert_eq!(
+        panel.scale.temperature_units(temperature::Units::Celsius),
+        temperature::Units::Fahrenheit
+    );
+    let rows: Vec<_> = panel
+        .readout
+        .top
+        .iter()
+        .map(|r| r.right.render(temperature::Units::Fahrenheit).into_owned())
+        .collect();
+    assert!(rows.contains(&"68.0 °F".into()));
+    assert!(rows.contains(&"SW 10kt".into()));
+    assert!(rows.contains(&"16.09km".into()));
+    assert!(rows.contains(&"1016hPa".into()));
+    assert!(rows.contains(&"20kt".into()));
+    value.preferences.distance_units = Some(Units::Us);
+    value.preferences.pressure_units = Some(Units::Us);
+    value.preferences.wind_units = None;
+    let panel = graph.panel(Some(&value));
+    assert_eq!(panel.series[0], original);
+    assert!(panel.readout.top.iter().any(|r| {
+        r.right
+            .render(temperature::Units::Fahrenheit)
+            .contains("mph")
+    }));
+    assert!(
+        panel
+            .readout
+            .top
+            .iter()
+            .any(|r| r.right.render(temperature::Units::Fahrenheit) == "30.00inHg")
+    );
+}

@@ -22,12 +22,43 @@ pub enum Units {
     Metric,
     Us,
 }
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WindUnits {
+    Knots,
+    Kmh,
+    Mph,
+}
+impl WindUnits {
+    pub fn factor(self) -> f64 {
+        match self {
+            Self::Knots => 1.,
+            Self::Kmh => 1.852,
+            Self::Mph => 1.852 / 1.609344,
+        }
+    }
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Knots => "kt",
+            Self::Kmh => "km/h",
+            Self::Mph => "mph",
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
     pub enabled: bool,
     pub station: String,
     pub units: Units,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature_units: Option<Units>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance_units: Option<Units>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pressure_units: Option<Units>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wind_units: Option<WindUnits>,
     pub refresh_minutes: u32,
 }
 impl Default for Preferences {
@@ -36,11 +67,22 @@ impl Default for Preferences {
             enabled: false,
             station: String::new(),
             units: Units::Metric,
+            temperature_units: None,
+            distance_units: None,
+            pressure_units: None,
+            wind_units: None,
             refresh_minutes: 15,
         }
     }
 }
 impl Preferences {
+    pub fn wind_system(&self) -> WindUnits {
+        self.wind_units
+            .unwrap_or(match self.distance_units.unwrap_or(self.units) {
+                Units::Metric => WindUnits::Kmh,
+                Units::Us => WindUnits::Mph,
+            })
+    }
     pub fn validate(&self) -> Result<(), String> {
         if !(5..=60).contains(&self.refresh_minutes) {
             return Err("Weather refresh interval must be 5–60 minutes".into());
@@ -240,7 +282,22 @@ impl Collector {
             if update.stale {
                 detail.push("Cached observation; it is not current confirmation of station conditions. XRG-ng marks observations older than two hours as stale.".into());
             }
-            let metric = self.preferences.units == Units::Metric;
+            let metric = self
+                .preferences
+                .temperature_units
+                .unwrap_or(self.preferences.units)
+                == Units::Metric;
+            let distance_metric = self
+                .preferences
+                .distance_units
+                .unwrap_or(self.preferences.units)
+                == Units::Metric;
+            let pressure_metric = self
+                .preferences
+                .pressure_units
+                .unwrap_or(self.preferences.units)
+                == Units::Metric;
+            let wind = self.preferences.wind_system();
             let value = |n: Option<f64>, factor: f64, offset: f64, unit: &str| {
                 n.map(|v| format!("{:.1} {unit}", v * factor + offset))
                     .unwrap_or_else(|| "unavailable".into())
@@ -273,18 +330,8 @@ impl Collector {
                 .unwrap_or_else(|| "unavailable".into());
             detail.push(format!(
                 "Wind direction: {direction}\nWind speed: {}\nGust: {}",
-                value(
-                    report.wind_knots,
-                    if metric { 1.852 } else { 1.150779448 },
-                    0.,
-                    if metric { "km/h" } else { "mph" }
-                ),
-                value(
-                    report.gust_knots,
-                    if metric { 1.852 } else { 1.150779448 },
-                    0.,
-                    if metric { "km/h" } else { "mph" }
-                )
+                value(report.wind_knots, wind.factor(), 0., wind.suffix()),
+                value(report.gust_knots, wind.factor(), 0., wind.suffix())
             ));
             let visibility = report
                 .visibility_miles
@@ -292,12 +339,12 @@ impl Collector {
                     format!(
                         "{}{:.2} {}",
                         report.visibility_qualifier,
-                        v * if metric { 1.609344 } else { 1. },
-                        if metric { "km" } else { "mi" }
+                        v * if distance_metric { 1.609344 } else { 1. },
+                        if distance_metric { "km" } else { "mi" }
                     )
                 })
                 .unwrap_or_else(|| "unavailable".into());
-            let pressure = if metric {
+            let pressure = if pressure_metric {
                 report.pressure_hpa.map(|p| format!("{p:.0} hPa"))
             } else {
                 report.pressure_in.map(|p| format!("{p:.2} inHg"))

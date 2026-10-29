@@ -458,7 +458,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             }
             let allow = NSButton(title: "Allow Budget Notifications…", target: self, action: #selector(allowBudgetNotifications(_:)))
             allow.bezelStyle = .rounded; allow.frame = NSRect(x: 20, y: 115, width: 255, height: 28); allow.tag = 1008; panel.addSubview(allow)
-            let status = NSTextField(wrappingLabelWithString: "Alerts require macOS permission. Usage is observed while this graph is sampled; initial history is excluded.")
+            let status = NSTextField(wrappingLabelWithString: "Accounting continues while the graph is hidden when tracking is enabled. Alerts require macOS permission; initial history is excluded.")
             status.frame = NSRect(x: 20, y: 35, width: 460, height: 70); status.tag = 1009; panel.addSubview(status)
             for (index, title) in ["Reset Session", "Reset Daily"].enumerated() {
                 let button = NSButton(title: title, target: self, action: index == 0 ? #selector(resetSessionCounters(_:)) : #selector(resetDailyCounters(_:)))

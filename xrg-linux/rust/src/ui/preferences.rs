@@ -526,6 +526,32 @@ fn graphs(ui: &mut egui::Ui, s: &mut Settings) {
                 }
             });
             ui.indent("appearance", |ui| {
+                if m.id == settings::Module::Battery {
+                    ui.horizontal(|ui| {
+                        let label = ui.label("Battery history");
+                        egui::ComboBox::from_id_salt("battery-mode")
+                            .selected_text(match s.metrics.battery_mode {
+                                xrg_ng_linux::battery::Mode::Charge => "Charge (%)",
+                                xrg_ng_linux::battery::Mode::Power => {
+                                    "Charging/discharging power (W)"
+                                }
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut s.metrics.battery_mode,
+                                    xrg_ng_linux::battery::Mode::Charge,
+                                    "Charge (%)",
+                                );
+                                ui.selectable_value(
+                                    &mut s.metrics.battery_mode,
+                                    xrg_ng_linux::battery::Mode::Power,
+                                    "Charging/discharging power (W)",
+                                );
+                            })
+                            .response
+                            .labelled_by(label.id);
+                    });
+                }
                 style_picker(ui, "style", &mut m.style);
                 ui.horizontal(|ui| {
                     let mut custom = m.height.is_some();
@@ -776,13 +802,76 @@ fn weather(ui: &mut egui::Ui, s: &mut Settings) {
         ui.text_edit_singleline(&mut s.weather.station);
     });
     ui.horizontal(|ui| {
-        ui.label("Units");
+        ui.label("Default unit system");
         ui.selectable_value(
             &mut s.weather.units,
             xrg_ng_linux::weather::Units::Metric,
             "Metric",
         );
         ui.selectable_value(&mut s.weather.units, xrg_ng_linux::weather::Units::Us, "US");
+    });
+    for (id, label, value, metric, us) in [
+        (
+            "weather-temperature",
+            "Temperature",
+            &mut s.weather.temperature_units,
+            "°C",
+            "°F",
+        ),
+        (
+            "weather-distance",
+            "Visibility",
+            &mut s.weather.distance_units,
+            "Kilometers",
+            "Miles",
+        ),
+        (
+            "weather-pressure",
+            "Pressure",
+            &mut s.weather.pressure_units,
+            "hPa",
+            "inHg",
+        ),
+    ] {
+        ui.horizontal(|ui| {
+            let label = ui.label(label);
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(match value {
+                    None => "Default",
+                    Some(xrg_ng_linux::weather::Units::Metric) => metric,
+                    Some(xrg_ng_linux::weather::Units::Us) => us,
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(value, None, "Default");
+                    ui.selectable_value(value, Some(xrg_ng_linux::weather::Units::Metric), metric);
+                    ui.selectable_value(value, Some(xrg_ng_linux::weather::Units::Us), us);
+                })
+                .response
+                .labelled_by(label.id);
+        });
+    }
+    ui.horizontal(|ui| {
+        use xrg_ng_linux::weather::WindUnits::*;
+        let label = ui.label("Wind / gusts");
+        egui::ComboBox::from_id_salt("weather-wind")
+            .selected_text(match s.weather.wind_units {
+                None => "From visibility units",
+                Some(Knots) => "Knots",
+                Some(Kmh) => "km/h",
+                Some(Mph) => "mph",
+            })
+            .show_ui(ui, |ui| {
+                for (value, label) in [
+                    (None, "From visibility units"),
+                    (Some(Knots), "Knots"),
+                    (Some(Kmh), "km/h"),
+                    (Some(Mph), "mph"),
+                ] {
+                    ui.selectable_value(&mut s.weather.wind_units, value, label);
+                }
+            })
+            .response
+            .labelled_by(label.id);
     });
     ui.horizontal(|ui| {
         ui.label("Refresh");

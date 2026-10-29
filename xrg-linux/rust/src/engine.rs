@@ -37,6 +37,9 @@ impl Panel {
         let (lower, upper) = self.scale.bounds_with_minimum(&self.series, minimum);
         let axis = match self.scale {
             Scale::Percent => "0–100%".into(),
+            Scale::SignedWatts => {
+                format!("{lower:.1}–{upper:.1} W; charging positive, discharging negative")
+            }
             Scale::Automatic => format!(
                 "{lower:.2}–{upper:.2} in graph units; scales to recent history, not device capacity"
             ),
@@ -88,6 +91,7 @@ impl Panel {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Scale {
     Percent,
+    SignedWatts,
     Automatic,
     Celsius,
     /// Weather keeps its own display-unit preference; samples remain Celsius.
@@ -110,6 +114,16 @@ impl Scale {
     pub fn bounds_with_minimum(self, series: &[Vec<f64>], minimum: u64) -> (f64, f64) {
         match self {
             Self::Percent => (0., 100.),
+            Self::SignedWatts => {
+                let peak = series
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .filter(|v| v.is_finite())
+                    .map(f64::abs)
+                    .fold(30., f64::max);
+                (-peak, peak)
+            }
             Self::Automatic => (
                 0.,
                 (series.iter().flatten().copied().fold(1.0, f64::max) * 1.1).max(minimum as f64),
@@ -188,7 +202,7 @@ pub struct Sampler {
     sensor_statistics: crate::sensor_stats::Statistics,
     inventory: crate::metrics::Inventory,
     process_report: Result<Arc<crate::process::Report>, String>,
-    battery_histories: BTreeMap<String, History>,
+    battery: crate::battery::View,
     gpu: crate::gpu::GpuCollector,
     gpu_memory: crate::gpu_memory::View,
     gpu_histories: BTreeMap<String, GpuHistory>,
@@ -256,7 +270,7 @@ impl Sampler {
             sensor_statistics: Default::default(),
             inventory: crate::metrics::Inventory::default(),
             process_report: Err("Waiting for process sample".into()),
-            battery_histories: BTreeMap::new(),
+            battery: crate::battery::View::default(),
             start: Instant::now(),
             sequence: 0,
         }
@@ -274,11 +288,7 @@ impl Sampler {
                     h.observed = 0;
                 }
             }
-            Module::Battery => {
-                for h in self.battery_histories.values_mut() {
-                    h.clear();
-                }
-            }
+            Module::Battery => self.battery.clear_graph(),
             Module::Processes => {
                 for h in &mut self.process_histories {
                     h.clear();
@@ -856,59 +866,8 @@ impl Sampler {
         panel
     }
     fn battery_panel(&mut self) -> Panel {
-        let mut series = Vec::new();
-        let (label, detail) = match self.source.battery() {
-            Err(error) => ("Battery unavailable".into(), error),
-            Ok(report) if report.values.is_empty() => {
-                if report.errors.is_empty() {
-                    self.battery_histories.clear();
-                    (
-                        "No system battery".into(),
-                        "No present system battery detected".into(),
-                    )
-                } else {
-                    ("Battery unavailable".into(), report.errors.join("\n"))
-                }
-            }
-            Ok(report) => {
-                let visible: Vec<_> = report.values.iter().take(3).collect();
-                self.battery_histories
-                    .retain(|name, _| visible.iter().any(|v| v.name == *name));
-                let mut labels = Vec::new();
-                for reading in visible {
-                    let history = self
-                        .battery_histories
-                        .entry(reading.name.clone())
-                        .or_insert_with(|| History::new(120));
-                    history.append(reading.percent);
-                    series.push(history.values());
-                    labels.push(format!("{} {:.0}%", reading.name, reading.percent));
-                }
-                let mut label = labels.join(" / ");
-                if report.values.len() > 3 {
-                    label.push_str(&format!(" (+{})", report.values.len() - 3));
-                }
-                if !report.errors.is_empty() || report.values.iter().any(|v| !v.notes.is_empty()) {
-                    label.push_str(" · partial");
-                }
-                let mut detail: Vec<_> = report
-                    .values
-                    .iter()
-                    .map(crate::hardware::Battery::description)
-                    .collect();
-                detail.extend(report.errors);
-                (label, detail.join("\n"))
-            }
-        };
-        Panel {
-            title: "Battery",
-            label,
-            detail,
-            series,
-            scale: Scale::Percent,
-            temperature_text: None,
-            readout: Default::default(),
-        }
+        self.battery
+            .panel(self.source.battery(), self.metrics.selection().battery_mode)
     }
     fn temperature_panel(&mut self) -> Panel {
         let report = crate::hardware::temperature_sources(self.source.sys_root());

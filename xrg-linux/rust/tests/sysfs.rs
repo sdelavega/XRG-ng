@@ -1290,3 +1290,37 @@ fn graph_control_clears_selected_or_all_histories_without_resetting_sensor_stati
     drop(worker);
     assert!(control.clear_all().is_err());
 }
+
+#[test]
+fn battery_power_mode_reaches_sampler_and_mode_changes_preserve_each_history() {
+    use xrg_ng_linux::{battery::Mode, engine::Scale, settings::MetricSelection};
+    let f = Fixture::new();
+    f.core();
+    f.battery(
+        "BAT0",
+        &[
+            ("capacity", "50"),
+            ("status", "Charging"),
+            ("power_now", "10000000"),
+        ],
+    );
+    let mut sampler = Sampler::with_sources(f.sources());
+    assert_eq!(sampler.sample().panels[4].series[0].last(), Some(&50.));
+    sampler
+        .set_selection(MetricSelection {
+            battery_mode: Mode::Power,
+            ..Default::default()
+        })
+        .unwrap();
+    let power = sampler.sample();
+    assert_eq!(power.panels[4].scale, Scale::SignedWatts);
+    assert_eq!(&power.panels[4].series[0][118..], [10., 10.]);
+    f.put("class/power_supply/BAT0/status", "Discharging");
+    f.put("class/power_supply/BAT0/power_now", "6000000");
+    f.put("class/power_supply/BAT0/capacity", "49");
+    assert_eq!(sampler.sample().panels[4].series[0].last(), Some(&-6.));
+    sampler.set_selection(MetricSelection::default()).unwrap();
+    let charge = sampler.sample();
+    assert_eq!(charge.panels[4].scale, Scale::Percent);
+    assert_eq!(&charge.panels[4].series[0][116..], [50., 50., 49., 49.]);
+}
