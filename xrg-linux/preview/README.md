@@ -1,27 +1,28 @@
 # XRG-ng Linux preview
 
-This is the Swift/Rust + GTK4 rewrite, version 0.1.0. It is an early preview;
+This is the Swift/Rust + egui rewrite, version 0.1.0. It is an early preview;
 the legacy C/GTK3 application remains available separately.
 
 ## Requirements
 
 Use the archive matching `uname -m`: **x86_64** or **aarch64** (ARM64).
-The preview is built and tested on **Ubuntu 24.04**, using glibc and **GTK 4.10+**.
+The preview is built and tested on **Ubuntu 24.04**, using glibc and **OpenGL / EGL**.
 Other distributions with compatible libraries may work but are not validated.
 These archives do not target musl/Alpine or older glibc systems. They include the
 required Swift libraries; Swift, Rust and development packages are not needed.
-GTK, GLib, graphics drivers, fonts and other system libraries remain dependencies.
+X11/Wayland and graphics driver libraries remain system dependencies. GTK, GSK,
+Cairo and GLib are not frontend dependencies.
 
 On Ubuntu 24.04:
 
 ```sh
 sudo apt-get update
-sudo apt-get install libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 curl ca-certificates
+sudo apt-get install libgl1 libegl1 libgl1-mesa-dri libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-6 libxcursor1 libxi6 libxrandr2 libstdc++6 libgcc-s1 python3 curl ca-certificates
 ```
 
 Python 3.11+ is only used by the optional install/uninstall scripts. Running directly
 from the extracted archive requires a POSIX shell and coreutils, not Python.
-Graphical launch needs a desktop session. Headless mode still loads GTK libraries.
+Graphical launch needs a desktop session. The desktop binary loads its windowing/graphics libraries even in headless mode.
 
 ## Verify, extract and run
 
@@ -42,11 +43,11 @@ moving the extracted directory, including paths with spaces.
 
 Use **AI…** for provider totals, recorded Claude/Gemini/Hermes token breakdowns by
 model, Ollama inventories and saved source settings.
-The Sources tab can disable providers, override local data paths and select local
+Preferences → AI can disable providers, override local data paths and select local
 HTTP endpoints. These controls and their limits are described in
 `share/doc/xrg-ng/DEVELOPMENT.md`.
 
-The toolbar's sun icon opens **Weather**. Requests are off by default; enable
+The title menu opens **Weather**. Requests are off by default; enable
 them and apply a four-character ICAO station to show current station observations.
 Metric/US units and a 5–60 minute refresh interval are saved. The window shows the
 observation age, raw METAR and explicit stale/error states. **Refresh now** obeys
@@ -54,10 +55,9 @@ a one-minute request minimum per instance. Weather uses HTTPS to the NWS Aviatio
 Weather Center; it does not detect your location or provide a forecast.
 
 Right-click a graph or focus it and press **Shift+F10** for live details,
-preferences, hide and reorder actions. The application menu's **Show all graphs**
-restores visibility, keeping saved order, themes and data sources.
+preferences, style and hide actions. Preferences restores graph visibility, keeping saved order, themes and data sources.
 
-Use **Preferences → Import legacy Linux settings…** to review the C app's
+Use **Preferences → Themes / import → Review legacy settings…** to review the C app's
 `xrg-linux/settings.conf`. Supported visibility flags and global colors can be
 imported into the draft; **Apply** saves them in the new app. Layout orientation
 and system temperature units also transfer. Unsupported fields
@@ -108,7 +108,7 @@ is explicitly marked `dirty: true`; CI packages require a clean checkout.
 `source.tar.gz` includes the corresponding project snapshot and locked Cargo
 dependency sources. Extract it, enter `source/`, and follow the Linux build guide
 in `xrg-linux/rust/README.md`. The included `.cargo/config.toml` selects `vendor/`
-for offline Cargo dependency resolution. Swift/Rust toolchains and GTK development
+for offline Cargo dependency resolution. Swift/Rust toolchains and windowing development
 packages are still needed to rebuild. The Swift runtime is unmodified apart from
 relative ELF loader paths. Licenses/notices are in `share/doc/xrg-ng/`.
 

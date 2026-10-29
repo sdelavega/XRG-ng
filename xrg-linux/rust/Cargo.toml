@@ -7,11 +7,12 @@ build = "build.rs"
 
 [features]
 default = []
-gtk-ui = ["dep:gtk"]
+egui-ui = ["dep:eframe", "dep:png"]
 
 [dependencies]
 libc = "0.2"
-gtk = { package = "gtk4", version = "0.11", features = ["v4_10"], optional = true }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"], optional = true }
+png = { version = "0.18", optional = true }
 rusqlite = { version = "0.41.0", features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }

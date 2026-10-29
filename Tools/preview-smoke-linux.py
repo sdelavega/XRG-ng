@@ -3,13 +3,13 @@
 # Copyright (C) 2026 Stephen de la Vega.
 """Exercise the preview on a runtime-only Linux system, under an unprivileged UID."""
 import argparse
-import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import xml.etree.ElementTree as ET
 import shutil
 import subprocess
 import sys
@@ -31,33 +31,45 @@ def run(command, env, log, success=True, timeout=60):
 
 
 def desktop_launch(path):
-    # Exercise the desktop environment's actual Exec parser, including field codes.
-    import gi
-    gi.require_version("Gio", "2.0")
-    from gi.repository import Gio, GLib
-    app = Gio.DesktopAppInfo.new_from_filename(str(path))
-    require(app is not None, "GIO rejected the installed desktop entry")
-    children = []
-    def spawned(_app, pid, _data):
-        children.append(pid)
-    app.launch_uris_as_manager([], None, GLib.SpawnFlags.DO_NOT_REAP_CHILD,
-                               None, None, spawned, None)
-    require(len(children) == 1, "Desktop entry did not start one application")
-    _, status = os.waitpid(children[0], 0)
-    require(os.waitstatus_to_exitcode(status) == 0, f"Desktop launch exited with status {status}")
+    # Decode Desktop Entry string escaping, then Exec quoting, then %% field
+    # codes. No shell expansion; /bin/sh is the installed launcher's interpreter.
+    lines = [line[5:] for line in path.read_text().splitlines() if line.startswith("Exec=")]
+    require(len(lines) == 1, "Desktop entry must have one Exec")
+    value = re.sub(r"\\([sntr\\])", lambda m: {"s": " ", "n": "\n", "t": "\t", "r": "\r", "\\": "\\"}[m[1]], lines[0])
+    args, token = [], []
+    quoted = False
+    started = False
+    i = 0
+    while i < len(value):
+        char = value[i]
+        if char == '"':
+            quoted = not quoted
+            started = True
+        elif char == "\\":
+            i += 1
+            require(i < len(value), "Truncated Exec escape")
+            token.append(value[i])
+            started = True
+        elif char.isspace() and not quoted:
+            if started:
+                args.append("".join(token))
+                token, started = [], False
+        else:
+            token.append(char)
+            started = True
+        i += 1
+    require(not quoted, "Unterminated Exec quote")
+    if started:
+        args.append("".join(token))
+    require(args, "Empty Exec")
+    require(all("%" not in arg.replace("%%", "") for arg in args), "Unsupported Exec field code")
+    args = [arg.replace("%%", "%") for arg in args]
+    subprocess.run(args, check=True, timeout=30)
 
 
 def decode_icon(path):
-    # Use the runtime image's real SVG loader without requiring GTK development
-    # tools or the optional GdkPixbuf introspection package.
-    library = ctypes.CDLL("libgdk_pixbuf-2.0.so.0")
-    library.gdk_pixbuf_new_from_file.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
-    library.gdk_pixbuf_new_from_file.restype = ctypes.c_void_p
-    pixbuf = library.gdk_pixbuf_new_from_file(os.fsencode(path), None)
-    require(pixbuf is not None, f"Runtime cannot decode icon: {path}")
-    objects = ctypes.CDLL("libgobject-2.0.so.0")
-    objects.g_object_unref.argtypes = [ctypes.c_void_p]
-    objects.g_object_unref(pixbuf)
+    root = ET.parse(path).getroot()
+    require(root.tag == "{http://www.w3.org/2000/svg}svg", "Invalid SVG root")
 
 
 def smoke(args):
@@ -78,7 +90,7 @@ def smoke(args):
         env = {k: v for k, v in os.environ.items() if not k.startswith("LD_")}
         env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"),
                    XDG_DATA_HOME=str(work / "data"), XDG_CACHE_HOME=str(work / "cache"),
-                   GSK_RENDERER="cairo")
+                   LIBGL_ALWAYS_SOFTWARE="1")
         Path(env["HOME"]).mkdir()
         config = Path(env["XDG_CONFIG_HOME"])
         for name in ["xrg-ng", "xrg-linux"]:
@@ -96,6 +108,10 @@ def smoke(args):
         require(manifest["architecture"] == platform.machine(), "Package architecture mismatch")
         require(args.allow_dirty or not manifest["dirty"], "CI package must have a clean source snapshot")
         require((bundle / "source.tar.gz").is_file(), "Corresponding source missing")
+        notices = bundle / "share/doc/xrg-ng/licenses"
+        require((notices / "egui-workspace-0.37.0/LICENSE-MIT").is_file(), "egui code license missing")
+        for name in ["UFL.txt", "OFL.txt", "Hack-Regular.txt", "emoji-icon-font-mit-license.txt", "egui-icons.txt"]:
+            require(len(list(notices.glob(f"epaint_default_fonts-*/fonts/{name}"))) == 1, f"Embedded font notice missing: {name}")
         require((bundle / "share/doc/xrg-ng/licenses/Swift-toolchain-LICENSE.txt").is_file(), "Swift license missing")
         require((bundle / "share/doc/xrg-ng/licenses/swift-6.4.1/ICU-76.1.txt").is_file(), "ICU notices missing")
         shutil.copy2(bundle / "manifest.json", results / "manifest.json")
@@ -105,6 +121,8 @@ def smoke(args):
         bundle = moved
         linked = run(["ldd", bundle / "bin/xrg-ng-linux"], env, results / "ldd.log")
         require("not found" not in linked, "Package has unresolved system dependencies")
+        forbidden = ("libgtk-", "libgdk-", "libgsk-", "libcairo", "libglib-", "libgobject-", "libgio-", "libpango")
+        require(not any(line.strip().startswith(forbidden) for line in linked.splitlines()), "GTK/GSK/Cairo/GLib entered the runtime closure")
         for name in manifest["bundled_libraries"]:
             line = next((line for line in linked.splitlines() if line.strip().startswith(name + " =>")), "")
             resolved = re.search(r"=> (/.+?) \(0x[0-9a-f]+\)", line)
@@ -131,11 +149,10 @@ def smoke(args):
         desktop = prefix / "share/applications/com.sdelavega.xrg-ng.desktop"
         run(["desktop-file-validate", desktop], env, results / "desktop-validate.log")
         decode_icon(icon)
-        decode_icon(Path("/usr/share/icons/Adwaita/symbolic/categories/preferences-system-symbolic.svg"))
         # Keep Exec quoting exactly as installed; add only the application's smoke flag.
         test_desktop = results / "desktop-smoke.desktop"
         test_desktop.write_text(re.sub(r"^Exec=(.*)$", r"Exec=\1 --smoke-test", desktop.read_text(), flags=re.M))
-        gui_env = dict(env, XRG_SMOKE_IMAGE=str(results / "installed-gtk.png"),
+        gui_env = dict(env, XRG_SMOKE_IMAGE=str(results / "installed-egui.png"),
                        XRG_SMOKE_PREFS_IMAGE=str(results / "installed-preferences.png"),
                        XRG_SMOKE_PROCESS_IMAGE=str(results / "installed-processes.png"),
                        XRG_SMOKE_AI_IMAGE=str(results / "installed-ai.png"),
@@ -146,9 +163,9 @@ def smoke(args):
                        XRG_SMOKE_IMPORT_IMAGE=str(results / "installed-import.png"),
                        XRG_SMOKE_LAYOUT_IMAGE=str(results / "installed-layout.png"),
                        XRG_SMOKE_NPU_IMAGE=str(results / "installed-npu.png"))
-        gtk = run(["dbus-run-session", "--", "xvfb-run", "-a", "--server-args=-screen 0 1280x1400x24",
+        gui = run(["dbus-run-session", "--", "xvfb-run", "-a", "--server-args=-screen 0 1280x1400x24",
                    sys.executable, Path(__file__).resolve(), "--desktop", test_desktop], gui_env, results / "desktop-launch.log")
-        require("GTK_SMOKE_OK" in gtk, "Installed desktop launch did not finish the GTK smoke flow")
+        require("EGUI_SMOKE_OK" in gui, "Installed desktop launch did not finish the egui smoke flow")
         # Upgrade and then exercise refusal paths without losing the installation.
         run([bundle / "install.sh", "--prefix", prefix], env, results / "upgrade.log")
         before = (installed / ".xrg-ng-install.json").read_bytes()

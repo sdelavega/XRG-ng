@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-#[cfg(feature = "gtk-ui")]
+#[cfg(feature = "egui-ui")]
 mod ui;
 use std::{process::ExitCode, time::Instant};
 use xrg_ng_linux::{engine::Sampler, shared};
@@ -54,7 +54,7 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    #[cfg(feature = "gtk-ui")]
+    #[cfg(feature = "egui-ui")]
     if args.is_empty() || args == ["--smoke-test"] {
         return if ui::run(!args.is_empty()) {
             ExitCode::SUCCESS
@@ -66,7 +66,7 @@ fn main() -> ExitCode {
 }
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: xrg-ng-linux [--version | --headless [--samples 2..3600] | --smoke-test]\nBuild with --features gtk-ui for the GTK 4 application."
+        "Usage: xrg-ng-linux [--version | --headless [--samples 2..3600] | --smoke-test]\nBuild with --features egui-ui for the desktop application."
     );
     ExitCode::from(2)
 }

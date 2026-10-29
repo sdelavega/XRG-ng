@@ -9,7 +9,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then echo "results=$output" >> "$GITHUB_OUTPUT
 exec > >(tee "$output/validation.log") 2>&1
 swift --version
 rustc --version
-pkg-config --modversion gtk4
+pkg-config --modversion xkbcommon
 # Tests already build the dynamic product. A second build needlessly re-enters
 # Swift 6.4.1's planner (which has crashed in libdispatch on hosted x86_64).
 # Keep one build, then require and exercise that exact artifact below.
@@ -30,47 +30,18 @@ cargo fmt --manifest-path xrg-linux/rust/Cargo.toml --check
 cargo clippy "${cargo_options[@]}" --all-targets -- -D warnings
 cargo test "${cargo_options[@]}"
 cargo run "${cargo_options[@]}" -- --headless --samples 3
-# Xe power policy wakes a sleeping worker; this mode uses custom sysfs, no GPU IO.
-XRG_SMOKE_XE_PMU=1 XRG_SMOKE_XE_PREFS_IMAGE="$output/xe-pmu-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Presentation-only network floors share the line/bar axis and preserve rates.
-XRG_SMOKE_NETWORK_SCALE=1 XRG_SMOKE_NETWORK_SCALE_PREFS_IMAGE="$output/network-scale-preferences.png" XRG_SMOKE_NETWORK_SCALE_IMAGE="$output/network-scale.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Opt-in dashboard dimensions restore separately from per-graph sizing.
-XRG_SMOKE_WINDOW_SIZE=1 XRG_SMOKE_WINDOW_SIZE_PREFS_IMAGE="$output/window-size-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Main-window opacity must apply independently of fully readable Preferences.
-XRG_SMOKE_OPACITY=1 XRG_SMOKE_OPACITY_PREFS_IMAGE="$output/opacity-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# A long saved interval must wake on Apply, with its own unchanged smoke deadline.
-XRG_SMOKE_SAMPLING=1 XRG_SMOKE_SAMPLING_PREFS_IMAGE="$output/sampling-preferences.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Display-only AI choices must preserve cached totals, sources and rate history.
-XRG_SMOKE_AI_VIEW=1 GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Dedicated theme conversion gate, with its own unchanged smoke deadline.
-XRG_SMOKE_XTF_THEME=1 XRG_SMOKE_P3_IMAGE="$output/p3-imported.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Default compact dashboard, with live Linux readings and honest absent-hardware states.
+# Fail if the new frontend acquires GTK/GSK/Cairo/GLib through a helper crate.
+python3 Tools/check-linux-ui-deps.py
+# Native OpenGL painting using Mesa under X11. This does not establish Wayland,
+# physical GPU behavior or screen-reader interoperability.
 for theme in Classic Midnight; do
-    XRG_SMOKE_STYLE="$theme" XRG_SMOKE_IMAGE="$output/compact-$theme.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    XRG_SMOKE_STYLE="$theme" XRG_SMOKE_IMAGE="$output/compact-$theme.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
         cargo run "${cargo_options[@]}" -- --smoke-test
 done
-
-# A real GTK main loop, Cairo drawing and live worker snapshots under X11.
-# This does not establish Wayland/compositor or hardware-specific behavior.
-XRG_SMOKE_IMAGE="$output/gtk-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferences-smoke.png" XRG_SMOKE_PROCESS_IMAGE="$output/processes-smoke.png" XRG_SMOKE_AI_IMAGE="$output/ai-smoke.png" XRG_SMOKE_AI_SOURCES_IMAGE="$output/ai-sources-smoke.png" XRG_SMOKE_WEATHER_IMAGE="$output/weather-smoke.png" XRG_SMOKE_MENU_IMAGE="$output/menu-smoke.png" XRG_SMOKE_DETAILS_IMAGE="$output/details-smoke.png" XRG_SMOKE_IMPORT_IMAGE="$output/import-smoke.png" XRG_SMOKE_LAYOUT_IMAGE="$output/layout-smoke.png" XRG_SMOKE_NPU_IMAGE="$output/npu-smoke.png" XRG_SMOKE_SENSOR_SOURCES_IMAGE="$output/sensor-sources-smoke.png" XRG_SMOKE_MEMORY_IMAGE="$output/memory-smoke.png" XRG_SMOKE_CPU_IMAGE="$output/cpu-smoke.png" XRG_SMOKE_STYLES_IMAGE="$output/styles-smoke.png" XRG_SMOKE_GRAPH_COLORS_IMAGE="$output/graph-colors-smoke.png" XRG_SMOKE_GRAPH_COLORS_PREFS_IMAGE="$output/graph-colors-preferences-smoke.png" XRG_SMOKE_HEIGHTS_VERTICAL_IMAGE="$output/heights-vertical-smoke.png" XRG_SMOKE_HEIGHTS_HORIZONTAL_IMAGE="$output/heights-horizontal-smoke.png" XRG_SMOKE_HEIGHTS_PREFS_IMAGE="$output/heights-preferences-smoke.png" XRG_SMOKE_BARS_LIVE_IMAGE="$output/bars-live-smoke.png" XRG_SMOKE_BARS_PREFS_IMAGE="$output/bars-preferences-smoke.png" XRG_SMOKE_BARS_IMAGE="$output/bars-smoke.png" XRG_SMOKE_MULTI_SENSORS_IMAGE="$output/multi-sensors-smoke.png" XRG_SMOKE_WIDTHS_VERTICAL_IMAGE="$output/widths-vertical-smoke.png" XRG_SMOKE_WIDTHS_HORIZONTAL_IMAGE="$output/widths-horizontal-smoke.png" XRG_SMOKE_WIDTHS_PREFS_IMAGE="$output/widths-preferences-smoke.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Independent process-action gate; signals target only disposable smoke children.
-XRG_SMOKE_PROCESS_ACTIONS=1 XRG_SMOKE_PROCESS_MENU_IMAGE="$output/process-actions-menu.png" XRG_SMOKE_PROCESS_CONFIRM_IMAGE="$output/process-actions-confirm.png" XRG_SMOKE_PROCESS_CONTROLS_IMAGE="$output/process-actions-controls.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+XRG_SMOKE_IMAGE="$output/egui-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferences-smoke.png" XRG_SMOKE_LAYOUT_IMAGE="$output/layout-smoke.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     cargo_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
     echo "binary=$cargo_target/$configuration/xrg-ng-linux" >> "$GITHUB_OUTPUT"
     echo "swift_library=$swift_bin/libXRGSharedCore.so" >> "$GITHUB_OUTPUT"
 fi
-XRG_SMOKE_WEATHER_GRAPH=1 XRG_SMOKE_WEATHER_GRAPH_IMAGE="$output/weather-graph.png" XRG_SMOKE_WEATHER_STALE_IMAGE="$output/weather-stale.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test
-# Separate read-only inspector gate, consuming copied reports; no process signals.
-G_DEBUG=fatal-criticals XRG_SMOKE_PROCESS_DETAILS=1 XRG_SMOKE_PROCESS_DETAILS_IMAGE="$output/process-details.png" XRG_SMOKE_PROCESS_DETAILS_STALE_IMAGE="$output/process-details-stale.png" GSK_RENDERER=cairo dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
-    cargo run "${cargo_options[@]}" -- --smoke-test

@@ -25,14 +25,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install GTK and Rust
+      - name: Install windowing dependencies and Rust
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential curl pkg-config libgtk-4-dev xvfb xauth dbus-x11 python3 patchelf desktop-file-utils
+          DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential curl pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth dbus-x11 python3 patchelf desktop-file-utils
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.99.1 --component clippy --component rustfmt
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Test shared Swift core, Rust collectors and GTK application
+      - name: Test shared Swift core, Rust collectors and egui application
         id: verify
         run: bash Tools/ci-linux.sh "${{ matrix.configuration }}"
       - name: Package tested Linux preview
@@ -62,24 +62,11 @@ jobs:
           name: linux-${{ matrix.runner }}-${{ matrix.configuration }}-results
           path: |
             ${{ steps.verify.outputs.results }}/validation.log
-            ${{ steps.verify.outputs.results }}/gtk-smoke.png
+            ${{ steps.verify.outputs.results }}/egui-smoke.png
+            ${{ steps.verify.outputs.results }}/compact-Classic.png
+            ${{ steps.verify.outputs.results }}/compact-Midnight.png
             ${{ steps.verify.outputs.results }}/preferences-smoke.png
-            ${{ steps.verify.outputs.results }}/sampling-preferences.png
-            ${{ steps.verify.outputs.results }}/opacity-preferences.png
-            ${{ steps.verify.outputs.results }}/window-size-preferences.png
-            ${{ steps.verify.outputs.results }}/network-scale-preferences.png
-            ${{ steps.verify.outputs.results }}/network-scale.png
-            ${{ steps.verify.outputs.results }}/xe-pmu-preferences.png
-            ${{ steps.verify.outputs.results }}/p3-imported.png
-            ${{ steps.verify.outputs.results }}/processes-smoke.png
-            ${{ steps.verify.outputs.results }}/ai-smoke.png
-            ${{ steps.verify.outputs.results }}/ai-sources-smoke.png
-            ${{ steps.verify.outputs.results }}/weather-smoke.png
-            ${{ steps.verify.outputs.results }}/menu-smoke.png
-            ${{ steps.verify.outputs.results }}/details-smoke.png
-            ${{ steps.verify.outputs.results }}/import-smoke.png
             ${{ steps.verify.outputs.results }}/layout-smoke.png
-            ${{ steps.verify.outputs.results }}/npu-smoke.png
   preview-install:
     name: ${{ matrix.runner }} clean runtime install
     needs: build-and-test
@@ -97,7 +84,7 @@ jobs:
       - name: Install runtime and smoke tools only
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgtk-4-1 adwaita-icon-theme librsvg2-common libstdc++6 libgcc-s1 python3 python3-gi curl ca-certificates xvfb xauth dbus-x11 desktop-file-utils
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libgl1 libegl1 libgl1-mesa-dri libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 libx11-6 libxcursor1 libxi6 libxrandr2 libstdc++6 libgcc-s1 python3 curl ca-certificates xvfb xauth dbus-x11 desktop-file-utils
           useradd --uid 10001 --create-home xrg-preview
           mkdir -p /tmp/xrg-preview-results
           chown xrg-preview /tmp/xrg-preview-results

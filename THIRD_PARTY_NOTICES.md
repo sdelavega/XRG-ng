@@ -80,14 +80,26 @@ under CC0-1.0; the text is retained in
 profile is retained beside the fixture. Apple's system profile bytes are used
 only for optional local verification and are not redistributed here.
 
+## Linux egui frontend
+
+The Linux desktop frontend uses egui/eframe 0.37.0 (MIT OR Apache-2.0).
+The upstream workspace license texts are retained under
+`xrg-linux/rust/licenses/egui-workspace-0.37.0/`, pinned to the published crate's source
+commit with URLs and SHA-256 hashes. The default embedded fonts have their own
+Ubuntu Font License, SIL Open Font License and MIT notices; packaging copies all
+of `epaint_default_fonts`'s `fonts/*.txt` notices alongside its Cargo metadata.
+The corresponding font/code sources are also retained in the vendored source archive.
+
 ## Linux preview archives
 
 Preview archives retain the project license/credits, dependency license files and
 Cargo package metadata under `share/doc/xrg-ng/`. Their `source.tar.gz` contains
 the corresponding project snapshot and locked Cargo sources, including third-party
 source notices. Rust standard-library copyright and license files are copied from
-the build toolchain. GTK, GLib, glibc and graphics driver libraries are system
-dependencies and are not included in the archive.
+the build toolchain. The egui/eframe frontend carries its resolved Cargo notices.
+glibc, window-system and graphics driver libraries are system dependencies and
+are not included in the archive. GTK, GSK, Cairo and GLib are excluded from the
+new frontend dependency graph and checked during packaging.
 
 The private Swift 6.4.1 libraries include Swift, Foundation, Dispatch, BlocksRuntime
 and Foundation's ICU dependency. The toolchain's license is copied into the package.

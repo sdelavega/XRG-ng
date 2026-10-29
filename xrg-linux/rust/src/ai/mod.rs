@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Optional AI monitoring. A separate worker prevents scans/SQLite/local APIs
-//! from delaying system collection or GTK. Tests inject roots and API responses.
+//! from delaying system collection or the UI. Tests inject roots and API responses.
 pub mod database;
 pub mod logs;
 mod models;

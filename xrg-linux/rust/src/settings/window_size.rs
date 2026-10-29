@@ -6,7 +6,7 @@ use serde::{
 };
 use std::fmt;
 
-/// GTK logical pixels, independent of graph dimensions and desktop placement.
+/// Window logical pixels, independent of graph dimensions and desktop placement.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub struct WindowSize {
     pub width: u32,

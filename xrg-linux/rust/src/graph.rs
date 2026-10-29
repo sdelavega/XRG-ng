@@ -1,213 +1,212 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-//! Cairo presentation only; immutable series enter here, never collectors.
+//! Cairo-free graph geometry and painting. Missing samples split every curve.
 use crate::settings::GraphStyle;
-use gtk::cairo::{Antialias, Context, Error, Extend, Filter, Format, ImageSurface, SurfacePattern};
+use eframe::egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, pos2};
+
 #[derive(Clone, Copy)]
 pub struct Plot {
-    pub left: f64,
-    pub top: f64,
-    pub right: f64,
-    pub bottom: f64,
+    pub rect: Rect,
     pub lower: f64,
     pub upper: f64,
 }
 impl Plot {
-    fn y(self, value: f64) -> f64 {
-        self.bottom
-            - ((value - self.lower) / (self.upper - self.lower)).clamp(0., 1.)
-                * (self.bottom - self.top)
+    pub fn valid(self) -> bool {
+        self.rect.is_finite()
+            && self.rect.is_positive()
+            && self.lower.is_finite()
+            && self.upper.is_finite()
+            && self.upper > self.lower
     }
-    fn trace(self, context: &Context, values: &[f64], filled: bool) {
-        context.new_path();
-        let zero = self.y(0.);
-        let mut active = false;
-        let mut last_x = self.left;
-        for (index, value) in values.iter().enumerate() {
-            let x = self.left
-                + index as f64 * (self.right - self.left)
-                    / values.len().saturating_sub(1).max(1) as f64;
-            if value.is_finite() {
-                let y = self.y(*value);
-                if !active {
-                    context.move_to(x, if filled { zero } else { y });
-                    if filled {
-                        context.line_to(x, y);
-                    }
-                    active = true;
-                } else {
-                    context.line_to(x, y);
-                }
-                last_x = x;
-            } else if active {
-                if filled {
-                    context.line_to(last_x, zero);
-                    context.close_path();
-                }
-                active = false;
+    pub fn y(self, value: f64) -> f32 {
+        self.rect.bottom()
+            - ((value - self.lower) / (self.upper - self.lower)).clamp(0., 1.) as f32
+                * self.rect.height()
+    }
+    /// Each run keeps its original history positions; gaps never shift samples.
+    pub fn runs(self, values: &[f64]) -> Vec<Vec<Pos2>> {
+        if !self.valid() {
+            return Vec::new();
+        }
+        let mut runs = Vec::new();
+        let mut run = Vec::new();
+        for (i, v) in values.iter().enumerate() {
+            if v.is_finite() {
+                run.push(pos2(
+                    self.rect.left()
+                        + i as f32 * self.rect.width()
+                            / values.len().saturating_sub(1).max(1) as f32,
+                    self.y(*v),
+                ));
+            } else if !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
             }
         }
-        if active && filled {
-            context.line_to(last_x, zero);
-            context.close_path();
+        if !run.is_empty() {
+            runs.push(run);
         }
+        runs
     }
-}
-fn color(context: &Context, color: [f64; 4]) {
-    context.set_source_rgba(color[0], color[1], color[2], color[3]);
-}
-fn pattern(style: GraphStyle, rgba: [f64; 4]) -> Result<SurfacePattern, Error> {
-    let size = if style == GraphStyle::Pixel { 6 } else { 3 };
-    let surface = ImageSurface::create(Format::ARgb32, size, size)?;
-    let context = Context::new(&surface)?;
-    color(&context, rgba);
-    if style == GraphStyle::Pixel {
-        context.set_antialias(Antialias::None);
-        context.rectangle(1., 1., 3., 3.);
-    } else {
-        context.arc(1.5, 1.5, 0.65, 0., std::f64::consts::TAU);
-    }
-    context.fill()?;
-    let pattern = SurfacePattern::create(&surface);
-    pattern.set_extend(Extend::Repeat);
-    pattern.set_filter(Filter::Nearest);
-    Ok(pattern)
-}
-/// Fill each curve against zero, then outline all curves so a smaller series
-/// remains visible even beneath another opaque area. Curves are never stacked.
-pub fn draw(
-    context: &Context,
-    series: &[Vec<f64>],
-    colors: &[[f64; 4]],
-    plot: Plot,
-    style: GraphStyle,
-) -> Result<(), Error> {
-    if ![
-        plot.left,
-        plot.right,
-        plot.top,
-        plot.bottom,
-        plot.lower,
-        plot.upper,
-    ]
-    .iter()
-    .all(|v| v.is_finite())
-        || plot.right <= plot.left
-        || plot.bottom <= plot.top
-        || plot.upper <= plot.lower
-    {
-        return Ok(());
-    }
-    context.save()?;
-    let result = (|| {
-        context.rectangle(
-            plot.left,
-            plot.top,
-            plot.right - plot.left,
-            plot.bottom - plot.top,
-        );
-        context.clip();
-        if style != GraphStyle::Hollow {
-            for (values, rgba) in series.iter().zip(colors).take(3) {
-                plot.trace(context, values, true);
-                if style == GraphStyle::Solid {
-                    color(context, *rgba);
-                } else {
-                    context.set_source(pattern(style, *rgba)?)?;
-                }
-                context.fill()?;
-            }
-        }
-        for (values, rgba) in series.iter().zip(colors).take(3) {
-            plot.trace(context, values, false);
-            color(context, *rgba);
-            context.set_line_width(1.5);
-            context.stroke()?;
-        }
-        Ok(())
-    })();
-    let restored = context.restore();
-    result.and(restored)
 }
 
-/// One track per current series, in the same order and on the same axis as the
-/// graph. Missing latest values leave a gap; a measured zero has an empty track.
-pub fn draw_bars(
-    context: &Context,
-    series: &[Vec<f64>],
-    plot: Plot,
-    bars: &crate::settings::ActivityBars,
-    border: [f64; 4],
-) -> Result<(), Error> {
-    if !bars.visible
-        || bars.validate().is_err()
-        || ![
-            plot.left,
-            plot.right,
-            plot.top,
-            plot.bottom,
-            plot.lower,
-            plot.upper,
-        ]
-        .iter()
-        .all(|v| v.is_finite())
-        || plot.right <= plot.left
-        || plot.bottom - plot.top < 2.
-        || plot.upper <= plot.lower
-    {
-        return Ok(());
+/// Mesh strips avoid the convex-polygon assumption for arbitrary sampled curves.
+fn fill(painter: &Painter, run: &[Pos2], baseline: f32, color: Color32, style: GraphStyle) {
+    if style == GraphStyle::Hollow {
+        return;
     }
-    let count = series.len().min(3);
-    if count == 0 {
-        return Ok(());
-    }
-    context.save()?;
-    let result = (|| {
-        context.rectangle(
-            plot.left,
-            plot.top,
-            plot.right - plot.left,
-            plot.bottom - plot.top,
-        );
-        context.clip();
-        let step = (plot.right - plot.left) / count as f64;
-        let width = (step - 2.).max(0.);
-        if width <= 1. {
-            return Ok(());
-        }
-        for (index, values) in series.iter().take(3).enumerate() {
-            let Some(value) = values.last().copied().filter(|v| v.is_finite()) else {
-                continue;
-            };
-            let x = plot.left + index as f64 * step + 0.5;
-            let zero = plot.y(0.);
-            let current = plot.y(value);
-            color(context, border);
-            context.set_line_width(1.);
-            context.rectangle(x, plot.top + 0.5, width - 1., plot.bottom - plot.top - 1.);
-            context.stroke()?;
-            context.rectangle(x, current.min(zero), width - 1., (current - zero).abs());
-            color(context, bars.color);
-            if bars.style == GraphStyle::Hollow {
-                context.stroke()?;
-            } else {
-                if bars.style != GraphStyle::Solid {
-                    context.set_source(pattern(bars.style, bars.color)?)?;
+    if style == GraphStyle::Solid {
+        let mut mesh = eframe::egui::Mesh::default();
+        for pair in run.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let offset = mesh.vertices.len() as u32;
+            // Split crossings at zero, so translucent fills cannot overlap.
+            if (a.y - baseline) * (b.y - baseline) < 0. {
+                let crossing = pos2(a.x + (b.x - a.x) * (baseline - a.y) / (b.y - a.y), baseline);
+                for p in [
+                    pos2(a.x, baseline),
+                    a,
+                    crossing,
+                    crossing,
+                    b,
+                    pos2(b.x, baseline),
+                ] {
+                    mesh.colored_vertex(p, color);
                 }
-                context.fill()?;
+                mesh.add_triangle(offset, offset + 1, offset + 2);
+                mesh.add_triangle(offset + 3, offset + 4, offset + 5);
+            } else {
+                for p in [pos2(a.x, baseline), a, b, pos2(b.x, baseline)] {
+                    mesh.colored_vertex(p, color);
+                }
+                mesh.add_triangle(offset, offset + 1, offset + 2);
+                mesh.add_triangle(offset, offset + 2, offset + 3);
             }
-            // An endpoint is also visible at zero and at the clipping edges.
-            color(context, bars.color);
-            context.move_to(x, current.clamp(plot.top + 0.75, plot.bottom - 0.75));
-            context.line_to(
-                x + width - 1.,
-                current.clamp(plot.top + 0.75, plot.bottom - 0.75),
-            );
-            context.set_line_width(1.5);
-            context.stroke()?;
         }
-        Ok(())
-    })();
-    let restored = context.restore();
-    result.and(restored)
+        painter.add(Shape::mesh(mesh));
+        return;
+    }
+    let step = if style == GraphStyle::Pixel { 6. } else { 3. };
+    for pair in run.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let mut x = ((a.x - 1.5) / step).ceil() * step + 1.5;
+        while x < b.x {
+            let y = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+            let (top, bottom) = (baseline.min(y), baseline.max(y));
+            let mut py = (top / step).ceil() * step + 1.5;
+            while py < bottom {
+                if style == GraphStyle::Pixel {
+                    painter.rect_filled(
+                        Rect::from_min_max(
+                            pos2((x - 1.5).max(a.x), py - 1.5),
+                            pos2((x + 1.5).min(b.x), (py + 1.5).min(bottom)),
+                        ),
+                        0.,
+                        color,
+                    );
+                } else {
+                    painter.circle_filled(pos2(x, py), 0.65, color);
+                }
+                py += step;
+            }
+            x += step;
+        }
+    }
+}
+
+pub fn draw(
+    painter: &Painter,
+    series: &[Vec<f64>],
+    colors: &[Color32],
+    plot: Plot,
+    style: GraphStyle,
+) {
+    if !plot.valid() {
+        return;
+    }
+    let painter = painter.with_clip_rect(plot.rect);
+    let curves: Vec<_> = series
+        .iter()
+        .zip(colors)
+        .map(|(v, c)| (plot.runs(v), *c))
+        .collect();
+    for (runs, color) in &curves {
+        for run in runs {
+            fill(&painter, run, plot.y(0.), *color, style);
+        }
+    }
+    // Draw outlines after all fills to retain smaller overlapping series.
+    for (runs, color) in curves {
+        for run in runs {
+            if run.len() == 1 {
+                painter.circle_filled(run[0], 0.6, color);
+            } else {
+                painter.add(Shape::line(run, Stroke::new(1., color)));
+            }
+        }
+    }
+}
+
+pub fn bar(
+    painter: &Painter,
+    value: Option<f64>,
+    plot: Plot,
+    color: Color32,
+    border: Color32,
+    style: GraphStyle,
+) {
+    if !plot.valid() || value.is_none_or(|v| !v.is_finite()) {
+        return;
+    }
+    painter.rect_stroke(plot.rect, 0., Stroke::new(0.5, border), StrokeKind::Inside);
+    if let Some(value) = value.filter(|v| v.is_finite()) {
+        draw(painter, &[vec![value, value]], &[color], plot, style);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn plot() -> Plot {
+        Plot {
+            rect: Rect::from_min_max(pos2(0., 0.), pos2(100., 100.)),
+            lower: 0.,
+            upper: 100.,
+        }
+    }
+    #[test]
+    fn gaps_keep_positions_and_zero_is_measured() {
+        let runs = plot().runs(&[0., f64::NAN, 50., f64::INFINITY, 100.]);
+        assert_eq!(
+            runs,
+            vec![
+                vec![pos2(0., 100.)],
+                vec![pos2(50., 50.)],
+                vec![pos2(100., 0.)]
+            ]
+        );
+    }
+    #[test]
+    fn clamps_values_and_rejects_invalid_axes() {
+        assert_eq!(
+            plot().runs(&[-50., 150.]),
+            vec![vec![pos2(0., 100.), pos2(100., 0.)]]
+        );
+        assert!(
+            Plot {
+                upper: 0.,
+                ..plot()
+            }
+            .runs(&[1., 2.])
+            .is_empty()
+        );
+        assert!(
+            Plot {
+                lower: f64::NAN,
+                ..plot()
+            }
+            .runs(&[1.])
+            .is_empty()
+        );
+        assert!(plot().runs(&[]).is_empty());
+    }
 }

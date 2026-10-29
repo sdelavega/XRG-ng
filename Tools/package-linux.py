@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Stephen de la Vega.
-"""Package an already-tested native Linux GTK release and its corresponding source."""
+"""Package an already-tested native Linux egui release and its corresponding source."""
 import argparse
 import hashlib
 import json
@@ -77,8 +77,11 @@ def package(args):
     env = {k: v for k, v in os.environ.items() if k not in ["LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"]}
     build_env = dict(env, LD_LIBRARY_PATH=os.pathsep.join(map(str, [library.parent, *runtime_paths])))
     linked = dependencies(binary, build_env)
-    if "libgtk-4.so.1" not in linked or linked.get(library.name) != library:
-        raise ValueError("The binary must link GTK4 and the exact supplied Swift library")
+    if linked.get(library.name) != library:
+        raise ValueError("The binary must link the exact supplied Swift library")
+    forbidden = [name for name in linked if name.startswith(("libgtk-", "libgdk-", "libgsk-", "libcairo", "libglib-", "libgobject-", "libgio-", "libpango"))]
+    if forbidden:
+        raise ValueError(f"Forbidden frontend runtime dependencies: {forbidden}")
     linked.update(dependencies(library, build_env))
     bundled = {name: path for name, path in linked.items()
                if path == library or any(path.is_relative_to(p) for p in runtime_paths)}
@@ -133,10 +136,11 @@ def package(args):
         shutil.copy2(ROOT / "xrg-linux/preview/README.md", bundle / "README.md")
         notices = docs / "licenses"
         shutil.copytree(ROOT / "xrg-linux/rust/licenses", notices)
-        pinned = notices / "swift-6.4.1"
-        for item in json.loads((pinned / "sources.json").read_text()):
-            if digest(pinned / item["file"]) != item["sha256"]:
-                raise ValueError(f"Pinned runtime notice changed: {item['file']}")
+        for name in ["swift-6.4.1", "egui-workspace-0.37.0"]:
+            pinned = notices / name
+            for item in json.loads((pinned / "sources.json").read_text()):
+                if digest(pinned / item["file"]) != item["sha256"]:
+                    raise ValueError(f"Pinned runtime notice changed: {name}/{item['file']}")
         swift_license = Path(target["paths"]["runtimeResourcePath"]).parent.parent / "share/swift/LICENSE.txt"
         shutil.copy2(swift_license, notices / "Swift-toolchain-LICENSE.txt")
         rust_docs = Path(run("rustc", "--print", "sysroot")) / "share/doc/rust"
@@ -179,6 +183,12 @@ def package(args):
                     copied = dest / relative
                     copied.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, copied)
+            if crate["name"] == "epaint_default_fonts":
+                # These embedded-font notices do not use LICENSE-prefixed names.
+                fonts = directory / "fonts"
+                for path in fonts.glob("*.txt"):
+                    (dest / "fonts").mkdir(exist_ok=True)
+                    shutil.copy2(path, dest / "fonts" / path.name)
             crates.append({"name": crate["name"], "version": crate["version"], "license": crate["license"], "source": crate["source"]})
         (notices / "cargo-dependencies.json").write_text(json.dumps(crates, indent=2) + "\n")
         make_tar(source, bundle / "source.tar.gz")
@@ -189,7 +199,7 @@ def package(args):
             "format": "xrg-ng-linux-preview", "version": project["version"],
             "architecture": arch, "revision": revision, "dirty": bool(status),
             "swift": target["compilerVersion"], "rust": run("rustc", "--version"),
-            "baseline": "Ubuntu 24.04; GTK 4.10+; glibc; system GTK/graphics dependencies",
+            "baseline": "Ubuntu 24.04; glibc; OpenGL / EGL; X11 or Wayland; no GTK/GSK/Cairo",
             "bundled_libraries": sorted(bundled),
             "system_libraries": sorted(set(linked) - set(bundled)),
             "inputs": {"binary_sha256": digest(binary), "swift_library_sha256": digest(library)},

@@ -1,20 +1,98 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-#![cfg(feature = "gtk-ui")]
-use gtk::cairo::{Context, Format, ImageSurface};
+#![cfg(feature = "egui-ui")]
+use eframe::egui::{self, Color32, Rect, pos2};
 use xrg_ng_linux::{
     graph::{self, Plot},
     settings::GraphStyle,
 };
 fn plot(lower: f64, upper: f64) -> Plot {
     Plot {
-        left: 10.,
-        right: 90.,
-        top: 10.,
-        bottom: 90.,
+        rect: Rect::from_min_max(pos2(10., 10.), pos2(90., 90.)),
         lower,
         upper,
     }
+}
+fn color(v: [f64; 4]) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        (v[0] * 255.) as u8,
+        (v[1] * 255.) as u8,
+        (v[2] * 255.) as u8,
+        (v[3] * 255.) as u8,
+    )
+}
+// Rasterize egui's production tessellated triangles to inspect fill semantics.
+// Native OpenGL and font rendering are separately exercised by the Xvfb gate.
+fn raster(draw: impl FnOnce(&egui::Painter)) -> Vec<u8> {
+    let ctx = egui::Context::default();
+    let mut draw = Some(draw);
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_max(pos2(0., 0.), pos2(100., 100.))),
+            ..Default::default()
+        },
+        |ui| draw.take().unwrap()(ui.painter()),
+    );
+    output.textures_delta.clear();
+    let mut image = vec![[0f32; 4]; 100 * 100];
+    let edge = |a: egui::Pos2, b: egui::Pos2, p: egui::Pos2| {
+        (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+    };
+    for primitive in ctx.tessellate(output.shapes, 1.) {
+        let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive else {
+            panic!("Unexpected custom GPU callback")
+        };
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            let [a, b, c] = [
+                mesh.vertices[triangle[0] as usize],
+                mesh.vertices[triangle[1] as usize],
+                mesh.vertices[triangle[2] as usize],
+            ];
+            let area = edge(a.pos, b.pos, c.pos);
+            if area.abs() < 1e-8 {
+                continue;
+            }
+            for y in 0..100 {
+                for x in 0..100 {
+                    let p = pos2(x as f32 + 0.31, y as f32 + 0.37);
+                    if !primitive.clip_rect.contains(p) {
+                        continue;
+                    }
+                    let weights = [
+                        edge(b.pos, c.pos, p) / area,
+                        edge(c.pos, a.pos, p) / area,
+                        edge(a.pos, b.pos, p) / area,
+                    ];
+                    if weights.iter().any(|v| *v < -1e-6) {
+                        continue;
+                    }
+                    let colors = [a.color.to_array(), b.color.to_array(), c.color.to_array()];
+                    let mut source = [0f32; 4];
+                    for channel in 0..4 {
+                        source[channel] = (0..3)
+                            .map(|i| weights[i] * colors[i][channel] as f32 / 255.)
+                            .sum();
+                    }
+                    let dest = &mut image[y * 100 + x];
+                    for channel in 0..4 {
+                        dest[channel] = source[channel] + dest[channel] * (1. - source[3]);
+                    }
+                }
+            }
+        }
+    }
+    image
+        .into_iter()
+        .flat_map(|p| {
+            u32::from_be_bytes([
+                (p[3] * 255.).round() as u8,
+                (p[0] * 255.).round() as u8,
+                (p[1] * 255.).round() as u8,
+                (p[2] * 255.).round() as u8,
+            ])
+            .to_ne_bytes()
+        })
+        .collect()
 }
 fn image(
     style: GraphStyle,
@@ -22,15 +100,15 @@ fn image(
     colors: &[[f64; 4]],
     range: (f64, f64),
 ) -> Vec<u8> {
-    let mut surface = ImageSurface::create(Format::ARgb32, 100, 100).unwrap();
-    let context = Context::new(&surface).unwrap();
-    context.set_line_width(7.);
-    graph::draw(&context, series, colors, plot(range.0, range.1), style).unwrap();
-    assert_eq!(context.line_width(), 7.);
-    assert_eq!(context.clip_extents().unwrap(), (0., 0., 100., 100.));
-    drop(context);
-    surface.flush();
-    surface.data().unwrap().to_vec()
+    raster(|p| {
+        graph::draw(
+            p,
+            series,
+            &colors.iter().copied().map(color).collect::<Vec<_>>(),
+            plot(range.0, range.1),
+            style,
+        )
+    })
 }
 fn pixel(image: &[u8], x: usize, y: usize) -> u32 {
     u32::from_ne_bytes(
@@ -129,27 +207,27 @@ fn opaque_overlaps_keep_other_curves_visible_and_fills_retain_theme_alpha() {
 }
 
 fn bars_image(style: GraphStyle, series: &[Vec<f64>], range: (f64, f64), visible: bool) -> Vec<u8> {
-    let mut surface = ImageSurface::create(Format::ARgb32, 100, 100).unwrap();
-    let context = Context::new(&surface).unwrap();
-    context.set_line_width(7.);
-    graph::draw_bars(
-        &context,
-        series,
-        plot(range.0, range.1),
-        &xrg_ng_linux::settings::ActivityBars {
-            use_series_colors: false,
-            visible,
-            style,
-            color: [1., 0., 0., 0.5],
-        },
-        [0., 0., 1., 1.],
-    )
-    .unwrap();
-    assert_eq!(context.line_width(), 7.);
-    assert_eq!(context.clip_extents().unwrap(), (0., 0., 100., 100.));
-    drop(context);
-    surface.flush();
-    surface.data().unwrap().to_vec()
+    raster(|p| {
+        if !visible {
+            return;
+        }
+        let count = series.len() as f32;
+        for (i, series) in series.iter().enumerate() {
+            let mut plot = plot(range.0, range.1);
+            plot.rect = Rect::from_min_max(
+                pos2(10. + i as f32 * 80. / count, 10.),
+                pos2(10. + (i + 1) as f32 * 80. / count - 1., 90.),
+            );
+            graph::bar(
+                p,
+                series.last().copied(),
+                plot,
+                color([1., 0., 0., 0.5]),
+                color([0., 0., 1., 1.]),
+                style,
+            );
+        }
+    })
 }
 #[test]
 fn bars_keep_zero_visible_missing_blank_and_never_reuse_a_stale_endpoint() {

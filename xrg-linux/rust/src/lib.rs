@@ -10,7 +10,7 @@ mod drm_clients;
 pub mod engine;
 pub mod gpu;
 pub mod gpu_memory;
-#[cfg(feature = "gtk-ui")]
+#[cfg(feature = "egui-ui")]
 pub mod graph;
 pub mod hardware;
 pub mod legacy;
