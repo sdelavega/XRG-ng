@@ -268,6 +268,16 @@ impl ThemeDocument {
     pub fn load(path: &Path) -> Result<Self, String> {
         Self::parse(&system_file::read(path, LIMIT).map_err(|e| e.to_string())?)
     }
+    /// Publish a new theme atomically, without replacing a concurrently created file.
+    pub fn save_new(&self, path: &Path) -> Result<(), String> {
+        self.validate()?;
+        atomic_write_policy(
+            path,
+            &serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?,
+            false,
+            false,
+        )
+    }
     pub fn save(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
         atomic_write(
@@ -802,6 +812,14 @@ impl Store {
     }
 }
 fn atomic_write(path: &Path, bytes: &[u8], create_parent: bool) -> Result<(), String> {
+    atomic_write_policy(path, bytes, create_parent, true)
+}
+fn atomic_write_policy(
+    path: &Path,
+    bytes: &[u8],
+    create_parent: bool,
+    replace: bool,
+) -> Result<(), String> {
     if bytes.len() > LIMIT {
         return Err("Settings/theme file exceeds 128 KiB".into());
     }
@@ -836,13 +854,52 @@ fn atomic_write(path: &Path, bytes: &[u8], create_parent: bool) -> Result<(), St
         let result = file
             .write_all(bytes)
             .and_then(|_| file.sync_all())
-            .and_then(|_| fs::rename(&temporary, path));
-        if result.is_err() {
+            .and_then(|_| {
+                if replace {
+                    fs::rename(&temporary, path)
+                } else {
+                    publish_new(&temporary, path)
+                }
+            });
+        if !replace || result.is_err() {
             let _ = fs::remove_file(&temporary);
         }
         return result.map_err(|e| e.to_string());
     }
     Err("Could not create a unique settings temporary file".into())
+}
+/// Prefer atomic no-replace rename on Linux (also works on filesystems without
+/// hard links). The hard-link fallback likewise cannot replace a racing writer.
+fn publish_new(temporary: &Path, path: &Path) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from = CString::new(temporary.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in export path"))?;
+        let to = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in export path"))?;
+        // Both C strings remain alive throughout the call; no pointer is retained.
+        if unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        } == 0
+        {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if !matches!(
+            error.raw_os_error(),
+            Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
+        ) {
+            return Err(error);
+        }
+    }
+    fs::hard_link(temporary, path)
 }
 /// One worker and one pending value bound save work while users change controls.
 /// Results carry a revision so an old completion cannot mask a newer save error.

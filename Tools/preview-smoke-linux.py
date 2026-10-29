@@ -166,6 +166,13 @@ def smoke(args):
         gui = run(["dbus-run-session", "--", "xvfb-run", "-a", "--server-args=-screen 0 1280x1400x24",
                    sys.executable, Path(__file__).resolve(), "--desktop", test_desktop], gui_env, results / "desktop-launch.log")
         require("EGUI_SMOKE_OK" in gui, "Installed desktop launch did not finish the egui smoke flow")
+        picker_env = dict(env, XRG_SMOKE_FILE_PICKER="1",
+                          XRG_SMOKE_FILE_PICKER_IMAGE=str(results / "installed-file-picker.png"),
+                          XRG_SMOKE_FILE_REPLACE_IMAGE=str(results / "installed-file-replace.png"))
+        chooser = run(["dbus-run-session", "--", "xvfb-run", "-a", "--server-args=-screen 0 1280x1400x24",
+                       sys.executable, Path(__file__).resolve(), "--desktop", test_desktop],
+                      picker_env, results / "file-picker-launch.log")
+        require("EGUI_FILE_PICKER_SMOKE_OK" in chooser, "Installed chooser load/save/import flow failed")
         # Upgrade and then exercise refusal paths without losing the installation.
         run([bundle / "install.sh", "--prefix", prefix], env, results / "upgrade.log")
         before = (installed / ".xrg-ng-install.json").read_bytes()

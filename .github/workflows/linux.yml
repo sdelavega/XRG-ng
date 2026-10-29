@@ -67,6 +67,8 @@ jobs:
             ${{ steps.verify.outputs.results }}/compact-Midnight.png
             ${{ steps.verify.outputs.results }}/preferences-smoke.png
             ${{ steps.verify.outputs.results }}/layout-smoke.png
+            ${{ steps.verify.outputs.results }}/file-picker.png
+            ${{ steps.verify.outputs.results }}/file-replace.png
   preview-install:
     name: ${{ matrix.runner }} clean runtime install
     needs: build-and-test

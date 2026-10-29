@@ -57,7 +57,7 @@ Weather Center; it does not detect your location or provide a forecast.
 Right-click a graph or focus it and press **Shift+F10** for live details,
 preferences, style and hide actions. Preferences restores graph visibility, keeping saved order, themes and data sources.
 
-Use **Preferences → Themes / import → Review legacy settings…** to review the C app's
+Use **Preferences → Themes / import → Browse legacy settings…** to review the C app's
 `xrg-linux/settings.conf`. Supported visibility flags and global colors can be
 imported into the draft; **Apply** saves them in the new app. Layout orientation
 and system temperature units also transfer. Unsupported fields

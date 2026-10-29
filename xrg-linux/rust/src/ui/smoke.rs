@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Real native event-loop, GPU paint, worker and persistence gate (20 seconds).
-use super::{App, preferences};
+use super::{App, file_picker_smoke, preferences};
 use eframe::egui;
 use std::{
     fs,
@@ -25,6 +25,7 @@ pub(super) struct Harness {
     receiver: mpsc::Receiver<Result<(), String>>,
     pub success: Arc<AtomicBool>,
     pub draws: [u32; 13],
+    picker: Option<file_picker_smoke::Harness>,
 }
 impl Harness {
     pub fn new() -> Result<Self, String> {
@@ -51,6 +52,8 @@ impl Harness {
             receiver,
             success: Arc::new(AtomicBool::new(false)),
             draws: [0; 13],
+            picker: std::env::var_os("XRG_SMOKE_FILE_PICKER")
+                .map(|_| file_picker_smoke::Harness::default()),
         })
     }
     pub fn path(&self) -> PathBuf {
@@ -143,6 +146,26 @@ impl Harness {
             return;
         }
         let sequence = snapshot.sequence;
+        if let Some(mut picker) = self.picker.take() {
+            match picker.tick(app, ctx, &self.directory) {
+                Ok(file_picker_smoke::Step::Capture(variable)) => {
+                    self.capture(ctx, egui::ViewportId::from_hash_of("preferences"), variable)
+                }
+                Ok(file_picker_smoke::Step::Done) => {
+                    if !self.success.swap(true, Ordering::Relaxed) {
+                        println!(
+                            "EGUI_FILE_PICKER_SMOKE_OK samples={sequence} xtf=loaded json=saved replace=confirmed cancel=preserved legacy=reviewed invalid=rejected"
+                        );
+                    }
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+                }
+                Ok(file_picker_smoke::Step::Pending) => (),
+                Err(error) => self.fail(ctx, &error),
+            }
+            self.picker = Some(picker);
+            return;
+        }
+
         if self.stage == 5
             && self.wake.is_some_and(|(before, t)| {
                 sequence <= before && t.elapsed() > Duration::from_secs(3)
@@ -301,7 +324,7 @@ pub(super) fn paint_capture(ui: &mut egui::Ui) {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     });
     ui.ctx()
-        .layer_painter(egui::LayerId::new(egui::Order::Foreground, key))
+        .layer_painter(egui::LayerId::new(egui::Order::Debug, key))
         .add(egui::epaint::PaintCallback {
             rect: ui.max_rect(),
             callback: Arc::new(callback),

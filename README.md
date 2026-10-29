@@ -16,6 +16,19 @@ using the same Swift METAR decoder as macOS.
 
 Original XRG website: https://gaucho.software/xrg/
 
+## Linux UI
+
+The Linux build uses egui/eframe instead of GTK.
+
+This is a deliberate technical and governance decision. egui fits
+XRG-ng's Rust architecture and custom graph interface.
+
+As maintainer, I disagree with aspects of GNOME's political advocacy
+and community governance, and prefer not to build on GTK. I want
+XRG-ng to remain focused on software engineering, with contributions
+evaluated on technical merit and constructive conduct. Agreement
+with my political views is not a condition of participation.
+
 ## Hardware support and feedback
 
 Hardware support is a **best-effort attempt**, especially across Linux GPU families,

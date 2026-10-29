@@ -3,6 +3,8 @@
 //! Native egui shell. Workers publish copied data; painting never collects it.
 mod compositor;
 mod dashboard;
+mod file_picker;
+mod file_picker_smoke;
 mod inspectors;
 mod preferences;
 mod smoke;

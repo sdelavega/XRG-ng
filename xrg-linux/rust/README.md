@@ -447,6 +447,10 @@ three-second sampler wake, reopens persisted settings and round-trips a theme.
 Classic and Midnight captures run separately. These checks exercise native OpenGL
 through Mesa software rendering; they do **not** establish physical GPU behavior,
 Wayland compositor behavior, screen-reader interoperability or idle power use.
+A separate native chooser gate covers XTF load, new JSON export, replacement
+confirmation/cancellation, legacy review, rejected files and unchanged active/saved
+preferences on Cancel. Its screenshots are exported. The same chooser gate also
+runs against the installed preview without build toolchains.
 The old GTK widget smoke gates are archived and are not claimed as egui validation.
 
 Release packaging retains the tested binary/Swift library, runtime notices, input
@@ -491,9 +495,29 @@ Xe PMU activity remains explicitly opt-in with its power-policy explanation.
 
 The six built-in themes remain available alongside custom palettes. Themes /
 import edits the seven named RGBA colors, loads JSON or original XRG `.xtf` files,
-and exports portable JSON. Enter or paste a file path; a graphical file browser
-is not yet included in the new frontend. File-format bounds, color conversion,
+and exports portable JSON. **Browse to load…**, **Browse to save…** and
+**Browse legacy settings…** open the built-in egui file picker; pasted paths
+remain available. The chooser supports folder navigation, case-insensitive
+JSON/XTF filtering, hidden files, filename search and explicit replacement review.
+Loading/importing changes only the preferences draft; saving exports its palette.
+Selecting a loaded XTF for export initially suggests a separate JSON filename.
+New-file exports publish atomically without replacing a racing writer.
+
+Directory inspection runs on one background worker per chooser, with coalesced
+requests, a 4,096-entry cap, cooperative 100 ms scan budget and cancellation.
+Incomplete listings are labeled; enter a filename directly to reach an unlisted
+file. File contents are read only after selection, on the existing file worker.
+Raw non-UTF-8 Unix filenames survive selection; file links and special files
+remain rejected by the bounded file readers. Folder links may be entered
+explicitly; directory listing does not recurse into links. **Ctrl+L** focuses
+the folder path, **Alt+Up** navigates to its parent, **Ctrl+H** toggles hidden files,
+**Ctrl+R** reloads and **Escape** cancels. File-format bounds, color conversion,
 validation and settings/theme separation remain in the existing Rust backend.
+
+[File picker preview](../../screenshots/linux-egui-file-picker.png) ·
+[Replacement confirmation](../../screenshots/linux-egui-file-replace.png).
+These native ARM64 Debug captures use disposable fixture files, with active and
+saved user preferences unchanged by the chooser flow.
 
 Custom theme documents contain `format: "xrg-ng-theme"`, `version: 1`, a printable
 name and seven RGBA arrays in window, graph background, series 1/2/3, border and
@@ -504,8 +528,8 @@ separate. Untouched colors retain their original numeric precision.
 
 ## Importing legacy Linux settings
 
-In Themes / import enter the C application's `settings.conf` path, then select
-**Review legacy settings…**. The report lists imported/skipped fields. **Import
+In Themes / import browse to the C application's `settings.conf`, or enter its
+path and select **Review pasted path…**. The report lists imported/skipped fields. **Import
 into draft** transfers supported settings for review; only Apply changes the
 active application. Cancelling keeps the original state. The legacy file is
 read-only and startup does not import it automatically. The new app saves to
@@ -687,8 +711,7 @@ forecast. Requests remain off by default. No location detection is performed.
 
 ## Remaining migration
 
-- Broader egui interaction/accessibility gates, a graphical file browser, native
-  desktop/window-manager validation and idle CPU/GPU/power measurement. Match
+- Broader egui interaction/accessibility gates, native desktop/window-manager validation and idle CPU/GPU/power measurement. Match
   toolkit-specific behavior against the archived GTK reference as this proceeds.
 - Additional vendor counters, Xe virtualization/topology coverage, board-specific
   raw thermistor calibration and optional process priority controls.

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Draft-only preferences. Apply validates before changing workers or storage.
-use super::App;
+use super::{
+    App,
+    file_picker::{Action, Choice, Decision, PathField, Picker},
+};
 use eframe::egui::{self, Color32};
 use std::{path::PathBuf, sync::mpsc};
 use xrg_ng_linux::{
@@ -17,8 +20,9 @@ enum Loaded {
 pub(super) struct Editor {
     pub draft: Settings,
     tab: usize,
-    theme_path: String,
-    legacy_path: String,
+    theme_path: PathField,
+    legacy_path: PathField,
+    pub(super) picker: Option<Picker>,
     message: Option<String>,
     import: Option<xrg_ng_linux::legacy::Import>,
     pending: Option<mpsc::Receiver<Result<Loaded, String>>>,
@@ -29,13 +33,15 @@ impl Editor {
         Self {
             draft,
             tab: 0,
-            theme_path: String::new(),
-            legacy_path: xrg_ng_linux::legacy::path_from(
-                std::env::var_os("XDG_CONFIG_HOME").as_deref(),
-                std::env::var_os("HOME").as_deref(),
-            )
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
+            theme_path: PathField::default(),
+            picker: None,
+            legacy_path: PathField::new(
+                xrg_ng_linux::legacy::path_from(
+                    std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+                    std::env::var_os("HOME").as_deref(),
+                )
+                .unwrap_or_default(),
+            ),
             message: None,
             import: None,
             pending: None,
@@ -50,11 +56,19 @@ impl Editor {
         };
         // Ignore any old asynchronous import completion after this new choice.
         self.pending = None;
+        self.picker = None;
         self.import = None;
         self.message = None;
     }
     fn content(&mut self, ui: &mut egui::Ui, inventory: &Inventory) {
+        let was_busy = self.busy();
         self.poll();
+        if was_busy && !self.busy() {
+            ui.ctx().request_repaint();
+        }
+        ui.add_enabled_ui(!self.busy(), |ui| self.form(ui, inventory));
+    }
+    fn form(&mut self, ui: &mut egui::Ui, inventory: &Inventory) {
         ui.horizontal_wrapped(|ui| {
             for (i, label) in [
                 "General",
@@ -116,9 +130,97 @@ impl Editor {
             }
             Some(Err(mpsc::TryRecvError::Disconnected)) => {
                 self.pending = None;
-                self.message = Some("File worker stopped before returning a result.".into());
+                self.message = Some("File operation stopped before returning a result.".into());
             }
             _ => (),
+        }
+    }
+    pub(super) fn choose(&mut self, action: Action, ctx: &egui::Context) {
+        if self.pending.is_some() {
+            return;
+        }
+        let path = if action == Action::ImportLegacy {
+            self.legacy_path.path()
+        } else {
+            self.theme_path.path()
+        };
+        self.choose_at(action, path, ctx);
+    }
+    pub(super) fn choose_at(&mut self, action: Action, path: PathBuf, ctx: &egui::Context) {
+        self.tab = 5;
+        self.picker = Some(Picker::new(action, path, ctx));
+    }
+    pub(super) fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub(super) fn import_ready(&self) -> bool {
+        self.import.is_some()
+    }
+    pub(super) fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+    pub(super) fn accept_import(&mut self) {
+        if let Some(import) = self.import.take() {
+            self.draft = import.settings;
+            self.message = Some("Imported into draft. Review before Apply.".into());
+        }
+    }
+    fn load_theme(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.start(ctx, move || {
+            ThemeDocument::load(&path).map(|t| Loaded::Theme(Box::new(t)))
+        });
+    }
+    fn save_theme(&mut self, ctx: &egui::Context, path: PathBuf, replace: bool) {
+        let document = self.draft.theme.palette().map(|p| ThemeDocument::new(&p));
+        self.start(ctx, move || {
+            if let Some(preferences) = settings::preferences_path()
+                && (path == preferences
+                    || path
+                        .canonicalize()
+                        .ok()
+                        .zip(preferences.canonicalize().ok())
+                        .is_some_and(|(a, b)| a == b))
+            {
+                return Err("Export a theme separately from application preferences.".into());
+            }
+            let document = document?;
+            if replace {
+                document.save(&path)?;
+            } else {
+                document.save_new(&path)?;
+            }
+            Ok(Loaded::Saved)
+        });
+    }
+    fn review_legacy(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let base = self.draft.clone();
+        self.start(ctx, move || {
+            xrg_ng_linux::legacy::load(&path, &base).map(|i| Loaded::Legacy(Box::new(i)))
+        });
+    }
+    fn chosen(&mut self, choice: Choice, ctx: &egui::Context) {
+        match choice.action {
+            Action::LoadTheme => {
+                self.theme_path.set(choice.path.clone());
+                self.load_theme(ctx, choice.path);
+            }
+            Action::SaveTheme => {
+                self.theme_path.set(choice.path.clone());
+                self.save_theme(ctx, choice.path, choice.replace);
+            }
+            Action::ImportLegacy => {
+                self.legacy_path.set(choice.path.clone());
+                self.review_legacy(ctx, choice.path);
+            }
+        }
+    }
+    fn show_picker(&mut self, ui: &mut egui::Ui) {
+        let Some(decision) = self.picker.as_mut().and_then(|p| p.show(ui)) else {
+            return;
+        };
+        self.picker = None;
+        if let Decision::Chosen(choice) = decision {
+            self.chosen(choice, ui.ctx());
         }
     }
     fn themes(&mut self, ui: &mut egui::Ui) {
@@ -156,46 +258,61 @@ impl Editor {
         }
         ui.separator();
         ui.label("Theme file path (.json or original XRG .xtf)");
-        ui.text_edit_singleline(&mut self.theme_path);
+        self.theme_path.edit(ui);
         ui.checkbox(
             &mut self.replace_theme,
-            "Allow replacing an existing theme file",
+            "Allow replacing an existing theme file when saving the pasted path",
         );
-        ui.horizontal(|ui| {
-            if ui.add_enabled(self.pending.is_none(),egui::Button::new("Load into draft")).clicked() {
-                let path=PathBuf::from(self.theme_path.trim());
-                self.start(ui.ctx(),move||ThemeDocument::load(&path).map(|t|Loaded::Theme(Box::new(t))));
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(self.pending.is_none(), egui::Button::new("Browse to load…"))
+                .clicked()
+            {
+                self.choose(Action::LoadTheme, ui.ctx());
             }
-            if ui.add_enabled(self.pending.is_none(),egui::Button::new("Save JSON theme…")).clicked() {
-                let path=PathBuf::from(self.theme_path.trim());
-                let replace=self.replace_theme;
-                let document=self.draft.theme.palette().map(|p|ThemeDocument::new(&p));
-                self.start(ui.ctx(),move||{
-                    if let Some(preferences)=settings::preferences_path() && (path==preferences || path.canonicalize().ok().zip(preferences.canonicalize().ok()).is_some_and(|(a,b)|a==b)) {
-                        return Err("Export a theme separately from application preferences.".into());
-                    }
-                    if !replace && path.try_exists().map_err(|e|e.to_string())? {return Err("Destination exists. Choose a new path or explicitly allow replacement.".into());}
-                    document?.save(&path)?;Ok(Loaded::Saved)
-                });
+            if ui
+                .add_enabled(self.pending.is_none(), egui::Button::new("Browse to save…"))
+                .clicked()
+            {
+                self.choose(Action::SaveTheme, ui.ctx());
+            }
+            if ui
+                .add_enabled(self.pending.is_none(), egui::Button::new("Load path"))
+                .clicked()
+            {
+                self.load_theme(ui.ctx(), self.theme_path.path());
+            }
+            if ui
+                .add_enabled(self.pending.is_none(), egui::Button::new("Save path"))
+                .clicked()
+            {
+                self.save_theme(ui.ctx(), self.theme_path.path(), self.replace_theme);
             }
         });
-        ui.label("Save exports only the portable JSON palette. Paths can be pasted; no GTK file chooser is used. Reads/writes run on a file worker.");
+        ui.label("Browse folders or paste a path. Theme files contain only the color palette.");
         ui.separator();
         ui.heading("Import legacy Linux settings");
-        ui.text_edit_singleline(&mut self.legacy_path);
-        if ui
-            .add_enabled(
-                self.pending.is_none(),
-                egui::Button::new("Review legacy settings…"),
-            )
-            .clicked()
-        {
-            let path = PathBuf::from(self.legacy_path.trim());
-            let base = self.draft.clone();
-            self.start(ui.ctx(), move || {
-                xrg_ng_linux::legacy::load(&path, &base).map(|i| Loaded::Legacy(Box::new(i)))
-            });
-        }
+        self.legacy_path.edit(ui);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    self.pending.is_none(),
+                    egui::Button::new("Browse legacy settings…"),
+                )
+                .clicked()
+            {
+                self.choose(Action::ImportLegacy, ui.ctx());
+            }
+            if ui
+                .add_enabled(
+                    self.pending.is_none(),
+                    egui::Button::new("Review pasted path…"),
+                )
+                .clicked()
+            {
+                self.review_legacy(ui.ctx(), self.legacy_path.path());
+            }
+        });
         if let Some(import) = &self.import {
             ui.label(import.summary());
             let mut accept = false;
@@ -205,8 +322,7 @@ impl Editor {
                 cancel = ui.button("Cancel import").clicked();
             });
             if accept {
-                self.draft = self.import.take().unwrap().settings;
-                self.message = Some("Imported into draft. Review before Apply.".into());
+                self.accept_import();
             }
             if cancel {
                 self.import = None;
@@ -235,28 +351,31 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
                 open = false;
             }
             egui::CentralPanel::default().show(ui, |ui| {
-                egui::Panel::bottom("preferences-actions").show(ui, |ui| {
-                    if let Some(message) = &editor.message {
-                        ui.colored_label(Color32::LIGHT_YELLOW, message);
-                    }
-                    ui.horizontal(|ui| {
-                        if ui.button("Defaults").clicked() {
-                            editor.restore_defaults();
+                ui.add_enabled_ui(editor.picker.is_none(), |ui| {
+                    egui::Panel::bottom("preferences-actions").show(ui, |ui| {
+                        if let Some(message) = &editor.message {
+                            ui.colored_label(Color32::LIGHT_YELLOW, message);
                         }
-                        if ui.button("Cancel").clicked() {
-                            open = false;
-                        }
-                        if ui
-                            .add_enabled(editor.pending.is_none(), egui::Button::new("Apply"))
-                            .clicked()
-                        {
-                            apply = true;
-                        }
-                        ui.label("Edits take effect only on Apply.");
+                        ui.horizontal(|ui| {
+                            if ui.button("Defaults").clicked() {
+                                editor.restore_defaults();
+                            }
+                            if ui.button("Cancel").clicked() {
+                                open = false;
+                            }
+                            if ui
+                                .add_enabled(editor.pending.is_none(), egui::Button::new("Apply"))
+                                .clicked()
+                            {
+                                apply = true;
+                            }
+                            ui.label("Edits take effect only on Apply.");
+                        });
                     });
+                    editor.content(ui, &inventory);
                 });
-                editor.content(ui, &inventory);
             });
+            editor.show_picker(ui);
             super::smoke::paint_capture(ui);
         },
     );

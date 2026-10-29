@@ -40,6 +40,10 @@ for theme in Classic Midnight; do
 done
 XRG_SMOKE_IMAGE="$output/egui-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferences-smoke.png" XRG_SMOKE_LAYOUT_IMAGE="$output/layout-smoke.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
+# Independent chooser gate: original XTF load, JSON export, replacement review,
+# cancelled drafts and legacy import through the production async UI path.
+XRG_SMOKE_FILE_PICKER=1 XRG_SMOKE_FILE_PICKER_IMAGE="$output/file-picker.png" XRG_SMOKE_FILE_REPLACE_IMAGE="$output/file-replace.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+    cargo run "${cargo_options[@]}" -- --smoke-test
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     cargo_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
     echo "binary=$cargo_target/$configuration/xrg-ng-linux" >> "$GITHUB_OUTPUT"
