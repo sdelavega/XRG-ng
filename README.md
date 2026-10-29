@@ -232,31 +232,27 @@ open XRG-ng.xcodeproj
 
 ### Linux
 
-**Requirements:**
-- GTK 3.24+
-- Cairo 1.16+
-- GLib 2.66+
-- json-glib
-- CMake 3.16+
-- C compiler (gcc/clang)
+The active build uses **Rust + shared Swift + egui/eframe**, with OpenGL and
+X11/Wayland support. It has no GTK, GSK, Cairo or GLib frontend dependency.
+Build natively on x86_64 or ARM64 with Swift 6.3+ (CI: 6.4.1), Rust 1.99.1,
+a C compiler, pkg-config and the windowing/graphics libraries listed in the
+[Linux build guide](xrg-linux/rust/README.md#build-and-run).
 
-**Build Commands:**
+From the repository root:
 
 ```bash
-cd xrg-linux
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-./xrg-linux
+cargo run --manifest-path xrg-linux/rust/Cargo.toml --features egui-ui
+# Toolkit-independent diagnostics:
+cargo run --manifest-path xrg-linux/rust/Cargo.toml -- --headless --samples 3
 ```
 
-**Install System-Wide:**
+Native CI produces relocatable preview archives with the Swift runtime included;
+see the [preview installation guide](xrg-linux/preview/README.md). No Swift or Rust
+toolchain is needed to run those archives.
 
-```bash
-sudo make install
-```
-
-For detailed Linux documentation, see [xrg-linux/README.md](xrg-linux/README.md)
+The earlier C/GTK3 application remains available separately for reference and
+fallback. Its CMake instructions and dependencies are in the
+[legacy Linux guide](xrg-linux/README.md).
 
 ## License
 
