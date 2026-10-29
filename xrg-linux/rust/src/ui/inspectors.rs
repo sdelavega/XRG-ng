@@ -51,6 +51,71 @@ fn report_text(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(text).wrap().selectable(true));
 }
 pub(super) fn show(app: &mut App, ctx: &egui::Context) {
+    if app.show_sensors {
+        app.show_sensors = window(
+            ctx,
+            "sensors",
+            "XRG-ng · Sensors and statistics",
+            [960., 600.],
+            |ui| {
+                ui.label("Session statistics cover all readable temperature and fan inputs, independently of graph selection. Averages are sample-weighted. Missing inputs retain statistics and show n/a as current. Replaced inputs start fresh.");
+                if let Some(snapshot) = &app.snapshot {
+                    let report = &snapshot.sensors;
+                    let units = app.settings.temperature_units;
+                    ui.label(format!(
+                        "{:.1}s since start/reset · snapshot {} · statistics generation {}",
+                        report.elapsed_seconds, snapshot.sequence, report.generation
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button("Copy sensor report").clicked() {
+                            ui.ctx().copy_text(report.text(units));
+                        }
+                        if ui.button("Reset session statistics").clicked()
+                            && let Err(error) = app.worker.sensor_stats_control().reset()
+                        {
+                            app.error = Some(error);
+                        }
+                    });
+                    ui.small("Reset applies at the next sample. Graph histories, source selection and sampling remain unchanged.");
+                    egui::Grid::new("sensor-statistics")
+                        .striped(true)
+                        .spacing([12., 6.])
+                        .show(ui, |ui| {
+                            for title in [
+                                "Sensor", "Current", "Minimum", "Average", "Maximum", "Samples",
+                            ] {
+                                ui.strong(title);
+                            }
+                            ui.end_row();
+                            for row in &report.rows {
+                                ui.label(&row.name).on_hover_text(format!(
+                                    "{:?}\nSource: {}\nIncarnation: {}",
+                                    row.kind, row.source_id, row.incarnation
+                                ));
+                                for value in [
+                                    row.current,
+                                    Some(row.minimum),
+                                    Some(row.average),
+                                    Some(row.maximum),
+                                ] {
+                                    ui.label(row.display(value, units));
+                                }
+                                ui.label(row.samples.to_string());
+                                ui.end_row();
+                            }
+                        });
+                    if report.rows.is_empty() {
+                        ui.label("No readable sensor samples accumulated.");
+                    }
+                    for error in &report.errors {
+                        report_text(ui, error);
+                    }
+                } else {
+                    ui.label("Waiting for a sensor sample…");
+                }
+            },
+        );
+    }
     let modules: Vec<_> = app.details.iter().copied().collect();
     for module in modules {
         let open = window(

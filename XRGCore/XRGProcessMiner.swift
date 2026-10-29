@@ -44,7 +44,9 @@ public final class XRGProcessMiner: NSObject {
     private let source: @Sendable () -> [XRGProcessRecord]?
     private var refreshTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
-    private var records: [XRGProcessRecord] = []
+    private(set) var records: [XRGProcessRecord] = []
+    private(set) var sampledAt: Date?
+    private(set) var refreshFailed = false
     @objc public var processes: [[String: Any]] { records.map(\.dictionary) }
 
     public override convenience init() {
@@ -71,7 +73,8 @@ public final class XRGProcessMiner: NSObject {
         refreshTask = Task { [weak self] in
             let result = await Task.detached(priority: .utility) { source() }.value
             guard !Task.isCancelled, let self else { return }
-            if let result { self.records = result }
+            self.refreshFailed = result == nil
+            if let result { self.records = result; self.sampledAt = Date() }
             self.refreshTask = nil
         }
     }

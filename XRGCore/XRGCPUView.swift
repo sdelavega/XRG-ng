@@ -35,6 +35,7 @@ import AppKit
 @objc(XRGCPUView) @objcMembers
 public final class XRGCPUView: NSView, XRGModuleView {
     private let miner: XRGCPUMiner
+    @nonobjc private(set) var processInspector: XRGProcessInspector?
     private let processMiner: XRGProcessMiner
     private let defaults: UserDefaults
     private let standaloneSettings: XRGSettings?
@@ -81,6 +82,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
         super.viewDidMoveToWindow(); bindToWindow()
     }
     private func bindToWindow() {
+        if window == nil { processInspector?.close() }
         let next = window as? any XRGCPUViewHost
         if host !== next || registeredManager !== next?.moduleManager {
             if host?.cpuView === self { host?.cpuView = nil }
@@ -255,6 +257,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
             menu.addItem(item(String(format: "%.1f%% - %@ (id %ld)", cpu, command, pid), #selector(emptyEvent(_:))))
         }
         menu.addItem(.separator())
+        menu.addItem(item("Processes…", #selector(openProcesses(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Open Activity Monitor...", #selector(openActivityMonitor(_:))))
@@ -263,6 +266,10 @@ public final class XRGCPUView: NSView, XRGModuleView {
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    public func openProcesses(_ sender: Any?) {
+        if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .cpu) }
+        processInspector?.present()
+    }
     public func emptyEvent(_ sender: Any?) {}
     public func clearData(_ sender: Any?) { miner.reset(); updateLabels(); needsDisplay = true }
     public func openActivityMonitor(_ sender: Any?) { _ = openURL(Self.activityMonitorURL) }

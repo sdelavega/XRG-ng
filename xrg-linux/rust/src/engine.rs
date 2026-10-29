@@ -139,6 +139,7 @@ pub struct Snapshot {
     pub selection: MetricSelection,
     pub inventory: crate::metrics::Inventory,
     pub processes: Result<Arc<crate::process::Report>, String>,
+    pub sensors: Arc<crate::sensor_stats::Report>,
     pub ai: Option<crate::ai::Update>,
     pub weather: Option<crate::weather::Update>,
 }
@@ -176,6 +177,7 @@ pub struct Sampler {
     metrics: crate::metrics::Sampler,
     memory: crate::memory::View,
     sensors: crate::sensors::View,
+    sensor_statistics: crate::sensor_stats::Statistics,
     inventory: crate::metrics::Inventory,
     process_report: Result<Arc<crate::process::Report>, String>,
     battery_histories: BTreeMap<String, History>,
@@ -241,6 +243,7 @@ impl Sampler {
             metrics: crate::metrics::Sampler::default(),
             memory: crate::memory::View::default(),
             sensors: crate::sensors::View::default(),
+            sensor_statistics: Default::default(),
             inventory: crate::metrics::Inventory::default(),
             process_report: Err("Waiting for process sample".into()),
             battery_histories: BTreeMap::new(),
@@ -298,6 +301,7 @@ impl Sampler {
             selection: self.metrics.selection().clone(),
             inventory: self.inventory.clone(),
             processes: self.process_report.clone(),
+            sensors: Arc::new(self.sensor_statistics.report(time)),
             ai: self.ai_update.clone(),
             weather: self.weather_update.clone(),
         }
@@ -785,10 +789,10 @@ impl Sampler {
         Some(values)
     }
     fn fan_panel(&mut self) -> Panel {
-        let (panel, inventory) = self.sensors.fans(
-            crate::hardware::fans(self.source.sys_root()),
-            self.metrics.selection(),
-        );
+        let report = crate::hardware::fans(self.source.sys_root());
+        self.sensor_statistics
+            .fans(&report, self.start.elapsed().as_secs_f64());
+        let (panel, inventory) = self.sensors.fans(report, self.metrics.selection());
         self.inventory.fans = inventory;
         panel
     }
@@ -848,10 +852,10 @@ impl Sampler {
         }
     }
     fn temperature_panel(&mut self) -> Panel {
-        let (panel, inventory) = self.sensors.temperatures(
-            crate::hardware::temperature_sources(self.source.sys_root()),
-            self.metrics.selection(),
-        );
+        let report = crate::hardware::temperature_sources(self.source.sys_root());
+        self.sensor_statistics
+            .temperatures(&report, self.start.elapsed().as_secs_f64());
+        let (panel, inventory) = self.sensors.temperatures(report, self.metrics.selection());
         self.inventory.temperatures = inventory;
         panel
     }
@@ -879,12 +883,21 @@ impl SelectionControl {
         self.1.request()
     }
 }
+#[derive(Clone)]
+pub struct SensorStatsControl(Arc<std::sync::atomic::AtomicBool>, crate::sampling::Control);
+impl SensorStatsControl {
+    pub fn reset(&self) -> Result<(), String> {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+        self.1.request()
+    }
+}
 pub struct Worker {
     notification: crate::notification::Notification,
     pub latest: Arc<Mutex<Option<Snapshot>>>,
     sampling: crate::sampling::Control,
     join: Option<thread::JoinHandle<()>>,
     selection: SelectionControl,
+    sensor_stats: SensorStatsControl,
     ai: crate::ai::Control,
     weather: crate::weather::Control,
 }
@@ -993,6 +1006,11 @@ impl Worker {
             sampling.clone(),
         );
         let updates = selection.clone();
+        let sensor_stats = SensorStatsControl(
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sampling.clone(),
+        );
+        let reset_stats = sensor_stats.clone();
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
         let notification = crate::notification::Notification::default();
@@ -1009,6 +1027,12 @@ impl Worker {
                         .set_selection(selection)
                         .expect("Validated selection update");
                 }
+                if reset_stats
+                    .0
+                    .swap(false, std::sync::atomic::Ordering::AcqRel)
+                {
+                    sampler.sensor_statistics.reset();
+                }
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 *output.lock().unwrap() = Some(sampler.sample());
                 published.notify();
@@ -1021,6 +1045,7 @@ impl Worker {
             sampling,
             join: Some(join),
             selection,
+            sensor_stats,
             ai,
             weather,
         }
@@ -1034,6 +1059,9 @@ impl Worker {
     }
     pub fn selection_control(&self) -> SelectionControl {
         self.selection.clone()
+    }
+    pub fn sensor_stats_control(&self) -> SensorStatsControl {
+        self.sensor_stats.clone()
     }
     pub fn ai_control(&self) -> crate::ai::Control {
         self.ai.clone()
@@ -1127,6 +1155,33 @@ mod sampling_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    #[test]
+    fn sensor_reset_wakes_the_existing_sampler_and_preserves_selection() {
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+            let root = std::env::temp_dir().join("xrg-missing-sensor-reset-roots");
+            Sampler::with_sources(LinuxSources::with_roots(
+                root.join("proc"),
+                root.join("sys"),
+            ))
+        });
+        let slot = worker.latest.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        worker.on_publish(move || {
+            if let Some(snapshot) = slot.lock().unwrap().take() {
+                send.send(snapshot).unwrap();
+            }
+        });
+        let first = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(first.sensors.generation, 0);
+        let control = worker.sensor_stats_control();
+        control.reset().unwrap();
+        let next = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(next.sequence, first.sequence + 1);
+        assert_eq!(next.sensors.generation, 1);
+        assert_eq!(next.selection, first.selection);
+        drop(worker);
+        assert!(control.reset().is_err());
+    }
     #[test]
     fn publication_notification_reads_slot_and_retiming_without_ui_polling() {
         let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {

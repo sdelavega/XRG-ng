@@ -565,6 +565,23 @@ the FUSE-free extraction path; FUSE mounting itself remains unvalidated. Runtime
 source/build notes are in `Tools/appimage-runtime-README.md`. See the
 [format installation guide](../preview/README.md#rpm-arch-and-appimage-previews).
 
+## Sensor statistics (development build)
+
+**Application menu → Sensors and statistics…** (also available on Temperature
+and Fans) lists all readable temperature and fan inputs with current, minimum,
+sample-weighted average, maximum and sample count. Accumulation is independent of
+graph selection and starts with the application. Display units follow Preferences;
+temperature statistics remain Celsius internally. A missing input shows **n/a**
+for current while retaining its historical statistics; a new physical input
+incarnation at the same source starts fresh statistics. Labels do not establish
+CPU/GPU ownership. Collection errors and fan driver alarms are included.
+
+**Copy sensor report** copies a text report with source identities, statistics and
+collection notes. **Reset session statistics** clears this accumulated data at the
+next sample without changing graph histories, source selection or sampling.
+Statistics are bounded to 4,096 input identities and are not saved between runs.
+This inspector is newer than the published Linux 0.2.0 release.
+
 ## Graph actions and live details
 
 Drag the hostname to move the dashboard. The title menu opens Preferences,

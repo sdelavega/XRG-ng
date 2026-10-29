@@ -1123,3 +1123,118 @@ fn automatic_fan_details_keep_alarms_and_notes_for_channels_outside_the_plotted_
     );
     assert!(panel.label.contains("partial"));
 }
+
+#[test]
+fn sensor_statistics_cover_unselected_inputs_and_do_not_merge_replacements() {
+    use xrg_ng_linux::{sensor_stats::Kind, settings::MetricSelection};
+    let f = Fixture::new();
+    f.core();
+    f.sensor("hwmon0", "1", "40000");
+    f.sensor("hwmon0", "2", "60000");
+    f.put("class/hwmon/hwmon0/fan1_input", "0");
+    let inputs = hardware::temperature_sources(&f.0).unwrap();
+    let selected = inputs
+        .values
+        .iter()
+        .find(|s| s.name.ends_with("[temp1]"))
+        .unwrap()
+        .source_id
+        .clone();
+    let mut sampler = Sampler::with_sources(f.sources());
+    sampler
+        .set_selection(MetricSelection {
+            temperature: Some(selected.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let first = sampler.sample();
+    assert_eq!(first.sensors.rows.len(), 3);
+    assert_eq!(
+        first
+            .sensors
+            .rows
+            .iter()
+            .filter(|r| r.kind == Kind::Temperature)
+            .count(),
+        2
+    );
+    assert!(
+        first
+            .sensors
+            .rows
+            .iter()
+            .any(|r| r.kind == Kind::Fan && r.current == Some(0.))
+    );
+    f.sensor("hwmon0", "1", "80000");
+    let second = sampler.sample();
+    let row = second
+        .sensors
+        .rows
+        .iter()
+        .find(|r| r.source_id == selected)
+        .unwrap();
+    assert_eq!(
+        (row.minimum, row.average, row.maximum, row.samples),
+        (40., 60., 80., 2)
+    );
+    fs::remove_file(f.0.join("class/hwmon/hwmon0/temp2_input")).unwrap();
+    fs::rename(
+        f.0.join("class/hwmon/hwmon0/temp1_input"),
+        f.0.join("class/hwmon/hwmon0/old-input"),
+    )
+    .unwrap();
+    f.sensor("hwmon0", "1", "20000");
+    let replacement = sampler.sample();
+    let row = replacement
+        .sensors
+        .rows
+        .iter()
+        .find(|r| r.source_id == selected)
+        .unwrap();
+    assert_eq!((row.current, row.minimum, row.samples), (Some(20.), 20., 1));
+    let absent = replacement
+        .sensors
+        .rows
+        .iter()
+        .find(|r| r.name.ends_with("[temp2]"))
+        .unwrap();
+    assert_eq!((absent.current, absent.samples), (None, 2));
+    assert_eq!(replacement.selection.temperature, Some(selected));
+}
+
+#[test]
+fn resetting_sensor_statistics_keeps_existing_graph_history() {
+    use std::{sync::mpsc, time::Duration};
+    use xrg_ng_linux::{engine::Worker, settings::Settings};
+    let f = Fixture::new();
+    f.core();
+    f.sensor("hwmon0", "1", "40000");
+    let settings = Settings {
+        sampling_interval_ms: 10000,
+        ..Default::default()
+    };
+    let worker = Worker::start_with_system_sources(f.sources(), &settings);
+    let slot = worker.latest.clone();
+    let (send, receive) = mpsc::channel();
+    worker.on_publish(move || {
+        if let Some(snapshot) = slot.lock().unwrap().take() {
+            send.send(snapshot).unwrap();
+        }
+    });
+    let first = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(first.sensors.rows[0].samples, 1);
+    f.sensor("hwmon0", "1", "80000");
+    worker.sensor_stats_control().reset().unwrap();
+    let next = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(next.sensors.generation, 1);
+    assert_eq!(next.sensors.rows[0].samples, 1);
+    assert_eq!(next.sensors.rows[0].minimum, 80.);
+    let graph = next
+        .panels
+        .iter()
+        .find(|p| p.title == "Temperature")
+        .unwrap();
+    assert!(graph.series[0].contains(&40.) && graph.series[0].contains(&80.));
+    assert_eq!(next.sequence, first.sequence + 1);
+    drop(worker);
+}

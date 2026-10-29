@@ -20,6 +20,7 @@ pub mod weather;
 
 pub mod process;
 pub mod sampling;
+pub mod sensor_stats;
 mod sensors;
 mod system_file;
 pub mod tpu;

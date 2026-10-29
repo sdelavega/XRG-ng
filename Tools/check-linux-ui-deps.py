@@ -15,4 +15,9 @@ forbidden = ("gtk", "gdk", "gsk", "cairo", "glib", "gobject", "gio", "pango", "g
 found = sorted(p["name"] for p in metadata["packages"] if p["name"].startswith(forbidden))
 if found:
     raise SystemExit(f"Forbidden frontend dependencies: {', '.join(found)}")
+for name in ("eframe", "egui-winit"):
+    package = next(p for p in metadata["packages"] if p["name"] == name)
+    node = next(n for n in metadata["resolve"]["nodes"] if n["id"] == package["id"])
+    if "clipboard" not in node["features"]:
+        raise SystemExit(f"{name} needs native clipboard support for sensor report export")
 print("LINUX_UI_DEPS_OK no GTK/GSK/Cairo/GLib crates")

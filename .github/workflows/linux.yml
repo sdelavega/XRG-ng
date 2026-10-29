@@ -33,7 +33,7 @@ jobs:
       - name: Install windowing dependencies and Rust
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential curl pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth dbus-x11 python3 patchelf desktop-file-utils weston fluxbox picom xdotool x11-utils imagemagick rpm zstd libarchive-tools squashfs-tools gnupg
+          DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential curl pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libegl1-mesa-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth xclip dbus-x11 python3 patchelf desktop-file-utils weston fluxbox picom xdotool x11-utils imagemagick rpm zstd libarchive-tools squashfs-tools gnupg
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
           sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.99.1 --component clippy --component rustfmt
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

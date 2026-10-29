@@ -35,6 +35,7 @@ import AppKit
 @objc(XRGMemoryView) @objcMembers
 public final class XRGMemoryView: NSView, XRGModuleView {
     private let memoryMiner: XRGMemoryMiner
+    @nonobjc private(set) var processInspector: XRGProcessInspector?
     private let processMiner: XRGProcessMiner
     private let defaults: UserDefaults
     private let standaloneSettings: XRGSettings?
@@ -87,6 +88,7 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         bindToWindow()
     }
     private func bindToWindow() {
+        if window == nil { processInspector?.close() }
         let next = window as? any XRGMemoryViewHost
         if host !== next {
             if host?.memoryView === self { host?.memoryView = nil }
@@ -277,6 +279,7 @@ public final class XRGMemoryView: NSView, XRGModuleView {
             menu.addItem(item("\(Self.processMemoryText(memory)) - \(command) (id \(pid))", action: #selector(emptyEvent(_:))))
         }
         menu.addItem(.separator())
+        menu.addItem(item("Processes…", action: #selector(openProcesses(_:))))
         menu.addItem(item("Reset Graph", action: #selector(clearData(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Open XRG-ng Memory Preferences...", action: #selector(openMemoryPreferences(_:))))
@@ -287,6 +290,10 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         memoryMiner.reset()
         updateLabels()
         needsDisplay = true
+    }
+    public func openProcesses(_ sender: Any?) {
+        if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .memory) }
+        processInspector?.present()
     }
     public func emptyEvent(_ sender: Any?) {}
     public func openMemoryPreferences(_ sender: Any?) { host?.showMemoryPreferences() }

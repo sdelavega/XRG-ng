@@ -247,7 +247,7 @@ struct XRGMemoryViewTests {
             let view = panel(miner, settings: settings, defaults: defaults, processMiner: processes)
             host.contentView?.addSubview(view); view.awakeFromNib()
             let menu = view.makeMenu()
-            #expect(menu.items.count == 8)
+            #expect(menu.items.count == 9)
             #expect(menu.items[1].title == "4768.4G - Big (id 3)")
             #expect(menu.items[2].title == "1.0M - Medium (id 2)")
             #expect(menu.items[3].title == "1K - Tiny (id 1)")
@@ -258,7 +258,11 @@ struct XRGMemoryViewTests {
             #expect(preferences.target === view)
             #expect(NSApp.sendAction(try #require(preferences.action), to: preferences.target, from: preferences))
             #expect(host.preferencesOpened == 1)
+            let inspect = try #require(menu.items.first { $0.title == "Processes…" })
+            #expect(NSApp.sendAction(try #require(inspect.action), to: inspect.target, from: inspect))
+            #expect(view.processInspector?.rows.first?.pid == 3)
             view.removeFromSuperview()
+            #expect(view.processInspector?.refreshTimer == nil)
         }
     }
 
@@ -271,11 +275,11 @@ struct XRGMemoryViewTests {
             await processes.refresh()
             let view = panel(XRGMemoryMiner(pageSize: 4096, source: { sample() }), settings: settings, defaults: defaults, processMiner: processes)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 15)
+            #expect(menu.items.count == 16)
             #expect(menu.items[1].title.contains("Process12"))
             #expect(menu.items[10].title.contains("Process3"))
             let empty = panel(XRGMemoryMiner(pageSize: 4096, source: { nil }), settings: settings, defaults: defaults)
-            #expect(empty.makeMenu().items.count == 5)
+            #expect(empty.makeMenu().items.count == 6)
             #expect(XRGMemoryView.processMemoryText(1024) == "1024K")
             #expect(XRGMemoryView.processMemoryText(1_048_576) == "1024.0M")
         }

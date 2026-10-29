@@ -39,7 +39,7 @@ for theme in Classic Midnight; do
     XRG_SMOKE_STYLE="$theme" XRG_SMOKE_IMAGE="$output/compact-$theme.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
         cargo run "${cargo_options[@]}" -- --smoke-test
 done
-XRG_SMOKE_IMAGE="$output/egui-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferences-smoke.png" XRG_SMOKE_LAYOUT_IMAGE="$output/layout-smoke.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
+XRG_SMOKE_IMAGE="$output/egui-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferences-smoke.png" XRG_SMOKE_LAYOUT_IMAGE="$output/layout-smoke.png" XRG_SMOKE_SENSOR_IMAGE="$output/sensors-smoke.png" XRG_SMOKE_SENSOR_CLIPBOARD=1 LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
 # Independent chooser gate: original XTF load, JSON export, replacement review,
 # cancelled drafts and legacy import through the production async UI path.

@@ -237,6 +237,29 @@ original ordering; both leave visibility unchanged until you edit it explicitly.
 Presentation overrides stay local and are not included in XTF or portable JSON
 palette files. These controls are not included in the published macOS 0.1.0 app.
 
+## Monitoring inspectors (development builds)
+
+On **macOS**, right-click CPU or Memory and choose **Processes…**. The table
+supports name/PID search, exact user-name filtering, CPU/memory/name/PID sorting
+and a saved row limit. It refreshes every five seconds while open, shows failures
+explicitly, and retains the last successful snapshot on collection failure.
+Double-click a row or choose **Inspect Selected…** for frozen, read-only details.
+Mac CPU percentages use `ps`'s recent decaying average; Linux uses interval CPU
+measurements. RSS can include shared pages. Neither arguments nor environments
+are collected. Mac process controls are still planned; Linux retains its existing
+process controls and live details.
+
+On **Linux**, choose **Sensors and statistics…** from the application menu or the
+Temperature/Fans graph menu. View current/minimum/average/maximum temperatures
+and fan RPM, copy a sensor report, or reset session statistics. Statistics include
+all readable inputs regardless of graph selection, use sample-weighted averages,
+and stay in memory for the current run. Missing readings show **n/a**; replacement
+inputs start fresh statistics. Reset takes effect at the next sample and keeps
+graph histories, source selection and sampling settings.
+
+These inspectors are additions after the published macOS 0.1.0 / Linux 0.2.0
+releases. See [platform parity](PLATFORM_PARITY.md) for remaining differences.
+
 ## Building
 
 ### macOS

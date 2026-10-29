@@ -26,6 +26,7 @@ pub(super) struct Harness {
     pub success: Arc<AtomicBool>,
     pub draws: [u32; 13],
     picker: Option<file_picker_smoke::Harness>,
+    clipboard_expected: Option<String>,
 }
 impl Harness {
     pub fn new() -> Result<Self, String> {
@@ -54,6 +55,7 @@ impl Harness {
             draws: [0; 13],
             picker: std::env::var_os("XRG_SMOKE_FILE_PICKER")
                 .map(|_| file_picker_smoke::Harness::default()),
+            clipboard_expected: None,
         })
     }
     pub fn path(&self) -> PathBuf {
@@ -146,6 +148,7 @@ impl Harness {
             return;
         }
         let sequence = snapshot.sequence;
+        let sensors = snapshot.sensors.clone();
         if let Some(mut picker) = self.picker.take() {
             match picker.tick(app, ctx, &self.directory) {
                 Ok(file_picker_smoke::Step::Capture(variable)) => {
@@ -186,6 +189,7 @@ impl Harness {
                 1 if std::env::var_os("XRG_SMOKE_STYLE").is_none() => {
                     app.preferences();
                     app.show_processes = true;
+                    app.show_sensors = true;
                     app.show_ai = true;
                     app.show_weather = true;
                     app.details.insert(Module::Cpu);
@@ -197,9 +201,52 @@ impl Harness {
                         egui::ViewportId::from_hash_of("preferences"),
                         "XRG_SMOKE_PREFS_IMAGE",
                     );
+                    self.stage = 8;
+                }
+                8 => {
+                    // Enabled only by isolated X11 CI. Check an external clipboard
+                    // consumer so egui's internal fallback cannot pass this gate.
+                    if std::env::var_os("XRG_SMOKE_SENSOR_CLIPBOARD").is_some() {
+                        let text = sensors.text(app.settings.temperature_units);
+                        ctx.copy_text(text.clone());
+                        self.clipboard_expected = Some(text);
+                    }
+                    self.capture(
+                        ctx,
+                        egui::ViewportId::from_hash_of("sensors"),
+                        "XRG_SMOKE_SENSOR_IMAGE",
+                    );
                     self.stage = 3;
                 }
                 3 => {
+                    if let Some(expected) = self.clipboard_expected.take() {
+                        self.waiting = true;
+                        let sender = self.sender.clone();
+                        std::thread::spawn(move || {
+                            let result = xrg_ng_linux::command::BoundedCommand::default()
+                                .output(
+                                    std::path::Path::new("/usr/bin/xclip"),
+                                    &["-selection", "clipboard", "-out"],
+                                    Duration::from_secs(2),
+                                    expected.len() + 1,
+                                )
+                                .and_then(|bytes| {
+                                    if bytes == expected.as_bytes() {
+                                        Ok(())
+                                    } else {
+                                        Err("Sensor report did not reach the native clipboard"
+                                            .into())
+                                    }
+                                });
+                            if result.is_ok() {
+                                println!(
+                                    "SENSOR_CLIPBOARD_SMOKE_OK external X11 consumer matched report"
+                                );
+                            }
+                            let _ = sender.send(result);
+                        });
+                        return Ok(());
+                    }
                     // Cancel preserves the complete saved model. Defaults are draft-only.
                     let before = app.settings.clone();
                     let mut draft = preferences::Editor::new(before.clone());

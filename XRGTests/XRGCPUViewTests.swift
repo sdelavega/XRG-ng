@@ -289,30 +289,32 @@ struct XRGCPUViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             seed(miner)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 17)
+            #expect(menu.items.count == 18)
             #expect(menu.items[1].title == "1200.0% - Process12 (id 5000000012)")
             #expect(menu.items[10].title.contains("Process3"))
             for item in menu.items where !item.isSeparatorItem { #expect(item.target === view) }
-            for title in ["Reset Graph", "Open Activity Monitor...", "Open XRG-ng CPU Preferences..."] {
+            for title in ["Processes…", "Reset Graph", "Open Activity Monitor...", "Open XRG-ng CPU Preferences..."] {
                 let item = try #require(menu.items.first { $0.title == title })
                 #expect(NSApp.sendAction(try #require(item.action), to: item.target, from: item))
             }
             #expect(view.totalUsage == 0 && opened == [XRGCPUView.activityMonitorURL] && host.preferencesOpened == 1)
+            #expect(view.processInspector?.rows.first?.pid == 5_000_000_012)
             view.removeFromSuperview()
+            #expect(view.processInspector?.refreshTimer == nil)
         }
     }
 
     @Test func processMenuHandlesNoResultsAndTiedCPUUsage() async throws {
         try await withFixture { settings, defaults, source in
             let empty = panel(source.miner(), settings, defaults)
-            #expect(empty.makeMenu().items.count == 7)
+            #expect(empty.makeMenu().items.count == 8)
             let records = XRGProcessMiner.parse("20 8 1 1 - u Second\n20 2 1 1 - u First\n1 3 1 1 - u Last")
             let processes = XRGProcessMiner(source: { records }); await processes.refresh()
             let view = panel(source.miner(), settings, defaults, processMiner: processes)
             let menu = view.makeMenu()
             #expect(menu.items[1].title == "20.0% - First (id 2)")
             #expect(menu.items[2].title == "20.0% - Second (id 8)")
-            #expect(menu.items.count == 10)
+            #expect(menu.items.count == 11)
         }
     }
 

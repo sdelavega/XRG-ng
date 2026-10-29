@@ -39,6 +39,7 @@ struct App {
     details: BTreeSet<Module>,
     processes: inspectors::Processes,
     show_processes: bool,
+    show_sensors: bool,
     show_ai: bool,
     show_weather: bool,
     show_about: bool,
@@ -165,6 +166,10 @@ impl App {
                     self.show_processes = true;
                     ui.close();
                 }
+                if ui.button("Sensors and statistics…").clicked() {
+                    self.show_sensors = true;
+                    ui.close();
+                }
                 if ui.button("AI usage…").clicked() {
                     self.show_ai = true;
                     ui.close();
@@ -225,6 +230,12 @@ impl App {
                 popup.show(|ui| {
                     if ui.button("Live details…").clicked() {
                         app.details.insert(module);
+                        ui.close();
+                    }
+                    if matches!(module, Module::Temperature | Module::Fans)
+                        && ui.button("Sensors and statistics…").clicked()
+                    {
+                        app.show_sensors = true;
                         ui.close();
                     }
                     ui.menu_button("Graph style", |ui| {
@@ -512,6 +523,7 @@ pub fn run(smoke_mode: bool) -> bool {
                 details: BTreeSet::new(),
                 processes: inspectors::Processes::default(),
                 show_processes: false,
+                show_sensors: false,
                 show_ai: false,
                 show_weather: false,
                 show_about: false,
@@ -617,6 +629,7 @@ mod tests {
             selection: Default::default(),
             inventory: Default::default(),
             processes: Err("fixture".into()),
+            sensors: Default::default(),
             ai: None,
             weather: None,
         };
