@@ -59,6 +59,71 @@ you want the system package to become the default.
 These are unsigned preview packages with corruption checksums, not a signed APT
 repository or tagged Linux release. The archive remains supported independently.
 
+## RPM, Arch and AppImage previews
+
+The same architecture-specific CI artifacts also contain `.rpm`, `.pkg.tar.zst`
+and `.AppImage` files with individual `.sha256` checksums. Each retains the tested
+Rust/Swift application, private Swift libraries, corresponding source and notices.
+These are unsigned prebuilt previews; no signed package repository is configured.
+The application version remains 0.1.0; package versions also identify the source
+commit and packaging revision.
+
+**RPM:** validated on Fedora 44, for `x86_64` and `aarch64`:
+
+```sh
+sha256sum -c xrg-ng-*.rpm.sha256
+sudo dnf install ./xrg-ng-*.x86_64.rpm
+# On ARM64 use the matching *.aarch64.rpm.
+# Remove with: sudo dnf remove xrg-ng
+```
+
+**Arch:** x86-64 packages target updated Arch Linux; aarch64 packages target
+[Arch Linux ARM](https://archlinuxarm.org/platforms/armv8/generic), a separate
+distribution. Use the file matching your system:
+
+```sh
+sha256sum -c xrg-ng-*.pkg.tar.zst.sha256
+sudo pacman -Syu
+sudo pacman -U ./xrg-ng-*-x86_64.pkg.tar.zst
+# On Arch Linux ARM use the matching *-aarch64.pkg.tar.zst.
+# Remove with: sudo pacman -R xrg-ng
+```
+
+RPM and Arch packages use the same `/usr` application/desktop/documentation paths
+as the `.deb`, with no application install scriptlets, user-home writes or global
+Swift-library registration. Upgrade by installing a newer matching package.
+Removal preserves user settings, provider data and unrelated legacy installations.
+RPM support on other distributions is not established by the Fedora checks.
+
+**AppImage:** choose `x86_64` or `aarch64`, verify the checksum and make it executable:
+
+```sh
+sha256sum -c XRG-ng-*.AppImage.sha256
+chmod +x ./XRG-ng-*-x86_64.AppImage
+./XRG-ng-*-x86_64.AppImage
+```
+
+AppImages retain the Ubuntu 24.04/glibc 2.39 application baseline and need compatible
+host graphics/windowing libraries, as the archive does. They do not install system
+packages or replace existing launchers. To update, replace the image; to remove,
+delete it. User configuration remains in its normal XDG location. The pinned
+upstream type-2 runtime and its source/license archives are embedded, including
+the libfuse source and upstream patch/build instructions.
+
+On systems without working FUSE support, use the upstream runtime's
+[extraction fallback](https://docs.appimage.org/user-guide/troubleshooting/fuse.html):
+
+```sh
+./XRG-ng-*-x86_64.AppImage --appimage-extract-and-run
+# Or extract once and run ./squashfs-root/AppRun:
+./XRG-ng-*-x86_64.AppImage --appimage-extract
+```
+
+The fallback extracts the full payload, including source, and needs temporary disk
+space. CI verifies extraction, relocation and ordinary-user GUI/chooser execution
+on both architectures; it does not establish FUSE mounting or every desktop's
+AppImage integration. No AppImage desktop-integration service is installed.
+
 ## Verify, extract and run
 
 Download the `.tar.gz` and matching `.sha256` from the same CI artifact. In their

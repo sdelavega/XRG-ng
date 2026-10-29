@@ -108,3 +108,14 @@ Additional upstream notices are retained in `xrg-linux/rust/licenses/swift-6.4.1
 the version selected in Swift 6.4.1's Foundation ICU source. Bundled ELF loader
 paths are adjusted for relocation; the runtime implementations are otherwise
 unchanged. Changing the toolchain/runtime version requires reviewing these notices.
+# AppImage distribution runtime
+
+Linux AppImage previews additionally embed the upstream AppImage type-2 runtime.
+The runtime asset/revision and source archive hashes are recorded in
+`Tools/appimage-runtime.json`. Each image includes
+`usr/share/doc/xrg-ng/appimage-runtime-source.tar.gz` containing the upstream
+runtime source, MIT notice, libfuse 3.15.0 source/LGPL notices and upstream patch,
+squashfuse source/notices, and reference source/license archives for musl, zstd,
+zlib and mimalloc. Build/relink instructions accompany those sources. This
+external distribution runtime does not change the project's GPL license or
+replace the application's corresponding Rust/Swift source archive.

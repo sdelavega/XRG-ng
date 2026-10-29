@@ -537,6 +537,31 @@ Ubuntu's minimal container excludes documentation by default; the test passes
 package-specific include options to retain and verify all source/notices without
 editing global dpkg settings. Both native and archive gates remain required.
 
+`--rpm --arch --appimage` adds Fedora RPM, Arch/Arch Linux ARM `.pkg.tar.zst` and
+type-2 AppImage outputs for the native x86-64 or aarch64 build. CI publishes every
+format with a SHA-256 file. Shared payload validation/staging prevents wrappers
+from changing the tested runtime bytes or losing source/notices. RPM uses explicit
+system dependencies and exports no private Swift SONAME provides. Arch packages
+include `.PKGINFO` and `.MTREE`; provenance describes the Ubuntu-built application,
+not an invented makepkg build environment. No application install scriptlets run.
+
+Fedora 44 and Arch runtime jobs use native runners, resolve package dependencies,
+verify payloads, launch GUI/chooser flows as an ordinary UID, upgrade to a higher
+packaging revision with unchanged application bytes, and remove the package while
+checking saved data. RPM build tools are added only after the initial runtime-only
+launch to construct its upgrade fixture. The ARM Arch job imports the official
+signed Arch Linux ARM root filesystem, verifies its published signing fingerprint,
+and keeps repository signature checking enabled. Container pacman downloads use
+`--disable-sandbox` because Docker may reject Landlock; applications still run
+unprivileged. These are userspace checks, not physical-board validation.
+
+AppImage's upstream runtime asset IDs, source revision and hashes are pinned in
+`Tools/appimage-runtime.json`. Its source/license archives are included separately
+from the application's corresponding source. Tests execute relocated images through
+the FUSE-free extraction path; FUSE mounting itself remains unvalidated. Runtime
+source/build notes are in `Tools/appimage-runtime-README.md`. See the
+[format installation guide](../preview/README.md#rpm-arch-and-appimage-previews).
+
 ## Graph actions and live details
 
 Drag the hostname to move the dashboard. The title menu opens Preferences,
@@ -841,7 +866,7 @@ forecast. Requests remain off by default. No location detection is performed.
   raw thermistor calibration and optional process priority controls.
 - Broader large-log/discovery coverage and Codex protocol compatibility,
   optional price tables, broader XTF color spaces and legacy-field mappings.
-- Signed/tagged Linux releases, a signed package repository and additional native
-  distribution formats. Ubuntu 24.04 `.deb` previews now accompany the archives;
-  both installation paths remain supported. Hardware support remains best effort;
+- Signed/tagged Linux releases and signed package repositories. Debian, RPM,
+  Arch and AppImage previews now accompany the archives; existing installation
+  paths remain supported. Hardware support remains best effort;
   feedback is welcome and encouraged.

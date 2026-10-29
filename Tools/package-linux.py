@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 from linux_deb import build_deb
+from linux_formats import build_rpm, build_arch, build_appimage
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -212,6 +213,10 @@ def package(args):
         }
         (bundle / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         native = build_deb(bundle, output, epoch, revision=args.deb_revision, allow_dirty=args.allow_dirty) if args.deb else None
+        additional = {}
+        for enabled, name, build in [(args.rpm, "rpm", build_rpm), (args.arch, "arch", build_arch), (args.appimage, "appimage", build_appimage)]:
+            if enabled:
+                additional[name] = build(bundle, output, epoch, allow_dirty=args.allow_dirty)
         make_tar(bundle, archive)
     checksum.write_text(f"{digest(archive)}  {archive.name}\n")
     print(f"LINUX_PACKAGE_OK {archive}")
@@ -220,8 +225,12 @@ def package(args):
             stream.write(f"archive={archive}\nchecksum={checksum}\n")
             if native:
                 stream.write(f"deb={native[0]}\ndeb_checksum={native[1]}\n")
+            for name, paths in additional.items():
+                stream.write(f"{name}={paths[0]}\n{name}_checksum={paths[1]}\n")
     if native:
         print(f"LINUX_DEB_PACKAGE_OK {native[0]}")
+    for name, paths in additional.items():
+        print(f"LINUX_{name.upper()}_PACKAGE_OK {paths[0]}")
 
 
 def main():
@@ -232,6 +241,9 @@ def main():
     parser.add_argument("--allow-dirty", action="store_true", help="Local development only; mark the source snapshot as dirty")
     parser.add_argument("--deb", action="store_true", help="Also build a native Ubuntu 24.04 preview package")
     parser.add_argument("--deb-revision", type=int, default=1, help="Native packaging revision (default: 1)")
+    parser.add_argument("--rpm", action="store_true", help="Also create an RPM preview for Fedora")
+    parser.add_argument("--arch", action="store_true", help="Also create an Arch/Arch Linux ARM .pkg.tar.zst")
+    parser.add_argument("--appimage", action="store_true", help="Also create a type-2 AppImage")
     package(parser.parse_args())
 
 
