@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Stephen de la Vega.
 import io
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -16,6 +17,17 @@ class FormatTests(unittest.TestCase):
     setUp = fixtures.NativePackageTests.setUp
     put = fixtures.NativePackageTests.put
     seal = fixtures.NativePackageTests.seal
+
+    def test_arch_container_doc_override_preserves_signature_and_repository_settings(self):
+        spec = importlib.util.spec_from_file_location("format_smoke", Path(formats.__file__).with_name("formats-smoke-linux.py"))
+        smoke = importlib.util.module_from_spec(spec); spec.loader.exec_module(smoke)
+        source = self.root / "original.conf"
+        text = "[options]\nSigLevel = Required DatabaseOptional\nNoExtract = usr/share/doc/* usr/share/man/*\n#NoExtract = keep-comment\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
+        source.write_text(text)
+        target = smoke.pacman_test_config(source, self.root / "test.conf")
+        expected = text.replace("NoExtract = usr/share/doc/* usr/share/man/*", "NoExtract = usr/share/doc/* usr/share/man/* !usr/share/doc/xrg-ng !usr/share/doc/xrg-ng/*")
+        self.assertEqual(target.read_text(), expected)
+        self.assertEqual(source.read_text(), text)
 
     def test_wrong_timestamp_and_unmapped_system_libraries_are_rejected(self):
         self.manifest["source_epoch"] = 1700000000

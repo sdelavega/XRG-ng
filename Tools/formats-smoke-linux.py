@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import select
 import shutil
 import subprocess
@@ -20,6 +21,17 @@ from linux_bundle import digest
 def require(value, message):
     if not value:
         raise RuntimeError(message)
+
+
+def pacman_test_config(original, destination):
+    text = original.read_text()
+    # Official minimal Arch containers omit documentation. Extend only active
+    # NoExtract lists with package-specific negative matches; retain every
+    # other option, repository and signature policy byte for byte.
+    text = re.sub(r"(?m)^(\s*NoExtract\s*=.*)$",
+                  r"\1 !usr/share/doc/xrg-ng !usr/share/doc/xrg-ng/*", text)
+    destination.write_text(text)
+    return destination
 
 
 def gui(binary, extra):
@@ -94,7 +106,8 @@ def smoke(args):
                 verify = ["rpm", "-V", "xrg-ng"]
             else:
                 require(subprocess.run(["pacman", "-Q", "xrg-ng"], capture_output=True).returncode != 0, "Pre-existing ALPM package")
-                run(["pacman", "--disable-sandbox", "-U", "--noconfirm", package], "install.log")
+                config = pacman_test_config(Path("/etc/pacman.conf"), work / "pacman.conf")
+                run(["pacman", "--config", config, "--disable-sandbox", "-U", "--noconfirm", package], "install.log")
                 verify = ["pacman", "-Qkk", "xrg-ng"]
             root = Path("/")
             binary = Path("/usr/bin/xrg-ng-linux")
@@ -157,7 +170,7 @@ def smoke(args):
                     upgraded, _ = build_arch(bundle, work / "upgrade", manifest["source_epoch"], revision=2)
                     require(int(run(["vercmp", manifest["version"], meta["version"].rsplit("-", 1)[0]], "version-order.log").strip()) > 0,
                             "Final release must sort after an Arch preview")
-                    run(["pacman", "--disable-sandbox", "-U", "--noconfirm", upgraded], "upgrade.log")
+                    run(["pacman", "--config", config, "--disable-sandbox", "-U", "--noconfirm", upgraded], "upgrade.log")
                     require(run(["pacman", "-Q", "xrg-ng"], "upgrade-version.log").strip().endswith("-2"), "ALPM upgrade did not apply")
                     run(verify, "upgraded-verify.log")
                     run(["pacman", "-R", "--noconfirm", "xrg-ng"], "remove.log")

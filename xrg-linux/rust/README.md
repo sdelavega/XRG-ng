@@ -554,6 +554,9 @@ signed Arch Linux ARM root filesystem, verifies its published signing fingerprin
 and keeps repository signature checking enabled. Container pacman downloads use
 `--disable-sandbox` because Docker may reject Landlock; applications still run
 unprivileged. These are userspace checks, not physical-board validation.
+Minimal Arch containers can also exclude documentation; their test uses a
+temporary package-specific `NoExtract` exception without modifying system
+configuration or signature policy.
 
 AppImage's upstream runtime asset IDs, source revision and hashes are pinned in
 `Tools/appimage-runtime.json`. Its source/license archives are included separately
