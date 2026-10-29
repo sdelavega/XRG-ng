@@ -32,7 +32,9 @@ fn window(
             .with_title(title)
             .with_inner_size(size),
         |ui, _| {
-            if ui.ctx().input(|i| i.viewport().close_requested()) {
+            if ui.ctx().input(|i| i.viewport().close_requested())
+                || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
                 open = false;
             }
             egui::CentralPanel::default().show(ui, |ui| {

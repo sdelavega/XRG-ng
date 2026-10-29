@@ -29,3 +29,4 @@ pub mod settings;
 pub mod memory;
 pub mod metric_sources;
 pub mod metrics;
+mod notification;

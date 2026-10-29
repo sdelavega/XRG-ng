@@ -1,3 +1,17 @@
+# Current project guidance
+
+The supported Linux build is Rust/shared Swift/egui under `xrg-linux/rust`.
+The C/GTK application, CMake build and archived GTK frontend have been retired.
+Do not recreate them or use the historical instructions below for new work.
+Follow [current Linux documentation](xrg-linux/rust/README.md) and
+[retirement notes](xrg-linux/RETIREMENT.md). Preserve macOS hardware bridges,
+the shared C ABI, settings imports, licensing and source attribution.
+
+The rest of this file is historical reference; obsolete Linux C paths and
+instructions are not current implementation guidance.
+
+---
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.

@@ -3693,6 +3693,7 @@ dependencies = [
  "libc",
  "plist",
  "png",
+ "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",

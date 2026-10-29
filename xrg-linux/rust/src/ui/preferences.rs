@@ -347,7 +347,10 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
             .with_title("XRG-ng Preferences")
             .with_inner_size([680., 720.]),
         |ui, _| {
-            if ui.ctx().input(|i| i.viewport().close_requested()) {
+            if ui.ctx().input(|i| i.viewport().close_requested())
+                || (editor.picker.is_none()
+                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)))
+            {
                 open = false;
             }
             egui::CentralPanel::default().show(ui, |ui| {

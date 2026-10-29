@@ -1,3 +1,27 @@
+# XRG-ng modernization status
+
+## Current baseline
+
+macOS targets macOS 26+ and uses Swift/AppKit with two small Objective-C hardware
+boundaries. Linux uses Rust collectors, shared Swift code and an egui/eframe
+frontend. GTK, GSK, Cairo and GLib are excluded from the Linux application.
+The obsolete Linux C application and archived GTK Rust frontend have been
+removed from the checkout; the current Linux build is the only supported path.
+See [Linux retirement notes](xrg-linux/RETIREMENT.md), the
+[current Linux construction/support guide](xrg-linux/rust/README.md), and
+[macOS NPU telemetry notes](Tools/macos-npu-telemetry.md).
+
+Current Linux validation includes managed X11 and nested Wayland desktop checks,
+size persistence and keyboard interaction, plus isolated idle profiles. Worker
+publication callbacks replace the old 100 ms UI polling thread. See the Linux
+guide for the software-renderer scope and remaining hardware/desktop limits.
+
+The sections below are a chronological historical record. Statements about older
+builds, test counts, remotes, retained C sources and intermediate Objective-C
+adapters describe those stages rather than the current checkout.
+
+---
+
 # macOS modernization review — October 2026
 
 ## Baseline

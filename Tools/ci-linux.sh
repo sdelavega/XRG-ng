@@ -32,6 +32,7 @@ cargo test "${cargo_options[@]}"
 cargo run "${cargo_options[@]}" -- --headless --samples 3
 # Fail if the new frontend acquires GTK/GSK/Cairo/GLib through a helper crate.
 python3 Tools/check-linux-ui-deps.py
+python3 Tools/check-linux-retirement.py
 # Native OpenGL painting using Mesa under X11. This does not establish Wayland,
 # physical GPU behavior or screen-reader interoperability.
 for theme in Classic Midnight; do
@@ -44,6 +45,19 @@ XRG_SMOKE_IMAGE="$output/egui-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferen
 # cancelled drafts and legacy import through the production async UI path.
 XRG_SMOKE_FILE_PICKER=1 XRG_SMOKE_FILE_PICKER_IMAGE="$output/file-picker.png" XRG_SMOKE_FILE_REPLACE_IMAGE="$output/file-replace.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
+# Release desktop validation uses actual managed X11 and nested Wayland windows.
+# Results are software-renderer costs, not hardware/power measurements.
+if [[ "$configuration" == release ]]; then
+    cargo build "${cargo_options[@]}" --example desktop_preferences
+    desktop_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+    for backend in x11 wayland; do
+        dbus-run-session -- xvfb-run -a --server-args="-screen 0 1600x1200x24" \
+            python3 Tools/desktop-check-linux.py \
+            --binary "$desktop_target/release/xrg-ng-linux" \
+            --fixture "$desktop_target/release/examples/desktop_preferences" \
+            --backend "$backend" --output "$output/desktop-$backend"
+    done
+fi
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     cargo_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
     echo "binary=$cargo_target/$configuration/xrg-ng-linux" >> "$GITHUB_OUTPUT"

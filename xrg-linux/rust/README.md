@@ -12,17 +12,41 @@ All thirteen modules remain available. Saved schema-21 settings, source identiti
 module order, colors, heights, JSON themes and original XRG XTF imports are reused.
 No settings migration or automatic preference write is needed for the toolkit change.
 
-`legacy-gtk/` contains uncompiled reference code, its old UI smoke harnesses and
-[historical documentation/screenshots](legacy-gtk/README.md). The C/GTK3 application
-in `../src` remains a separate executable. Neither reference tree is linked into
-the new desktop build. Published GTK screenshots describe that earlier frontend;
-new egui captures come from the native smoke checks below.
+The C/GTK3 application, its CMake build and the uncompiled GTK4 reference tree
+have been retired from the checkout. The current application has no fallback
+build of either implementation. [Retirement notes](../RETIREMENT.md) identify the
+last historical revision and retained settings compatibility. Earlier GTK
+screenshots remain historical artifacts; the captures below show the active UI.
 
 [Classic](../../screenshots/linux-egui-classic.png) ·
 [Midnight](../../screenshots/linux-egui-midnight.png) ·
 [Preferences](../../screenshots/linux-egui-preferences.png).
 These are native ARM64 debug captures with live Linux system readings; unavailable
 hardware stays explicit and AI/weather collection is disabled in smoke mode.
+
+## Desktop validation and idle diagnostics
+
+Release CI runs `Tools/desktop-check-linux.py` under Fluxbox/Picom X11 and nested
+Weston 13 Wayland on native x86_64 and ARM64 runners. It checks the actual native
+window handle; Wayland clients have no `DISPLAY`, so an X11 fallback cannot pass.
+The checks exercise window resizing, saved-size restoration, Ctrl+, Preferences,
+Escape cancellation, CPU detail windows and clean application shutdown. X11 also
+covers minimization. Ctrl+Q quits the dashboard; Escape closes inspector windows.
+
+Each run uses disposable HOME/XDG directories with AI and weather disabled. It
+records process CPU time as a percentage of one core, RSS/PSS, voluntary thread
+context switches and root UI pass rate at one- and ten-second sampling intervals,
+including a translucent window. `XRG_DESKTOP_REPORT=1` enables bounded diagnostic
+counters; normal launches collect none of these QA counters. Publication callbacks
+wake the UI directly, without the former 100 ms polling thread. CI rejects a
+continuous idle repaint loop, but records CPU/memory values without brittle
+machine-specific pass thresholds.
+
+These are software Mesa/Pixman results in isolated desktops. They do not establish
+physical GPU power consumption, multi-monitor/fractional-scale behavior, every
+desktop's focus/placement policy or accessibility interoperability. Those remain
+best-effort validation areas for real-world feedback. JSON reports, application
+logs and desktop captures are retained with the CI validation artifacts.
 
 ## Hardware support and feedback
 
@@ -451,7 +475,9 @@ A separate native chooser gate covers XTF load, new JSON export, replacement
 confirmation/cancellation, legacy review, rejected files and unchanged active/saved
 preferences on Cancel. Its screenshots are exported. The same chooser gate also
 runs against the installed preview without build toolchains.
-The old GTK widget smoke gates are archived and are not claimed as egui validation.
+The retired GTK widget smoke gates remain in Git history and are not claimed as
+egui validation. The managed desktop checks above separately exercise X11 and
+nested Wayland; the runtime-only installer gate still uses Xvfb without a shell.
 
 Release packaging retains the tested binary/Swift library, runtime notices, input
 hashes and corresponding source with locked vendored Cargo dependencies. It checks
@@ -543,7 +569,7 @@ log/database paths, loopback metrics/Ollama endpoints and the display-only model
 breakdown. The display toggle preserves sources and token histories. Scanning,
 SQLite, HTTP and Swift parsing remain outside the UI thread. Disabled, unsupported
 attribution and unavailable cost/activity states remain explicit. Detailed backend
-accounting and historical validation are recorded in the archived documentation;
+accounting and historical validation are recorded in the historical documentation;
 the toolkit change does not modify those collectors.
 
 ## Processes
@@ -711,12 +737,13 @@ forecast. Requests remain off by default. No location detection is performed.
 
 ## Remaining migration
 
-- Broader egui interaction/accessibility gates, native desktop/window-manager validation and idle CPU/GPU/power measurement. Match
-  toolkit-specific behavior against the archived GTK reference as this proceeds.
+- Broader interaction/accessibility gates and physical GPU/power measurements.
+  Managed X11 and nested Wayland checks now cover window interaction and idle
+  process costs; other compositors, scale factors and hardware still need feedback.
 - Additional vendor counters, Xe virtualization/topology coverage, board-specific
   raw thermistor calibration and optional process priority controls.
 - Safe additional Codex model attribution, incremental I/O for very large logs,
   optional price tables, broader XTF color spaces and legacy-field mappings.
 - Signed/tagged Linux releases and native distribution packages before retiring
-  the C application's separate release path. Hardware support remains best effort;
+  the preview distribution path. Hardware support remains best effort;
   feedback is welcome and encouraged.

@@ -880,6 +880,7 @@ impl SelectionControl {
     }
 }
 pub struct Worker {
+    notification: crate::notification::Notification,
     pub latest: Arc<Mutex<Option<Snapshot>>>,
     sampling: crate::sampling::Control,
     join: Option<thread::JoinHandle<()>>,
@@ -994,6 +995,8 @@ impl Worker {
         let updates = selection.clone();
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
+        let notification = crate::notification::Notification::default();
+        let published = notification.clone();
         let join = thread::spawn(move || {
             let mut sampler = build(ai_updates, weather_updates);
             sampler
@@ -1008,17 +1011,23 @@ impl Worker {
                 }
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 *output.lock().unwrap() = Some(sampler.sample());
+                published.notify();
                 timer.sampled(started);
             }
         });
         Self {
             latest,
+            notification,
             sampling,
             join: Some(join),
             selection,
             ai,
             weather,
         }
+    }
+    /// Wake a consumer after publishing; registration also covers a queued sample.
+    pub fn on_publish(&self, callback: impl Fn() + Send + Sync + 'static) {
+        self.notification.set(callback);
     }
     pub fn sampling_control(&self) -> crate::sampling::Control {
         self.sampling.clone()
@@ -1118,6 +1127,28 @@ mod sampling_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    #[test]
+    fn publication_notification_reads_slot_and_retiming_without_ui_polling() {
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+            let root = std::env::temp_dir().join("xrg-missing-notification-roots");
+            Sampler::with_sources(LinuxSources::with_roots(
+                root.join("proc"),
+                root.join("sys"),
+            ))
+        });
+        let slot = worker.latest.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        worker.on_publish(move || {
+            if let Some(snapshot) = slot.lock().unwrap().take() {
+                send.send(snapshot.sequence).unwrap();
+            }
+        });
+        assert_eq!(receive.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+        worker.sampling_control().set(250).unwrap();
+        assert_eq!(receive.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
+        // Stop before dropping the receiver, so teardown publications remain valid.
+        drop(worker);
+    }
     #[test]
     fn retiming_wakes_the_same_sampler_without_rebuilding_sources_or_resetting_sequence() {
         let builds = Arc::new(AtomicUsize::new(0));

@@ -333,6 +333,30 @@ fn save_worker_reports_persistence_failure_without_destroying_source() {
     assert_eq!(fs::read_to_string(f.path()).unwrap(), "{broken");
 }
 #[test]
+fn save_notification_can_consume_success_and_failure_results_without_polling() {
+    for broken in [false, true] {
+        let f = Fixture::new();
+        if broken {
+            fs::write(f.path(), "{broken").unwrap();
+        }
+        let (store, settings, _) = Store::open(Some(f.path()));
+        let writer = Writer::start(store);
+        let output = writer.latest.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        writer.on_publish(move || {
+            if let Some(result) = output.lock().unwrap().take() {
+                send.send(result).unwrap();
+            }
+        });
+        writer.queue(47, settings);
+        let (revision, result) = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(revision, 47);
+        assert_eq!(result.is_err(), broken);
+    }
+}
+#[test]
 fn module_indices_match_the_sampler_contract_after_ui_reordering() {
     let f = Fixture::new();
     let mut sampler = xrg_ng_linux::engine::Sampler::with_sources(

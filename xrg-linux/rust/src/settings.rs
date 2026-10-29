@@ -905,6 +905,7 @@ fn publish_new(temporary: &Path, path: &Path) -> io::Result<()> {
 /// Results carry a revision so an old completion cannot mask a newer save error.
 pub type SaveResult = (u64, Result<(), String>);
 pub struct Writer {
+    notification: crate::notification::Notification,
     pending: Arc<Mutex<Option<(u64, Settings)>>>,
     wake: Option<mpsc::SyncSender<()>>,
     pub latest: Arc<Mutex<Option<SaveResult>>>,
@@ -916,11 +917,14 @@ impl Writer {
         let requests = pending.clone();
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
+        let notification = crate::notification::Notification::default();
+        let published = notification.clone();
         let (wake, receiver) = mpsc::sync_channel(1);
         let join = thread::spawn(move || {
             let save = |request: Option<(u64, Settings)>, store: &mut Store| {
                 if let Some((revision, settings)) = request {
                     *output.lock().unwrap() = Some((revision, store.save(&settings)));
+                    published.notify();
                 }
             };
             while receiver.recv().is_ok() {
@@ -931,11 +935,16 @@ impl Writer {
             save(request, &mut store);
         });
         Self {
+            notification,
             pending,
             wake: Some(wake),
             latest,
             join: Some(join),
         }
+    }
+    /// Wake a consumer after saving, without polling or holding a value lock.
+    pub fn on_publish(&self, callback: impl Fn() + Send + Sync + 'static) {
+        self.notification.set(callback);
     }
     pub fn queue(&self, revision: u64, settings: Settings) {
         *self.pending.lock().unwrap() = Some((revision, settings));

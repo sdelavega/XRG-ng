@@ -7,7 +7,7 @@ XRG-ng
 A real-time system resource monitor for **macOS and Linux** with customizable floating graphs.
 
 🍎 **macOS**: Native Swift/Objective-C AppKit implementation (macOS 26+, Intel and Apple silicon)
-🐧 **Linux**: Swift/Rust + egui rewrite in progress; C/GTK3 application remains available.
+🐧 **Linux**: Swift/Rust + egui application; the C/GTK implementation has been retired.
 See the [new Linux build and migration status](xrg-linux/rust/README.md).
 The Linux preview includes an opt-in [station weather window](xrg-linux/rust/README.md#weather-observations)
 using the same Swift METAR decoder as macOS.
@@ -263,9 +263,10 @@ Native CI produces relocatable preview archives with the Swift runtime included;
 see the [preview installation guide](xrg-linux/preview/README.md). No Swift or Rust
 toolchain is needed to run those archives.
 
-The earlier C/GTK3 application remains available separately for reference and
-fallback. Its CMake instructions and dependencies are in the
-[legacy Linux guide](xrg-linux/README.md).
+The obsolete C/GTK application and archived GTK frontend have been retired from
+the checkout. The Rust/Swift implementation is the only Linux build path.
+[Retirement notes](xrg-linux/RETIREMENT.md) document the historical revision and
+legacy-settings import; existing installed files and settings are preserved.
 
 ## License
 

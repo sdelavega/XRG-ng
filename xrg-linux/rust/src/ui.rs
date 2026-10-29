@@ -3,6 +3,7 @@
 //! Native egui shell. Workers publish copied data; painting never collects it.
 mod compositor;
 mod dashboard;
+mod diagnostics;
 mod file_picker;
 mod file_picker_smoke;
 mod inspectors;
@@ -15,7 +16,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 use xrg_ng_linux::{
     engine::{Panel, Snapshot, Worker},
@@ -30,7 +30,7 @@ struct App {
     snapshot: Option<Snapshot>,
     worker: Worker,
     writer: Writer,
-    notifier: Notifier,
+    diagnostics: diagnostics::Diagnostics,
     compositor: Arc<std::sync::Mutex<compositor::Compositor>>,
     revision: u64,
     saved_revision: u64,
@@ -43,44 +43,6 @@ struct App {
     show_weather: bool,
     show_about: bool,
     smoke: Option<smoke::Harness>,
-}
-/// Wake egui only for a new worker publication/save result. No continuous render loop.
-struct Notifier {
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-impl Notifier {
-    fn start(ctx: egui::Context, worker: &Worker, writer: &Writer) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let done = stop.clone();
-        let latest = worker.latest.clone();
-        let saved = writer.latest.clone();
-        let thread = std::thread::spawn(move || {
-            let mut seen = (0, 0);
-            while !done.load(Ordering::Relaxed) {
-                let sample = latest.lock().unwrap().as_ref().map(|s| s.sequence);
-                let revision = saved.lock().unwrap().as_ref().map(|s| s.0);
-                let next = (sample.unwrap_or(seen.0), revision.unwrap_or(seen.1));
-                if next != seen {
-                    seen = next;
-                    ctx.request_repaint();
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        });
-        Self {
-            stop,
-            thread: Some(thread),
-        }
-    }
-}
-impl Drop for Notifier {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
 }
 impl App {
     fn apply(&mut self, settings: Settings, ctx: &egui::Context) -> Result<(), String> {
@@ -146,16 +108,7 @@ impl App {
         if self.settings.window_size.is_none() {
             return;
         }
-        let size = ctx.input(|i| {
-            let v = i.viewport();
-            if v.maximized == Some(true) || v.fullscreen == Some(true) {
-                return None;
-            }
-            v.inner_rect.map(|r| settings::WindowSize {
-                width: r.width().round() as u32,
-                height: r.height().round() as u32,
-            })
-        });
+        let size = ctx.input(current_window_size);
         if let Some(size) = size.filter(|s| s.validate().is_ok())
             && self.settings.window_size != Some(size)
         {
@@ -352,9 +305,10 @@ impl App {
     }
 }
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if let Some(snapshot) = self.worker.latest.lock().unwrap().take() {
+            self.diagnostics.sample(snapshot.valid);
             self.snapshot = Some(snapshot);
         }
         let saved = self.writer.latest.lock().unwrap().take();
@@ -368,6 +322,10 @@ impl eframe::App for App {
                 }
                 Err(_) => (),
             }
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Q)) {
+            self.capture_size(&ctx);
+            ctx.send_viewport_cmd(ViewportCommand::Close);
         }
         if ctx.input(|i| i.viewport().close_requested()) {
             self.capture_size(&ctx);
@@ -395,6 +353,13 @@ impl eframe::App for App {
         resize_edges(ui);
         preferences::show(self, &ctx);
         inspectors::show(self, &ctx);
+        self.diagnostics.observe(
+            frame,
+            ui,
+            self.settings.sampling_interval_ms,
+            self.preferences.is_some(),
+            self.details.len(),
+        );
         if let Some(mut smoke) = self.smoke.take() {
             smoke.tick(self, &ctx);
             self.smoke = Some(smoke);
@@ -404,10 +369,10 @@ impl eframe::App for App {
         [0.; 4]
     }
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        self.diagnostics.finish();
         if let Some(gl) = gl {
             self.compositor.lock().unwrap().destroy(gl);
         }
-        self.notifier.stop.store(true, Ordering::Relaxed);
     }
 }
 fn snapshot_matches(snapshot: &Snapshot, settings: &Settings, module: Module) -> bool {
@@ -424,6 +389,19 @@ fn snapshot_matches(snapshot: &Snapshot, settings: &Settings, module: Module) ->
                 .is_some_and(|w| w.preferences == settings.weather))
 }
 
+fn current_window_size(i: &egui::InputState) -> Option<settings::WindowSize> {
+    let v = i.viewport();
+    if v.maximized == Some(true) || v.fullscreen == Some(true) {
+        return None;
+    }
+    // Wayland does not expose global window coordinates, so inner_rect
+    // may be absent even though the local viewport dimensions are known.
+    let r = v.inner_rect.unwrap_or_else(|| i.viewport_rect());
+    Some(settings::WindowSize {
+        width: r.width().round() as u32,
+        height: r.height().round() as u32,
+    })
+}
 fn window_size(settings: &Settings) -> egui::Vec2 {
     if let Some(s) = settings.window_size {
         return vec2(s.width as f32, s.height as f32);
@@ -499,7 +477,10 @@ pub fn run(smoke_mode: bool) -> bool {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             let worker = Worker::start_with_settings(!smoke_mode, &settings);
             let writer = Writer::start(store);
-            let notifier = Notifier::start(cc.egui_ctx.clone(), &worker, &writer);
+            let ctx = cc.egui_ctx.clone();
+            worker.on_publish(move || ctx.request_repaint_of(ViewportId::ROOT));
+            let ctx = cc.egui_ctx.clone();
+            writer.on_publish(move || ctx.request_repaint_of(ViewportId::ROOT));
             let smoke = harness.map(|mut h| {
                 h.success = result;
                 h
@@ -511,7 +492,7 @@ pub fn run(smoke_mode: bool) -> bool {
                 snapshot: None,
                 worker,
                 writer,
-                notifier,
+                diagnostics: diagnostics::Diagnostics::new(cc),
                 compositor: Arc::new(std::sync::Mutex::new(compositor::Compositor::default())),
                 revision: 0,
                 saved_revision: 0,
@@ -549,7 +530,9 @@ fn hostname() -> String {
 
 fn resize_edges(ui: &mut egui::Ui) {
     use egui::{CursorIcon as C, Rect, ResizeDirection as D, pos2};
-    let r = ui.max_rect();
+    // Content can exceed the viewport minimum width. Resize hit targets must
+    // remain on the visible native edges, including an undecorated Wayland window.
+    let r = ui.ctx().viewport_rect();
     let (l, t, b, x) = (r.left(), r.top(), r.bottom(), r.right());
     for (i, (rect, direction, cursor)) in [
         (
@@ -630,6 +613,32 @@ mod tests {
         settings.metrics.xe_pmu = true;
         assert!(!snapshot_matches(&snapshot, &settings, Module::Gpu));
         assert!(snapshot_matches(&snapshot, &settings, Module::GpuMemory));
+    }
+    #[test]
+    fn wayland_size_is_retained_without_global_coordinates_and_maximized_size_is_ignored() {
+        for maximized in [false, true] {
+            let ctx = egui::Context::default();
+            let mut raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(300., 660.),
+                )),
+                ..Default::default()
+            };
+            let viewport = raw.viewports.get_mut(&ViewportId::ROOT).unwrap();
+            viewport.inner_rect = None; // Normal Wayland input: size but no global position.
+            viewport.maximized = Some(maximized);
+            let mut observed = None;
+            let mut output = ctx.run_ui(raw, |ui| observed = ui.input(current_window_size));
+            output.textures_delta.clear();
+            assert_eq!(
+                observed,
+                (!maximized).then_some(settings::WindowSize {
+                    width: 300,
+                    height: 660
+                })
+            );
+        }
     }
     #[test]
     fn automatic_and_saved_sizes_follow_the_same_graph_order() {

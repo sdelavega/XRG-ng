@@ -56,6 +56,7 @@ def make_tar(directory, archive):
 def package(args):
     if platform.system() != "Linux" or platform.machine() not in ["x86_64", "aarch64"]:
         raise ValueError("Build natively on x86_64 or aarch64 Linux")
+    subprocess.run([sys.executable, str(ROOT / "Tools/check-linux-retirement.py")], check=True)
     arch = platform.machine()
     binary, library = args.binary.resolve(), args.swift_library.resolve()
     if library.name != "libXRGSharedCore.so":
@@ -129,10 +130,11 @@ def package(args):
         run("desktop-file-validate", str(desktop))
         icon = bundle / "share/icons/hicolor/scalable/apps/com.sdelavega.xrg-ng.svg"
         icon.parent.mkdir(parents=True)
-        shutil.copy2(ROOT / "xrg-linux/data/icons/com.gaucho.xrg-linux.svg", icon)
+        shutil.copy2(ROOT / "xrg-linux/preview/com.sdelavega.xrg-ng.svg", icon)
         for name in ["LICENSE", "COPYRIGHT", "THIRD_PARTY_NOTICES.md"]:
             shutil.copy2(ROOT / name, docs / name)
         shutil.copy2(ROOT / "xrg-linux/rust/README.md", docs / "DEVELOPMENT.md")
+        shutil.copy2(ROOT / "xrg-linux/RETIREMENT.md", docs / "RETIREMENT.md")
         shutil.copy2(ROOT / "xrg-linux/preview/README.md", bundle / "README.md")
         notices = docs / "licenses"
         shutil.copytree(ROOT / "xrg-linux/rust/licenses", notices)

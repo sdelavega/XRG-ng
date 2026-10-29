@@ -1,7 +1,8 @@
 # XRG-ng Linux preview
 
-This is the Swift/Rust + egui rewrite, version 0.1.0. It is an early preview;
-the legacy C/GTK3 application remains available separately.
+This is the Rust/Swift + egui application, version 0.1.0. It is an early preview.
+The C/GTK implementation has been retired; see the retirement notes in the source
+repository. Existing legacy installations and settings are not removed automatically.
 
 ## Requirements
 

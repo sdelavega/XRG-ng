@@ -1,28 +1,13 @@
-# Build directories
-build/
-xrg-linux/build/
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-
-# Compiled binaries
-xrg-linux
-*.o
-*.so
-*.a
-
-# IDE
+# Editor / OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# macOS
 .DS_Store
 
-# User config (keep local preferences private)
+# User configuration must stay private.
 *.ini
+
+# Old untracked build output is left alone during source retirement.
+build/
