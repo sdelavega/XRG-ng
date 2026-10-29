@@ -151,7 +151,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             if let font { NSFontManager.shared.setSelectedFont(font, isMultiple: false) }
         }
         chooseOpen = Self.openThemePanel; chooseSave = Self.saveThemePanel
-        readFile = { try Data(contentsOf: $0) }; writeFile = { try $0.write(to: $1, options: .atomic) }
+        readFile = XRGTheme.readFile; writeFile = { try $0.write(to: $1, options: .atomic) }
         super.init()
     }
     @nonobjc init(defaults: UserDefaults, center: NotificationCenter = NotificationCenter(),
@@ -160,7 +160,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
                   fontPanel: @escaping (NSFont?) -> Void = { _ in },
                   chooseOpen: @escaping (NSWindow, @escaping (URL?) -> Void) -> Void = { _, done in done(nil) },
                   chooseSave: @escaping (NSWindow, @escaping (URL?) -> Void) -> Void = { _, done in done(nil) },
-                  readFile: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) },
+                  readFile: @escaping (URL) throws -> Data = XRGTheme.readFile,
                   writeFile: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
         self.defaults = defaults; self.center = center; sensorSource = sensors; interfaceSource = interfaces
         self.openURL = openURL; errorNotice = error; showFont = fontPanel; self.chooseOpen = chooseOpen; self.chooseSave = chooseSave
@@ -320,6 +320,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
               let preset = XRGTheme.Builtin(rawValue: raw), let settings else { return }
         do {
             try settings.applyThemeDictionary(preset.dictionary(), defaults: defaults)
+            defaults.set(preset.name, forKey: XRGTheme.nameKey)
             setUpColorPanel(); redrawGraphs()
         } catch { errorNotice("Could not apply the built-in theme.", window) }
     }
@@ -569,17 +570,30 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     @nonobjc func themeData() throws -> Data {
         try PropertyListSerialization.data(fromPropertyList: themeDictionary(), format: .xml, options: 0)
     }
+    @nonobjc func portableThemeData() throws -> Data {
+        let original = defaults.data(forKey: XRGTheme.documentKey).flatMap { try? XRGThemeDocument(data: $0) }
+        return try XRGTheme(dictionary: themeDictionary()).portableDocument(
+            name: defaults.string(forKey: XRGTheme.nameKey) ?? "My Theme", original: original).encoded()
+    }
     @nonobjc func loadTheme(from url: URL) -> Bool {
         guard let settings else { return false }
         let scope = url.startAccessingSecurityScopedResource(); defer { if scope { url.stopAccessingSecurityScopedResource() } }
         do {
-            let plist = try PropertyListSerialization.propertyList(from: readFile(url), options: [], format: nil)
-            try settings.applyThemeDictionary(plist, defaults: defaults); setUpColorPanel(); redrawGraphs(); return true
+            try settings.applyThemeData(readFile(url), defaults: defaults)
+            setUpColorPanel(); redrawGraphs(); return true
         } catch { errorNotice("The theme file specified is not a valid theme file.", window); return false }
     }
     @nonobjc func saveTheme(to url: URL) -> Bool {
         let scope = url.startAccessingSecurityScopedResource(); defer { if scope { url.stopAccessingSecurityScopedResource() } }
-        do { try writeFile(themeData(), url); return true }
+        do {
+            let data: Data
+            switch url.pathExtension.lowercased() {
+            case "json": data = try portableThemeData()
+            case "xtf": data = try themeData()
+            default: throw Self.invalidInput
+            }
+            try writeFile(data, url); return true
+        }
         catch { errorNotice("Could not save the theme to that location.", window); return false }
     }
     @IBAction public func loadTheme(_ sender: Any?) {
@@ -592,13 +606,16 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     }
     private static func openThemePanel(_ window: NSWindow, completion: @escaping (URL?) -> Void) {
         let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.init(filenameExtension: "xtf") ?? .data]; panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        panel.allowedContentTypes = [.json, .init(filenameExtension: "xtf") ?? .data]; panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
         panel.beginSheetModal(for: window) { response in completion(response == .OK ? panel.url : nil) }
     }
     private static func saveThemePanel(_ window: NSWindow, completion: @escaping (URL?) -> Void) {
-        let panel = NSSavePanel(); panel.allowedContentTypes = [.init(filenameExtension: "xtf") ?? .data]
+        let panel = NSSavePanel()
+        panel.allowsOtherFileTypes = false; panel.isExtensionHidden = false
+        panel.message = "Choose Original XRG or Portable Mac/Linux theme format."
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser; panel.nameFieldStringValue = "My Theme.xtf"
-        panel.beginSheetModal(for: window) { response in completion(response == .OK ? panel.url : nil) }
+        let format = XRGThemeSaveFormat(panel: panel)
+        panel.beginSheetModal(for: window) { [format] response in completion(response == .OK ? format.panel?.url : nil) }
     }
     private static func presentError(_ message: String, _ window: NSWindow?) {
         let alert = NSAlert(); alert.messageText = "Error"; alert.informativeText = message; alert.addButton(withTitle: "Okay")
@@ -644,5 +661,36 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         let item = NSToolbarItem(itemIdentifier: identifier); item.label = labels[index]; item.paletteLabel = labels[index]; item.toolTip = labels[index] + " Graph Options"
         item.image = NSImage(systemSymbolName: symbols[index], accessibilityDescription: labels[index]); item.target = self; item.action = selectors[index]
         toolbarItems[identifier] = item; return item
+    }
+}
+
+/// The accessory and filename always describe the same format. Retained by the
+/// sheet completion; its weak panel reference avoids a modal-sheet retain cycle.
+@MainActor final class XRGThemeSaveFormat: NSObject {
+    weak var panel: NSSavePanel?
+    let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 290, height: 26), pullsDown: false)
+
+    init(panel: NSSavePanel) {
+        self.panel = panel
+        super.init()
+        picker.addItems(withTitles: ["Original XRG (.xtf)", "Portable Mac/Linux (.json)"])
+        picker.setAccessibilityLabel("Theme file format")
+        picker.target = self; picker.action = #selector(change(_:))
+        let label = NSTextField(labelWithString: "Format:")
+        let stack = NSStackView(views: [label, picker]); stack.orientation = .horizontal
+        stack.spacing = 8; stack.alignment = .centerY; stack.frame = NSRect(x: 0, y: 0, width: 390, height: 32)
+        panel.accessoryView = stack
+        change(picker)
+    }
+
+    @objc func change(_ sender: Any?) {
+        guard let panel else { return }
+        let portable = picker.indexOfSelectedItem == 1
+        let suffix = portable ? "json" : "xtf"
+        panel.allowedContentTypes = [portable ? .json : (.init(filenameExtension: "xtf") ?? .data)]
+        let name = panel.nameFieldStringValue
+        let known = ["xtf", "json"].contains((name as NSString).pathExtension.lowercased())
+        let stem = known ? (name as NSString).deletingPathExtension : name
+        panel.nameFieldStringValue = (stem.isEmpty ? "My Theme" : stem) + "." + suffix
     }
 }

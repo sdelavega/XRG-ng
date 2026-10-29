@@ -26,6 +26,8 @@ import Foundation
 
 struct XRGTheme {
     static let colorNames = ["background", "graphBG", "graphFG1", "graphFG2", "graphFG3", "border", "text"]
+    static let documentKey = "portableThemeDocument"
+    static let nameKey = "portableThemeName"
 
     typealias Builtin = XRGBuiltinTheme
 
@@ -38,8 +40,10 @@ struct XRGTheme {
     }
 
     let fields: [Field]
+    let document: XRGThemeDocument?
 
     init(dictionary: Any?) throws {
+        document = nil
         guard let dictionary = dictionary as? NSDictionary else { throw Self.invalidTheme }
         fields = try Self.colorNames.map { name in
             let colorKey = name + "Color"
@@ -63,6 +67,55 @@ struct XRGTheme {
             return Field(colorKey: colorKey, alphaKey: alphaKey, color: color,
                          alpha: number.doubleValue, archive: archive)
         }
+    }
+
+    init(data: Data) throws {
+        guard data.count <= XRGThemeDocument.byteLimit else { throw Self.invalidTheme }
+        if let dictionary = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+           let theme = try? Self(dictionary: dictionary) {
+            self = theme
+        } else {
+            let document = try XRGThemeDocument(data: data)
+            var dictionary: [String: Any] = [:]
+            for (name, rgba) in zip(Self.colorNames, document.colors) {
+                let color = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+                dictionary[name + "Color"] = try NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: true)
+                dictionary[name + "Transparency"] = rgba[3]
+            }
+            fields = try Self(dictionary: dictionary).fields
+            self.document = document
+        }
+    }
+
+    func portableDocument(name: String, original: XRGThemeDocument?) throws -> XRGThemeDocument {
+        let colors = try fields.enumerated().map { index, field -> [Double] in
+            if let original {
+                let rgba = original.colors[index]
+                let rendered = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+                // Preserve untouched imported doubles rather than repeatedly
+                // converting them through a native color picker/color profile.
+                if field.color.isEqual(rendered) { return rgba }
+            }
+            guard let rgb = field.color.usingColorSpace(.sRGB) else { throw Self.invalidTheme }
+            let components = [Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent)]
+            guard components.allSatisfy(\.isFinite) else { throw Self.invalidTheme }
+            // Like the Linux XTF reader, clip converted wide-gamut colors to
+            // portable sRGB. XTF export retains the native color archive.
+            return components.map { min(1, max(0, $0)) } + [field.alpha]
+        }
+        return try XRGThemeDocument(name: original?.name ?? name, colors: colors)
+    }
+
+    static func readFile(_ url: URL) throws -> Data {
+        guard url.isFileURL, try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw invalidTheme }
+        let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+        var data = Data()
+        while data.count <= XRGThemeDocument.byteLimit {
+            let chunk = try file.read(upToCount: XRGThemeDocument.byteLimit + 1 - data.count) ?? Data()
+            if chunk.isEmpty { return data }
+            data.append(chunk)
+        }
+        throw invalidTheme
     }
 
     private static var invalidTheme: NSError {

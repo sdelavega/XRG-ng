@@ -297,6 +297,21 @@ public final class XRGSettings: NSObject {
     @objc(applyThemeDictionary:defaults:error:)
     public func applyThemeDictionary(_ dictionary: Any?, defaults: UserDefaults) throws {
         let theme = try XRGTheme(dictionary: dictionary)
+        try applyTheme(theme, defaults: defaults)
+    }
+
+    @nonobjc public func applyThemeData(_ data: Data, defaults: UserDefaults) throws {
+        try applyTheme(XRGTheme(data: data), defaults: defaults)
+    }
+
+    @nonobjc public func loadTheme(from url: URL, defaults: UserDefaults) throws {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        try applyThemeData(XRGTheme.readFile(url), defaults: defaults)
+    }
+
+    private func applyTheme(_ theme: XRGTheme, defaults: UserDefaults) throws {
+        let portable = try theme.document?.encoded()
         for field in theme.fields {
             // XRGTheme supplies a fixed allowlist of keys.
             setValue(field.alpha, forKey: field.alphaKey)
@@ -305,6 +320,13 @@ public final class XRGSettings: NSObject {
         for field in theme.fields {
             defaults.set(field.alpha, forKey: field.alphaKey)
             defaults.set(field.archive, forKey: field.colorKey)
+        }
+        if let portable {
+            defaults.set(portable, forKey: XRGTheme.documentKey)
+            defaults.set(theme.document?.name, forKey: XRGTheme.nameKey)
+        } else {
+            defaults.removeObject(forKey: XRGTheme.documentKey)
+            defaults.removeObject(forKey: XRGTheme.nameKey)
         }
     }
 

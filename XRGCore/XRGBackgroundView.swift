@@ -106,18 +106,18 @@ public final class XRGBackgroundView: NSView {
     private var strip: CGFloat { border * 2 + lineHeight }
 
     public override init(frame frameRect: NSRect) {
-        defaults = .standard; action = Self.systemAction; readTheme = { try Data(contentsOf: $0) }; animateResizing = true
+        defaults = .standard; action = Self.systemAction; readTheme = XRGTheme.readFile; animateResizing = true
         hostnameLookup = { await Task.detached { ProcessInfo.processInfo.hostName }.value }
         super.init(frame: frameRect); prepare()
     }
     public required init?(coder: NSCoder) {
-        defaults = .standard; action = Self.systemAction; readTheme = { try Data(contentsOf: $0) }; animateResizing = true
+        defaults = .standard; action = Self.systemAction; readTheme = XRGTheme.readFile; animateResizing = true
         hostnameLookup = { await Task.detached { ProcessInfo.processInfo.hostName }.value }
         super.init(coder: coder); prepare()
     }
     @nonobjc init(frame: NSRect, defaults: UserDefaults, animateResizing: Bool = false,
                   hostnameLookup: @escaping @Sendable () async -> String = { "Fixture.local" },
-                  readTheme: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) },
+                  readTheme: @escaping (URL) throws -> Data = XRGTheme.readFile,
                   action: @escaping (XRGBackgroundAction) -> Void = { _ in }) {
         self.defaults = defaults; self.action = action; self.hostnameLookup = hostnameLookup
         self.readTheme = readTheme; self.animateResizing = animateResizing
@@ -315,7 +315,7 @@ public final class XRGBackgroundView: NSView {
     @nonobjc func themeURL(from pasteboard: NSPasteboard, operation: NSDragOperation) -> URL? {
         guard operation.contains(.copy),
               let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-              urls.count == 1, let url = urls.first, url.isFileURL, url.pathExtension == "xtf" else { return nil }
+              urls.count == 1, let url = urls.first, url.isFileURL, ["xtf", "json"].contains(url.pathExtension) else { return nil }
         return url
     }
     @nonobjc func performThemeDrop(from pasteboard: NSPasteboard, operation: NSDragOperation) -> Bool {
@@ -325,8 +325,7 @@ public final class XRGBackgroundView: NSView {
         do {
             let data = try readTheme(url)
             guard !data.isEmpty else { throw NSError(domain: "XRGThemeErrorDomain", code: 1) }
-            let dictionary = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-            try settings.applyThemeDictionary(dictionary, defaults: defaults)
+            try settings.applyThemeData(data, defaults: defaults)
             needsDisplay = true; host?.backgroundThemeDidApply(); return true
         } catch { action(.invalidTheme); return false }
     }

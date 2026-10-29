@@ -625,6 +625,13 @@ reader supports the previously verified RGB, grayscale and sRGB/Display-P3 cases
 it does not execute an Objective-C unarchiver. Theme alpha and window opacity are
 separate. Untouched colors retain their original numeric precision.
 
+Portable JSON palettes can also be loaded and saved by the current macOS
+development build through Preferences → Appearance. Original XTF load/save
+remains available on Mac. The published macOS 0.1.0 release is XTF-only; JSON
+exchange requires a newer build. Both parsers use the same acceptance fixtures
+under `Shared/Tests/Fixtures`, including duplicate-key, version, Unicode-name,
+array-shape and numeric-precision cases.
+
 ## Importing legacy Linux settings
 
 In Themes / import browse to the C application's `settings.conf`, or enter its
@@ -869,7 +876,9 @@ forecast. Requests remain off by default. No location detection is performed.
   raw thermistor calibration and optional process priority controls.
 - Broader large-log/discovery coverage and Codex protocol compatibility,
   optional price tables, broader XTF color spaces and legacy-field mappings.
-- Signed/tagged Linux releases and signed package repositories. Debian, RPM,
-  Arch and AppImage previews now accompany the archives; existing installation
-  paths remain supported. Hardware support remains best effort;
-  feedback is welcome and encouraged.
+- Signed package repositories and further release automation. Signed/tagged Linux
+  0.2.0 standalone Debian, RPM, Arch, AppImage and archive releases are available;
+  see [verification instructions](../../signing/README.md). Hardware support remains
+  best effort; feedback is welcome and encouraged.
+- Remaining cross-platform presentation and workflow gaps are tracked in
+  [PLATFORM_PARITY.md](../../PLATFORM_PARITY.md).

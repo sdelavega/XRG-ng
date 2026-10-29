@@ -344,6 +344,32 @@ struct XRGPrefControllerTests {
         #expect(f.inputs.errors.isEmpty)
     }
 
+    @Test func portableThemeImportEditAndExportPreserveUntouchedPrecisionAndOtherSettings() throws {
+        let f = try PreferencesFixture(); defer { f.cleanUp() }
+        let source = try #require(Bundle(for: PreferencesNibOwner.self).url(forResource: "portable-theme", withExtension: "json"))
+        let expected = try XRGThemeDocument(data: Data(contentsOf: source))
+        f.defaults.set(777, forKey: "aiTokensDailyBudget"); f.graph.appSettings?.graphStyle = 2
+        f.pref.netMinGraphScaleValue?.stringValue = "unrelated invalid field"
+        #expect(f.pref.loadTheme(from: source))
+        #expect(try XRGThemeDocument(data: f.pref.portableThemeData()) == expected)
+        // The cached original also survives a normal preference restore.
+        let restored = XRGSettings(defaults: f.defaults)
+        _ = XRGWindowPreferences.apply(f.defaults.dictionaryRepresentation() as NSDictionary, to: restored)
+        let cached = try XRGThemeDocument(data: #require(f.defaults.data(forKey: XRGTheme.documentKey)))
+        #expect(cached == expected)
+        #expect(restored.backgroundColor == f.graph.appSettings?.backgroundColor)
+        f.pref.graphFG1Transparency?.doubleValue = 0.42
+        let edited = try XRGThemeDocument(data: f.pref.portableThemeData())
+        #expect(edited.name == expected.name && edited.colors[2][3] == 0.42)
+        for i in [0, 1, 3, 4, 5, 6] { #expect(edited.colors[i] == expected.colors[i]) }
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("XRG-portable-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: output) }
+        #expect(f.pref.saveTheme(to: output))
+        #expect(try XRGThemeDocument(data: Data(contentsOf: output)) == edited)
+        #expect(f.defaults.integer(forKey: "aiTokensDailyBudget") == 777 && f.graph.appSettings?.graphStyle == 2)
+        #expect(f.inputs.errors.isEmpty)
+    }
+
     @Test(arguments: XRGTheme.Builtin.allCases.filter { $0 != .classic })
     func builtinTextRemainsReadableOverBackgroundAndGraphFills(preset: XRGTheme.Builtin) throws {
         let theme = try XRGTheme(dictionary: preset.dictionary())

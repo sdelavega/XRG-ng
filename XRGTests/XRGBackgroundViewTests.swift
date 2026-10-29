@@ -406,6 +406,16 @@ struct XRGBackgroundViewTests {
         #expect(NSDictionary(dictionary: f.defaults.persistentDomain(forName: f.domain) ?? [:]).isEqual(to: original))
     }
 
+    @Test func portableJSONThemeDropsUseTheSameValidatedPalettePath() throws {
+        let doc = try XRGThemeDocument(name: "Dropped portable theme", colors: Array(repeating: [0.123456789, 0.5, 0.75, 0.42], count: 7))
+        let f = try BackgroundFixture(readTheme: { _ in try doc.encoded() }); defer { f.cleanUp() }
+        let board = privatePasteboard([URL(fileURLWithPath: "/fixture.json")]); defer { board.releaseGlobally() }
+        #expect(f.view.performThemeDrop(from: board, operation: .copy))
+        #expect(f.host.themesApplied == 1 && f.actions.isEmpty)
+        #expect(f.settings.textTransparency == 0.42)
+        #expect(try XRGThemeDocument(data: #require(f.defaults.data(forKey: XRGTheme.documentKey))) == doc)
+    }
+
     @Test(arguments: ["multiple", "wrongExtension", "upperExtension", "web", "move", "empty"])
     func rejectedDragPayloadNeverReadsAFile(failure: String) throws {
         var reads = 0

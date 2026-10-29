@@ -8,7 +8,8 @@ let package = Package(
     targets: [
         .target(name: "XRGSharedCore", path: "Shared", exclude: ["Tests", "include"],
                 sources: ["Sources", "Bridge"]),
-        .testTarget(name: "XRGSharedCoreTests", dependencies: ["XRGSharedCore"], path: "Shared/Tests")
+        .testTarget(name: "XRGSharedCoreTests", dependencies: ["XRGSharedCore"], path: "Shared/Tests",
+                    resources: [.copy("Fixtures")])
     ],
     swiftLanguageModes: [.v5]
 )

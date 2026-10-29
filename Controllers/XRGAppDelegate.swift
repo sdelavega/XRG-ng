@@ -173,9 +173,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
         guard !filename.isEmpty, let settings = appSettings else { return false }
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: filename))
-            let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-            try settings.applyThemeDictionary(plist, defaults: defaults)
+            try settings.loadTheme(from: URL(fileURLWithPath: filename), defaults: defaults)
             xrgGraphWindow?.display()
             prefController?.setUpColorPanel()
             return true

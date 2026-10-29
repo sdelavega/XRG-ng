@@ -84,6 +84,21 @@ struct XRGApplicationLifecycleTests {
         #expect(!scene.delegate.application(NSApplication.shared, openFile: ""))
     }
 
+    @Test func applicationFileOpenAcceptsPortableThemesAndRejectsInvalidJSONAtomically() throws {
+        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("XRG-app-theme-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let doc = try XRGThemeDocument(name: "Opened JSON", colors: Array(repeating: [0.1, 0.2, 0.3, 0.4], count: 7))
+        try doc.encoded().write(to: file)
+        #expect(scene.delegate.application(NSApplication.shared, openFile: file.path))
+        #expect(defaults.double(forKey: "textTransparency") == 0.4)
+        let before = defaults.persistentDomain(forName: domain) ?? [:]
+        try Data("{\"format\":\"xrg-ng-theme\",\"version\":2}".utf8).write(to: file)
+        #expect(!scene.delegate.application(NSApplication.shared, openFile: file.path))
+        #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: domain) ?? [:]).isEqual(to: before))
+    }
+
     @Test func injectedUnknownSensorPolicyAndLazyNibFailuresDoNotFallBackToGlobalHardware() throws {
         let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
         var loaded: [String] = [], errors = 0

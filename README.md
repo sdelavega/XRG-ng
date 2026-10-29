@@ -196,8 +196,26 @@ light background, while the other palettes offer dark alternatives. Existing
 saved appearances keep their colors; choose Classic to apply it to an existing setup.
 
 Customize any preset with the existing color wells and opacity sliders. **Load
-Theme** and **Save Theme** continue to use `.xtf` files, including existing custom
-themes. Presets keep your font, graph style, layout and monitoring settings.
+Theme** accepts original `.xtf` files and portable `.json` palettes from Linux.
+**Save Theme → Format** offers **Original XRG (.xtf)** and **Portable Mac/Linux
+(.json)**; XTF remains the default. JSON palettes can move in either direction
+between the two apps. Theme drag-and-drop and explicit application file-open also
+accept JSON. Loading a palette applies colors and alpha without changing the
+font, graph style, layout or monitoring settings. Untouched imported JSON colors
+retain their original numeric precision and theme name when re-exported.
+Wide-gamut Mac colors are converted and clipped to sRGB for portable JSON; XTF
+retains the native color archives.
+
+JSON support is available in the current macOS development build. The published
+macOS 0.1.0 release still uses XTF only.
+
+Portable files use `format: "xrg-ng-theme"`, `version: 1`, a printable name of
+1–80 Unicode scalars, and seven sRGB RGBA arrays in window, graph background,
+series 1/2/3, border and text order. Components must be finite values between
+0 and 1; files are limited to 128 KiB. Both apps reject unknown fields, duplicate
+fields and unsupported versions. Theme files contain palettes, not complete
+cross-platform preference profiles. Shared compatibility fixtures exercise the
+Swift and Rust readers against the same valid and invalid documents.
 
 ## Building
 
