@@ -34,6 +34,7 @@ struct XRGAIViewProviderData {
     var rate: UInt64
     var total: UInt64
     var cost: Double = 0
+    var costBasis: String = "source value (may include estimates)"
 }
 struct XRGAITokenViewSnapshot {
     var providers: [XRGAIViewProviderData] = []
@@ -49,7 +50,9 @@ struct XRGAITokenViewSnapshot {
     }
 }
 @MainActor protocol XRGAITokenViewSource: AnyObject {
-    var geminiEventHandler: ((UInt64, UInt64) -> Void)? { get set }
+    var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)? { get set }
+    func resetAccountingBaseline()
+    func setAccountingEnabled(_ enabled: Bool)
     func setDataSize(_ count: Int)
     func getLatestTokenInfo()
     func viewSnapshot() -> XRGAITokenViewSnapshot
@@ -57,11 +60,11 @@ struct XRGAITokenViewSnapshot {
 extension XRGAITokenMiner: XRGAITokenViewSource {
     func viewSnapshot() -> XRGAITokenViewSnapshot {
         XRGAITokenViewSnapshot(providers: [
-            XRGAIViewProviderData(provider: .claude, history: claudeTokenData(), rate: UInt64(claudeTokenRate()), total: totalClaudeTokens, cost: claudeCostUSD()),
-            XRGAIViewProviderData(provider: .codex, history: codexTokenData(), rate: UInt64(codexTokenRate()), total: totalCodexTokens, cost: codexCostUSD()),
-            XRGAIViewProviderData(provider: .gemini, history: geminiTokenData(), rate: UInt64(geminiTokenRate()), total: totalGeminiTokens, cost: geminiCostUSD()),
+            XRGAIViewProviderData(provider: .claude, history: claudeTokenData(), rate: UInt64(claudeTokenRate()), total: totalClaudeTokens, cost: claudeCostUSD(), costBasis: activeStrategy == .JSONL ? "legacy estimate" : activeStrategy == .SQLite ? "source estimate" : "reported"),
+            XRGAIViewProviderData(provider: .codex, history: codexTokenData(), rate: UInt64(codexTokenRate()), total: totalCodexTokens, cost: codexCostUSD(), costBasis: "legacy estimate; assumed split"),
+            XRGAIViewProviderData(provider: .gemini, history: geminiTokenData(), rate: UInt64(geminiTokenRate()), total: totalGeminiTokens, cost: geminiCostUSD(), costBasis: "legacy estimate"),
             XRGAIViewProviderData(provider: .ollama, history: ollamaTokenData(), rate: UInt64(ollamaTokenRate()), total: totalOllamaTokens),
-            XRGAIViewProviderData(provider: .hermes, history: hermesTokenData(), rate: UInt64(hermesTokenRate()), total: totalHermesTokens, cost: hermesCostUSD())],
+            XRGAIViewProviderData(provider: .hermes, history: hermesTokenData(), rate: UInt64(hermesTokenRate()), total: totalHermesTokens, cost: hermesCostUSD(), costBasis: "source value (actual or estimated)")],
             ollamaAvailable: ollamaAvailable, ollamaStatus: ollamaStatusString(), runningModels: ollamaRunningModels,
             hermesModels: hermesModelTokens, totalCost: totalCostUSD, costPerHour: costPerHour(), projectedDailyCost: projectedDailyCost())
     }
@@ -86,6 +89,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     private weak var host: (any XRGAITokenViewHost)?
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
+    private var accountingGeneration: UUID?
     private var historyWidth: Int?
     private var cachedLayers: [XRGDataSet] = []
     @nonobjc let graphLabels = XRGGraphLabels()
@@ -114,9 +118,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     }
     private func prepare() {
         for label in [graphLabels.leftLabel, graphLabels.centerLabel, graphLabels.rightLabel] { addSubview(label) }
-        source.geminiEventHandler = { [observer] input, output in
-            observer.recordEvent(promptTokens: input, completionTokens: output, model: "Gemini", provider: "Google")
-        }
+        source.usageEventHandler = { [observer] provider, delta in observer.recordUsage(delta, provider: provider) }
         setGraphSize(bounds.size); updateLabels()
     }
     public nonisolated override func awakeFromNib() {
@@ -156,7 +158,12 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         module?.minHeight = XRGGraphLabels.lineHeight(settings)
         updateLabels()
     }
-    public func graphUpdate(_ timer: Timer?) { source.getLatestTokenInfo(); updateLabels(); needsDisplay = true }
+    public func graphUpdate(_ timer: Timer?) {
+        let generation = observer.accountingGeneration
+        if accountingGeneration != generation { source.resetAccountingBaseline(); accountingGeneration = generation }
+        source.setAccountingEnabled(defaults.bool(forKey: "aiTokensTrackingEnabled"))
+        source.getLatestTokenInfo(); updateLabels(); needsDisplay = true
+    }
     public func fastUpdate(_ timer: Timer?) {}
     public func min5Update(_ timer: Timer?) {}
     public func min30Update(_ timer: Timer?) {}
@@ -333,19 +340,21 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         item("Session Statistics", enabled: false)
         item("  Prompt: \(Self.compactCount(observer.sessionPromptTokens)) tokens")
         item("  Completion: \(Self.compactCount(observer.sessionCompletionTokens)) tokens")
+        item("  Unknown split: \(Self.compactCount(observer.sessionUnclassifiedTokens)) tokens")
         item("  Total: \(Self.compactCount(observer.sessionTotalTokens)) tokens")
+        item("Observed since tracking began; initial history excluded", enabled: false)
         menu.addItem(.separator()); item("Daily Statistics", enabled: false)
         let daily = observer.dailyTotalTokens, budget = settings?.aiTokensDailyBudget ?? 0
         item("  Total: \(Self.compactCount(daily)) tokens")
         if budget > 0 { item("  Budget: \(Self.compactCount(daily)) / \(Self.compactCount(UInt64(budget))) (" + String(format: "%.1f%%)", Double(daily) / Double(budget) * 100)) }
         if snapshot.totalCost.isFinite && snapshot.totalCost > 0.001 {
             menu.addItem(.separator()); item("Cost Intelligence", enabled: false)
-            item(String(format: "  Total Cost: $%.4f", snapshot.totalCost))
+            item(String(format: "  Mixed Cost (includes estimates): $%.4f", snapshot.totalCost))
             if snapshot.costPerHour.isFinite && snapshot.costPerHour > 0.001 {
-                item(String(format: "  Burn Rate: $%.4f/hr", snapshot.costPerHour))
-                if snapshot.projectedDailyCost.isFinite { item(String(format: "  Projected 24hr: $%.4f", snapshot.projectedDailyCost)) }
+                item(String(format: "  Estimated Change: $%.4f/hr", snapshot.costPerHour))
+                if snapshot.projectedDailyCost.isFinite { item(String(format: "  Extrapolated 24hr: $%.4f", snapshot.projectedDailyCost)) }
             }
-            for provider in providers where provider.cost.isFinite && provider.cost > 0.001 { item(String(format: "  %@: $%.4f", provider.provider.name, provider.cost)) }
+            for provider in providers where provider.cost.isFinite && provider.cost > 0.001 { item(String(format: "  %@: $%.4f (%@)", provider.provider.name, provider.cost, provider.costBasis)) }
         }
         if snapshot.ollamaAvailable {
             menu.addItem(.separator()); item("Ollama Local Inference", enabled: false); item("  " + snapshot.ollamaStatus)
@@ -362,13 +371,15 @@ public final class XRGAITokenView: NSView, XRGModuleView {
             menu.addItem(.separator()); item("By Provider", enabled: false)
             for key in observer.dailyByProvider.keys.sorted() { item("  \(key): \(Self.compactCount(observer.dailyByProvider[key]?.uint64Value ?? 0)) tokens") }
         }
-        menu.addItem(.separator()); item("Reset Daily Counters", #selector(resetDailyCounters(_:)))
+        menu.addItem(.separator()); item("Reset Session Counters", #selector(resetSessionCounters(_:)))
+        item("Reset Daily Counters", #selector(resetDailyCounters(_:)))
         item("Open Database Location...", #selector(openDatabaseLocation(_:)))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     public func formatNumber(_ number: UInt64) -> String { Self.compactCount(number) }
     public func emptyEvent(_ sender: Any?) {}
+    public func resetSessionCounters(_ sender: Any?) { observer.resetSession(); updateLabels(); needsDisplay = true }
     public func resetDailyCounters(_ sender: Any?) { observer.resetDaily(); updateLabels(); needsDisplay = true }
     public func openDatabaseLocation(_ sender: Any?) { _ = openURL(databaseURL) }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

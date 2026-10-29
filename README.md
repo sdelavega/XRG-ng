@@ -135,15 +135,39 @@ XRG-ng displays real-time graphs for:
 
 ### Features
 
-- **5-Provider Support** - Track Claude, Codex, Gemini, Ollama, and Hermes agents in a single stacked graph
-- **Cost Intelligence** - Total cost, $/hour burn rate, and projected daily cost in the right-click menu
-- **Per-Provider Costs** - Accurate pricing (Claude $3/$15, Codex $2.50/$10, Gemini $0.15/$0.60 per MTok)
-- **Ollama Integration** - Detect available models, show running models, track local inference
+- **Provider Monitoring** - Observed token rates for Claude, Codex, Gemini and Hermes, plus Ollama model inventory/status
+- **Cost Context** - The Mac menu labels legacy estimates, source estimates and reported values; the mixed total and extrapolations are not billing records or a current price catalog
+- **Ollama Integration** - Detect available and running models; `/api/tags` and `/api/ps` do not supply token usage
 - **Hermes Agent Tracking** - Per-model token breakdown and cost read straight from the Hermes state DB
 - **Zero Configuration** - Auto-detects installed AI tools, no setup required
-- **Real-Time Tracking** - Updates within 1-2 seconds during active AI usage
+- **Cached Tracking** - Mac log scans run in the background on a 30-second schedule; database/endpoint sampling follows graph updates
 - **Per-Provider Breakdown** - Color-coded visualization shows usage by provider (and per-model for Hermes)
-- **Performance Optimized** - Background threading, intelligent caching, 95MB memory footprint
+- **Background Collection** - Incremental file caches and background scans keep log parsing off the UI thread
+
+Mac AI preferences now apply session/daily accounting and token budgets to all
+four collected usage providers. Enable **AI Token Tracking** and keep the AI
+graph displayed to sample usage. The first complete read establishes a baseline;
+historical files are excluded from these counters. New tokens are assigned to the
+day they are observed, not reconstructed by event timestamp. Source changes,
+decreasing counters and failed database/endpoint reads establish fresh baselines;
+log scans retain their last complete snapshot on failure. Gaps and history edits
+can therefore undercount activity. These are local observed counters, not invoices.
+
+Input/output splits and model names are used only when available. Total-only
+Codex and custom Claude monitoring counters retain an **Unknown split** count.
+Claude/Gemini log models and Hermes database models contribute to daily model
+breakdowns; late or inconsistent attribution is omitted rather than added to the
+provider total. Reset Session and Reset Daily are independent and preserve graphs
+and historical provider totals. Resets, midnight rollover and tracking changes
+establish new observation baselines, excluding any pending pre-reset scan delta.
+
+Use **Allow Budget Notifications…** in Mac AI preferences to request macOS alert
+permission. A positive daily budget emits at most one threshold alert per day
+(or after Reset Daily); zero disables it. Delivery follows macOS authorization and
+notification settings. A denied alert is not retried for that day's threshold.
+Permission is never requested by background sampling or smoke tests. Linux still
+has observed provider rates/model details; persistent daily budgets and desktop
+budget alerts remain a parity task.
 
 ### How It Works
 
@@ -151,24 +175,23 @@ The AI Token monitor automatically detects all installed AI coding tools:
 
 1. **Claude Code** (Anthropic) - Cloud API
    - Source: `~/.claude/projects/*/sessionid.jsonl`
-   - Tracks input/output tokens with accurate cost calculation
-   - Pricing: $3/MTok input, $15/MTok output
+   - Tracks input/output tokens; Mac applies a legacy model-based cost estimate
 
 2. **OpenAI Codex CLI** - Cloud API
    - Source: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
    - Parses `token_count` events from session files
-   - Pricing: $2.50/MTok input, $10/MTok output
+   - Mac legacy cost estimate assumes a 70/30 input/output split
 
 3. **Google Gemini CLI** - Cloud API
    - Source: `~/.gemini/tmp/<hash>/chats/session-*.json`
    - Extracts tokens from message history
-   - Pricing: $0.15/MTok input, $0.60/MTok output
+   - Mac applies a legacy model-based cost estimate
 
 4. **Ollama** - Local Inference
    - Source: REST API at `http://localhost:11434`
    - Queries `/api/tags` for available models
    - Queries `/api/ps` for currently loaded models
-   - Zero cost (local inference)
+   - Inventory/status only; no token usage or electricity cost measurement
 
 5. **Hermes Agents** - Agent Orchestrator
    - Source: SQLite database at `~/.hermes/state.db`

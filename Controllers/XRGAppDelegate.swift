@@ -28,6 +28,7 @@ import XRGCore
 @objc(XRGAppDelegate)
 @objcMembers
 final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, XRGSensorWindowDataSource, XRGGraphWindowController, XRGPreferencesDataSource {
+    private let budgetNotifications: XRGAIBudgetNotifications?
     private let defaults: UserDefaults
     private let loadNib: (String, XRGAppDelegate) -> Void
     private let presentWindow: (NSWindow, Any?) -> Void
@@ -37,7 +38,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     private let invalidThemeNotice: (Error) -> Void
 
     override convenience init() {
-        self.init(defaults: .standard,
+        self.init(defaults: .standard, budgetNotifications: XRGAIBudgetNotifications(),
                   loadNib: { name, owner in _ = Bundle.main.loadNibNamed(NSNib.Name(name), owner: owner, topLevelObjects: nil) },
                   presentWindow: { $0.makeKeyAndOrderFront($1) },
                   activateApplication: {
@@ -55,12 +56,13 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
                   })
     }
 
-    @nonobjc init(defaults: UserDefaults, loadNib: @escaping (String, XRGAppDelegate) -> Void,
+    @nonobjc init(defaults: UserDefaults, budgetNotifications: XRGAIBudgetNotifications? = nil, loadNib: @escaping (String, XRGAppDelegate) -> Void,
                   presentWindow: @escaping (NSWindow, Any?) -> Void = { _, _ in },
                   activateApplication: @escaping () -> Void = {},
                   includeUnknownSensors: (() -> Bool)? = nil,
                   sensorProvider: @escaping (Bool) -> [XRGSensorData] = { _ in [] },
                   invalidThemeNotice: @escaping (Error) -> Void = { _ in }) {
+        self.budgetNotifications = budgetNotifications
         self.defaults = defaults; self.loadNib = loadNib; self.presentWindow = presentWindow
         self.activateApplication = activateApplication; self.sensorProvider = sensorProvider
         self.includeUnknownSensors = includeUnknownSensors ?? { defaults.bool(forKey: "tempShowUnknownSensors") }
@@ -135,6 +137,8 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let window = xrgGraphWindow else { return }
+        budgetNotifications?.installNativeDelegate()
+        budgetNotifications?.start()
         window.startRuntimeIfNeeded()
         window.moduleManager?.windowChanged(to: window.frame.size)
         window.initializeNPUView()
@@ -168,6 +172,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        budgetNotifications?.stop()
         xrgGraphWindow?.cleanupBeforeExiting()
     }
 

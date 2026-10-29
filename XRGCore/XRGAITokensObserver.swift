@@ -32,8 +32,14 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
     private let center: NotificationCenter
     private let now: () -> Date
     private let calendar: Calendar
+    private var generation = UUID()
+    private var notificationGeneration = UUID()
     private var sessionPrompt: UInt64 = 0
     private var sessionCompletion: UInt64 = 0
+    private var sessionUnclassified: UInt64 = 0
+    private var dailyUnclassified: UInt64
+    private var modelUnclassified: [String: UInt64]
+    private var providerUnclassified: [String: UInt64]
     private var dailyPrompt: UInt64
     private var dailyCompletion: UInt64
     private var modelPrompt: [String: UInt64]
@@ -52,6 +58,9 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
         self.center = center
         self.calendar = calendar
         self.now = now
+        dailyUnclassified = Self.count(defaults.object(forKey: "aiTokensDailyUnclassifiedTokens"))
+        modelUnclassified = Self.counts(defaults.dictionary(forKey: "aiTokensDailyModelUnclassifiedTokens"))
+        providerUnclassified = Self.counts(defaults.dictionary(forKey: "aiTokensDailyProviderUnclassifiedTokens"))
         dailyPrompt = Self.count(defaults.object(forKey: "aiTokensDailyPromptTokens"))
         dailyCompletion = Self.count(defaults.object(forKey: "aiTokensDailyCompletionTokens"))
         modelPrompt = Self.counts(defaults.dictionary(forKey: "aiTokensDailyModelPromptTokens"))
@@ -78,26 +87,42 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
         let (value, overflow) = a.addingReportingOverflow(b)
         return overflow ? .max : value
     }
-    private func combined(_ a: [String: UInt64], _ b: [String: UInt64]) -> [String: NSNumber] {
+    private func combined(_ a: [String: UInt64], _ b: [String: UInt64], _ c: [String: UInt64]) -> [String: NSNumber] {
         var result = a
-        for (key, value) in b { result[key] = add(result[key] ?? 0, value) }
+        for values in [b, c] { for (key, value) in values { result[key] = add(result[key] ?? 0, value) } }
         return result.mapValues { NSNumber(value: $0) }
     }
 
+    var accountingGeneration: UUID { lock.withLock { rollover(); return generation } }
     @objc public var sessionPromptTokens: UInt64 { lock.withLock { sessionPrompt } }
     @objc public var sessionCompletionTokens: UInt64 { lock.withLock { sessionCompletion } }
-    @objc public var sessionTotalTokens: UInt64 { lock.withLock { add(sessionPrompt, sessionCompletion) } }
+    @objc public var sessionTotalTokens: UInt64 { lock.withLock { add(add(sessionPrompt, sessionCompletion), sessionUnclassified) } }
+    @objc public var sessionUnclassifiedTokens: UInt64 { lock.withLock { sessionUnclassified } }
+    @objc public var dailyUnclassifiedTokens: UInt64 { lock.withLock { rollover(); return dailyUnclassified } }
     @objc public var dailyPromptTokens: UInt64 { lock.withLock { rollover(); return dailyPrompt } }
     @objc public var dailyCompletionTokens: UInt64 { lock.withLock { rollover(); return dailyCompletion } }
-    @objc public var dailyTotalTokens: UInt64 { lock.withLock { rollover(); return add(dailyPrompt, dailyCompletion) } }
-    @objc public var dailyByModel: [String: NSNumber] { lock.withLock { rollover(); return combined(modelPrompt, modelCompletion) } }
-    @objc public var dailyByProvider: [String: NSNumber] { lock.withLock { rollover(); return combined(providerPrompt, providerCompletion) } }
+    @objc public var dailyTotalTokens: UInt64 { lock.withLock { rollover(); return add(add(dailyPrompt, dailyCompletion), dailyUnclassified) } }
+    @objc public var dailyByModel: [String: NSNumber] { lock.withLock { rollover(); return combined(modelPrompt, modelCompletion, modelUnclassified) } }
+    @objc public var dailyByProvider: [String: NSNumber] { lock.withLock { rollover(); return combined(providerPrompt, providerCompletion, providerUnclassified) } }
 
     @objc(recordEventWithPromptTokens:completionTokens:model:provider:)
     public func recordEvent(promptTokens: UInt64, completionTokens: UInt64, model: String?, provider: String?) {
-        let progress: Double? = lock.withLock {
+        record(usage: XRGTokenUsage(input: promptTokens, output: completionTokens, total: add(promptTokens, completionTokens)),
+               models: [:], legacyModel: model, provider: provider)
+    }
+
+    func recordUsage(_ delta: XRGTokenAccounting.Delta, provider: String) {
+        record(usage: delta.usage, models: delta.models, legacyModel: nil, provider: provider)
+    }
+
+    private func record(usage: XRGTokenUsage, models: [String: UInt64], legacyModel model: String?, provider: String?) {
+        let promptTokens = usage.input, completionTokens = usage.output
+        let progress: (Double, UUID)? = lock.withLock {
             guard defaults.bool(forKey: "aiTokensTrackingEnabled") else { return nil }
             rollover()
+            let unclassified = usage.isValid ? usage.unclassified : 0
+            sessionUnclassified = add(sessionUnclassified, unclassified)
+            dailyUnclassified = add(dailyUnclassified, unclassified)
             sessionPrompt = add(sessionPrompt, promptTokens)
             sessionCompletion = add(sessionCompletion, completionTokens)
             dailyPrompt = add(dailyPrompt, promptTokens)
@@ -106,7 +131,11 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
                 modelPrompt[model] = add(modelPrompt[model] ?? 0, promptTokens)
                 modelCompletion[model] = add(modelCompletion[model] ?? 0, completionTokens)
             }
+            if defaults.bool(forKey: "aiTokensAggregateByModel") {
+                for (name, count) in models { modelUnclassified[name] = add(modelUnclassified[name] ?? 0, count) }
+            }
             if defaults.bool(forKey: "aiTokensAggregateByProvider"), let provider, !provider.isEmpty {
+                providerUnclassified[provider] = add(providerUnclassified[provider] ?? 0, unclassified)
                 providerPrompt[provider] = add(providerPrompt[provider] ?? 0, promptTokens)
                 providerCompletion[provider] = add(providerCompletion[provider] ?? 0, completionTokens)
             }
@@ -116,27 +145,31 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
             let today = now()
             var result: Double?
             if budget > 0, !(notifiedDate.map { calendar.isDate($0, inSameDayAs: today) } ?? false) {
-                let fraction = Double(add(dailyPrompt, dailyCompletion)) / Double(budget)
+                let fraction = Double(add(add(dailyPrompt, dailyCompletion), dailyUnclassified)) / Double(budget)
                 if fraction * 100 >= Double(threshold) {
                     notifiedDate = calendar.startOfDay(for: today)
                     result = fraction
                 }
             }
             persist()
-            return result
+            return result.map { ($0, notificationGeneration) }
         }
         // Deliver outside the lock so notification consumers can safely read counters.
         if let progress {
             let center = center
-            DispatchQueue.main.async {
-                center.post(name: .xrgAITokensBudgetThresholdReached, object: nil,
-                            userInfo: ["progress": progress, "percent": progress * 100])
+            DispatchQueue.main.async { [self] in
+                guard isCurrentNotification(progress.1) else { return }
+                center.post(name: .xrgAITokensBudgetThresholdReached, object: self,
+                            userInfo: ["progress": progress.0, "percent": progress.0 * 100, "generation": progress.1])
             }
         }
     }
 
+    func isCurrentNotification(_ id: UUID) -> Bool {
+        lock.withLock { rollover(); return notificationGeneration == id && defaults.bool(forKey: "aiTokensTrackingEnabled") }
+    }
     @objc public func resetSession() {
-        lock.withLock { sessionPrompt = 0; sessionCompletion = 0 }
+        lock.withLock { sessionPrompt = 0; sessionCompletion = 0; sessionUnclassified = 0; generation = UUID() }
     }
     @objc public func resetDaily() {
         lock.withLock { clearDaily(); persist() }
@@ -150,13 +183,18 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
         }
     }
     private func clearDaily() {
-        dailyPrompt = 0; dailyCompletion = 0
+        generation = UUID(); notificationGeneration = UUID()
+        dailyPrompt = 0; dailyCompletion = 0; dailyUnclassified = 0
+        modelUnclassified = [:]; providerUnclassified = [:]
         modelPrompt = [:]; modelCompletion = [:]
         providerPrompt = [:]; providerCompletion = [:]
         notifiedDate = nil
         dailyDate = calendar.startOfDay(for: now())
     }
     private func persist() {
+        defaults.set(NSNumber(value: dailyUnclassified), forKey: "aiTokensDailyUnclassifiedTokens")
+        defaults.set(modelUnclassified.mapValues { NSNumber(value: $0) }, forKey: "aiTokensDailyModelUnclassifiedTokens")
+        defaults.set(providerUnclassified.mapValues { NSNumber(value: $0) }, forKey: "aiTokensDailyProviderUnclassifiedTokens")
         defaults.set(NSNumber(value: dailyPrompt), forKey: "aiTokensDailyPromptTokens")
         defaults.set(NSNumber(value: dailyCompletion), forKey: "aiTokensDailyCompletionTokens")
         defaults.set(modelPrompt.mapValues { NSNumber(value: $0) }, forKey: "aiTokensDailyModelPromptTokens")

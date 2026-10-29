@@ -56,13 +56,20 @@ enum XRGAIPricing {
     }
     static func parse(_ path: String, gemini: Bool) -> XRGScanTotals {
         var cost = 0.0
+        var models: [String: UInt64] = [:]
         let consume: (String?, UInt64, UInt64) -> Void = { model, input, output in
+            if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               model.utf8.count <= 1024, model.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
+                let (tokens, badTokens) = input.addingReportingOverflow(output)
+                let (sum, badSum) = (models[model] ?? 0).addingReportingOverflow(tokens)
+                if !badTokens, !badSum { models[model] = sum }
+            }
             let (i, o) = prices(model: model, gemini: gemini)
             cost += Double(input) / 1_000_000 * i + Double(output) / 1_000_000 * o
         }
         let totals = gemini ? XRGProviderLogParser.parseGemini(atPath: path, consume: consume)
             : XRGProviderLogParser.parseClaude(atPath: path, consume: consume)
-        return XRGScanTotals(tokens: totals.total, input: totals.input, output: totals.output, cost: cost)
+        return XRGScanTotals(tokens: totals.total, input: totals.input, output: totals.output, cost: cost, modelTotals: models)
     }
 }
 
@@ -71,9 +78,9 @@ enum XRGAIPricing {
 public final class XRGAITokenMiner: NSObject {
     private let home: String
     private let clock: () -> TimeInterval
-    private let claudeScan = XRGScanCache()
-    private let codexScan = XRGScanCache()
-    private let geminiScan = XRGScanCache()
+    private let claudeScan: XRGScanCache
+    private let codexScan: XRGScanCache
+    private let geminiScan: XRGScanCache
     private let tracker = XRGRateTracker()
     private let otelRequest: XRGURL
     private let tagsRequest = XRGURL(timeoutInterval: 2)
@@ -90,6 +97,12 @@ public final class XRGAITokenMiner: NSObject {
     private var geminiReady = false
     private var geminiInput: UInt64 = 0
     private var geminiOutput: UInt64 = 0
+    private var accounting = XRGTokenAccounting()
+    private var accountingEnabled = false
+    private var claudeUsage: XRGTokenUsage?
+    private var hermesUsage: XRGTokenUsage?
+    private var claudeModels: [String: UInt64] = [:]
+    var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)?
     @objc public var geminiEventHandler: ((UInt64, UInt64) -> Void)?
     @objc public private(set) var activeStrategy: XRGAIDataStrategy = .none
     @objc public private(set) var ollamaAvailable = false
@@ -107,7 +120,10 @@ public final class XRGAITokenMiner: NSObject {
     public override convenience init() {
         self.init(home: NSHomeDirectory(), clock: { ProcessInfo.processInfo.systemUptime })
     }
-    init(home: String, clock: @escaping () -> TimeInterval, otelRequest: XRGURL = XRGURL(timeoutInterval: 2)) {
+    init(home: String, clock: @escaping () -> TimeInterval, otelRequest: XRGURL = XRGURL(timeoutInterval: 2), scanInterval: TimeInterval = 30) {
+        claudeScan = XRGScanCache(interval: scanInterval)
+        codexScan = XRGScanCache(interval: scanInterval)
+        geminiScan = XRGScanCache(interval: scanInterval)
         self.otelRequest = otelRequest
         self.home = home
         self.clock = clock
@@ -157,6 +173,18 @@ public final class XRGAITokenMiner: NSObject {
         hermesModelTokens = [:]; hermesTopModel = nil
         models = []; ollamaRunningModels = []; ollamaAvailable = false
         lastOllamaPoll = nil
+        accounting = XRGTokenAccounting(); claudeUsage = nil; hermesUsage = nil; claudeModels = [:]
+    }
+
+    func resetAccountingBaseline() {
+        accounting = XRGTokenAccounting()
+        // A scan started before a reset/enable transition must not later appear
+        // as post-reset activity. Fresh complete sweeps establish the baseline.
+        for scan in [claudeScan, codexScan, geminiScan] { scan.reset() }
+        claudeReady = false; codexReady = false; geminiReady = false
+    }
+    func setAccountingEnabled(_ enabled: Bool) {
+        if accountingEnabled != enabled { resetAccountingBaseline(); accountingEnabled = enabled }
     }
 
     @objc public func getLatestTokenInfo() {
@@ -186,6 +214,23 @@ public final class XRGAITokenMiner: NSObject {
             let output = tracker.sample(counter: geminiOutput, key: "geminiOutput", time: time).delta
             if input > 0 || output > 0 { geminiEventHandler?(input, output) }
         }
+        let gemini = geminiScan.completedSnapshot
+        // Waiting for the next HTTP response is not a failed observation.
+        let claudeAccountingReady = activeStrategy == .OTel ? claudeUsage != nil : claudeReady
+        let samples: [(String, String, XRGTokenUsage?, [String: UInt64])] = [
+            ("Claude", "claude-\(activeStrategy.rawValue)", claudeAccountingReady ? claudeUsage : nil, claudeModels),
+            ("Codex", "codex-jsonl", codexReady ? XRGTokenUsage(total: totalCodexTokens) : nil, [:]),
+            ("Gemini", "gemini-json", geminiReady ? XRGTokenUsage(input: geminiInput, output: geminiOutput, total: totalGeminiTokens) : nil, gemini?.modelTotals ?? [:]),
+            ("Hermes", "hermes-sqlite", hermesReady ? hermesUsage : nil,
+             hermesModelTokens.mapValues {
+                let (sum, overflow) = ($0["input"]?.uint64Value ?? 0).addingReportingOverflow($0["output"]?.uint64Value ?? 0)
+                return overflow ? 0 : sum
+             })]
+        for (provider, source, usage, models) in samples {
+            if let delta = accounting.sample(provider: provider, source: source, usage: usage, models: models), accountingEnabled {
+                usageEventHandler?(provider, delta)
+            }
+        }
         costs[1] = XRGAIPricing.estimate(tokens: totalCodexTokens, inputPrice: 2.5, outputPrice: 10)
         totalCostUSD = costs.reduce(0, +)
         let costsReady = (claudeReady || activeStrategy == .none) && codexReady && geminiReady
@@ -197,6 +242,8 @@ public final class XRGAITokenMiner: NSObject {
         claudeReady = claudeScan.completedSnapshot != nil
         if let sample = claudeScan.completedSnapshot {
             totalClaudeTokens = sample.tokens
+            claudeUsage = XRGTokenUsage(input: sample.input, output: sample.output, total: sample.tokens)
+            claudeModels = sample.modelTotals
             costs[0] = sample.cost
         }
         updateJSONLCacheInBackground()
@@ -235,6 +282,7 @@ public final class XRGAITokenMiner: NSObject {
             return false
         }
         totalClaudeTokens = sample.tokens
+        claudeUsage = XRGTokenUsage(total: sample.tokens); claudeModels = [:]
         costs[0] = sample.cost
         claudeReady = true
         return true
@@ -242,6 +290,7 @@ public final class XRGAITokenMiner: NSObject {
     @objc public func fetchFromHermesDatabase() -> Bool {
         guard let sample = XRGHermesStore.snapshot(atPath: path(".hermes/state.db")) else { return false }
         totalHermesTokens = sample.total
+        hermesUsage = XRGTokenUsage(input: sample.input, output: sample.output, total: sample.total)
         costs[4] = sample.cost
         hermesModelTokens = sample.models
         hermesTopModel = sample.topModel
@@ -255,11 +304,14 @@ public final class XRGAITokenMiner: NSObject {
             if activeStrategy != .OTel { tracker.reset() }
             activeStrategy = .OTel
             totalClaudeTokens = sample.tokens
+            claudeUsage = sample.hasTokenSamples ? XRGTokenUsage(total: sample.tokens) : nil
+            claudeModels = [:]
             costs[0] = sample.cost
-            received = true
+            received = sample.hasTokenSamples
         }
         claudeReady = received
         let failed = otelRequest.didErrorOccur()
+        if failed { claudeUsage = nil }
         if !otelRequest.isLoading { otelRequest.loadURLInBackground() }
         return received || !failed
     }

@@ -10,6 +10,7 @@ struct XRGAITokensObserverTests {
         defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(true, forKey: "aiTokensAggregateByModel")
         defaults.set(true, forKey: "aiTokensAggregateByProvider")
+        defaults.set(false, forKey: "aiTokensDailyAutoReset")
         try body(defaults, NotificationCenter())
     }
 

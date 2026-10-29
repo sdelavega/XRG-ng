@@ -30,7 +30,12 @@ public final class XRGScanTotals: NSObject, Sendable {
     public let input: UInt64
     public let output: UInt64
     public let cost: Double
-    public init(tokens: UInt64, input: UInt64, output: UInt64, cost: Double) {
+    @nonobjc public let modelTotals: [String: UInt64]
+    public convenience init(tokens: UInt64, input: UInt64, output: UInt64, cost: Double) {
+        self.init(tokens: tokens, input: input, output: output, cost: cost, modelTotals: [:])
+    }
+    @nonobjc init(tokens: UInt64, input: UInt64, output: UInt64, cost: Double, modelTotals: [String: UInt64]) {
+        self.modelTotals = modelTotals
         self.tokens = tokens
         self.input = input
         self.output = output
@@ -201,6 +206,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         var input: UInt64 = 0
         var output: UInt64 = 0
         var cost = 0.0
+        var models: [String: UInt64] = [:]
         for path in next.keys.sorted() {
             guard let entry = next[path] else { continue }
             let (newTokens, overflowTokens) = tokens.addingReportingOverflow(entry.totals.tokens)
@@ -209,11 +215,16 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             let newCost = cost + entry.totals.cost
             guard !overflowTokens, !overflowInput, !overflowOutput,
                   entry.totals.cost >= 0, newCost.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+            for (name, count) in entry.totals.modelTotals {
+                let (sum, overflow) = (models[name] ?? 0).addingReportingOverflow(count)
+                guard !overflow else { throw CocoaError(.fileReadCorruptFile) }
+                models[name] = sum
+            }
             tokens = newTokens
             input = newInput
             output = newOutput
             cost = newCost
         }
-        return (next, XRGScanTotals(tokens: tokens, input: input, output: output, cost: cost))
+        return (next, XRGScanTotals(tokens: tokens, input: input, output: output, cost: cost, modelTotals: models))
     }
 }

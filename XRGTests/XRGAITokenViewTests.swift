@@ -47,7 +47,11 @@ import Testing
 private final class AITokenPanelNibOwner: NSObject {}
 
 @MainActor final class AITokenPanelSource: XRGAITokenViewSource {
-    var geminiEventHandler: ((UInt64, UInt64) -> Void)?
+    var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)?
+    var accountingResets = 0
+    var trackingStates: [Bool] = []
+    func resetAccountingBaseline() { accountingResets += 1 }
+    func setAccountingEnabled(_ enabled: Bool) { trackingStates.append(enabled) }
     var updates = 0
     var sizes: [Int] = []
     var state = XRGAITokenViewSnapshot()
@@ -225,14 +229,30 @@ struct XRGAITokenViewTests {
         }
     }
 
-    @Test func geminiCallbacksReachOnlyTheInjectedObserverWithoutRetainingTheView() throws {
+    @Test func resetsInvalidateAccountingWithoutClearingGraphHistory() throws {
+        try withFixture { settings, defaults, observer, source in
+            let view = panel(settings, defaults, observer, source)
+            source.seed()
+            let history = source.state.providers.map { $0.history.orderedValues }
+            view.graphUpdate(nil)
+            #expect(source.accountingResets == 1 && source.trackingStates == [true])
+            observer.recordEvent(promptTokens: 10, completionTokens: 20, model: nil, provider: nil)
+            view.resetSessionCounters(nil); view.graphUpdate(nil)
+            #expect(source.accountingResets == 2 && observer.sessionTotalTokens == 0 && observer.dailyTotalTokens == 30)
+            view.resetDailyCounters(nil); view.graphUpdate(nil)
+            #expect(source.accountingResets == 3 && observer.dailyTotalTokens == 0)
+            #expect(source.state.providers.map { $0.history.orderedValues } == history)
+        }
+    }
+
+    @Test func usageCallbacksReachOnlyTheInjectedObserverWithoutRetainingTheView() throws {
         try withFixture { settings, defaults, observer, source in
             weak var released: XRGAITokenView?
             autoreleasepool {
                 let view = panel(settings, defaults, observer, source)
-                released = view; source.geminiEventHandler?(10, 20)
+                released = view; source.usageEventHandler?("Gemini", .init(usage: .init(input: 10, output: 20, total: 30), models: ["gemini-test": 30]))
                 #expect(observer.sessionPromptTokens == 10 && observer.sessionCompletionTokens == 20)
-                #expect(observer.dailyByModel["Gemini"] == 30 && observer.dailyByProvider["Google"] == 30)
+                #expect(observer.dailyByModel["gemini-test"] == 30 && observer.dailyByProvider["Gemini"] == 30)
             }
             #expect(released == nil)
         }
@@ -247,9 +267,9 @@ struct XRGAITokenViewTests {
             let view = XRGAITokenView(frame: NSRect(x: 0, y: 0, width: 240, height: 300), source: source, observer: observer,
                 settings: settings, defaults: defaults, databaseURL: location, openURL: { opened.append($0); return true })
             let menu = view.makeMenu(), titles = menu.items.map(\.title)
-            #expect(titles.contains("Cost Intelligence") && titles.contains("  Total Cost: $20.0000"))
-            #expect(titles.contains("  Burn Rate: $2.0000/hr") && titles.contains("  Projected 24hr: $48.0000"))
-            #expect(titles.contains("  Hermes: $5.0000") && titles.contains("Ollama Local Inference") && titles.contains("    local-model"))
+            #expect(titles.contains("Cost Intelligence") && titles.contains("  Mixed Cost (includes estimates): $20.0000"))
+            #expect(titles.contains("  Estimated Change: $2.0000/hr") && titles.contains("  Extrapolated 24hr: $48.0000"))
+            #expect(titles.contains("  Hermes: $5.0000 (source value (may include estimates))") && titles.contains("Ollama Local Inference") && titles.contains("    local-model"))
             let firstModel = try #require(titles.firstIndex(of: "  a-model: 50 tokens"))
             let lastModel = try #require(titles.firstIndex(of: "  z-model: 30 tokens"))
             #expect(firstModel < lastModel)
@@ -276,7 +296,7 @@ struct XRGAITokenViewTests {
             #expect(!view.makeMenu().items.contains { $0.title == "Cost Intelligence" || $0.title == "Ollama Local Inference" })
             #expect(view.legendLabels.count == 4 && source.updates == 1)
             source.state.totalCost = 20; source.state.costPerHour = .infinity
-            #expect(!view.makeMenu().items.contains { $0.title.contains("Burn Rate") })
+            #expect(!view.makeMenu().items.contains { $0.title.contains("Estimated Change") })
             source.state.ollamaAvailable = true; view.graphUpdate(nil)
             #expect(view.legendLabels.count == 5)
         }
@@ -357,7 +377,7 @@ struct XRGAITokenViewTests {
         }
     }
 
-    @Test func productionMinerAdapterPreservesAllFiveSourcesAndTheGeminiCallback() throws {
+    @Test func productionMinerAdapterPreservesAllFiveSourcesAndUsageCallback() throws {
         try withFixture { settings, defaults, observer, _ in
             let miner = XRGAITokenMiner(home: "/nonexistent-xrg-ai-view-fixture", clock: { 0 })
             let view = XRGAITokenView(frame: NSRect(x: 0, y: 0, width: 240, height: 100), source: miner, observer: observer,
@@ -367,7 +387,7 @@ struct XRGAITokenViewTests {
             #expect(miner.viewSnapshot().ordered.map(\.total) == [100, 200, 300, 400, 500])
             miner.hermesTokenData().setAllValues(50)
             #expect(view.historyLayers().first?.data.currentValue == 50)
-            miner.geminiEventHandler?(5, 7)
+            miner.usageEventHandler?("Gemini", .init(usage: .init(input: 5, output: 7, total: 12), models: [:]))
             #expect(observer.sessionTotalTokens == 12)
         }
     }

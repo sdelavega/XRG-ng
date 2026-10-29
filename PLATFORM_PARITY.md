@@ -55,16 +55,27 @@ Implemented in development for monitoring tools:
   percentages when every plotted source has capacity. Linux VRAM currently needs
   a reported used/total pair. Mac optional sources are automatic (extra readings
   in details); Linux also supports explicit fan source selection.
+- Mac session/daily AI accounting now consumes observed deltas from Claude,
+  Codex, Gemini and Hermes, with explicit unknown input/output splits and available
+  log/database model attribution. Initial history is excluded; source changes,
+  resets and tracking changes establish new baselines. Daily counters persist;
+  independent resets preserve graphs/provider history. A shared portable Swift
+  delta helper covers counter corrections and attribution bounds. Mac native budget
+  alerts have an explicit permission action and respect OS authorization. Mac cost
+  menus now label estimates and source values instead of claiming current pricing.
 
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
    source selection, counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
-2. AI accounting: common provider/model deltas, daily/session resets, budgets and
-   native notifications. Complete the Mac observer's provider integration first:
-   only Gemini currently feeds it, and the threshold has no desktop notification
-   consumer. Distinguish source-recorded cost from optional labeled estimates.
+2. AI accounting: expose the shared delta contract to Rust and add Linux persistent
+   daily/session counters, resets, budgets and native notifications. Align source
+   continuity/model attribution and Mac/Linux observed windows. Mac Codex still
+   lacks model/input-output attribution; Ollama inventory is not token accounting.
+   Mac log scans retain their last complete snapshot through failed scans, while
+   database/endpoint failure breaks accounting continuity. Keep cost estimates
+   optional and labeled; neither platform's observed counters are billing records.
 3. Weather/battery/Stocks: align history windows, secondary weather curves, unit
    choices and battery graph modes. Port Stocks if retained in the common set.
 4. Desktop behavior: Linux collapse/hover expansion and supported window controls;

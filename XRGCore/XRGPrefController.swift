@@ -41,6 +41,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     private let chooseSave: (NSWindow, @escaping (URL?) -> Void) -> Void
     private let readFile: (URL) throws -> Data
     private let writeFile: (Data, URL) throws -> Void
+    private let notificationPermission: () async -> String
     private let animate: Bool
     private var didConfigure = false
     @nonobjc private(set) var toolbarItems: [NSToolbarItem.Identifier: NSToolbarItem] = [:]
@@ -140,6 +141,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
 
     public override init() {
         defaults = .standard; center = .default; animate = true
+        notificationPermission = { await XRGAIBudgetNotifications.requestPermission() }
         sensorSource = {
             let miner = XRGTemperatureMiner.shared
             return miner.locationKeys(includingUnknown: XRGTemperatureView.showUnknownSensors()).compactMap { miner.sensor(forLocation: $0) }
@@ -160,10 +162,12 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
                   fontPanel: @escaping (NSFont?) -> Void = { _ in },
                   chooseOpen: @escaping (NSWindow, @escaping (URL?) -> Void) -> Void = { _, done in done(nil) },
                   chooseSave: @escaping (NSWindow, @escaping (URL?) -> Void) -> Void = { _, done in done(nil) },
+                  notificationPermission: @escaping () async -> String = { "Notification transport is not installed in this preview." },
                   readFile: @escaping (URL) throws -> Data = XRGTheme.readFile,
                   writeFile: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
         self.defaults = defaults; self.center = center; sensorSource = sensors; interfaceSource = interfaces
         self.openURL = openURL; errorNotice = error; showFont = fontPanel; self.chooseOpen = chooseOpen; self.chooseSave = chooseSave
+        self.notificationPermission = notificationPermission
         self.readFile = readFile; self.writeFile = writeFile; animate = false
         super.init()
     }
@@ -452,6 +456,10 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
                 let label = NSTextField(labelWithString: title); label.frame = NSRect(x: 20, y: y, width: 305, height: 20); panel.addSubview(label)
                 let field = NSTextField(frame: NSRect(x: 340, y: y, width: 140, height: 22)); field.tag = tag; field.setAccessibilityLabel(title); panel.addSubview(field)
             }
+            let allow = NSButton(title: "Allow Budget Notifications…", target: self, action: #selector(allowBudgetNotifications(_:)))
+            allow.bezelStyle = .rounded; allow.frame = NSRect(x: 20, y: 115, width: 255, height: 28); allow.tag = 1008; panel.addSubview(allow)
+            let status = NSTextField(wrappingLabelWithString: "Alerts require macOS permission. Usage is observed while this graph is sampled; initial history is excluded.")
+            status.frame = NSRect(x: 20, y: 35, width: 460, height: 70); status.tag = 1009; panel.addSubview(status)
             for (index, title) in ["Reset Session", "Reset Daily"].enumerated() {
                 let button = NSButton(title: title, target: self, action: index == 0 ? #selector(resetSessionCounters(_:)) : #selector(resetDailyCounters(_:)))
                 button.bezelStyle = .rounded; button.frame = NSRect(x: 20 + index * 160, y: 160, width: 150, height: 28); panel.addSubview(button)
@@ -487,6 +495,16 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     }
     @IBAction public func setFont(_ sender: Any?) { showFont(settings?.graphFont) }
     @IBAction public func openWeatherStationList(_ sender: Any?) { _ = openURL(URL(string: "https://download.gauchosoft.com/xrg/stations.txt")!) }
+    @IBAction public func allowBudgetNotifications(_ sender: NSButton) {
+        guard sender.isEnabled else { return }
+        sender.isEnabled = false
+        Task { [weak self, weak sender] in
+            guard let self else { return }
+            let message = await notificationPermission()
+            (AIPrefView?.viewWithTag(1009) as? NSTextField)?.stringValue = message
+            sender?.isEnabled = true
+        }
+    }
     @IBAction public func resetSessionCounters(_ sender: Any?) { center.post(name: .xrgAITokensDidResetSession, object: self) }
     @IBAction public func resetDailyCounters(_ sender: Any?) { center.post(name: .xrgAITokensDidResetDaily, object: self) }
 

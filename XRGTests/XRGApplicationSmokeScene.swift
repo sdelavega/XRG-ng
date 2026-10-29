@@ -54,7 +54,9 @@ func smokeCheck(_ condition: @autoclosure () -> Bool, _ message: String) throws 
     func changeString() -> String { "+1.00" }
 }
 @MainActor private final class SmokeTokens: XRGAITokenViewSource {
-    var geminiEventHandler: ((UInt64, UInt64) -> Void)?
+    var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)?
+    func resetAccountingBaseline() {}
+    func setAccountingEnabled(_ enabled: Bool) {}
     var updates = 0
     func setDataSize(_ count: Int) {}
     func getLatestTokenInfo() { updates += 1 }
