@@ -616,6 +616,34 @@ decoding. A file that keeps changing during every unfinished read can delay a
 complete snapshot; incomplete work reports progress rather than partial totals.
 The shared Swift record decoders and macOS scan path are unchanged.
 
+### Codex model evidence
+
+The Linux model breakdown can attribute a cumulative increase to the preceding
+valid `turn_context.model` when `last_token_usage.total_tokens` matches that
+increase and `last_usage_includes_reasoning` is a recorded Boolean. Both Boolean
+values qualify. Missing/null markers, initial unseen history, mismatched deltas
+and synthetic context-window fills remain unattributed. Repeated cumulative
+snapshots never add tokens. Cumulative resets discard the old partition; invalid
+contexts, routing changes, compaction and turn boundaries require a new context.
+These are **recorded turn models**, not proof of the backend model that served a
+request. Quota aliases and reroute targets never supply a model name.
+
+This follows the [Codex protocol at revision 9cc14e7](https://github.com/openai/codex/blob/9cc14e79882ff8885cd5d33b4adadae014045aef/codex-rs/protocol/src/protocol.rs),
+including its distinction between real request usage and context-window fills.
+Older or incomplete logs may have no usable model breakdown. The shared Swift
+decoder still determines cumulative provider totals independently of optional
+model metadata. Named rows plus unattributed usage sum to those totals, including
+sessions with no usable model evidence. No input/output split or price is inferred.
+The inspector labels those details unavailable and the existing model display
+toggle hides the breakdown without changing collection or history.
+
+At most 255 named groups and one unattributed group are kept per session and per
+provider; additional distinct names fold into unattributed usage. These limits
+do not discard tokens or turn excess Codex model metadata into a provider error.
+Model state shares verified scan checkpoints, so resumable reads, EOF replay,
+rewrites and replacement files cannot retain stale attribution. Fixtures are
+synthetic; tests do not read personal sessions or contact live AI providers.
+
 ## Processes
 
 The process table retains name filtering, saved UID filtering, row limit and
@@ -786,7 +814,7 @@ forecast. Requests remain off by default. No location detection is performed.
   process costs; other compositors, scale factors and hardware still need feedback.
 - Additional vendor counters, Xe virtualization/topology coverage, board-specific
   raw thermistor calibration and optional process priority controls.
-- Safe additional Codex model attribution, broader large-log/discovery coverage,
+- Broader large-log/discovery coverage and Codex protocol compatibility,
   optional price tables, broader XTF color spaces and legacy-field mappings.
 - Signed/tagged Linux releases and native distribution packages before retiring
   the preview distribution path. Hardware support remains best effort;

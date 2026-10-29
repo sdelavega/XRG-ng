@@ -672,7 +672,8 @@ fn excess_models_fail_the_whole_snapshot_and_recover_after_removal() {
     );
 }
 #[test]
-fn model_details_never_infer_codex_or_metrics_attribution_and_hide_disabled_or_failed_sources() {
+fn model_details_never_infer_unqualified_codex_or_metrics_attribution_and_hide_disabled_or_failed_sources()
+ {
     let f = Fixture::new();
     f.put(
         "logs/rollout-a.jsonl",
@@ -726,6 +727,40 @@ fn model_details_never_infer_codex_or_metrics_attribution_and_hide_disabled_or_f
     let panel = display.panel(r.clone(), 4.);
     let update = ai::Update::new(ai::Preferences::default(), panel, r);
     assert!(!update.detail.contains("secret-model"));
+}
+
+#[test]
+fn codex_model_report_shows_qualified_totals_and_explicit_unknown_breakdowns() {
+    let f = Fixture::new();
+    let qualified = serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{
+        "total_token_usage":{"total_tokens":52},"last_token_usage":{"total_tokens":10},
+        "last_usage_includes_reasoning":false
+    }}});
+    f.put(".codex/sessions/rollout-a.jsonl", format!("{}\n{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"recorded-model\"}}}}\n{qualified}", codex(42)));
+    let report = f.collector().sample(&mut Api::default());
+    let reading = report.providers[1].as_ref().unwrap();
+    assert_eq!(reading.usage.total, 52);
+    assert_eq!(reading.cost, None);
+    let rows = reading.models.as_ref().unwrap();
+    assert_eq!(by_model(rows, Some("recorded-model")).usage.total, 10);
+    assert_eq!(by_model(rows, None).usage.total, 42);
+    let mut display = Display::default();
+    let panel = display.panel(report.clone(), 1.);
+    let update = ai::Update::new(ai::Preferences::default(), panel, report);
+    assert!(update.detail.contains("recorded turn models"));
+    assert!(update.detail.contains("recorded-model\": 10 total"));
+    assert!(
+        update
+            .detail
+            .contains("Unattributed (ambiguous or missing model evidence): 42 total")
+    );
+    assert!(
+        update
+            .detail
+            .contains("input/output attribution unavailable · cost unavailable")
+    );
+    assert!(!update.detail.contains("0 input · 0 output"));
+    assert!(!update.detail_for(false).contains("recorded-model"));
 }
 
 #[test]

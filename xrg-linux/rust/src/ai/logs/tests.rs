@@ -68,6 +68,127 @@ fn read(bytes: &[u8], old: Option<&Entry>) -> Entry {
     )
     .unwrap()
 }
+fn attributed(model: &str, total: u64, last: u64) -> String {
+    use super::codex::tests::{context, count};
+    use serde_json::json;
+    format!(
+        "{}\n{}",
+        context(json!(model)),
+        count(total, json!(last), json!(true))
+    )
+}
+#[test]
+fn eof_replay_removes_attribution_when_an_appended_record_becomes_invalid() {
+    let first = format!("{}\n{}", attributed("a", 10, 10), attributed("b", 20, 10));
+    let entry = read(first.as_bytes(), None);
+    assert_eq!(entry.parsed.codex.rows.clone().finish().unwrap().len(), 2);
+    let next = format!("{first}invalid-json");
+    let entry = read(next.as_bytes(), Some(&entry));
+    let rows = entry.parsed.codex.rows.clone().finish().unwrap();
+    assert_eq!(entry.parsed.anonymous.total, 10);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].model.as_deref(), Some("a"));
+    assert_eq!(rows[0].usage.total, 10);
+}
+#[test]
+fn resumed_attribution_matches_a_fresh_complete_scan() {
+    let f = ScanFixture::new();
+    let records: Vec<_> = (0..100)
+        .map(|n| attributed(&format!("m{}", n % 3), (n + 1) * 10, 10))
+        .collect();
+    let mut data = records.join("\n");
+    f.put("rollout-a.jsonl", &data);
+    let mut scan = f.scanner();
+    let first = finish(&mut scan, 71);
+    assert_eq!(first.usage.total, 1000);
+    assert_eq!(first.models, f.scanner().scan_details().unwrap().models);
+    data.push_str(&format!("\n{}", attributed("appended", 1010, 10)));
+    f.put("rollout-a.jsonl", data);
+    let next = finish(&mut scan, 71);
+    assert_eq!(next.usage.total, 1010);
+    assert_eq!(next.models, f.scanner().scan_details().unwrap().models);
+    assert_eq!(
+        next.models
+            .unwrap()
+            .iter()
+            .map(|r| r.usage.total)
+            .sum::<u64>(),
+        1010
+    );
+}
+#[test]
+fn rewritten_and_replaced_files_discard_old_model_partitions() {
+    let f = ScanFixture::new();
+    f.put("rollout-a.jsonl", attributed("old", 100, 100));
+    let mut scan = f.scanner();
+    assert_eq!(
+        scan.scan_details().unwrap().models.unwrap()[0]
+            .model
+            .as_deref(),
+        Some("old")
+    );
+    for (model, total) in [("new", 100), ("short", 2)] {
+        f.put("rollout-a.jsonl", attributed(model, total, total));
+        let result = scan.scan_details().unwrap();
+        assert_eq!(result.usage.total, total);
+        let rows = result.models.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model.as_deref(), Some(model));
+    }
+    f.put("replacement", attributed("replacement", 50, 50));
+    std::fs::rename(f.0.join("replacement"), f.0.join("rollout-a.jsonl")).unwrap();
+    let rows = scan.scan_details().unwrap().models.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].model.as_deref(), Some("replacement"));
+}
+#[test]
+fn provider_rows_include_unattributed_usage_from_other_sessions() {
+    let f = ScanFixture::new();
+    f.put("rollout-a.jsonl", codex(200));
+    f.put("rollout-b.jsonl", attributed("recorded", 10, 10));
+    let scan = f.scanner().scan_details().unwrap();
+    assert_eq!(scan.usage.total, 210);
+    let rows = scan.models.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].model, None);
+    assert_eq!(rows[0].usage.total, 200);
+    assert_eq!(rows.iter().map(|r| r.usage.total).sum::<u64>(), 210);
+}
+#[test]
+fn failed_append_cannot_mutate_cached_attribution() {
+    let first = format!("{}\n", attributed("old", 10, 10));
+    let entry = read(first.as_bytes(), None);
+    let original = entry.parsed.codex.rows.clone().finish();
+    let next = format!(
+        "{first}{}\n{}",
+        attributed("new", 20, 10),
+        "x".repeat(RECORD_LIMIT + 1)
+    );
+    assert!(
+        parse(
+            next.as_bytes(),
+            Layout::Codex,
+            false,
+            stamp(next.len()),
+            deadline(),
+            Some(&entry)
+        )
+        .is_err()
+    );
+    assert_eq!(entry.parsed.codex.rows.clone().finish(), original);
+    assert_eq!(
+        entry
+            .checkpoint
+            .as_ref()
+            .unwrap()
+            .parsed
+            .codex
+            .rows
+            .clone()
+            .finish(),
+        original
+    );
+}
 #[test]
 fn verified_append_reuses_the_decoded_prefix_and_never_the_eof_line() {
     let first = format!("{}\n{}", codex(10), codex(20));

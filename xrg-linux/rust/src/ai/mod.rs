@@ -455,20 +455,39 @@ fn report_detail(
                 if rows.is_empty() {
                     lines.push("No recorded model usage.".into());
                 }
+                if index == 1 {
+                    lines.push(
+                        "Attributed to recorded turn models; ambiguous usage remains unattributed."
+                            .into(),
+                    );
+                }
                 for row in rows.iter().take(128) {
                     let name = row
                         .model
                         .as_ref()
                         .map(|m| format!("{m:?}"))
-                        .unwrap_or_else(|| "Unattributed (model not recorded or invalid)".into());
+                        .unwrap_or_else(|| {
+                            if index == 1 {
+                                "Unattributed (ambiguous or missing model evidence)".into()
+                            } else {
+                                "Unattributed (model not recorded or invalid)".into()
+                            }
+                        });
                     let cost = row
                         .cost
                         .map(|v| format!("source cost ${v:.4}"))
                         .unwrap_or_else(|| "cost unavailable".into());
-                    lines.push(format!(
-                        "{name}: {} total · {} input · {} output · {cost}",
-                        row.usage.total, row.usage.input, row.usage.output
-                    ));
+                    if index == 1 {
+                        lines.push(format!(
+                            "{name}: {} total · input/output attribution unavailable · {cost}",
+                            row.usage.total
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "{name}: {} total · {} input · {} output · {cost}",
+                            row.usage.total, row.usage.input, row.usage.output
+                        ));
+                    }
                 }
                 if rows.len() > 128 {
                     lines.push(format!(

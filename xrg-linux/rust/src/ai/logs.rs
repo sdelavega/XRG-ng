@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Metadata-cached bounded scans. Only a complete provider sweep is published.
+mod codex;
 mod stream;
 use super::{ModelUsage, models::Totals};
 use crate::shared::{self, Usage};
@@ -57,6 +58,7 @@ struct Recorded {
 struct Parsed {
     anonymous: Usage,
     anonymous_models: Totals,
+    codex: codex::Ledger,
     identified: BTreeMap<String, Recorded>,
 }
 #[derive(Clone)]
@@ -210,12 +212,14 @@ impl LogScan {
         }
         let mut total = Usage::default();
         let mut models = Totals::default();
+        let mut codex_models = codex::Rows::default();
         // Claude IDs are global, so copied/subagent transcripts cannot count the
         // same assistant message twice. Newest file snapshot wins deterministically.
         let mut identified = BTreeMap::new();
         for entry in self.cache.values() {
             check(deadline)?;
             total = add(total, entry.parsed.anonymous)?;
+            codex_models.merge(&entry.parsed.codex.rows)?;
             for row in entry.parsed.anonymous_models.rows() {
                 models.add(row.clone())?;
             }
@@ -240,7 +244,11 @@ impl LogScan {
         }
         Ok(Scan {
             usage: total,
-            models: (!matches!(self.layout, Layout::Codex)).then(|| models.finish()),
+            models: if matches!(self.layout, Layout::Codex) {
+                codex_models.finish()
+            } else {
+                Some(models.finish())
+            },
         })
     }
 }
@@ -324,9 +332,15 @@ fn lines(
             return Err("JSONL record exceeds 8 MiB".into());
         }
         if matches!(layout, Layout::Codex) {
-            if let Some(total) = shared::codex_record(line) {
+            let total = shared::codex_record(line);
+            let update = codex::Update::parse(line);
+            if total.is_some() || parsed.codex.changes_context(&update) {
+                let entry = Arc::make_mut(parsed);
+                entry.codex.update(update, total)?;
                 // Each event is a cumulative session snapshot, never an increment.
-                Arc::make_mut(parsed).anonymous.total = total;
+                if let Some(total) = total {
+                    entry.anonymous.total = total;
+                }
             }
         } else if let Some(details) = shared::provider_details(
             line,
