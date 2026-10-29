@@ -35,8 +35,8 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
     }
     try require(XRGPackagedSmokeInstalled() == 1 && NSApp.activationPolicy() == .prohibited, "Presentation protections were lost")
     try require(String(cString: class_getName(type(of: delegate))) == "XRGAppDelegate", "Wrong nib delegate class")
-    try require(modules.count == 11, "MainMenu did not register eleven modules")
-    let expected = Set(["CPU", "GPU", "NPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"])
+    try require(modules.count == 13, "MainMenu did not register thirteen modules")
+    let expected = Set(["VRAM", "Fans", "CPU", "GPU", "NPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"])
     let names = try Set(modules.map { try property($0, "name") as? String ?? "" })
     try require(names == expected, "Unexpected module identities")
     let displayed = try property(manager, "displayList") as? [NSObject] ?? []
@@ -53,7 +53,7 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
         guard let image = class_getImageName(type(of: panel)) else { throw Failure.failed("Missing panel image") }
         try require(URL(fileURLWithPath: String(cString: image)).resolvingSymlinksInPath().path == Bundle.main.executableURL?.resolvingSymlinksInPath().path,
                     "A panel came from another image")
-        if ["Weather", "Stock", "AI Tokens"].contains(try property(module, "name") as? String ?? "") {
+        if ["Weather", "Stock", "AI Tokens", "VRAM", "Fans"].contains(try property(module, "name") as? String ?? "") {
             try require((try property(module, "isDisplayed") as? NSNumber)?.boolValue == false, "External provider module was enabled")
         }
     }

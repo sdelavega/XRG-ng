@@ -31,6 +31,7 @@ struct XRGGPUSample {
     let free: Double?
     let wait: Double?
     let utilization: Double?
+    var memoryReading: XRGHardwareReading? = nil
 
     static func parse(id: UInt64, pci: [String: Any], accelerator: [String: Any]) -> Self {
         func number(_ value: Any?) -> Double? {
@@ -70,10 +71,12 @@ struct XRGGPUSample {
             used = number(perf["gartUsedBytes"])
             memory = resolve(total, free, used)
         }
-        return Self(id: id, vendor: vendor.flatMap { names[$0] } ?? "",
+        let vendorName = vendor.flatMap { names[$0] } ?? ""
+        return Self(id: id, vendor: vendorName,
                     total: memory?.0, free: memory?.1,
                     wait: number(perf["hardwareWaitTime"]),
-                    utilization: number(perf["Device Utilization %"]).map { min(100, $0) })
+                    utilization: number(perf["Device Utilization %"]).map { min(100, $0) },
+                    memoryReading: XRGHardwareReading.gpuMemory(id: id, vendor: vendorName, pci: pci, accelerator: accelerator))
     }
 }
 
@@ -89,6 +92,8 @@ public final class XRGGPUMiner: NSObject {
     }
     private let source: () -> [XRGGPUSample]?
     private var histories: [UInt64: History] = [:]
+    private var lastGraphTick: UInt64?
+    private(set) var memorySnapshot: Result<[XRGHardwareReading], Error> = .success([])
     @objc public private(set) var numSamples = 1
     @objc public var numberOfGPUs: Int { vendorNames.count }
     @objc public private(set) var totalVRAMDataSets: [XRGDataSet] = []
@@ -115,7 +120,11 @@ public final class XRGGPUMiner: NSObject {
     }
 
     @objc public func getLatestGraphicsInfo() {
-        guard let samples = source() else { return }
+        guard let samples = source() else {
+            memorySnapshot = .failure(NSError(domain: "XRGGPU", code: 1, userInfo: [NSLocalizedDescriptionKey: "GPU memory readings unavailable"]))
+            return
+        }
+        memorySnapshot = .success(samples.sorted { $0.id < $1.id }.compactMap(\.memoryReading))
         var next: [UInt64: History] = [:]
         var ordered: [History] = []
         var vendors: [String] = []
@@ -143,6 +152,11 @@ public final class XRGGPUMiner: NSObject {
         vendorNames = vendors
         memoryAvailable = memory
         utilizationAvailable = utilization
+    }
+
+    func refreshForGraphTick(_ tick: UInt64?) {
+        if let tick, lastGraphTick == tick { return }
+        lastGraphTick = tick; getLatestGraphicsInfo()
     }
 
     nonisolated static func readSnapshot() -> [XRGGPUSample]? {

@@ -47,11 +47,19 @@ Implemented in development for monitoring tools:
 - Linux Network/Disk faces now show observed session transfers, with raw kernel
   totals in details. Transfer reset preserves graphs/rate baselines, source changes
   restart the session, and failed-read gaps/saturation are marked as lower bounds.
+- Mac now has optional, default-hidden VRAM and Fans graphs with up to three
+  sources, per-graph presentation, read-only details and independent history reset.
+  GPU/VRAM share one read per graph tick; Fans reuses the temperature collector's
+  fan cache. Original GPU/Temperature readings and old presentation profiles remain.
+  Allocation-only GPU memory is labeled and plotted in bytes; reported pools use
+  percentages when every plotted source has capacity. Linux VRAM currently needs
+  a reported used/total pair. Mac optional sources are automatic (extra readings
+  in details); Linux also supports explicit fan source selection.
 
 Remaining monitoring work:
 
-1. Monitoring tools: Mac process controls, richer live details and optional
-   VRAM/Fans modules; align optional counter displays and remaining graph modes.
+1. Monitoring tools: Mac process controls and richer live details; align optional
+   source selection, counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
 2. AI accounting: common provider/model deltas, daily/session resets, budgets and
    native notifications. Complete the Mac observer's provider integration first:

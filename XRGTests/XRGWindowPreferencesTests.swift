@@ -41,8 +41,9 @@ struct XRGWindowPreferencesTests {
     @Test func nonColorDefaultsMatchThePreMigrationObjectiveCSnapshot() throws {
         let legacy = try legacyDefaults()
         let current = XRGWindowPreferences.defaultValues(metric: false, screen: NSRect(x: 0, y: 0, width: 1920, height: 1080))
-        #expect(current.count == legacy.count + 1)
+        #expect(current.count == legacy.count + 3)
         #expect(current["showNPUGraph"] as? String == (XRGNPUReader.isAppleSilicon() ? "YES" : "NO"))
+        #expect(current["showVRAMGraph"] as? String == "NO" && current["showFansGraph"] as? String == "NO")
         for key in legacy.allKeys.compactMap({ $0 as? String }) {
             if ["backgroundColor", "graphBGColor", "graphFG1Color", "graphFG2Color", "graphFG3Color", "borderColor", "textColor"].contains(key) {
                 // Color defaults now follow the original XRG export, checked below.

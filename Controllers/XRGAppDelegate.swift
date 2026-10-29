@@ -139,6 +139,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         window.moduleManager?.windowChanged(to: window.frame.size)
         window.initializeNPUView()
         window.initializeAITokenView()
+        window.initializeHardwareViews()
 
         if defaults.bool(forKey: "windowIsMinimized") {
             // Restore the expanded dimensions before collapsing, preserving the

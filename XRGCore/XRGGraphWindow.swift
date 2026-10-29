@@ -65,7 +65,8 @@ enum XRGWindowVersion {
 @MainActor @objc(XRGGraphWindow) @objcMembers
 public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XRGMemoryViewHost,
     XRGNetViewHost, XRGBatteryViewHost, XRGCPUViewHost, XRGTemperatureViewHost, XRGStockViewHost,
-    XRGDiskViewHost, XRGAITokenViewHost, XRGBackgroundViewHost, XRGWeatherViewHost, XRGNPUViewHost {
+    XRGDiskViewHost, XRGAITokenViewHost, XRGBackgroundViewHost, XRGWeatherViewHost, XRGNPUViewHost,
+    XRGHardwareViewHost, XRGGraphicsSampleClock {
     private let defaults: UserDefaults
     private let wakeCenter: NotificationCenter
     private let scheduleTimers: Bool
@@ -93,6 +94,9 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public var cpuView: XRGCPUView?
     public var gpuView: XRGGPUView?
     public var npuView: XRGNPUView?
+    @nonobjc private(set) var vramView: XRGHardwareGraphView?
+    @nonobjc private(set) var fansView: XRGHardwareGraphView?
+    @nonobjc private(set) var graphicsSampleGeneration: UInt64 = 0
     public var netView: XRGNetView?
     public var diskView: XRGDiskView?
     public var memoryView: XRGMemoryView?
@@ -230,7 +234,10 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     public func min30Update(_ timer: Timer?) { moduleManager?.min30Update() }
     public func min5Update(_ timer: Timer?) { moduleManager?.min5Update() }
-    public func graphUpdate(_ timer: Timer?) { moduleManager?.graphUpdate(); checkServerForUpdatesPostProcess() }
+    public func graphUpdate(_ timer: Timer?) {
+        graphicsSampleGeneration &+= 1
+        moduleManager?.graphUpdate(); checkServerForUpdatesPostProcess()
+    }
     public func fastUpdate(_ timer: Timer?) { moduleManager?.fastUpdate() }
     public func initializeAITokenView() {
         guard aiTokenView == nil else { return }
@@ -242,6 +249,24 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         guard npuView == nil else { return }
         let view = XRGNPUView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: XRGNPUMiner(), settings: appSettings, defaults: defaults)
         npuView = view; contentView?.addSubview(view); view.awakeFromNib()
+        moduleManager?.windowChanged(to: frame.size)
+    }
+    public func initializeHardwareViews() {
+        initializeHardwareViews(vram: { [weak self] in
+            guard let self, let gpu = self.gpuView else {
+                return .failure(NSError(domain: "XRGGPU", code: 2, userInfo: [NSLocalizedDescriptionKey: "GPU collector unavailable"]))
+            }
+            return gpu.memoryReadings(tick: self.graphicsSampleGeneration)
+        }, fans: { .success(XRGTemperatureMiner.shared.fanGraphReadings()) })
+    }
+    @nonobjc func initializeHardwareViews(vram: @escaping () -> Result<[XRGHardwareReading], Error>,
+                                        fans: @escaping () -> Result<[XRGHardwareReading], Error>) {
+        for (kind, source) in [(XRGHardwareGraphView.Kind.vram, vram), (.fans, fans)] {
+            guard kind == .vram ? vramView == nil : fansView == nil else { continue }
+            let view = XRGHardwareGraphView(kind: kind, frame: NSRect(x: 0, y: 0, width: 200, height: 100), settings: appSettings, defaults: defaults, source: source)
+            if kind == .vram { vramView = view } else { fansView = view }
+            contentView?.addSubview(view); view.awakeFromNib()
+        }
         moduleManager?.windowChanged(to: frame.size)
     }
     public func showMemoryPreferences() { controller?.showPrefs(withPanel: "RAM") }

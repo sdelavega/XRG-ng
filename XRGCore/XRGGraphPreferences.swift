@@ -3,12 +3,14 @@
 import AppKit
 
 enum XRGGraphID: String, CaseIterable, Codable, Sendable {
-    case cpu, gpu, tpu, memory, battery, temperature, network, disk, weather, stock, ai
+    case cpu, gpu, tpu, vram, memory, battery, temperature, fans, network, disk, weather, stock, ai
     var name: String {
         switch self {
         case .cpu: "CPU"
         case .gpu: "GPU"
         case .tpu: "NPU"
+        case .vram: "VRAM"
+        case .fans: "Fans"
         case .memory: "Memory"
         case .battery: "Battery"
         case .temperature: "Temperature"
@@ -70,8 +72,15 @@ struct XRGGraphPreferences: Codable, Equatable {
     init(data: Data) throws {
         guard data.count <= 32 * 1024 else { throw Self.invalid }
         self = try JSONDecoder().decode(Self.self, from: data)
+        // Extend a complete pre-hardware-panel order in memory. Keep the saved
+        // bytes untouched until Apply; new optional graphs are appended hidden.
+        let legacy = Self.legacyIDs
+        if let order, order.count == legacy.count, Set(order) == Set(legacy) {
+            self.order = order + [.vram, .fans]
+        }
         try validate()
     }
+    static var legacyIDs: [XRGGraphID] { XRGGraphID.allCases.filter { $0 != .vram && $0 != .fans } }
     func validate() throws {
         guard version == 1, order.map({ $0.count == XRGGraphID.allCases.count && Set($0) == Set(XRGGraphID.allCases) }) ?? true,
               overrides.keys.allSatisfy({ XRGGraphID(rawValue: $0) != nil }) else { throw Self.invalid }

@@ -231,7 +231,7 @@ def main():
                 launch(app / "Contents/MacOS/XRG-ng", f"{phase}-{orientation}.log", phase)
                 report = json.loads((output / f"{phase}-{orientation}.json").read_text())
                 if (report["architecture"] != architecture or report["translated"] is not translated or
-                    report["phase"] != phase or report["orientation"] != orientation or report["moduleCount"] != 11 or not all(report[key] for key in
+                    report["phase"] != phase or report["orientation"] != orientation or report["moduleCount"] != 13 or not all(report[key] for key in
                         ("mainMenuConnected", "productionClassImages", "shippingPriority", "runtimeTimersAdvanced",
                          "preferencesNibLoaded", "sensorsNibLoaded", "windowsHidden", "timersStopped", "appKitTerminationCallback"))):
                     raise RuntimeError("Packaged app verification failed")

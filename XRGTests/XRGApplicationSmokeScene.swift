@@ -104,7 +104,7 @@ private final class SmokePreferencesOwner: NSObject {
         })
         let gpu = XRGGPUMiner(source: {
             source.gpuReads += 1
-            return [XRGGPUSample(id: 1, vendor: "Fixture", total: 1024, free: 512, wait: 0, utilization: 25)]
+            return [XRGGPUSample(id: 1, vendor: "Fixture", total: 1024, free: 512, wait: 0, utilization: 25, memoryReading: XRGHardwareReading(id: "1", name: "Fixture GPU", value: 512, capacity: 1024))]
         })
         let npu = XRGNPUMiner(source: {
             source.npuReads += 1
@@ -148,6 +148,9 @@ private final class SmokePreferencesOwner: NSObject {
         delegate.xrgGraphWindow = window; window.controller = delegate
         window.contentView?.addSubview(background); background.awakeFromNib()
         for panel in panels { window.contentView?.addSubview(panel); panel.awakeFromNib() }
+        window.initializeHardwareViews(vram: { [weak window] in
+            gpu.refreshForGraphTick(window?.graphicsSampleGeneration); return gpu.memorySnapshot
+        }, fans: { .success([XRGHardwareReading(id: "fixture-fan", name: "Fixture Fan", value: 1200)]) })
         inputs.load = { [weak self] name, owner in
             do { try self?.load(name, owner: owner) }
             catch { source.errors.append(String(describing: error)) }
@@ -191,7 +194,7 @@ private final class SmokePreferencesOwner: NSObject {
 
     func launched() throws {
         try smokeCheck(inputs.activations == 1, "Application launch delegate did not run exactly once")
-        try smokeCheck(window.moduleManager?.moduleList().count == 11, "Expected eleven production panels")
+        try smokeCheck(window.moduleManager?.moduleList().count == 13, "Expected thirteen registered production panels")
         try smokeCheck(window.moduleManager?.displayList().prefix(4).compactMap(\.name) == ["CPU", "GPU", "NPU", "Memory"], "Neural Engine is not between GPU and Memory")
         for (name, panel) in zip(Self.moduleNames, panels) {
             try smokeCheck(window.moduleManager?.getModule(byName: name)?.reference === panel, "Missing module registration: \(name)")

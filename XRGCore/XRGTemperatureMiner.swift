@@ -111,6 +111,12 @@ public final class XRGTemperatureMiner: NSObject {
         fanCacheTime = now
         return fans
     }
+    @nonobjc func fanGraphReadings() -> [XRGHardwareReading] {
+        fanValues().map { fan in
+            XRGHardwareReading(id: fan.key, name: reader?.name(forKey: fan.key) ?? fan.name ?? fan.key,
+                               value: Double(fan.actualSpeed), note: "Read-only actual fan RPM; zero can mean stopped.")
+        }
+    }
 
     // Empty graph selections can pass nil through Objective-C; preserve that behavior.
     public func isFanSensor(_ sensor: XRGSensorData?) -> Bool {

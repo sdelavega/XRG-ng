@@ -239,6 +239,22 @@ palette files. These controls are not included in the published macOS 0.1.0 app.
 
 ## Monitoring inspectors (development builds)
 
+On **macOS**, **Preferences → Graphs** also offers optional **VRAM** and **Fans**
+panels, both off by default. Each plots up to three sources with its own colors,
+height and curve style. Right-click for read-only details or **Reset Graph**;
+additional readable sources appear in details. The existing GPU and Temperature
+panels retain their integrated readings.
+
+VRAM shows driver-reported GPU memory pools as percentages when all plotted
+adapters report usable capacity. Allocation-only readings, including Apple shared
+or unified-memory allocations, use a byte scale labeled **GPU allocations**;
+system RAM and GART apertures are not treated as installed VRAM. Fan curves show
+actual RPM, including measured zero for stopped fans. Missing readings stay
+unavailable, and neither panel changes hardware controls. Older custom graph
+orders and overrides are preserved; the two new graphs append hidden to saved
+orders. GPU/VRAM share collection within each graph tick, and Fans reuses the
+existing fan cache even when the Temperature panel is hidden.
+
 On **macOS**, right-click CPU or Memory and choose **Processes…**. The table
 supports name/PID search, exact user-name filtering, CPU/memory/name/PID sorting
 and a saved row limit. It refreshes every five seconds while open, shows failures

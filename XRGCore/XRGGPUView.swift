@@ -133,9 +133,13 @@ public final class XRGGPUView: NSView, XRGModuleView {
         updateLabels()
     }
     public func graphUpdate(_ timer: Timer?) {
-        miner.getLatestGraphicsInfo()
+        miner.refreshForGraphTick((host as? any XRGGraphicsSampleClock)?.graphicsSampleGeneration)
         updateLabels()
         needsDisplay = true
+    }
+    @nonobjc func memoryReadings(tick: UInt64) -> Result<[XRGHardwareReading], Error> {
+        miner.refreshForGraphTick(tick)
+        return miner.memorySnapshot
     }
     public func fastUpdate(_ timer: Timer?) {}
     public func min5Update(_ timer: Timer?) {}

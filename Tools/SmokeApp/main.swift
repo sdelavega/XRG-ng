@@ -107,7 +107,7 @@ import Darwin
                                "shutdownTimersInvalidated": true]
     try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         .write(to: output.appendingPathComponent("\(phase).json"))
-    print("PASS: isolated AppKit \(phase), eleven fixture-backed panels, preference persistence and delegate shutdown")
+    print("PASS: isolated AppKit \(phase), thirteen registered fixture-backed panels (two optional), preference persistence and delegate shutdown")
 }
 
 exit(MainActor.assumeIsolated {
