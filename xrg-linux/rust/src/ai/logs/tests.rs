@@ -892,3 +892,20 @@ fn appending_during_an_unfinished_read_restarts_without_double_counting_eof() {
         .unwrap();
     assert_eq!(finish(&mut scan, 4093).usage.total, 10);
 }
+#[test]
+fn an_earlier_active_log_does_not_discard_a_later_files_read_progress() {
+    let f = ScanFixture::new();
+    f.put(
+        "rollout-z.jsonl",
+        format!("{}\n{}", codex(20), "ignored\n".repeat(2000)),
+    );
+    let mut scan = f.scanner();
+    for tick in 1..100 {
+        f.put("rollout-a.jsonl", codex(tick));
+        if let Ok(result) = scan.scan_with_budget(4093, deadline()) {
+            assert_eq!(result.usage.total, tick + 20);
+            return;
+        }
+    }
+    panic!("An earlier active log repeatedly discarded the later file's progress");
+}

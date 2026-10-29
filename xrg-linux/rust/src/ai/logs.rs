@@ -163,8 +163,19 @@ impl LogScan {
                     None,
                 )
             } else {
-                let mut job = match self.pending.take() {
-                    Some((saved, job)) if saved == *path && job.stamp() == stamp => job,
+                // A small earlier log may change every poll. Preserve a later
+                // pending file while that earlier file completes in this slice.
+                let saved = if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|(saved, _)| saved == path)
+                {
+                    self.pending.take()
+                } else {
+                    None
+                };
+                let mut job = match saved {
+                    Some((_, job)) if job.stamp() == stamp => job,
                     _ => stream::Job::new(self.layout, stamp, self.cache.get(path))?,
                 };
                 let entry = job.advance(&mut file, &mut budget, deadline)?;
