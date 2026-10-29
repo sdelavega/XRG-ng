@@ -42,6 +42,17 @@ impl Editor {
             replace_theme: false,
         }
     }
+    pub(super) fn restore_defaults(&mut self) {
+        self.draft = Settings {
+            ai: self.draft.ai.clone(),
+            weather: self.draft.weather.clone(),
+            ..Default::default()
+        };
+        // Ignore any old asynchronous import completion after this new choice.
+        self.pending = None;
+        self.import = None;
+        self.message = None;
+    }
     fn content(&mut self, ui: &mut egui::Ui, inventory: &Inventory) {
         self.poll();
         ui.horizontal_wrapped(|ui| {
@@ -230,13 +241,15 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.horizontal(|ui| {
                         if ui.button("Defaults").clicked() {
-                            editor.draft = Settings::default();
-                            editor.message = None;
+                            editor.restore_defaults();
                         }
                         if ui.button("Cancel").clicked() {
                             open = false;
                         }
-                        if ui.button("Apply").clicked() {
+                        if ui
+                            .add_enabled(editor.pending.is_none(), egui::Button::new("Apply"))
+                            .clicked()
+                        {
                             apply = true;
                         }
                         ui.label("Edits take effect only on Apply.");
@@ -248,6 +261,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
         },
     );
     if apply {
+        editor.draft.weather.station = editor.draft.weather.station.trim().to_ascii_uppercase();
         match app.apply(editor.draft.clone(), ctx) {
             Ok(()) => editor.message = Some("Preferences applied.".into()),
             Err(e) => editor.message = Some(e),
@@ -648,6 +662,30 @@ fn theme_picker(ui: &mut egui::Ui, choice: &mut ThemeChoice) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restoring_presentation_defaults_keeps_provider_and_weather_sources_private() {
+        let mut settings = Settings {
+            graph_width: 300,
+            window_opacity: 0.4,
+            ..Default::default()
+        };
+        settings.ai.enabled = [false; 4];
+        settings.ai.ollama = false;
+        settings.ai.metrics_url = "http://127.0.0.1:18889/metrics".into();
+        settings.ai.claude_logs = Some(PathBuf::from("/private-provider-logs"));
+        settings.weather.enabled = true;
+        settings.weather.station = "KJFK".into();
+        settings.weather.refresh_minutes = 10;
+        let expected_ai = settings.ai.clone();
+        let expected_weather = settings.weather.clone();
+        let mut editor = Editor::new(settings);
+        editor.restore_defaults();
+        assert_eq!(editor.draft.ai, expected_ai);
+        assert_eq!(editor.draft.weather, expected_weather);
+        assert_eq!(editor.draft.graph_width, Settings::default().graph_width);
+        assert_eq!(editor.draft.window_opacity, 1.);
+        assert!(editor.draft.validate().is_ok());
+    }
     #[test]
     fn rendering_all_tabs_keeps_the_entire_draft_unchanged() {
         let mut settings = Settings {

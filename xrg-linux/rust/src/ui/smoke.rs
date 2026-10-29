@@ -164,7 +164,7 @@ impl Harness {
                     // Cancel preserves the complete saved model. Defaults are draft-only.
                     let before = app.settings.clone();
                     let mut draft = preferences::Editor::new(before.clone());
-                    draft.draft = Default::default();
+                    draft.restore_defaults();
                     drop(draft);
                     if app.settings != before {
                         return Err("Cancelled draft changed active settings".into());

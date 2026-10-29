@@ -473,7 +473,8 @@ changing a source hides mismatched old readings until a matching report arrives.
 
 Preferences has General, Graphs, Sources, AI, Weather and Themes / import tabs.
 Edits remain in a draft until **Apply**. **Cancel** discards edits; **Defaults**
-changes only the draft. Invalid settings leave the active configuration unchanged.
+changes only the draft, preserving AI-provider and weather-source preferences as
+in the previous frontend. Invalid settings leave the active configuration unchanged.
 Existing invalid/unreadable preferences remain protected by the same Store/Writer.
 
 General controls layout, graph width/default height, sampling (250–10,000 ms),
