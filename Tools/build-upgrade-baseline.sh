@@ -23,4 +23,18 @@ library=$(find "$scratch/target/release/build" -path '*/out/swift/*' -name libXR
 env -u XRG_SHARED_LIB_DIR CARGO_TARGET_DIR="$scratch/target" GITHUB_OUTPUT= \
     python3 "$scratch/source/Tools/package-linux.py" \
     --binary "$scratch/target/release/xrg-ng-linux" --swift-library "$library" --output "$output"
+python3 - "$output" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+archives = list(root.glob("*.tar.gz"))
+assert len(archives) == 1, "Expected exactly one baseline archive"
+archive = archives[0]
+checksum = archive.with_suffix("").with_suffix(".sha256")
+with archive.open("rb") as stream:
+    expected = hashlib.file_digest(stream, "sha256").hexdigest()
+assert checksum.read_text().split() == [expected, archive.name], "Baseline checksum mismatch"
+assert {p.name for p in root.iterdir()} == {archive.name, checksum.name}, "Unexpected baseline files"
+PY
 echo "APPLICATION_BASELINE_OK version=0.1.0 revision=$baseline"
