@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Native egui shell. Workers publish copied data; painting never collects it.
+mod compositor;
 mod dashboard;
 mod inspectors;
 mod preferences;
@@ -28,6 +29,7 @@ struct App {
     worker: Worker,
     writer: Writer,
     notifier: Notifier,
+    compositor: Arc<std::sync::Mutex<compositor::Compositor>>,
     revision: u64,
     saved_revision: u64,
     error: Option<String>,
@@ -372,9 +374,9 @@ impl eframe::App for App {
             self.capture_size(&ctx);
             self.preferences();
         }
-        ui.set_opacity(self.settings.window_opacity as f32);
+
         egui::Frame::new()
-            .fill(dashboard::color(self.theme.colors[0]))
+            .fill(dashboard::opaque(self.theme.colors[0]))
             .inner_margin(4)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(2., 2.);
@@ -384,6 +386,10 @@ impl eframe::App for App {
                     ui.colored_label(Color32::LIGHT_RED, error);
                 }
             });
+        compositor::Compositor::enqueue(&self.compositor, ui, self.settings.window_opacity);
+        if let Some(error) = self.compositor.lock().unwrap().error.as_ref() {
+            self.error = Some(format!("Window opacity unavailable: {error}"));
+        }
         resize_edges(ui);
         preferences::show(self, &ctx);
         inspectors::show(self, &ctx);
@@ -395,7 +401,10 @@ impl eframe::App for App {
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
         [0.; 4]
     }
-    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let Some(gl) = gl {
+            self.compositor.lock().unwrap().destroy(gl);
+        }
         self.notifier.stop.store(true, Ordering::Relaxed);
     }
 }
@@ -501,6 +510,7 @@ pub fn run(smoke_mode: bool) -> bool {
                 worker,
                 writer,
                 notifier,
+                compositor: Arc::new(std::sync::Mutex::new(compositor::Compositor::default())),
                 revision: 0,
                 saved_revision: 0,
                 error,

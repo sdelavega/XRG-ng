@@ -75,11 +75,19 @@ impl Harness {
             return;
         }
         let sender = self.sender.clone();
+        let check_opacity = variable == "XRG_SMOKE_LAYOUT_IMAGE";
         let repaint = ctx.clone();
         ctx.send_viewport_cmd_to(
             viewport,
             egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
                 let result = (|| {
+                    if check_opacity {
+                        let maximum=image.pixels.iter().map(|p|p.a()).max().unwrap_or(0);
+                        let border=image.pixels.get(image.width()+1).map_or(0,|p|p.a());
+                        if !(177..=181).contains(&maximum)||!(177..=181).contains(&border) {
+                            return Err(format!("Whole-window opacity compounded or lost its opaque theme base: max={maximum} border={border}"));
+                        }
+                    }
                     let file = fs::File::create(path).map_err(|e| e.to_string())?;
                     let mut encoder =
                         png::Encoder::new(file, image.width() as u32, image.height() as u32);
@@ -100,6 +108,10 @@ impl Harness {
     }
     pub fn tick(&mut self, app: &mut App, ctx: &egui::Context) {
         ctx.request_repaint_after(Duration::from_millis(100));
+        if let Some(error) = app.compositor.lock().unwrap().error.as_ref() {
+            self.fail(ctx, error);
+            return;
+        }
         if self.started.elapsed() > Duration::from_secs(20) {
             self.fail(ctx, "20-second deadline exceeded");
             return;
@@ -182,11 +194,17 @@ impl Harness {
                     next.layout = Layout::Horizontal;
                     next.window_opacity = 0.7;
                     next.activity_bars.visible = true;
+                    let mut theme =
+                        xrg_ng_linux::settings::ThemeDocument::new(&next.theme.palette()?);
+                    theme.colors[0][3] = 0.;
+                    next.theme = xrg_ng_linux::settings::ThemeChoice::Custom {
+                        theme: Box::new(theme),
+                    };
                     for (i, m) in next.modules.iter_mut().enumerate() {
                         m.style = GraphStyle::ALL[i % 4];
                         m.height = Some(100 + i as u32);
                     }
-                    next.modules[0].colors.background = Some([0.02, 0.03, 0.1, 1.]);
+                    next.modules[0].colors.background = Some([0.02, 0.03, 0.1, 0.25]);
                     app.apply(next, ctx)?;
                     self.wake = Some((sequence, Instant::now()));
                     app.preferences = None;

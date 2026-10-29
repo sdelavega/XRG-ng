@@ -441,7 +441,8 @@ complete draft, including unavailable saved sources and full color precision.
 
 The native smoke flow has a **20-second deadline**, isolated temporary preferences,
 no AI-provider scans or weather requests, valid worker samples and repeated graph
-draws. It opens preferences/inspectors, changes cadence and presentation, checks a
+draws. It opens preferences/inspectors, changes cadence and presentation, verifies uniform final-frame alpha with
+overlapping graphs and a transparent custom-theme base, checks a
 three-second sampler wake, reopens persisted settings and round-trips a theme.
 Classic and Midnight captures run separately. These checks exercise native OpenGL
 through Mesa software rendering; they do **not** establish physical GPU behavior,
@@ -480,7 +481,9 @@ Existing invalid/unreadable preferences remain protected by the same Store/Write
 General controls layout, graph width/default height, sampling (250–10,000 ms),
 temperature units, opacity, optional remembered window dimensions, network scale
 floor (whole B/s; zero = automatic), and current-value bars. Opacity applies only
-to the dashboard and requires a compositing desktop. Graphs controls visibility,
+to the completed dashboard frame through an OpenGL compositing pass (not per-shape
+fading) and requires a compositing desktop. The theme window base stays opaque
+before this pass; theme-layer alpha remains independent of whole-window opacity. Graphs controls visibility,
 order, four drawing styles, individual heights and optional background/series
 color overrides. Sources retains missing saved identities and offers CPU,
 network, disk, GPU/VRAM and up to three distinct temperature/fan channels. Intel

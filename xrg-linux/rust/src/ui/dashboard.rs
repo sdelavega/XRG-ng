@@ -17,6 +17,9 @@ pub(super) fn color(v: [f64; 4]) -> Color32 {
         (v[3] * 255.).round() as u8,
     )
 }
+pub(super) fn opaque(v: [f64; 4]) -> Color32 {
+    color([v[0], v[1], v[2], 1.])
+}
 fn text(p: &Painter, text: &str, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(
         text.into(),
@@ -54,7 +57,7 @@ pub(super) fn show(
         return response;
     }
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, 0., color(theme.colors[0]));
+    p.rect_filled(rect, 0., opaque(theme.colors[0]));
     p.rect_filled(rect, 0., color(theme.colors[1]));
     p.rect_stroke(
         rect,
