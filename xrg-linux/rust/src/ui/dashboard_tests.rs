@@ -21,7 +21,7 @@ fn frame(
     let settings = Settings::default();
     let theme = xrg_ng_linux::shared::themes().remove(0);
     let mut responses = Vec::new();
-    let output = ctx.run_ui(raw, |ui| {
+    let mut output = ctx.run_ui(raw, |ui| {
         responses.clear();
         for &module in modules {
             responses.push(show(
@@ -35,6 +35,8 @@ fn frame(
             ));
         }
     });
+    // This fixture has no renderer; acknowledge uploads even on setup frames.
+    output.textures_delta.clear();
     (output, responses)
 }
 fn key(key: Key) -> Event {
