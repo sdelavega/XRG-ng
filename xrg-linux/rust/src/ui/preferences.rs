@@ -405,27 +405,30 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
                 ui.selectable_value(&mut s.layout, Layout::Horizontal, "Horizontal");
             });
             ui.end_row();
-            ui.label("Graph width");
+            let label = ui.label("Graph width");
             ui.add(
                 egui::DragValue::new(&mut s.graph_width)
                     .range(100..=1200)
                     .suffix(" px"),
-            );
+            )
+            .labelled_by(label.id);
             ui.end_row();
-            ui.label("Default graph height");
+            let label = ui.label("Default graph height");
             ui.add(
                 egui::DragValue::new(&mut s.graph_height)
                     .range(64..=240)
                     .suffix(" px"),
-            );
+            )
+            .labelled_by(label.id);
             ui.end_row();
-            ui.label("System sampling target");
+            let label = ui.label("System sampling target");
             ui.add(
                 egui::DragValue::new(&mut s.sampling_interval_ms)
                     .range(250..=10_000)
                     .speed(50.)
                     .suffix(" ms"),
-            );
+            )
+            .labelled_by(label.id);
             ui.end_row();
             ui.label("Temperature");
             ui.horizontal(|ui| {
@@ -441,12 +444,17 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
                 );
             });
             ui.end_row();
-            ui.label("Window opacity");
-            ui.add(egui::Slider::new(&mut s.window_opacity, 0.1..=1.).show_value(true));
+            let label = ui.label("Window opacity");
+            ui.add(egui::Slider::new(&mut s.window_opacity, 0.1..=1.).show_value(true))
+                .labelled_by(label.id);
             ui.end_row();
-            ui.label("Remember window size");
+            let label = ui.label("Remember window size");
             let mut remember = s.window_size.is_some();
-            if ui.checkbox(&mut remember, "").changed() {
+            if ui
+                .checkbox(&mut remember, "")
+                .labelled_by(label.id)
+                .changed()
+            {
                 let size = super::window_size(s);
                 s.window_size = remember.then_some(settings::WindowSize {
                     width: size.x.round() as u32,
@@ -455,27 +463,30 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
             }
             ui.end_row();
             if let Some(size) = &mut s.window_size {
-                ui.label("Window width");
+                let label = ui.label("Window width");
                 ui.add(
                     egui::DragValue::new(&mut size.width)
                         .range(100..=8192)
                         .suffix(" px"),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
-                ui.label("Window height");
+                let label = ui.label("Window height");
                 ui.add(
                     egui::DragValue::new(&mut size.height)
                         .range(100..=8192)
                         .suffix(" px"),
-                );
+                )
+                .labelled_by(label.id);
                 ui.end_row();
             }
-            ui.label("Network minimum scale");
+            let label = ui.label("Network minimum scale");
             ui.add(
                 egui::DragValue::new(&mut s.network_min_scale)
                     .range(0..=settings::network_scale::MAX)
                     .suffix(" B/s"),
-            );
+            )
+            .labelled_by(label.id);
             ui.end_row();
         });
     ui.label("A zero network floor uses automatic scaling. Rates and history are unchanged.");
@@ -560,7 +571,7 @@ fn source(
     default: &str,
 ) {
     ui.horizontal(|ui| {
-        ui.label(label);
+        let label = ui.label(label);
         let selected = value
             .as_ref()
             .map(|id| {
@@ -571,7 +582,8 @@ fn source(
                     .unwrap_or_else(|| format!("Unavailable: {id}"))
             })
             .unwrap_or_else(|| default.into());
-        egui::ComboBox::from_id_salt(id)
+        let current = selected.clone();
+        let selector = egui::ComboBox::from_id_salt(id)
             .selected_text(selected)
             .width(360.)
             .show_ui(ui, |ui| {
@@ -579,7 +591,11 @@ fn source(
                 for option in options {
                     ui.selectable_value(value, Some(option.id.clone()), &option.label);
                 }
-            });
+            })
+            .response
+            .labelled_by(label.id);
+        ui.ctx()
+            .accesskit_node_builder(selector.id, |node| node.set_value(current));
     });
 }
 fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
@@ -807,6 +823,72 @@ mod tests {
         assert_eq!(editor.draft.graph_width, Settings::default().graph_width);
         assert_eq!(editor.draft.window_opacity, 1.);
         assert!(editor.draft.validate().is_ok());
+    }
+    #[test]
+    fn accessible_source_selector_preserves_the_current_unavailable_selection() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut selected = Some("missing-gpu".into());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            source(ui, "gpu-test", "GPU", &mut selected, &[], "Automatic")
+        });
+        let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+        let (_, node) = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == egui::accesskit::Role::ComboBox)
+            .unwrap();
+        assert_eq!(node.value(), Some("Unavailable: missing-gpu"));
+        assert!(!node.labelled_by().is_empty());
+        assert_eq!(selected.as_deref(), Some("missing-gpu"));
+        output.textures_delta.clear();
+    }
+    #[test]
+    fn general_controls_have_associated_accessible_labels() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut settings = Settings {
+            window_size: Some(settings::WindowSize {
+                width: 300,
+                height: 660,
+            }),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| general(ui, &mut settings));
+        let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+        for name in [
+            "Graph width",
+            "Default graph height",
+            "System sampling target",
+            "Window opacity",
+            "Remember window size",
+            "Window width",
+            "Window height",
+            "Network minimum scale",
+        ] {
+            fn text(tree: &egui::accesskit::TreeUpdate, id: egui::accesskit::NodeId) -> String {
+                let Some((_, node)) = tree.nodes.iter().find(|(node_id, _)| *node_id == id) else {
+                    return String::new();
+                };
+                let mut value = node
+                    .label()
+                    .or_else(|| node.value())
+                    .unwrap_or_default()
+                    .to_owned();
+                for child in node.children() {
+                    value.push_str(&text(tree, *child));
+                }
+                value
+            }
+            assert!(
+                tree.nodes.iter().any(|(_, node)| node
+                    .labelled_by()
+                    .iter()
+                    .any(|id| text(tree, *id).contains(name))),
+                "No control labelled by {name}"
+            );
+        }
+        output.textures_delta.clear();
     }
     #[test]
     fn rendering_all_tabs_keeps_the_entire_draft_unchanged() {

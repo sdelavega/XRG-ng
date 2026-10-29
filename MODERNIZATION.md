@@ -16,6 +16,13 @@ size persistence and keyboard interaction, plus isolated idle profiles. Worker
 publication callbacks replace the old 100 ms UI polling thread. See the Linux
 guide for the software-renderer scope and remaining hardware/desktop limits.
 
+The egui dashboard now supports keyboard and AccessKit graph activation, visible
+focus, offscreen focus scrolling, and named graph/status semantics. General
+preferences have associated control labels. Zoomed-window persistence retains
+native logical dimensions; CI adds fractional X11 scale and Wayland UI-zoom
+interaction cases. Full assistive-technology sessions and multi-monitor scale
+transitions remain validation work.
+
 The sections below are a chronological historical record. Statements about older
 builds, test counts, remotes, retained C sources and intermediate Objective-C
 adapters describe those stages rather than the current checkout.

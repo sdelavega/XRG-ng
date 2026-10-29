@@ -24,14 +24,33 @@ screenshots remain historical artifacts; the captures below show the active UI.
 These are native ARM64 debug captures with live Linux system readings; unavailable
 hardware stays explicit and AI/weather collection is disabled in smoke mode.
 
+## Keyboard navigation and scaling
+
+Tab and Shift+Tab move through the application menu and visible graph order.
+Focused graphs have a visible outline and scroll into view when necessary.
+Enter or Space opens the focused graph's live details; Shift+F10 opens its graph
+options. Mouse double-click remains supported. Escape closes preferences and
+inspectors; Ctrl+, opens preferences and Ctrl+Q quits the dashboard.
+
+The application menu includes Zoom controls. Ctrl+plus (or Ctrl+equals),
+Ctrl+minus and Ctrl+0 also adjust/reset session UI zoom. Saved window dimensions
+remain independent of UI zoom and restore at the same native logical size.
+Graph widgets expose named button roles, current-status descriptions and
+AccessKit activation; general preference fields and metric-source selectors
+have associated labels. Automated accessibility-tree tests cover these semantics;
+full screen-reader interoperability remains a separate validation task.
+
 ## Desktop validation and idle diagnostics
 
 Release CI runs `Tools/desktop-check-linux.py` under Fluxbox/Picom X11 and nested
 Weston 13 Wayland on native x86_64 and ARM64 runners. It checks the actual native
 window handle; Wayland clients have no `DISPLAY`, so an X11 fallback cannot pass.
 The checks exercise window resizing, saved-size restoration, Ctrl+, Preferences,
-Escape cancellation, CPU detail windows and clean application shutdown. X11 also
-covers minimization. Ctrl+Q quits the dashboard; Escape closes inspector windows.
+Escape cancellation, Enter/Space graph activation, CPU detail windows and clean
+application shutdown. X11 also covers minimization. Additional native interaction
+cases use a 125% X11 native-scale override and 125% UI zoom on Wayland. Headless rendering/accessibility checks cover
+100%, 125%, 150% and 200% scale. Saved dimensions are compared with independently
+measured window bounds before a relaunch, so UI zoom cannot silently shrink them.
 
 Each run uses disposable HOME/XDG directories with AI and weather disabled. It
 records process CPU time as a percentage of one core, RSS/PSS, voluntary thread
@@ -43,8 +62,9 @@ continuous idle repaint loop, but records CPU/memory values without brittle
 machine-specific pass thresholds.
 
 These are software Mesa/Pixman results in isolated desktops. They do not establish
-physical GPU power consumption, multi-monitor/fractional-scale behavior, every
-desktop's focus/placement policy or accessibility interoperability. Those remain
+physical GPU power consumption, multi-monitor scale transitions, native Wayland
+fractional-scale protocol behavior, every desktop's focus/placement policy or
+accessibility interoperability. Those remain
 best-effort validation areas for real-world feedback. JSON reports, application
 logs and desktop captures are retained with the CI validation artifacts.
 

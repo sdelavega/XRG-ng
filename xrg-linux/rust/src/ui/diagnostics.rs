@@ -11,6 +11,10 @@ struct Event {
     at_ms: u64,
     width: u32,
     height: u32,
+    native_width: u32,
+    native_height: u32,
+    pixels_per_point: f32,
+    zoom_factor: f32,
 }
 #[derive(Serialize)]
 struct Report {
@@ -101,6 +105,10 @@ impl Diagnostics {
             at_ms: r.started.elapsed().as_millis() as u64,
             width: size.width().round() as u32,
             height: size.height().round() as u32,
+            native_width: (size.width() * ui.ctx().zoom_factor()).round() as u32,
+            native_height: (size.height() * ui.ctx().zoom_factor()).round() as u32,
+            pixels_per_point: ui.ctx().pixels_per_point(),
+            zoom_factor: ui.ctx().zoom_factor(),
         };
         r.ui_passes += 1;
         r.sampling_interval_ms = interval;
@@ -115,10 +123,10 @@ impl Diagnostics {
         }
         r.last_preferences = preferences;
         r.last_details = details;
-        if r.ui_passes == 1 {
+        if r.ui_passes == 2 {
             println!(
                 "XRG_DESKTOP_READY {}",
-                serde_json::json!({"backend":r.backend,"at_ms":event.at_ms,"width":event.width,"height":event.height})
+                serde_json::json!({"backend":r.backend,"at_ms":event.at_ms,"width":event.width,"height":event.height,"pixels_per_point":event.pixels_per_point,"zoom_factor":event.zoom_factor})
             );
         }
         if r.events.len() < LIMIT {
@@ -134,5 +142,25 @@ impl Diagnostics {
                 serde_json::to_string(r).expect("finite diagnostic counters")
             );
         }
+    }
+}
+
+/// Exercise the normal egui zoom implementation in isolated desktop QA only.
+pub(super) fn configure(ctx: &egui::Context) {
+    if std::env::var("XRG_DESKTOP_REPORT").as_deref() == Ok("1")
+        && let Ok(value) = std::env::var("XRG_DESKTOP_ZOOM")
+    {
+        let zoom: f32 = value.parse().expect("XRG_DESKTOP_ZOOM must be numeric");
+        assert!(
+            zoom.is_finite() && (0.5..=2.).contains(&zoom),
+            "QA zoom must be 0.5–2"
+        );
+        ctx.set_zoom_factor(zoom);
+    }
+}
+
+pub(super) fn focus(response: &egui::Response, name: &str) {
+    if response.gained_focus() && std::env::var("XRG_DESKTOP_REPORT").as_deref() == Ok("1") {
+        println!("XRG_DESKTOP_FOCUS {}", serde_json::json!({"name":name}));
     }
 }

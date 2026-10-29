@@ -52,7 +52,32 @@ pub(super) fn show(
     settings: &Settings,
     style: GraphStyle,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    // Keep keyboard/accessibility identity attached to the module after reordering.
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let response = ui.interact(
+        rect,
+        ui.scope_id().with(("graph", module.index())),
+        Sense::click(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            format!("{} graph", module.title()),
+        )
+    });
+    let status = panel
+        .map(|p| p.display_label(settings.temperature_units).into_owned())
+        .unwrap_or_else(|| "Waiting for selected source".into());
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_description(format!(
+            "{status}. Activate for live details. Shift+F10 for graph options."
+        ));
+    });
+    if response.gained_focus() {
+        super::diagnostics::focus(&response, &format!("{} graph", module.title()));
+        response.scroll_to_me(None);
+    }
     if !ui.is_rect_visible(rect) {
         return response;
     }
@@ -199,18 +224,41 @@ pub(super) fn show(
         p.with_clip_rect(label_rect)
             .galley(label_rect.min, galley, ink);
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::Role::Label,
-            true,
-            format!(
-                "{}: {}",
-                module.title(),
-                panel
-                    .map(|p| p.display_label(units).into_owned())
-                    .unwrap_or_else(|| "Waiting for selected source".into())
-            ),
-        )
-    });
+    if response.has_focus() {
+        p.rect_stroke(
+            rect.shrink(1.),
+            0.,
+            Stroke::new(1.5, ui.visuals().widgets.active.fg_stroke.color),
+            StrokeKind::Inside,
+        );
+    }
     response
 }
+/// Mouse activation stays a double click; Enter, Space and AccessKit Click are
+/// synthesized primary clicks and must use the same details action.
+pub(super) fn details_requested(response: &egui::Response) -> bool {
+    response.double_clicked()
+        || (response.clicked() && !response.clicked_by(egui::PointerButton::Primary))
+}
+/// Pointer-fixed anchors require a pointer position; retain a graph-relative
+/// anchor across frames when the menu was opened from the keyboard instead.
+pub(super) fn context_menu(response: &egui::Response, module: Module) -> egui::Popup<'_> {
+    let ctx = &response.ctx;
+    let mut popup = egui::Popup::context_menu(response);
+    let keyboard = popup.get_id().with("keyboard-anchor");
+    if response.has_focus()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10))
+    {
+        egui::Popup::open_id(ctx, popup.get_id());
+        ctx.data_mut(|data| data.insert_temp(keyboard, true));
+    } else if response.secondary_clicked() || !popup.is_open() {
+        ctx.data_mut(|data| data.remove::<bool>(keyboard));
+    }
+    if ctx.data(|data| data.get_temp::<bool>(keyboard)) == Some(true) {
+        popup = popup.at_position(response.rect.left_bottom());
+    }
+    popup.accessible_name(format!("{} graph options", module.title()))
+}
+#[cfg(test)]
+#[path = "dashboard_tests.rs"]
+mod tests;

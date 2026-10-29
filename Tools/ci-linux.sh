@@ -56,6 +56,15 @@ if [[ "$configuration" == release ]]; then
             --binary "$desktop_target/release/xrg-ng-linux" \
             --fixture "$desktop_target/release/examples/desktop_preferences" \
             --backend "$backend" --output "$output/desktop-$backend"
+        # Native X11 scaling and fractional UI zoom on a real Wayland surface.
+        scale_options=(--zoom 1.25)
+        if [[ "$backend" == x11 ]]; then scale_options=(--native-scale 1.25); fi
+        dbus-run-session -- xvfb-run -a --server-args="-screen 0 1600x1200x24" \
+            python3 Tools/desktop-check-linux.py \
+            --binary "$desktop_target/release/xrg-ng-linux" \
+            --fixture "$desktop_target/release/examples/desktop_preferences" \
+            --backend "$backend" "${scale_options[@]}" --interaction-only --seconds 10 \
+            --output "$output/desktop-$backend-scaled"
     done
 fi
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then

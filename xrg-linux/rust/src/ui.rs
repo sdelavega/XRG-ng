@@ -81,7 +81,7 @@ impl App {
         if resize {
             ctx.send_viewport_cmd_to(
                 ViewportId::ROOT,
-                ViewportCommand::InnerSize(window_size(&self.settings)),
+                ViewportCommand::InnerSize(viewport_window_size(&self.settings, ctx.zoom_factor())),
             );
         }
         self.persist();
@@ -108,7 +108,8 @@ impl App {
         if self.settings.window_size.is_none() {
             return;
         }
-        let size = ctx.input(current_window_size);
+        let zoom = ctx.zoom_factor();
+        let size = ctx.input(|i| current_window_size(i, zoom));
         if let Some(size) = size.filter(|s| s.validate().is_ok())
             && self.settings.window_size != Some(size)
         {
@@ -128,12 +129,12 @@ impl App {
                         .color(dashboard::color(self.theme.colors[6])),
                 )
                 .truncate()
-                .sense(egui::Sense::click_and_drag()),
+                .sense(egui::Sense::drag().difference(egui::Sense::FOCUSABLE)),
             );
             if heading.drag_started() {
                 ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
             }
-            ui.menu_button("…", |ui| {
+            let menu = ui.menu_button("…", |ui| {
                 if ui.button("Preferences…").clicked() {
                     self.capture_size(ui.ctx());
                     self.preferences();
@@ -151,6 +152,7 @@ impl App {
                         }
                     }
                 });
+                ui.menu_button("Zoom", egui::gui_zoom::zoom_menu_buttons);
                 if ui.button("Show all graphs").clicked() {
                     let mut settings = self.settings.clone();
                     settings.modules.iter_mut().for_each(|m| m.visible = true);
@@ -180,6 +182,10 @@ impl App {
                     self.capture_size(ui.ctx());
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                 }
+            });
+            diagnostics::focus(&menu.response, "Application menu");
+            menu.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, "Application menu")
             });
         });
     }
@@ -212,16 +218,10 @@ impl App {
                     })
                     .unwrap_or_else(|| "Waiting for selected source…".into());
                 let response = response.on_hover_text(detail);
-                if response.double_clicked() {
+                if dashboard::details_requested(&response) {
                     app.details.insert(module);
                 }
-                let mut popup = egui::Popup::context_menu(&response);
-                if response.has_focus()
-                    && ui.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::F10))
-                {
-                    egui::Popup::open_id(ui.ctx(), popup.get_id());
-                    popup = popup.at_position(response.rect.left_bottom());
-                }
+                let popup = dashboard::context_menu(&response, module);
                 popup.show(|ui| {
                     if ui.button("Live details…").clicked() {
                         app.details.insert(module);
@@ -389,7 +389,7 @@ fn snapshot_matches(snapshot: &Snapshot, settings: &Settings, module: Module) ->
                 .is_some_and(|w| w.preferences == settings.weather))
 }
 
-fn current_window_size(i: &egui::InputState) -> Option<settings::WindowSize> {
+fn current_window_size(i: &egui::InputState, zoom: f32) -> Option<settings::WindowSize> {
     let v = i.viewport();
     if v.maximized == Some(true) || v.fullscreen == Some(true) {
         return None;
@@ -398,9 +398,19 @@ fn current_window_size(i: &egui::InputState) -> Option<settings::WindowSize> {
     // may be absent even though the local viewport dimensions are known.
     let r = v.inner_rect.unwrap_or_else(|| i.viewport_rect());
     Some(settings::WindowSize {
-        width: r.width().round() as u32,
-        height: r.height().round() as u32,
+        width: (r.width() * zoom).round() as u32,
+        height: (r.height() * zoom).round() as u32,
     })
+}
+// Saved dimensions use native logical units. Egui viewport commands use UI
+// points, which are smaller when the user zooms with Ctrl+plus/minus.
+fn viewport_window_size(settings: &Settings, zoom: f32) -> egui::Vec2 {
+    let size = window_size(settings);
+    if settings.window_size.is_some() {
+        size / zoom
+    } else {
+        size
+    }
 }
 fn window_size(settings: &Settings) -> egui::Vec2 {
     if let Some(s) = settings.window_size {
@@ -475,6 +485,7 @@ pub fn run(smoke_mode: bool) -> bool {
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            diagnostics::configure(&cc.egui_ctx);
             let worker = Worker::start_with_settings(!smoke_mode, &settings);
             let writer = Writer::start(store);
             let ctx = cc.egui_ctx.clone();
@@ -580,7 +591,11 @@ fn resize_edges(ui: &mut egui::Ui) {
     .enumerate()
     {
         let response = ui
-            .interact(rect, ui.scope_id().with(("resize", i)), egui::Sense::drag())
+            .interact(
+                rect,
+                ui.scope_id().with(("resize", i)),
+                egui::Sense::drag().difference(egui::Sense::FOCUSABLE),
+            )
             .on_hover_cursor(cursor);
         if response.drag_started() {
             ui.ctx()
@@ -629,7 +644,9 @@ mod tests {
             viewport.inner_rect = None; // Normal Wayland input: size but no global position.
             viewport.maximized = Some(maximized);
             let mut observed = None;
-            let mut output = ctx.run_ui(raw, |ui| observed = ui.input(current_window_size));
+            let mut output = ctx.run_ui(raw, |ui| {
+                observed = ui.input(|i| current_window_size(i, 1.))
+            });
             output.textures_delta.clear();
             assert_eq!(
                 observed,
@@ -638,6 +655,45 @@ mod tests {
                     height: 660
                 })
             );
+        }
+    }
+    #[test]
+    fn zoomed_windows_keep_native_logical_dimensions_across_saves_and_apply() {
+        for native_scale in [1., 1.25, 1.5, 2.] {
+            for zoom in [1., 1.25, 1.5, 2.] {
+                let ctx = egui::Context::default();
+                ctx.options_mut(|o| o.zoom_factor = zoom);
+                let mut raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        vec2(300., 660.) / zoom,
+                    )),
+                    ..Default::default()
+                };
+                raw.viewports
+                    .get_mut(&ViewportId::ROOT)
+                    .unwrap()
+                    .native_pixels_per_point = Some(native_scale);
+                let mut size = None;
+                let mut output =
+                    ctx.run_ui(raw, |ui| size = ui.input(|i| current_window_size(i, zoom)));
+                output.textures_delta.clear();
+                assert_eq!(
+                    size,
+                    Some(settings::WindowSize {
+                        width: 300,
+                        height: 660
+                    })
+                );
+                let settings = Settings {
+                    window_size: size,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    viewport_window_size(&settings, zoom) * zoom,
+                    vec2(300., 660.)
+                );
+            }
         }
     }
     #[test]
