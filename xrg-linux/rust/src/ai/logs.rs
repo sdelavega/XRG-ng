@@ -17,6 +17,7 @@ const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 const RECORD_LIMIT: usize = 8 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 20_000;
 const USAGE_LIMIT: usize = 100_000;
+const TIME_BUDGET_ERROR: &str = "Log scan time budget reached; continuing next poll";
 
 #[derive(Clone, Copy, Debug)]
 pub enum Layout {
@@ -58,6 +59,7 @@ struct Parsed {
     anonymous_models: Totals,
     identified: BTreeMap<String, Recorded>,
 }
+#[derive(Clone)]
 struct Checkpoint {
     length: usize,
     hash: blake3::Hash,
@@ -76,6 +78,7 @@ pub struct LogScan {
     root: PathBuf,
     layout: Layout,
     cache: BTreeMap<PathBuf, Entry>,
+    pending: Option<(PathBuf, stream::Job)>,
 }
 impl LogScan {
     pub fn new(root: PathBuf, layout: Layout) -> Self {
@@ -83,13 +86,16 @@ impl LogScan {
             root,
             layout,
             cache: BTreeMap::new(),
+            pending: None,
         }
     }
     pub fn scan(&mut self) -> Result<Usage, String> {
         self.scan_details().map(|s| s.usage)
     }
     pub fn scan_details(&mut self) -> Result<Scan, String> {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        self.scan_with_budget(IO_BUDGET, Instant::now() + Duration::from_secs(2))
+    }
+    fn scan_with_budget(&mut self, mut budget: u64, deadline: Instant) -> Result<Scan, String> {
         let mut paths = Vec::new();
         let mut visited = 0;
         discover(
@@ -105,7 +111,13 @@ impl LogScan {
         // deleting old logs could leave the cache permanently stuck at its cap.
         let keep: BTreeSet<_> = paths.iter().cloned().collect();
         self.cache.retain(|path, _| keep.contains(path));
-        let mut budget = IO_BUDGET;
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(path, _)| !keep.contains(path))
+        {
+            self.pending = None;
+        }
         let mut cached_records: usize =
             self.cache.values().map(|e| e.parsed.identified.len()).sum();
         for path in &paths {
@@ -116,32 +128,64 @@ impl LogScan {
             }
             let stamp = Stamp::from(&before);
             if self.cache.get(path).is_some_and(|old| old.stamp == stamp) {
+                if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|(saved, _)| saved == path)
+                {
+                    self.pending = None;
+                }
                 continue;
             }
             if stamp.size > FILE_LIMIT {
                 return Err("Log exceeds the 64 MiB per-file limit".into());
             }
-            if stamp.size > budget {
-                return Err("Log scan budget reached; continuing next poll".into());
-            }
             let mut file = open_regular(path)?;
             if Stamp::from(&file.metadata().map_err(|e| e.to_string())?) != stamp {
                 return Err("Log changed while opening; retrying".into());
             }
-            let entry = stream::parse(
-                &mut file,
-                self.layout,
-                path.extension().is_some_and(|e| e == "json"),
-                stamp,
-                deadline,
-                self.cache.get(path),
-                &mut budget,
-            )?;
+            let session = matches!(self.layout, Layout::Gemini)
+                && path.extension().is_some_and(|e| e == "json");
+            let (entry, pending) = if session {
+                if stamp.size > budget {
+                    return Err("Log scan budget reached; continuing next poll".into());
+                }
+                (
+                    Some(stream::parse(
+                        &mut file,
+                        self.layout,
+                        true,
+                        stamp,
+                        deadline,
+                        self.cache.get(path),
+                        &mut budget,
+                    )?),
+                    None,
+                )
+            } else {
+                let mut job = match self.pending.take() {
+                    Some((saved, job)) if saved == *path && job.stamp() == stamp => job,
+                    _ => stream::Job::new(self.layout, stamp, self.cache.get(path))?,
+                };
+                let entry = job.advance(&mut file, &mut budget, deadline)?;
+                (entry, Some(job))
+            };
             if Stamp::from(&file.metadata().map_err(|e| e.to_string())?) != stamp
                 || Stamp::from(&fs::symlink_metadata(path).map_err(|e| e.to_string())?) != stamp
             {
                 return Err("Log changed during parsing; retrying".into());
             }
+            let Some(entry) = entry else {
+                let position = pending
+                    .as_ref()
+                    .map(|job| job.position())
+                    .unwrap_or_default();
+                self.pending = pending.map(|job| (path.clone(), job));
+                return Err(format!(
+                    "Log scan in progress: {} / {} bytes; continuing next poll",
+                    position.0, position.1
+                ));
+            };
             let old_count = self
                 .cache
                 .get(path)
@@ -195,7 +239,7 @@ fn add(a: Usage, b: Usage) -> Result<Usage, String> {
 }
 fn check(deadline: Instant) -> Result<(), String> {
     if Instant::now() >= deadline {
-        Err("Log scan time budget reached; continuing next poll".into())
+        Err(TIME_BUDGET_ERROR.into())
     } else {
         Ok(())
     }

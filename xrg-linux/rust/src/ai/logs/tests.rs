@@ -532,3 +532,363 @@ fn underreported_sizes_cannot_turn_extra_content_into_an_empty_or_complete_log()
     );
     assert_eq!(meter.bytes, valid.len() as u64 + 1);
 }
+
+#[test]
+fn resumable_cold_reads_and_prefix_verification_charge_each_byte_once() {
+    let first = format!("{}\n{}\n{}", codex(10), "ignored".repeat(20_000), codex(20));
+    let mut meter = Meter::new(first.as_bytes().to_vec());
+    let mut job = stream::Job::new(Layout::Codex, stamp(first.len()), None).unwrap();
+    let mut polls = 0;
+    let old = loop {
+        let mut budget = 4093;
+        let before = meter.bytes;
+        let result = job.advance(&mut meter, &mut budget, deadline()).unwrap();
+        assert_eq!(4093 - budget, meter.bytes - before);
+        assert!(meter.bytes - before <= 4093);
+        polls += 1;
+        if let Some(entry) = result {
+            break entry;
+        }
+        assert!(polls < 100);
+    };
+    assert!(polls > 1);
+    assert_eq!(old.parsed.anonymous.total, 20);
+    assert_eq!(meter.bytes, first.len() as u64);
+    let next = format!("{first}\n{}", codex(30));
+    let mut meter = Meter::new(next.as_bytes().to_vec());
+    let mut job = stream::Job::new(Layout::Codex, stamp(next.len()), Some(&old)).unwrap();
+    let appended = loop {
+        let mut budget = 4093;
+        if let Some(entry) = job.advance(&mut meter, &mut budget, deadline()).unwrap() {
+            break entry;
+        }
+    };
+    assert_eq!(meter.bytes, next.len() as u64);
+    assert!(meter.largest <= stream::CHUNK);
+    assert_eq!(appended.parsed.anonymous.total, 30);
+    assert_eq!(appended.checkpoint.unwrap().parsed.anonymous.total, 20);
+    assert_eq!(old.parsed.anonymous.total, 20);
+}
+
+#[test]
+fn yielding_during_rewritten_prefix_verification_reparses_and_keeps_old_counts() {
+    let first = format!("{}\n{}\n", "x".repeat(70_000), codex(10));
+    let old = read(first.as_bytes(), None);
+    let next = format!("{}tail\n", first.replace("tokens\":10", "tokens\":99"));
+    let mut job = stream::Job::new(Layout::Codex, stamp(next.len()), Some(&old)).unwrap();
+    let mut meter = Meter::new(next.as_bytes().to_vec());
+    let entry = loop {
+        let mut budget = 4093;
+        let result = job.advance(&mut meter, &mut budget, deadline()).unwrap();
+        assert_eq!(old.parsed.anonymous.total, 10);
+        if let Some(entry) = result {
+            break entry;
+        }
+    };
+    assert_eq!(entry.parsed.anonymous.total, 99);
+    assert_eq!(meter.bytes, (first.len() + next.len()) as u64);
+}
+
+#[test]
+fn an_expired_slice_preserves_progress_and_io_errors_remain_errors() {
+    let bytes = format!("{}\n{}", codex(10), codex(20));
+    let mut meter = Meter::new(bytes.as_bytes().to_vec());
+    let mut job = stream::Job::new(Layout::Codex, stamp(bytes.len()), None).unwrap();
+    let mut budget = 23;
+    assert!(
+        job.advance(&mut meter, &mut budget, deadline())
+            .unwrap()
+            .is_none()
+    );
+    let read = meter.bytes;
+    let mut budget = IO_BUDGET;
+    assert!(
+        job.advance(&mut meter, &mut budget, Instant::now())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(meter.bytes, read);
+    meter.fail_after = Some(read);
+    assert!(
+        job.advance(&mut meter, &mut budget, deadline())
+            .err()
+            .unwrap()
+            .contains("injected read failure")
+    );
+    meter.fail_after = None;
+    assert_eq!(
+        job.advance(&mut meter, &mut budget, deadline())
+            .unwrap()
+            .unwrap()
+            .parsed
+            .anonymous
+            .total,
+        20
+    );
+    assert_eq!(meter.bytes, bytes.len() as u64);
+}
+
+struct ScanFixture(std::path::PathBuf);
+impl ScanFixture {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "xrg-ai-resume-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+    fn put(&self, name: &str, bytes: impl AsRef<[u8]>) {
+        let path = self.0.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    fn scanner(&self) -> LogScan {
+        LogScan::new(self.0.clone(), Layout::Codex)
+    }
+}
+impl Drop for ScanFixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+fn finish(scan: &mut LogScan, budget: u64) -> Scan {
+    for _ in 0..1000 {
+        match scan.scan_with_budget(budget, deadline()) {
+            Ok(scan) => return scan,
+            Err(error) => assert!(error.contains("continuing next poll"), "{error}"),
+        }
+    }
+    panic!("Bounded scan did not make progress");
+}
+#[test]
+fn complete_provider_totals_publish_only_after_all_slices_and_then_use_the_cache() {
+    let f = ScanFixture::new();
+    f.put(
+        "rollout-a.jsonl",
+        format!("{}\n{}", codex(10), "ignored\n".repeat(20_000)),
+    );
+    f.put("rollout-b.jsonl", codex(20));
+    let mut scan = f.scanner();
+    assert!(scan.scan_with_budget(4093, deadline()).is_err());
+    assert!(scan.cache.is_empty());
+    assert_eq!(finish(&mut scan, 4093).usage.total, 30);
+    assert!(scan.pending.is_none());
+    // An unchanged sweep does no data I/O, even with no read allowance.
+    assert_eq!(
+        scan.scan_with_budget(0, deadline()).unwrap().usage.total,
+        30
+    );
+}
+#[test]
+fn replacements_truncation_and_same_size_rewrites_invalidate_inflight_work() {
+    for replacement in [false, true] {
+        let f = ScanFixture::new();
+        let first = format!("{}\n{}", codex(10), "ignored\n".repeat(20_000));
+        f.put("rollout-a.jsonl", &first);
+        let mut scan = f.scanner();
+        assert!(scan.scan_with_budget(4093, deadline()).is_err());
+        if replacement {
+            f.put("new", codex(70));
+            fs::rename(f.0.join("new"), f.0.join("rollout-a.jsonl")).unwrap();
+        } else {
+            f.put("rollout-a.jsonl", codex(70));
+        }
+        assert_eq!(finish(&mut scan, 4093).usage.total, 70);
+        // Restore mtime to prove ctime still invalidates an unfinished snapshot.
+        f.put("rollout-a.jsonl", &first);
+        assert!(scan.scan_with_budget(4093, deadline()).is_err());
+        let modified = fs::metadata(f.0.join("rollout-a.jsonl"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        f.put(
+            "rollout-a.jsonl",
+            first.replace("tokens\":10", "tokens\":99"),
+        );
+        File::open(f.0.join("rollout-a.jsonl"))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(finish(&mut scan, 4093).usage.total, 99);
+    }
+}
+#[test]
+fn deleted_pending_logs_are_dropped_without_poisoning_new_work() {
+    let f = ScanFixture::new();
+    f.put(
+        "rollout-a.jsonl",
+        format!("{}\n{}", codex(10), "ignored\n".repeat(20_000)),
+    );
+    let mut scan = f.scanner();
+    assert!(scan.scan_with_budget(4093, deadline()).is_err());
+    assert!(scan.pending.is_some());
+    fs::remove_file(f.0.join("rollout-a.jsonl")).unwrap();
+    f.put("rollout-b.jsonl", codex(40));
+    assert_eq!(finish(&mut scan, 4093).usage.total, 40);
+    assert!(scan.pending.is_none());
+}
+
+#[test]
+fn resumable_claude_appends_keep_copy_deduplication_models_and_cache_atomic() {
+    let f = ScanFixture::new();
+    let message = |tokens, model| {
+        serde_json::json!({"message":{"id":"shared", "model":model, "usage":{"input_tokens":tokens}}}).to_string()
+    };
+    let first = format!("{}\n{}", message(10, "old"), "ignored\n".repeat(2000));
+    f.put("a.jsonl", &first);
+    f.put("copy.jsonl", message(10, "old"));
+    let set_time = |name, seconds| {
+        File::open(f.0.join(name))
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(seconds)),
+            )
+            .unwrap()
+    };
+    set_time("a.jsonl", 100);
+    set_time("copy.jsonl", 200);
+    let mut scan = LogScan::new(f.0.clone(), Layout::Claude);
+    assert_eq!(finish(&mut scan, 4093).usage.total, 10);
+    f.put("a.jsonl", format!("{first}{}", message(30, "new")));
+    set_time("a.jsonl", 300);
+    assert!(scan.scan_with_budget(4093, deadline()).is_err());
+    assert_eq!(
+        scan.cache[&f.0.join("a.jsonl")].parsed.identified["shared"]
+            .usage
+            .total,
+        10
+    );
+    let next = finish(&mut scan, 4093);
+    assert_eq!(next.usage.total, 30);
+    let models = next.models.unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].model.as_deref(), Some("new"));
+    assert_eq!(models[0].usage.total, 30);
+}
+#[test]
+fn oversize_records_after_multiple_slices_never_replace_a_good_snapshot() {
+    let f = ScanFixture::new();
+    f.put("rollout-a.jsonl", format!("{}\n", codex(10)));
+    let mut scan = f.scanner();
+    assert_eq!(scan.scan().unwrap().total, 10);
+    f.put(
+        "rollout-a.jsonl",
+        format!("{}\n{}", codex(20), "x".repeat(RECORD_LIMIT + 1)),
+    );
+    let mut failed = false;
+    for _ in 0..100 {
+        let error = scan
+            .scan_with_budget(128 * 1024, deadline())
+            .err()
+            .expect("Partial totals must not publish");
+        assert_eq!(
+            scan.cache[&f.0.join("rollout-a.jsonl")]
+                .parsed
+                .anonymous
+                .total,
+            10
+        );
+        if error.contains("record exceeds 8 MiB") {
+            failed = true;
+            break;
+        }
+        assert!(error.contains("continuing next poll"), "{error}");
+    }
+    assert!(failed);
+    assert!(scan.pending.is_none());
+    f.put("rollout-a.jsonl", codex(30));
+    assert_eq!(finish(&mut scan, 4093).usage.total, 30);
+}
+#[test]
+fn an_exact_byte_budget_can_finish_the_eof_probe_next_poll_without_recounting() {
+    let bytes = format!("{}\n{}", codex(10), codex(20));
+    let mut job = stream::Job::new(Layout::Codex, stamp(bytes.len()), None).unwrap();
+    let mut meter = Meter::new(bytes.as_bytes().to_vec());
+    let mut budget = bytes.len() as u64;
+    assert!(
+        job.advance(&mut meter, &mut budget, deadline())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(budget, 0);
+    let mut budget = 1;
+    let entry = job
+        .advance(&mut meter, &mut budget, deadline())
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.parsed.anonymous.total, 20);
+    assert_eq!(entry.checkpoint.unwrap().parsed.anonymous.total, 10);
+    assert_eq!(meter.bytes, bytes.len() as u64);
+    assert_eq!(budget, 1);
+}
+#[test]
+fn gemini_jsonl_resumes_alongside_whole_document_sessions() {
+    let f = ScanFixture::new();
+    f.put(
+        "hash/chats/session-a.json",
+        r#"{"model":"legacy","messages":[{"tokens":{"input":7}}]}"#,
+    );
+    f.put(
+        "hash/chats/session-b.jsonl",
+        format!(
+            "{}\n{}\n{}",
+            r#"{"model":"stream","tokens":{"input":3}}"#,
+            "ignored\n".repeat(2000),
+            r#"{"model":"stream","tokens":{"output":5}}"#
+        ),
+    );
+    let mut scan = LogScan::new(f.0.clone(), Layout::Gemini);
+    let result = finish(&mut scan, 4093);
+    assert_eq!(result.usage.total, 15);
+    let models = result.models.unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .find(|m| m.model.as_deref() == Some("legacy"))
+            .unwrap()
+            .usage
+            .total,
+        7
+    );
+    assert_eq!(
+        models
+            .iter()
+            .find(|m| m.model.as_deref() == Some("stream"))
+            .unwrap()
+            .usage
+            .total,
+        8
+    );
+}
+#[test]
+fn appending_during_an_unfinished_read_restarts_without_double_counting_eof() {
+    use std::io::Write;
+    let f = ScanFixture::new();
+    let anonymous =
+        |tokens| serde_json::json!({"message":{"usage":{"input_tokens":tokens}}}).to_string();
+    f.put(
+        "a.jsonl",
+        format!("{}\n{}", anonymous(10), "ignored\n".repeat(2000)),
+    );
+    let mut scan = LogScan::new(f.0.clone(), Layout::Claude);
+    assert!(scan.scan_with_budget(4093, deadline()).is_err());
+    OpenOptions::new()
+        .append(true)
+        .open(f.0.join("a.jsonl"))
+        .unwrap()
+        .write_all(anonymous(20).as_bytes())
+        .unwrap();
+    assert_eq!(finish(&mut scan, 4093).usage.total, 30);
+    OpenOptions::new()
+        .append(true)
+        .open(f.0.join("a.jsonl"))
+        .unwrap()
+        .write_all(b"invalid\n")
+        .unwrap();
+    assert_eq!(finish(&mut scan, 4093).usage.total, 10);
+}

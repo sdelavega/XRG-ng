@@ -592,6 +592,30 @@ attribution and unavailable cost/activity states remain explicit. Detailed backe
 accounting and historical validation are recorded in the historical documentation;
 the toolkit change does not modify those collectors.
 
+### Resumable JSONL scans
+
+Linux Claude, Codex and Gemini JSONL scans retain unfinished file work across
+polls. A slice that reaches the provider's cooperative two-second or 128 MiB read
+budget reports read progress, then resumes from the saved cursor and buffered
+record. It retains at most one unfinished file per provider, using 64 KiB reads
+and an 8 MiB record buffer. No open file descriptor survives a poll. Only a
+complete successful provider sweep publishes totals and model attribution.
+
+Each slice reopens a regular file and validates device/inode, size, modification
+time and change time before and after reading. A changed or replaced file restarts
+its draft; deleted logs discard their pending work. Appended files still verify
+every saved prefix byte before reusing decoded records, including the middle of
+the file. This saves restart work when a scan yields; it does not turn prefix
+verification into tail-only I/O. Complete records without a final newline remain
+visible and are replayed safely if more bytes arrive.
+
+The existing limits remain: 64 MiB per file, 8 MiB per record or whole Gemini JSON
+session, 20,000 discovery entries, 100,000 cached message identities per provider
+and 256 model groups. Legacy Gemini JSON documents still use whole-document
+decoding. A file that keeps changing during every unfinished read can delay a
+complete snapshot; incomplete work reports progress rather than partial totals.
+The shared Swift record decoders and macOS scan path are unchanged.
+
 ## Processes
 
 The process table retains name filtering, saved UID filtering, row limit and
@@ -762,7 +786,7 @@ forecast. Requests remain off by default. No location detection is performed.
   process costs; other compositors, scale factors and hardware still need feedback.
 - Additional vendor counters, Xe virtualization/topology coverage, board-specific
   raw thermistor calibration and optional process priority controls.
-- Safe additional Codex model attribution, incremental I/O for very large logs,
+- Safe additional Codex model attribution, broader large-log/discovery coverage,
   optional price tables, broader XTF color spaces and legacy-field mappings.
 - Signed/tagged Linux releases and native distribution packages before retiring
   the preview distribution path. Hardware support remains best effort;

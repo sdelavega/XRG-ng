@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Bound raw read buffers while retaining byte-verified append checkpoints.
-use super::{
-    Checkpoint, Entry, FILE_LIMIT, Layout, ModelUsage, Parsed, RECORD_LIMIT, Stamp, check, lines,
-};
+use super::{Entry, FILE_LIMIT, Layout, ModelUsage, Parsed, RECORD_LIMIT, Stamp, check};
+mod job;
+#[cfg(test)]
+use super::Checkpoint;
 use crate::shared;
+pub(super) use job::Job;
 use std::{
-    io::{self, BufRead, BufReader, Read, Seek},
+    io::{self, Read, Seek},
     sync::Arc,
     time::Instant,
 };
@@ -60,6 +62,7 @@ impl<R: Read> Input<'_, R> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn digest(input: &mut impl Read, length: usize) -> Result<blake3::Hasher, String> {
     let mut hash = blake3::Hasher::new();
     let mut buffer = [0u8; CHUNK];
@@ -74,6 +77,7 @@ pub(super) fn digest(input: &mut impl Read, length: usize) -> Result<blake3::Has
     }
     Ok(hash)
 }
+#[cfg(test)]
 pub(super) fn checkpoint<'a>(
     input: &mut impl Read,
     stamp: Stamp,
@@ -101,8 +105,9 @@ pub(super) fn checkpoint<'a>(
     }
 }
 
+#[cfg(test)]
 pub(super) fn record(
-    reader: &mut impl BufRead,
+    reader: &mut impl std::io::BufRead,
     line: &mut Vec<u8>,
     deadline: Instant,
 ) -> Result<(), String> {
@@ -147,10 +152,10 @@ pub(super) fn parse<R: Read + Seek>(
     if stamp.size > FILE_LIMIT {
         return Err("Log exceeds the 64 MiB per-file limit".into());
     }
-    reader.rewind().map_err(|e| e.to_string())?;
-    let mut input = Input::new(reader, budget, deadline);
-    let mut parsed = Arc::new(Parsed::default());
     if matches!(layout, Layout::Gemini) && session {
+        reader.rewind().map_err(|e| e.to_string())?;
+        let mut input = Input::new(reader, budget, deadline);
+        let mut parsed = Arc::new(Parsed::default());
         if stamp.size > RECORD_LIMIT as u64 {
             return Err("Gemini session exceeds 8 MiB".into());
         }
@@ -189,43 +194,8 @@ pub(super) fn parse<R: Read + Seek>(
             checkpoint: None,
         });
     }
-    // Every cached prefix byte is reread and hashed, including its middle.
-    // A mismatch is reparsed from byte zero and charges that second read too.
-    let (reused, mut hash) = checkpoint(&mut input, stamp, old)?;
-    let mut end = reused.map_or(0, |c| c.length);
-    if let Some(reused) = reused {
-        parsed = reused.parsed.clone();
-    } else {
-        input.inner.rewind().map_err(|e| e.to_string())?;
-    }
-    let mut reader = BufReader::with_capacity(CHUNK, (&mut input).take(stamp.size - end as u64));
-    let mut line = Vec::new();
-    loop {
-        record(&mut reader, &mut line, deadline)?;
-        if line.is_empty() || line.last() != Some(&b'\n') {
-            break;
-        }
-        hash.update(&line);
-        lines(&line, layout, &mut parsed, deadline)?;
-        end += line.len();
-    }
-    if end as u64 + line.len() as u64 != stamp.size {
-        return Err("Log changed while reading; retrying".into());
-    }
-    drop(reader);
-    input.eof()?;
-    let checkpoint = Checkpoint {
-        length: end,
-        hash: hash.finalize(),
-        parsed: parsed.clone(),
-    };
-    // A complete EOF record is visible now, but is reparsed on the next append.
-    // It must never enter the reusable newline checkpoint.
-    lines(&line, layout, &mut parsed, deadline)?;
+    let mut job = Job::new(layout, stamp, old)?;
+    let entry = job.advance(reader, budget, deadline)?;
     check(deadline)?;
-    Ok(Entry {
-        stamp,
-        parsed,
-        checkpoint: Some(checkpoint),
-    })
+    entry.ok_or_else(|| "Log scan I/O budget reached; continuing next poll".into())
 }

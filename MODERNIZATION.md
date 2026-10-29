@@ -23,6 +23,11 @@ native logical dimensions; CI adds fractional X11 scale and Wayland UI-zoom
 interaction cases. Full assistive-technology sessions and multi-monitor scale
 transitions remain validation work.
 
+Linux JSONL scans now retain bounded unfinished read/decode work across provider
+polls, validating the same file stamp before resuming and publishing only complete
+sweeps. Prefix verification, message/model limits and per-file/record ceilings
+remain intact. Shared Swift decoders and the macOS scan path are unchanged.
+
 The sections below are a chronological historical record. Statements about older
 builds, test counts, remotes, retained C sources and intermediate Objective-C
 adapters describe those stages rather than the current checkout.
