@@ -154,6 +154,12 @@ impl App {
                     }
                 });
                 ui.menu_button("Zoom", egui::gui_zoom::zoom_menu_buttons);
+                if ui.button("Clear all graph histories").clicked() {
+                    if let Err(e) = self.worker.graph_control().clear_all() {
+                        self.error = Some(e);
+                    }
+                    ui.close();
+                }
                 if ui.button("Show all graphs").clicked() {
                     let mut settings = self.settings.clone();
                     settings.modules.iter_mut().for_each(|m| m.visible = true);
@@ -236,6 +242,20 @@ impl App {
                         && ui.button("Sensors and statistics…").clicked()
                     {
                         app.show_sensors = true;
+                        ui.close();
+                    }
+                    if ui.button("Clear graph history").clicked() {
+                        if let Err(e) = app.worker.graph_control().clear(module) {
+                            app.error = Some(e);
+                        }
+                        ui.close();
+                    }
+                    if matches!(module, Module::Network | Module::Disk)
+                        && ui.button("Reset session transfers").clicked()
+                    {
+                        if let Err(e) = app.worker.graph_control().reset_transfers(module) {
+                            app.error = Some(e);
+                        }
                         ui.close();
                     }
                     ui.menu_button("Graph style", |ui| {
@@ -630,6 +650,8 @@ mod tests {
             inventory: Default::default(),
             processes: Err("fixture".into()),
             sensors: Default::default(),
+            graph_generations: [0; 13],
+            transfers: Default::default(),
             ai: None,
             weather: None,
         };

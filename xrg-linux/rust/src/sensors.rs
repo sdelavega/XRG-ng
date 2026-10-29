@@ -76,6 +76,17 @@ fn fan_detail(fan: &Fan, prefix: &str) -> String {
     detail
 }
 impl View {
+    pub fn clear_temperatures(&mut self) {
+        self.maximum.clear();
+        for h in self.temperatures.values_mut() {
+            h.clear();
+        }
+    }
+    pub fn clear_fans(&mut self) {
+        for h in self.fans.values_mut() {
+            h.clear();
+        }
+    }
     pub fn temperatures(
         &mut self,
         report: Result<Readings<Temperature>, String>,

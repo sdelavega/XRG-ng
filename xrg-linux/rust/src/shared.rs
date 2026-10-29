@@ -144,6 +144,7 @@ pub fn metar_latest(bytes: &[u8], station: &str, reference: i64) -> Option<Metar
 pub struct History {
     handle: NonNull<c_void>,
     length: u32,
+    visible_after_clear: Option<usize>,
     _local: PhantomData<Rc<()>>,
 }
 impl History {
@@ -153,6 +154,7 @@ impl History {
             handle: NonNull::new(unsafe { xrg_history_create(length) })
                 .expect("history allocation"),
             length,
+            visible_after_clear: None,
             _local: PhantomData,
         }
     }
@@ -161,6 +163,14 @@ impl History {
             unsafe { xrg_history_append(self.handle.as_ptr(), value) },
             0
         );
+        if let Some(count) = &mut self.visible_after_clear {
+            *count = (*count + 1).min(self.length as usize);
+        }
+    }
+    /// Clear presentation only. Retain the Swift allocation and mask old samples
+    /// with missing values until new observations replace them.
+    pub fn clear(&mut self) {
+        self.visible_after_clear = Some(0);
     }
     pub fn values(&self) -> Vec<f64> {
         let mut values = vec![0.0; self.length as usize];
@@ -168,6 +178,9 @@ impl History {
             unsafe { xrg_history_copy(self.handle.as_ptr(), values.as_mut_ptr(), self.length) },
             self.length as i32
         );
+        if let Some(count) = self.visible_after_clear {
+            values[..self.length as usize - count].fill(f64::NAN);
+        }
         values
     }
 }
@@ -255,6 +268,26 @@ mod tests {
             }
             assert_eq!(h.values(), [2., 3., 4.]);
         }
+    }
+    #[test]
+    fn graph_clear_hides_prior_samples_until_new_observations_replace_them() {
+        let mut h = History::new(3);
+        for value in [1., 2., 3.] {
+            h.append(value);
+        }
+        h.clear();
+        assert!(h.values().iter().all(|v| v.is_nan()));
+        h.append(0.);
+        let values = h.values();
+        assert!(values[..2].iter().all(|v| v.is_nan()));
+        assert_eq!(values[2], 0.);
+        h.append(4.);
+        h.append(5.);
+        assert_eq!(h.values(), [0., 4., 5.]);
+        h.clear();
+        h.append(6.);
+        assert_eq!(h.values()[2], 6.);
+        assert!(h.values()[..2].iter().all(|v| v.is_nan()));
     }
     #[test]
     fn swift_rates_reset_and_elapsed_time() {

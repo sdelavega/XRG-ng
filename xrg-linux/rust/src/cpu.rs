@@ -144,6 +144,11 @@ impl Default for View {
     }
 }
 impl View {
+    pub fn clear_graph(&mut self) {
+        for history in &mut self.histories {
+            history.clear();
+        }
+    }
     pub fn reset_history(&mut self) {
         self.histories = std::array::from_fn(|_| History::new(120));
     }

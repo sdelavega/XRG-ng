@@ -130,9 +130,11 @@ the aggregate 0–100% **Average**, one-minute load and uptime. When selecting o
 CPU, the total and average both refer to that CPU. Activity bars along the bottom
 show up to 64 logical CPUs with stable IDs; unreadable/regressed intervals stay
 blank. Memory displays Linux used, available, cached and swap-used byte counts,
-without inventing macOS wired memory. Net/Disk faces show kernel lifetime totals
-(normally since boot) and the latest rates. Compact B/K/M/G/T suffixes use powers
-of 1024; totals are neither disk capacity nor transfers since launching the app.
+without inventing macOS wired memory. Net/Disk faces show observed session transfers
+and the latest rates. Compact B/K/M/G/T suffixes use powers
+of 1024. Raw kernel lifetime counters remain in Live details. Session totals count
+valid deltas since the first monitoring sample or an explicit transfer reset;
+they are not disk capacity or counters since boot.
 Full labels, accounting semantics and source details remain in accessibility,
 tooltips and Live details.
 
@@ -589,6 +591,26 @@ Processes, AI usage, Weather, themes, About and Quit. Right-click a graph for it
 live details, style, visibility and preferences. Double-click also opens details.
 The `Ctrl+,` shortcut opens Preferences. Details consume copied worker snapshots;
 changing a source hides mismatched old readings until a matching report arrives.
+
+**Clear graph history** is available on every graph and its Live details window;
+the application menu also offers **Clear all graph histories**, including hidden
+modules. Clearing removes prior plotted samples without resetting collectors,
+rate baselines, source preferences, sensor statistics or transfer/AI totals.
+Old samples remain gaps until new readings arrive. AI waits for its next provider
+poll and rejects queued plots from before the reset. Weather keeps its latest
+observation as the restart point and retains its older-response guard; clearing
+does not fetch new weather or manufacture observations.
+
+Network and Disk additionally offer **Reset session transfers**. Counting starts
+with a fresh baseline at the next sample, while the graph and rate baseline stay
+intact. Session totals restart automatically when selection, aggregate membership,
+device identity or a counter reset changes their scope. Failed reads preserve
+already-counted bytes, exclude the missing interval, and mark totals with **≥**
+for partial coverage. The first recovered read re-establishes a rate baseline.
+Totals use full 64-bit deltas even when the shared instantaneous rate saturates;
+arithmetic saturation is explicitly marked as a lower bound. Sessions and manual
+graph resets are not saved between launches. These controls are newer than the
+published Linux 0.2.0 release.
 
 ## Graph and theme preferences
 

@@ -124,6 +124,20 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
             &format!("XRG-ng · {}", module.title()),
             [640., 550.],
             |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Clear graph history").clicked()
+                        && let Err(e) = app.worker.graph_control().clear(module)
+                    {
+                        app.error = Some(e);
+                    }
+                    if matches!(module, Module::Network | Module::Disk)
+                        && ui.button("Reset session transfers").clicked()
+                        && let Err(e) = app.worker.graph_control().reset_transfers(module)
+                    {
+                        app.error = Some(e);
+                    }
+                });
+                ui.small("Graph clearing preserves source settings, rate baselines, sensor statistics and transfers. Transfer reset starts counting at the next sample and keeps graph history.");
                 if let Some(p) = app.panel(module) {
                     ui.heading(p.display_label(app.settings.temperature_units));
                     report_text(ui, &p.display_detail(app.settings.temperature_units));

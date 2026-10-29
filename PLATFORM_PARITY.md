@@ -40,11 +40,18 @@ Implemented in development for monitoring tools:
   restart for replaced input incarnations. Reset clears these statistics at the
   next sample without resetting graph histories. Statistics are not persisted
   between launches.
+- Linux graph menus/Live details now clear individual histories, and the
+  application menu clears all histories. Collector/rate baselines, sensor
+  statistics and AI usage remain intact; AI generation checks discard queued
+  pre-reset plots. Weather retains the latest observation and its freshness guard.
+- Linux Network/Disk faces now show observed session transfers, with raw kernel
+  totals in details. Transfer reset preserves graphs/rate baselines, source changes
+  restart the session, and failed-read gaps/saturation are marked as lower bounds.
 
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls, richer live details and optional
-   VRAM/Fans modules; Linux graph-history resets and session transfer totals.
+   VRAM/Fans modules; align optional counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
 2. AI accounting: common provider/model deltas, daily/session resets, budgets and
    native notifications. Complete the Mac observer's provider integration first:

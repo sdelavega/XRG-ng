@@ -227,6 +227,17 @@ pub struct View {
     swap_io: Interval,
 }
 impl View {
+    pub fn clear_graph(&mut self) {
+        if let Some((_, h)) = &mut self.ram {
+            h.clear();
+        }
+        if let Some(h) = &mut self.cache {
+            h.clear();
+        }
+        if let Some((_, h)) = &mut self.swap {
+            h.clear();
+        }
+    }
     pub fn panel(
         &mut self,
         memory: &Result<Reading, String>,

@@ -296,6 +296,9 @@ impl Default for Display {
     }
 }
 impl Display {
+    pub fn clear_graph(&mut self) {
+        self.history.clear();
+    }
     pub fn panel(&mut self, report: Report, time: f64) -> Panel {
         self.panel_for(report, time, &Preferences::default())
     }
@@ -407,6 +410,7 @@ impl Control {
 #[derive(Clone, Debug)]
 pub struct Update {
     pub preferences: Preferences,
+    pub graph_generation: u64,
     pub panel: Panel,
     pub report: Arc<Report>,
     pub detail: String,
@@ -418,6 +422,7 @@ impl Update {
         let summary_detail = report_detail(&report, &preferences, &panel, false);
         Self {
             preferences,
+            graph_generation: 0,
             panel,
             detail,
             summary_detail,
@@ -554,10 +559,16 @@ pub fn waiting() -> Panel {
 }
 pub struct Worker {
     pub latest: Arc<Mutex<Option<Update>>>,
+    graph_generation: Arc<std::sync::atomic::AtomicU64>,
     stop: Option<mpsc::Sender<()>>,
     join: Option<thread::JoinHandle<()>>,
 }
 impl Worker {
+    pub fn clear_graph(&self) -> u64 {
+        self.graph_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            .wrapping_add(1)
+    }
     pub fn start(config: Config) -> Self {
         Self::with_api(config, CurlApi::default())
     }
@@ -576,12 +587,15 @@ impl Worker {
         preferences.validate().expect("Validated AI preferences");
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
+        let graph_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let graph_updates = graph_generation.clone();
         let (stop, receiver) = mpsc::channel();
         let join = thread::spawn(move || {
             let mut collector = Collector::configured(config.clone(), preferences.clone())
                 .expect("Validated AI preferences");
             let mut display = Display::default();
             let start = Instant::now();
+            let mut generation = 0;
             loop {
                 let next = Instant::now() + Duration::from_secs(5);
                 if let Some(next) = control.0.lock().unwrap().take() {
@@ -591,9 +605,15 @@ impl Worker {
                     display = Display::default();
                 }
                 let report = collector.sample(&mut api);
+                let requested = graph_updates.load(std::sync::atomic::Ordering::Acquire);
+                if requested != generation {
+                    display.clear_graph();
+                    generation = requested;
+                }
                 let panel =
                     display.panel_for(report.clone(), start.elapsed().as_secs_f64(), &preferences);
-                let update = Update::new(preferences.clone(), panel, report);
+                let mut update = Update::new(preferences.clone(), panel, report);
+                update.graph_generation = generation;
                 *output.lock().unwrap() = Some(update);
                 match receiver.recv_timeout(next.saturating_duration_since(Instant::now())) {
                     Err(mpsc::RecvTimeoutError::Timeout) => (),
@@ -603,6 +623,7 @@ impl Worker {
         });
         Self {
             latest,
+            graph_generation,
             stop: Some(stop),
             join: Some(join),
         }
@@ -702,6 +723,22 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         };
         assert!(panel.panel.detail.contains("Claude: 7 tokens"));
+        let generation = worker.clear_graph();
+        let deadline = Instant::now() + Duration::from_secs(7);
+        let cleared = loop {
+            if let Some(update) = worker.latest.lock().unwrap().take()
+                && update.graph_generation == generation
+            {
+                break update;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "AI graph reset was not acknowledged"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert!(cleared.panel.series[0][..119].iter().all(|v| v.is_nan()));
+        assert!(cleared.panel.detail.contains("Claude: 7 tokens"));
         let stop = Instant::now();
         drop(worker);
         assert!(stop.elapsed() < Duration::from_secs(2));

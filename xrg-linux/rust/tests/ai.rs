@@ -824,3 +824,15 @@ fn grouped_details_preserve_provider_totals_cost_inventory_and_rate_history() {
     let next = display.panel_for(report(52, "display fixture"), 6., &preferences);
     assert_eq!(next.series[0].last(), Some(&2.));
 }
+
+#[test]
+fn clear_ai_plot_preserves_usage_totals_and_rate_baselines() {
+    let mut display = Display::default();
+    display.panel(report(100, "same"), 1.);
+    assert_eq!(display.panel(report(200, "same"), 3.).series[0][119], 50.);
+    display.clear_graph();
+    let after = display.panel(report(300, "same"), 5.);
+    assert!(after.series[0][..119].iter().all(|v| v.is_nan()));
+    assert_eq!(after.series[0][119], 50.);
+    assert!(after.detail.contains("300 tokens"));
+}

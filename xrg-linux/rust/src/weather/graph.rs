@@ -15,6 +15,13 @@ pub struct Graph {
     observations: BTreeMap<i64, shared::Metar>,
 }
 impl Graph {
+    /// Keep the latest observation as the restart point and freshness watermark.
+    /// Clearing must not promote an older response to a current observation.
+    pub fn clear_graph(&mut self) {
+        if let Some((&last, _)) = self.observations.last_key_value() {
+            self.observations.retain(|time, _| *time == last);
+        }
+    }
     pub fn panel(&mut self, update: Option<&Update>) -> Panel {
         let mut panel = Panel {
             title: "Weather",

@@ -356,3 +356,128 @@ fn changed_sampling_spacing_preserves_history_and_uses_measured_elapsed_time() {
     assert_eq!(&slow.disk.series[0][118..], &[61440., 1536.]);
     assert_eq!(&slow.cpu.series[0][118..], &[25., 25.]);
 }
+
+#[test]
+fn session_transfers_count_deltas_and_keep_graph_clear_and_transfer_reset_independent() {
+    use xrg_ng_linux::settings::Module;
+    let f = Fixture::new();
+    let source = f.source();
+    let mut s = Sampler::default();
+    s.set_selection(MetricSelection {
+        network: Some("eth0".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    s.sample(&source, 1.);
+    assert_eq!(s.transfer_totals()[0].bytes, [0, 0]);
+    f.net(&[("eth0", 200, 400)]);
+    s.sample(&source, 2.);
+    assert_eq!(s.transfer_totals()[0].bytes, [100, 200]);
+    s.clear_graph(Module::Network);
+    f.net(&[("eth0", 400, 600)]);
+    let cleared = s.sample(&source, 3.).network;
+    assert!(cleared.series[0][..119].iter().all(|v| v.is_nan()));
+    assert_eq!(cleared.series[0][119], 200.);
+    assert_eq!(s.transfer_totals()[0].bytes, [300, 400]);
+    assert_eq!(cleared.readout.top[1].left, "Rx session");
+    assert!(
+        cleared
+            .detail
+            .contains("Kernel totals (normally since boot): Rx 400 bytes")
+    );
+    s.reset_transfers(Module::Network);
+    f.net(&[("eth0", 600, 800)]);
+    let next = s.sample(&source, 4.).network;
+    assert_eq!(s.transfer_totals()[0].bytes, [0, 0]);
+    assert_eq!(&next.series[0][118..], &[200., 200.]);
+    f.net(&[("eth0", 700, 900)]);
+    s.sample(&source, 5.);
+    assert_eq!(s.transfer_totals()[0].bytes, [100, 100]);
+}
+
+#[test]
+fn session_gaps_preserve_counted_bytes_and_scope_or_counter_changes_restart_them() {
+    let f = Fixture::new();
+    let source = f.source();
+    let mut s = Sampler::default();
+    s.set_selection(MetricSelection {
+        network: Some("eth0".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    s.sample(&source, 1.);
+    f.net(&[("eth0", 200, 400)]);
+    s.sample(&source, 2.);
+    f.put("proc/net/dev", "broken");
+    let missing = s.sample(&source, 3.);
+    assert!(missing.network.series.is_empty());
+    assert_eq!(s.transfer_totals()[0].bytes, [100, 200]);
+    assert!(s.transfer_totals()[0].partial);
+    assert!(missing.network.detail.contains("Partial coverage"));
+    f.net(&[("eth0", 900, 1000)]);
+    s.sample(&source, 4.);
+    assert_eq!(s.transfer_totals()[0].bytes, [100, 200]);
+    f.net(&[("eth0", 1000, 1200)]);
+    s.sample(&source, 5.);
+    assert_eq!(s.transfer_totals()[0].bytes, [200, 400]);
+    f.put("sys/class/net/eth0/ifindex", "99");
+    s.sample(&source, 6.);
+    assert_eq!(s.transfer_totals()[0].bytes, [0, 0]);
+    assert!(!s.transfer_totals()[0].partial);
+    f.net(&[("eth0", 1100, 1300)]);
+    s.sample(&source, 7.);
+    assert_eq!(s.transfer_totals()[0].bytes, [100, 100]);
+    f.net(&[("eth0", 1, 1400)]);
+    let restarted = s.sample(&source, 8.);
+    assert_eq!(s.transfer_totals()[0].bytes, [0, 0]);
+    assert_eq!(restarted.network.series[0].last(), Some(&0.));
+    assert_eq!(restarted.network.series[1].last(), Some(&0.));
+}
+
+#[test]
+fn session_totals_are_not_limited_by_the_32_bit_rate_and_disk_counts_bytes() {
+    let f = Fixture::new();
+    let source = f.source();
+    let mut s = Sampler::default();
+    s.set_selection(MetricSelection {
+        network: Some("eth0".into()),
+        disk: Some("sda".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    s.sample(&source, 1.);
+    f.net(&[("eth0", 5_000_000_100, 6_000_000_200)]);
+    f.disk(20, 40, 30, 40, 9999);
+    let next = s.sample(&source, 2.);
+    assert_eq!(s.transfer_totals()[0].bytes, [5_000_000_000, 6_000_000_000]);
+    assert_eq!(next.network.series[0].last(), Some(&(u32::MAX as f64)));
+    assert_eq!(s.transfer_totals()[1].bytes, [5120, 10240]);
+    s.sample(&source, 2.);
+    assert_eq!(s.transfer_totals()[0].bytes, [5_000_000_000, 6_000_000_000]);
+    f.put("sys/class/net/veth0/ifindex", "4");
+    s.set_selection(MetricSelection::default()).unwrap();
+    s.sample(&source, 3.);
+    assert_eq!(s.transfer_totals()[0].bytes, [0, 0]);
+    f.net(&[
+        ("eth0", 5_000_000_200, 6_000_000_300),
+        ("veth0", 1_000_000, 2_000_000),
+    ]);
+    s.sample(&source, 4.);
+    assert_eq!(s.transfer_totals()[0].bytes, [0, 0]);
+}
+
+#[test]
+fn cpu_plot_clear_keeps_the_counter_interval_and_does_not_warm_up_again() {
+    use xrg_ng_linux::settings::Module;
+    let f = Fixture::new();
+    let source = f.source();
+    let mut s = Sampler::default();
+    s.sample(&source, 1.);
+    f.cpu(1);
+    s.sample(&source, 2.);
+    s.clear_graph(Module::Cpu);
+    f.cpu(2);
+    let next = s.sample(&source, 4.).cpu;
+    assert_eq!(next.series[0][119], 25.);
+    assert!(next.series[0][..119].iter().all(|v| v.is_nan()));
+}

@@ -260,6 +260,13 @@ graph histories, source selection and sampling settings.
 These inspectors are additions after the published macOS 0.1.0 / Linux 0.2.0
 releases. See [platform parity](PLATFORM_PARITY.md) for remaining differences.
 
+Linux development builds also provide **Clear graph history** in graph menus and
+Live details, plus **Clear all graph histories** in the application menu. Network
+and Disk display observed session transfers and offer a separate **Reset session
+transfers** action. Clearing a plot preserves rates and totals; resetting transfers
+preserves the plot. Source changes restart transfer sessions, and missed intervals
+are explicitly marked as partial coverage. Raw kernel counters remain in details.
+
 ## Building
 
 ### macOS

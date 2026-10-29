@@ -14,6 +14,11 @@ pub struct View {
     histories: BTreeMap<String, (String, u64, History)>,
 }
 impl View {
+    pub fn clear_graph(&mut self) {
+        for (_, _, h) in self.histories.values_mut() {
+            h.clear();
+        }
+    }
     pub fn reset(&mut self) {
         self.histories.clear();
     }

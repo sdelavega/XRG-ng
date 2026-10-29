@@ -156,3 +156,18 @@ fn retained_observations_are_bounded_and_long_gaps_stay_gaps() {
     assert!(result.series[0][result.series[0].len() - 2].is_nan());
     assert_eq!(*result.series[0].last().unwrap(), 12.4);
 }
+
+#[test]
+fn clear_history_retains_latest_observation_and_older_response_guard() {
+    let mut graph = Graph::default();
+    let first = reading();
+    graph.panel(Some(&first));
+    let next = update("KSEA", "KSEA 271205Z 00000KT 10SM 02/M02 Q1013");
+    assert_eq!(graph.panel(Some(&next)).series[0].len(), 2);
+    graph.clear_graph();
+    assert_eq!(graph.panel(Some(&next)).series[0], vec![2.]);
+    let older = graph.panel(Some(&first));
+    assert!(older.label.contains("older observation"));
+    assert_eq!(older.series[0][0], 2.);
+    assert!(older.series[0][1].is_nan());
+}

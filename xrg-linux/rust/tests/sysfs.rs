@@ -1238,3 +1238,55 @@ fn resetting_sensor_statistics_keeps_existing_graph_history() {
     assert_eq!(next.sequence, first.sequence + 1);
     drop(worker);
 }
+
+#[test]
+fn graph_control_clears_selected_or_all_histories_without_resetting_sensor_statistics() {
+    use std::{sync::mpsc, time::Duration};
+    use xrg_ng_linux::{
+        engine::Worker,
+        settings::{Module, Settings},
+    };
+    let f = Fixture::new();
+    f.core();
+    f.sensor("hwmon0", "1", "40000");
+    let settings = Settings {
+        sampling_interval_ms: 10000,
+        ..Default::default()
+    };
+    let worker = Worker::start_with_system_sources(f.sources(), &settings);
+    let slot = worker.latest.clone();
+    let (send, receive) = mpsc::channel();
+    worker.on_publish(move || {
+        if let Some(snapshot) = slot.lock().unwrap().take() {
+            send.send(snapshot).unwrap();
+        }
+    });
+    let first = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(first.sensors.rows[0].samples, 1);
+    let control = worker.graph_control();
+    control.clear(Module::Temperature).unwrap();
+    let next = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    let temp = next
+        .panels
+        .iter()
+        .find(|p| p.title == "Temperature")
+        .unwrap();
+    assert!(temp.series[0][..119].iter().all(|v| v.is_nan()));
+    assert_eq!(temp.series[0][119], 40.);
+    assert_eq!(next.sensors.rows[0].samples, 2);
+    assert_eq!(next.graph_generations[Module::Temperature.index()], 1);
+    assert_eq!(next.graph_generations[Module::Memory.index()], 0);
+    control.clear_all().unwrap();
+    let all = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(all.graph_generations[Module::Temperature.index()], 2);
+    for module in Module::ALL
+        .into_iter()
+        .filter(|m| *m != Module::Temperature)
+    {
+        assert_eq!(all.graph_generations[module.index()], 1);
+    }
+    assert_eq!(all.sensors.rows[0].samples, 3);
+    assert!(control.reset_transfers(Module::Cpu).is_err());
+    drop(worker);
+    assert!(control.clear_all().is_err());
+}

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 use crate::temperature::Text;
-use crate::{collectors::LinuxSources, settings::MetricSelection, shared::History};
+use crate::{
+    collectors::LinuxSources,
+    settings::{MetricSelection, Module},
+    shared::History,
+};
 use std::{
     array,
     collections::{BTreeMap, BTreeSet},
@@ -140,6 +144,8 @@ pub struct Snapshot {
     pub inventory: crate::metrics::Inventory,
     pub processes: Result<Arc<crate::process::Report>, String>,
     pub sensors: Arc<crate::sensor_stats::Report>,
+    pub graph_generations: [u64; 13],
+    pub transfers: [crate::metrics::TransferTotals; 2],
     pub ai: Option<crate::ai::Update>,
     pub weather: Option<crate::weather::Update>,
 }
@@ -165,6 +171,8 @@ pub struct Sampler {
     ai: Option<crate::ai::Worker>,
     ai_panel: Panel,
     ai_update: Option<crate::ai::Update>,
+    minimum_ai_generation: u64,
+    graph_generations: [u64; 13],
     weather: Option<crate::weather::Worker>,
     weather_update: Option<crate::weather::Update>,
     weather_view: crate::weather::Graph,
@@ -228,6 +236,8 @@ impl Sampler {
             ai: None,
             ai_panel: crate::ai::waiting(),
             ai_update: None,
+            minimum_ai_generation: 0,
+            graph_generations: [0; 13],
             weather: None,
             weather_update: None,
             weather_view: Default::default(),
@@ -250,6 +260,52 @@ impl Sampler {
             start: Instant::now(),
             sequence: 0,
         }
+    }
+    pub fn clear_graph(&mut self, module: Module) {
+        match module {
+            Module::Cpu | Module::Network | Module::Disk => self.metrics.clear_graph(module),
+            Module::Memory => self.memory.clear_graph(),
+            Module::Temperature => self.sensors.clear_temperatures(),
+            Module::Fans => self.sensors.clear_fans(),
+            Module::GpuMemory => self.gpu_memory.clear_graph(),
+            Module::Gpu => {
+                for h in self.gpu_histories.values_mut() {
+                    h.history.clear();
+                    h.observed = 0;
+                }
+            }
+            Module::Battery => {
+                for h in self.battery_histories.values_mut() {
+                    h.clear();
+                }
+            }
+            Module::Processes => {
+                for h in &mut self.process_histories {
+                    h.clear();
+                }
+            }
+            Module::Tpu => {
+                self.tpu_history.clear();
+                for h in self.npu_histories.values_mut() {
+                    h.clear();
+                }
+            }
+            Module::Weather => self.weather_view.clear_graph(),
+            Module::Ai => {
+                if let Some(worker) = &self.ai {
+                    self.minimum_ai_generation = worker.clear_graph();
+                }
+                self.ai_panel.series.clear();
+                if let Some(update) = &mut self.ai_update {
+                    update.panel.series.clear();
+                }
+            }
+        }
+        let generation = &mut self.graph_generations[module.index()];
+        *generation = generation.wrapping_add(1);
+    }
+    pub fn reset_transfers(&mut self, module: Module) {
+        self.metrics.reset_transfers(module);
     }
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
@@ -278,6 +334,7 @@ impl Sampler {
         panels.push(gpu);
         if let Some(ai) = &self.ai
             && let Some(update) = ai.latest.lock().unwrap().take()
+            && update.graph_generation >= self.minimum_ai_generation
         {
             self.ai_panel = update.panel.clone();
             self.ai_update = Some(update);
@@ -302,6 +359,8 @@ impl Sampler {
             inventory: self.inventory.clone(),
             processes: self.process_report.clone(),
             sensors: Arc::new(self.sensor_statistics.report(time)),
+            graph_generations: self.graph_generations,
+            transfers: self.metrics.transfer_totals(),
             ai: self.ai_update.clone(),
             weather: self.weather_update.clone(),
         }
@@ -883,6 +942,30 @@ impl SelectionControl {
         self.1.request()
     }
 }
+#[derive(Default)]
+struct PlotRequests {
+    graphs: BTreeSet<Module>,
+    transfers: BTreeSet<Module>,
+}
+#[derive(Clone)]
+pub struct GraphControl(Arc<Mutex<PlotRequests>>, crate::sampling::Control);
+impl GraphControl {
+    pub fn clear(&self, module: Module) -> Result<(), String> {
+        self.0.lock().unwrap().graphs.insert(module);
+        self.1.request()
+    }
+    pub fn clear_all(&self) -> Result<(), String> {
+        self.0.lock().unwrap().graphs.extend(Module::ALL);
+        self.1.request()
+    }
+    pub fn reset_transfers(&self, module: Module) -> Result<(), String> {
+        if !matches!(module, Module::Network | Module::Disk) {
+            return Err("Only Network and Disk have session transfers".into());
+        }
+        self.0.lock().unwrap().transfers.insert(module);
+        self.1.request()
+    }
+}
 #[derive(Clone)]
 pub struct SensorStatsControl(Arc<std::sync::atomic::AtomicBool>, crate::sampling::Control);
 impl SensorStatsControl {
@@ -898,6 +981,7 @@ pub struct Worker {
     join: Option<thread::JoinHandle<()>>,
     selection: SelectionControl,
     sensor_stats: SensorStatsControl,
+    graphs: GraphControl,
     ai: crate::ai::Control,
     weather: crate::weather::Control,
 }
@@ -1011,6 +1095,11 @@ impl Worker {
             sampling.clone(),
         );
         let reset_stats = sensor_stats.clone();
+        let graphs = GraphControl(
+            Arc::new(Mutex::new(PlotRequests::default())),
+            sampling.clone(),
+        );
+        let plot_updates = graphs.clone();
         let latest = Arc::new(Mutex::new(None));
         let output = latest.clone();
         let notification = crate::notification::Notification::default();
@@ -1033,6 +1122,13 @@ impl Worker {
                 {
                     sampler.sensor_statistics.reset();
                 }
+                let requests = std::mem::take(&mut *plot_updates.0.lock().unwrap());
+                for module in requests.graphs {
+                    sampler.clear_graph(module);
+                }
+                for module in requests.transfers {
+                    sampler.reset_transfers(module);
+                }
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 *output.lock().unwrap() = Some(sampler.sample());
                 published.notify();
@@ -1046,6 +1142,7 @@ impl Worker {
             join: Some(join),
             selection,
             sensor_stats,
+            graphs,
             ai,
             weather,
         }
@@ -1059,6 +1156,9 @@ impl Worker {
     }
     pub fn selection_control(&self) -> SelectionControl {
         self.selection.clone()
+    }
+    pub fn graph_control(&self) -> GraphControl {
+        self.graphs.clone()
     }
     pub fn sensor_stats_control(&self) -> SensorStatsControl {
         self.sensor_stats.clone()

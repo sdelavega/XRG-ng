@@ -27,6 +27,7 @@ pub(super) struct Harness {
     pub draws: [u32; 13],
     picker: Option<file_picker_smoke::Harness>,
     clipboard_expected: Option<String>,
+    graph_reset_expected: Option<[u64; 13]>,
 }
 impl Harness {
     pub fn new() -> Result<Self, String> {
@@ -56,6 +57,7 @@ impl Harness {
             picker: std::env::var_os("XRG_SMOKE_FILE_PICKER")
                 .map(|_| file_picker_smoke::Harness::default()),
             clipboard_expected: None,
+            graph_reset_expected: None,
         })
     }
     pub fn path(&self) -> PathBuf {
@@ -148,6 +150,7 @@ impl Harness {
             return;
         }
         let sequence = snapshot.sequence;
+        let graph_generations = snapshot.graph_generations;
         let sensors = snapshot.sensors.clone();
         if let Some(mut picker) = self.picker.take() {
             match picker.tick(app, ctx, &self.directory) {
@@ -302,7 +305,17 @@ impl Harness {
                     self.capture(ctx, egui::ViewportId::ROOT, "XRG_SMOKE_LAYOUT_IMAGE");
                     self.stage = 6;
                 }
-                1 | 6 => {
+                6 => {
+                    self.graph_reset_expected = Some(graph_generations.map(|g| g.wrapping_add(1)));
+                    app.worker.graph_control().clear_all()?;
+                    self.stage = 9;
+                }
+                1 | 9
+                    if self.stage == 1 || self.graph_reset_expected == Some(graph_generations) =>
+                {
+                    if self.stage == 9 {
+                        println!("GRAPH_RESET_SMOKE_OK all 13 worker histories acknowledged");
+                    }
                     println!(
                         "EGUI_SMOKE_OK samples={sequence} draws={} mode={} renderer=glow",
                         self.draws.iter().sum::<u32>(),
