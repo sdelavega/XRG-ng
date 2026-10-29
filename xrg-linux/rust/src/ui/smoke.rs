@@ -84,6 +84,10 @@ impl Harness {
                     if check_opacity {
                         let maximum=image.pixels.iter().map(|p|p.a()).max().unwrap_or(0);
                         let border=image.pixels.get(image.width()+1).map_or(0,|p|p.a());
+                        if !image.pixels.iter().any(|p| {
+                            let rgba=p.to_srgba_unmultiplied();
+                            rgba[..3].iter().all(|v|*v>=250)&&(177..=181).contains(&rgba[3])
+                        }) {return Err("Compositing changed opaque white text instead of only its opacity".into());}
                         if !(177..=181).contains(&maximum)||!(177..=181).contains(&border) {
                             return Err(format!("Whole-window opacity compounded or lost its opaque theme base: max={maximum} border={border}"));
                         }
@@ -94,7 +98,7 @@ impl Harness {
                     encoder.set_color(png::ColorType::Rgba);
                     encoder.set_depth(png::BitDepth::Eight);
                     let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-                    let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                    let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect();
                     writer.write_image_data(&bytes).map_err(|e| e.to_string())
                 })();
                 let _ = sender.send(result);
@@ -286,7 +290,11 @@ pub(super) fn paint_capture(ui: &mut egui::Ui) {
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-            let bytes: Vec<_> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+            let bytes: Vec<_> = image
+                .pixels
+                .iter()
+                .flat_map(|p| p.to_srgba_unmultiplied())
+                .collect();
             writer.write_image_data(&bytes).map_err(|e| e.to_string())
         })();
         let _ = capture.sender.send(result);
