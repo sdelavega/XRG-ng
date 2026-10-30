@@ -3,7 +3,7 @@
 //! Linux memory categories overlap: never stack them into an invented app/wired total.
 use crate::{
     engine::{Panel, Scale},
-    shared::{History, Rates},
+    shared::{History, Rates, TimedHistory},
     system_file,
 };
 use std::{collections::BTreeMap, path::Path};
@@ -218,9 +218,37 @@ impl Interval {
         Ok(rates)
     }
 }
+struct TimeHistory {
+    channels: [TimedHistory; 3],
+    ram_total: Option<u64>,
+    swap_total: Option<u64>,
+    minutes: u32,
+    interval: f64,
+}
+impl Default for TimeHistory {
+    fn default() -> Self {
+        Self {
+            channels: std::array::from_fn(|_| {
+                TimedHistory::new_limited(1, crate::shared::timed_projection_settings()[0])
+            }),
+            ram_total: None,
+            swap_total: None,
+            minutes: 0,
+            interval: 1.,
+        }
+    }
+}
+impl TimeHistory {
+    fn append(&mut self, time: f64, values: [f64; 3]) {
+        for (history, value) in self.channels.iter_mut().zip(values) {
+            history.append(time, &[value]);
+        }
+    }
+}
 #[derive(Default)]
 pub struct View {
     history_samples: u32,
+    time: TimeHistory,
     ram: Option<(u64, History)>,
     cache: Option<History>,
     swap: Option<(u64, History)>,
@@ -228,6 +256,20 @@ pub struct View {
     swap_io: Interval,
 }
 impl View {
+    pub fn set_time_window(&mut self, minutes: u32) -> Result<(), String> {
+        if minutes > crate::shared::timed_projection_settings()[0] {
+            return Err("Memory time window must be 0..60 minutes".into());
+        }
+        self.time.minutes = minutes;
+        Ok(())
+    }
+    pub fn set_history_interval(&mut self, seconds: f64) {
+        if seconds.is_finite()
+            && seconds >= f64::from(crate::shared::timed_projection_settings()[1]) / 1000.
+        {
+            self.time.interval = seconds;
+        }
+    }
     fn capacity(&self) -> u32 {
         if self.history_samples == 0 {
             120
@@ -256,6 +298,9 @@ impl View {
         Ok(())
     }
     pub fn clear_graph(&mut self) {
+        for history in &mut self.time.channels {
+            history.clear();
+        }
         if let Some((_, h)) = &mut self.ram {
             h.clear();
         }
@@ -272,6 +317,19 @@ impl View {
         paging: &Result<Paging, String>,
         now: f64,
     ) -> Panel {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.panel_at(memory, paging, now, observed)
+    }
+    pub fn panel_at(
+        &mut self,
+        memory: &Result<Reading, String>,
+        paging: &Result<Paging, String>,
+        now: f64,
+        observed_at: f64,
+    ) -> Panel {
         let mut panel = Panel {
             title: "Memory",
             label: "Memory unavailable".into(),
@@ -285,13 +343,25 @@ impl View {
         let reading = match memory {
             Ok(reading) => reading,
             Err(error) => {
-                let history_samples = self.history_samples;
-                *self = Self::default();
-                self.history_samples = history_samples;
+                // Preserve timestamp observations across unreadable intervals;
+                // keep the existing sample-history and paging-baseline reset.
+                self.ram = None;
+                self.cache = None;
+                self.swap = None;
+                self.io = Interval::default();
+                self.swap_io = Interval::default();
+                self.time.append(observed_at, [f64::NAN; 3]);
                 panel.detail = error.clone();
                 return panel;
             }
         };
+        if self.time.ram_total != Some(reading.total) {
+            self.time.channels[0].clear();
+            self.time.channels[1].clear();
+            self.time.ram_total = Some(reading.total);
+        }
+        let mut timed_values = [f64::NAN; 3];
+        let mut visible_channels = vec![0];
         if self
             .ram
             .as_ref()
@@ -301,6 +371,7 @@ impl View {
             self.cache = None;
         }
         let percent = reading.used_percent();
+        timed_values[0] = percent;
         let history = &mut self.ram.as_mut().unwrap().1;
         history.append(percent);
         panel.series.push(history.values());
@@ -313,6 +384,8 @@ impl View {
         )];
         if let Some(cached) = reading.cached {
             let percent = 100. * cached as f64 / reading.total as f64;
+            timed_values[1] = percent;
+            visible_channels.push(1);
             let capacity = self.capacity();
             let history = self.cache.get_or_insert_with(|| History::new(capacity));
             history.append(percent);
@@ -329,6 +402,10 @@ impl View {
         }
         match &reading.swap {
             Some(swap) if swap.total > 0 => {
+                if self.time.swap_total != Some(swap.total) {
+                    self.time.channels[2].clear();
+                    self.time.swap_total = Some(swap.total);
+                }
                 if self
                     .swap
                     .as_ref()
@@ -337,6 +414,8 @@ impl View {
                     self.swap = Some((swap.total, History::new(self.capacity())));
                 }
                 let percent = 100. * swap.used as f64 / swap.total as f64;
+                timed_values[2] = percent;
+                visible_channels.push(2);
                 let history = &mut self.swap.as_mut().unwrap().1;
                 history.append(percent);
                 panel.series.push(history.values());
@@ -348,6 +427,8 @@ impl View {
                 ));
             }
             Some(_) => {
+                self.time.channels[2].clear();
+                self.time.swap_total = Some(0);
                 self.swap = None;
                 labels.push("no swap".into());
                 detail.push("Swap: none configured (zero capacity); no percentage series".into());
@@ -397,6 +478,18 @@ impl View {
                     .unwrap_or_else(|| "n/a".into()),
             ),
         ];
+        self.time.append(observed_at, timed_values);
+        if self.time.minutes > 0 {
+            panel.series = visible_channels
+                .into_iter()
+                .map(|index| {
+                    self.time.channels[index]
+                        .values_at(self.time.minutes, self.time.interval)
+                        .remove(0)
+                })
+                .collect();
+            detail.push(format!("Memory time window: {} {} ending at latest completed observation; {} second projection target. Unobserved bins stay gaps. Up to one hour / 20,000 observations per curve. RAM capacity changes clear RAM/cache time history; configured swap capacity changes clear swap time history. Paging intervals are independent.", self.time.minutes, if self.time.minutes == 1 {"minute"} else {"minutes"}, self.time.interval));
+        }
         panel.label = labels.join(" · ");
         panel.detail = detail.join("\n");
         panel

@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 33 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 34 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -442,6 +442,25 @@ sample-mode failure reset, while time mode preserves earlier observations across
 the gap and resumes on recovery. Mac retains earlier observations in both modes.
 Native window actions do not poll counters; Linux keeps its system-settings wake
 behavior. Choosing a Mac sample count returns to sample mode.
+
+Memory also supports **Memory Time Window** on Mac and a time-window field in
+Linux Sources: 1–60 minutes, or zero for samples. It uses the same sampling-target
+grid, latest completed observation anchor and one-hour / 20,000-observation bound
+per curve. Mac keeps its paging-event deltas and live RAM/swap bars; Linux keeps
+independent RAM-used, cache/RAM and swap-used percentages. These measurements are
+not equivalent across platforms. Window and cadence edits do not reset paging
+baselines. Mac Reset Graph retains its existing baseline reset; Linux Reset Graph
+preserves paging intervals. Failed Mac reads leave legacy samples/current readings
+unchanged but add missing timestamp observations; recovery keeps the existing
+cumulative paging delta across the gap. A decreased paging counter starts fresh
+Mac time history without changing the existing per-counter delta rules. Linux
+keeps its sample-mode failure resets and hides unavailable curves, while time mode
+preserves earlier observations across gaps. Changes to total RAM clear RAM/cache
+time history; configured swap capacity changes (including no swap) clear swap time
+history. Missing optional counters remain gaps, and recovering with the same
+capacity preserves earlier timestamp observations. Backward completion clocks
+start a new graph era independently of paging state. Native window actions do not
+poll memory counters; Linux retains its system-settings wake behavior.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

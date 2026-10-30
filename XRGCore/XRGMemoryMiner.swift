@@ -43,6 +43,8 @@ public struct XRGMemorySnapshot: Sendable {
 @objc(XRGMemoryMiner)
 public final class XRGMemoryMiner: NSObject {
     private let source: () -> XRGMemorySnapshot?
+    private let historyClock: () -> TimeInterval
+    let timedHistory = XRGTimedHistory(channels: 3, retentionMinutes: XRGTimedHistory.systemMaximumMinutes)!
     private var previous: XRGMemorySnapshot?
     private var current = XRGMemorySnapshot()
     private var faults: UInt64 = 0
@@ -58,9 +60,10 @@ public final class XRGMemoryMiner: NSObject {
     public override convenience init() {
         self.init(pageSize: UInt64(getpagesize()), source: Self.readSnapshot)
     }
-    public init(pageSize: UInt64, source: @escaping () -> XRGMemorySnapshot?) {
+    public init(pageSize: UInt64, source: @escaping () -> XRGMemorySnapshot?, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         self.pageSize = pageSize
         self.source = source
+        self.historyClock = historyClock
         super.init()
         getLatestMemoryInfo()
     }
@@ -75,12 +78,19 @@ public final class XRGMemoryMiner: NSObject {
     }
     @objc public func reset() {
         for data in [faultsHistory, pageInHistory, pageOutHistory] { data.reset() }
+        timedHistory.clear()
         previous = nil
         faults = 0; pageIns = 0; pageOuts = 0
     }
 
     @objc public func getLatestMemoryInfo() {
-        guard let sample = source() else { return }
+        guard let sample = source() else {
+            timedHistory.append(time: historyClock(), values: [.nan, .nan, .nan])
+            return
+        }
+        if let previous, sample.faults < previous.faults || sample.pageIns < previous.pageIns || sample.pageOuts < previous.pageOuts {
+            timedHistory.clear()
+        }
         func delta(_ value: UInt64, _ old: UInt64?) -> UInt64 {
             guard let old, value >= old else { return 0 }
             return value - old
@@ -93,6 +103,7 @@ public final class XRGMemoryMiner: NSObject {
         faultsHistory.setNextValue(CGFloat(faults))
         pageInHistory.setNextValue(CGFloat(pageIns))
         pageOutHistory.setNextValue(CGFloat(pageOuts))
+        timedHistory.append(time: historyClock(), values: [Double(faults), Double(pageIns), Double(pageOuts)])
         if let used = sample.usedSwap, let total = sample.totalSwap {
             usedSwap = used
             totalSwap = total

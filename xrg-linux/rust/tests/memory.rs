@@ -282,3 +282,97 @@ fn sampler_publishes_memory_details_and_bounded_reads_reject_symlinks_special_fi
     assert!(memory::read(&root).is_err());
     assert!(sampler.sample().panels[1].series.is_empty());
 }
+
+#[test]
+fn memory_time_windows_preserve_percentages_and_paging_intervals_through_mode_cadence_and_graph_edits()
+ {
+    let reading = memory::parse(MEM);
+    let mut view = View::default();
+    view.set_history_samples(3).unwrap();
+    view.panel_at(&reading, &paging([100, 200], [2, 4]), 1., 100.);
+    view.set_time_window(1).unwrap();
+    let p = view.panel_at(&reading, &paging([200, 400], [4, 8]), 2., 110.);
+    assert_eq!(p.series.len(), 3);
+    for (series, value) in p.series.iter().zip([40., 20., 25.]) {
+        assert_eq!(series.len(), 61);
+        assert_eq!(series[50], value);
+        assert_eq!(series[60], value);
+        assert!(series[51..60].iter().all(|v| v.is_nan()));
+    }
+    assert!(p.detail.contains("Page I/O in / out: 100.0 / 200.0 KiB/s"));
+    view.set_history_samples(6).unwrap();
+    view.set_history_interval(0.2);
+    let p = view.panel_at(&reading, &paging([300, 600], [6, 12]), 3., 111.);
+    assert!(p.series.iter().all(|v| v.len() == 301));
+    assert!(p.detail.contains("Swap in / out: 2.0 / 4.0 pages/s"));
+    view.clear_graph();
+    let p = view.panel_at(&reading, &paging([400, 800], [8, 16]), 4., 112.);
+    assert!(p.series.iter().all(|v| v[..300].iter().all(|x| x.is_nan())));
+    assert!(p.detail.contains("Page I/O in / out: 100.0 / 200.0 KiB/s"));
+    let p = view.panel_at(&reading, &paging([500, 1000], [10, 20]), 5., 50.);
+    assert!(p.series.iter().all(|v| v[..300].iter().all(|x| x.is_nan())));
+    assert!(p.detail.contains("Swap in / out: 2.0 / 4.0 pages/s"));
+    assert!(view.set_time_window(61).is_err());
+    view.set_time_window(0).unwrap();
+    assert!(
+        view.panel_at(&reading, &paging([600, 1200], [12, 24]), 6., 51.)
+            .series
+            .iter()
+            .all(|v| v.len() == 6)
+    );
+}
+#[test]
+fn memory_time_gaps_keep_channel_identity_and_capacity_boundaries_independent() {
+    let reading = memory::parse(MEM);
+    let mut view = View::default();
+    view.set_time_window(1).unwrap();
+    view.panel_at(&reading, &paging([100, 200], [2, 4]), 1., 100.);
+    let p = view.panel_at(&Err("offline".into()), &Err("offline".into()), 2., 110.);
+    assert!(p.series.is_empty());
+    let p = view.panel_at(&reading, &paging([200, 400], [4, 8]), 3., 111.);
+    assert!(p.detail.contains("waiting for a fresh interval"));
+    for series in &p.series {
+        assert!(series[49].is_finite() && series[59].is_nan() && series[60].is_finite());
+    }
+    let missing = memory::parse(
+        &MEM.replace("Cached: 200 kB\n", "")
+            .replace("SwapTotal: 400 kB\n", ""),
+    );
+    assert_eq!(
+        view.panel_at(&missing, &paging([300, 600], [6, 12]), 4., 112.)
+            .series
+            .len(),
+        1
+    );
+    let p = view.panel_at(&reading, &paging([400, 800], [8, 16]), 5., 113.);
+    assert!(p.series[0][59].is_finite());
+    assert!(p.series[1][59].is_nan() && p.series[2][59].is_nan());
+    let changed = memory::parse(&MEM.replace("MemTotal: 1000 kB", "MemTotal: 2000 kB"));
+    let p = view.panel_at(&changed, &paging([500, 1000], [10, 20]), 6., 114.);
+    assert!(
+        p.series[0][..60].iter().all(|v| v.is_nan())
+            && p.series[1][..60].iter().all(|v| v.is_nan())
+    );
+    assert_eq!(p.series[2][59], 25.);
+    let swap_changed = memory::parse(
+        &MEM.replace("MemTotal: 1000 kB", "MemTotal: 2000 kB")
+            .replace("SwapTotal: 400 kB", "SwapTotal: 800 kB"),
+    );
+    let p = view.panel_at(&swap_changed, &paging([600, 1200], [12, 24]), 7., 115.);
+    assert_eq!(p.series[0][59], 70.);
+    assert!(p.series[2][..60].iter().all(|v| v.is_nan()));
+    let no_swap = memory::parse(
+        &MEM.replace("MemTotal: 1000 kB", "MemTotal: 2000 kB")
+            .replace("SwapTotal: 400 kB", "SwapTotal: 0 kB")
+            .replace("SwapFree: 300 kB", "SwapFree: 0 kB"),
+    );
+    assert_eq!(
+        view.panel_at(&no_swap, &paging([700, 1400], [14, 28]), 8., 116.)
+            .series
+            .len(),
+        2
+    );
+    let p = view.panel_at(&swap_changed, &paging([800, 1600], [16, 32]), 9., 117.);
+    assert!(p.series[2][..60].iter().all(|v| v.is_nan()));
+    assert!(p.detail.contains("Page I/O in / out: 100.0 / 200.0 KiB/s"));
+}

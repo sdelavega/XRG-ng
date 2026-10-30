@@ -195,11 +195,13 @@ public final class XRGMemoryView: NSView, XRGModuleView {
                       clip(NSRect(x: x + 10, y: rect.minY, width: 1, height: rect.height))])
     }
     @nonobjc func pagingLayers() -> (maximum: CGFloat, values: [XRGDataSet]) {
-        guard let all = XRGGraphRenderer.sumObservedHistories([memoryMiner.faultData(), memoryMiner.pageInData(), memoryMiner.pageOutData()]),
-              let withoutPageOut = XRGGraphRenderer.sumObservedHistories([memoryMiner.faultData(), memoryMiner.pageInData()]) else { return (0, []) }
+        let data = timeProjection.values(from: memoryMiner.timedHistory, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))
+            ?? [memoryMiner.faultData(), memoryMiner.pageInData(), memoryMiner.pageOutData()]
+        guard let all = XRGGraphRenderer.sumObservedHistories(data),
+              let withoutPageOut = XRGGraphRenderer.sumObservedHistories(Array(data.prefix(2))) else { return (0, []) }
         let maximum = all.max
         guard maximum.isFinite, maximum > 0 else { return (0, []) }
-        return (maximum, [all, withoutPageOut, memoryMiner.faultData()])
+        return (maximum, [all, withoutPageOut, data[0]])
     }
     @nonobjc func fullReading() -> String {
         guard let settings else { return "Memory" }
@@ -280,16 +282,25 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         menu.addItem(.separator())
         menu.addItem(item("Processes…", action: #selector(openProcesses(_:))))
         menu.addItem(XRGHistoryRetention.menu("Memory History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("Memory Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", action: #selector(clearData(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Open XRG-ng Memory Preferences...", action: #selector(openMemoryPreferences(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let windowKey = "XRGMemoryView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc private let timeProjection = XRGTimeWindowProjection(channels: 3)
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
+    }
     @nonobjc static let historyKey = "XRGMemoryView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     public func clearData(_ sender: Any?) {

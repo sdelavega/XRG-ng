@@ -226,6 +226,11 @@ impl Harness {
                                     .draft
                                     .metrics
                                     .history_minutes
+                                    .insert(Module::Memory, 4);
+                                editor
+                                    .draft
+                                    .metrics
+                                    .history_minutes
                                     .insert(Module::Network, 2);
                                 editor.draft.metrics.history_minutes.insert(Module::Disk, 3);
                             }
@@ -316,6 +321,7 @@ impl Harness {
                     next.metrics.cpu_history_samples = 300;
                     next.metrics.cpu_history_minutes = 1;
                     next.metrics.history_samples.insert(Module::Memory, 360);
+                    next.metrics.history_minutes.insert(Module::Memory, 4);
                     next.metrics.history_samples.insert(Module::Network, 480);
                     next.metrics.history_minutes.insert(Module::Network, 2);
                     next.metrics.history_minutes.insert(Module::Disk, 3);
@@ -384,6 +390,7 @@ impl Harness {
                         (Module::Battery, "Battery", 1320),
                     ] {
                         let (minutes, positions) = match module {
+                            Module::Memory => (4, 1201),
                             Module::Network => (2, 601),
                             Module::Disk => (3, 901),
                             _ => (0, count),
@@ -404,7 +411,7 @@ impl Harness {
                         }
                     }
                     println!(
-                        "SYSTEM_HISTORY_SMOKE_OK Memory=360 Network=2min/601positions Disk=3min/901positions at 200ms, 480/600 fallback samples, live worker acknowledged"
+                        "SYSTEM_HISTORY_SMOKE_OK Memory=4min/1201positions (360 fallback) Network=2min/601positions Disk=3min/901positions at 200ms, 480/600 fallback samples, live worker acknowledged"
                     );
                     println!(
                         "GRAPHICS_HISTORY_SMOKE_OK GPU=720 NPU=840 VRAM=960, capacities applied; unavailable inputs remain unavailable"

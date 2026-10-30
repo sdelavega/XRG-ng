@@ -125,14 +125,15 @@ Implemented in development for monitoring tools:
 - Memory, Network and Disk now share CPU's explicit-capacity workflow: Mac graph
   history menus / Linux Preferences Sources, 1–20,000 samples, preserving original
   automatic defaults. Capacity changes retain newest observations and normal/fast
-  rate/paging baselines and session transfers without polling hardware. Growing
+  rate/paging baselines and session transfers. Native capacity actions do not poll
+  hardware. Growing
   explicit Mac capacities adds missing padding; paging stacks use CPU's gap-safe sums.
   Source/failure reset policies remain unchanged and keep the chosen capacity.
   Mac Memory retains paging activity; Linux retains RAM/cache/swap percentages.
   Current RAM/swap bars and accounting remain separate from history settings.
   The Linux per-module map migrates old files without a write; unsupported module
-  keys and invalid capacities reject the entire settings edit. AI and Weather have
-  separate cadence/windows; timestamp-based retention remains open. Mac Memory's
+  keys and invalid capacities reject the entire settings edit. Timestamp modes
+  described below add elapsed-time coverage. Mac Memory's
   existing Reset Graph still resets its paging baseline; Linux preserves it.
 - GPU, NPU and VRAM now also have independent capacity controls. All cached
   device histories retain newest samples when resized; future/replacement histories
@@ -154,7 +155,7 @@ Implemented in development for monitoring tools:
   Linux charge and signed-power histories remain separate; Mac keeps its split
   charge/discharge watt curves. Source, failure and aggregate membership boundaries
   keep their existing policies. Linux schema 29 upgrades older profiles without writing
-  until explicit save. AI/Weather duration and timestamp-based retention remain open.
+  until explicit save. Additional timestamp modes are described below.
 - AI rate history now has independent sample capacities on both platforms: Mac
   **AI History** and Linux **Preferences → AI → Retained AI samples**. Explicit
   counts keep newest values and gaps while preserving current rates, rate/cost
@@ -167,7 +168,7 @@ Implemented in development for monitoring tools:
   history-only edits now resize the cached result without collecting, appending a
   duplicate observation or changing counters/alerts. They preserve the existing
   deadline and an in-flight scan; source/accounting edits and counter resets still
-  request collection. Schema 33 upgrades old files without writing until explicit
+  request collection. Schema 34 upgrades old files without writing until explicit
   save. AI now also offers 1–1,440-minute observation-timestamp windows through Mac
   AI Time Window / Linux AI preferences, using shared Swift five-second bins. The
   latest completed observation anchors the window; missing time bins remain gaps.
@@ -188,7 +189,15 @@ Implemented in development for monitoring tools:
   Failed reads add gaps. Linux retains its sample-mode failure reset and hides
   unavailable series, but preserves earlier timestamp observations for recovery;
   Mac retains earlier observations in both modes. I/O warm-up remains zero-rate.
-  Memory and other system windows and remaining scheduling work are still open.
+  Memory now also offers 1–60-minute timestamp windows with that grid and bound.
+  Mac keeps paging deltas and live bars; Linux keeps independent RAM/cache/swap
+  percentages. Edits preserve paging baselines. Mac Reset Graph retains its
+  baseline reset, while Linux preserves paging intervals. Time histories show
+  failures as gaps; existing sample/current/failure policies remain. Linux RAM
+  capacity changes clear RAM/cache time history; swap capacity changes clear only
+  swap time history. Unavailable optional curves stay hidden and missing. Mac
+  decreased paging counters start fresh time history with existing delta rules.
+  Other system windows and remaining scheduling work are still open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

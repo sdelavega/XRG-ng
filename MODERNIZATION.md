@@ -1636,3 +1636,46 @@ mismatch, fixed with explicit conversion before the final full gate. Physical
 Intel/Linux x86-64, macOS 26 runtime and actual suspend/resume remain unverified.
 Memory and other system timestamp windows remain separate work. No release,
 version, signing or third-party-notice policy changed.
+
+
+### Memory timestamp windows retain native metric meanings
+
+Mac Memory Time Window and Linux Sources now support 1–60-minute windows (zero
+uses sample count), using the shared Swift projection and the current normal
+sampling target, minimum 200 ms. Windows end at the last completed observation,
+retain genuine gaps, freeze while collection is paused and are bounded to one hour
+/ 20,000 observations per curve. Mac keeps paging-event deltas and current RAM/swap
+bars; Linux keeps independent RAM-used, cache/RAM and swap-used percentages.
+
+Mac normal memory observations now carry a completion wall clock. Per-view cached
+projection preserves old paging peaks even after a narrow sample buffer discards
+them. Window/cadence changes do not poll counters, change current readings or reset
+paging baselines. Failed reads append missing timestamp observations while keeping
+the old sample/current and cumulative-recovery delta behavior. Decreased paging
+counters clear time history while retaining the existing per-counter delta rules.
+Reset Graph still resets the Mac paging baseline. Linux retains its sample-mode
+failure resets and unavailable-series hiding, but preserves prior timestamp data
+for recovery. Optional cache/swap failures leave channel-specific gaps. Total RAM
+changes clear RAM/cache time history; configured swap capacity changes, including
+no swap, clear swap time history independently. Linux Reset Graph and projection
+edits preserve paging intervals. Backward completion wall clocks begin a new graph
+era without resetting paging state. Existing system-settings wakes remain.
+
+Linux settings schema 34 migrates old files read-only until explicit save. Memory
+uses the existing per-module time-window map; invalid windows/types reject the edit
+atomically. Desktop smoke applies a four-minute Memory window at 200 ms and waits
+for the live worker's 1,201 positions while retaining its 360-sample fallback and
+the original acknowledgment deadline.
+
+Validation: universal Debug build; 587 passing cases on ARM64 and 587 under
+Rosetta x86_64, with isolated native and packaged launch checks. Linux ARM64
+passed 37 shared Swift tests, C ABI smoke against the same shared artifact,
+strict Clippy, 576 Rust tests and 16 normal/scaled X11 and nested Wayland
+collapse/restore cases. Native fixture captures show a 20-second missing interval
+inside a one-minute paging window and correct menu labels; Linux captures show
+independent window controls and disabled sample-count inputs. Both full Mac gates
+passed; the final rerun strengthened the resize fixture to assert the peak had
+actually left the sample buffer while remaining in time history. Evidence is in
+`dist/memory-time-window-validation`. Physical Intel/Linux x86-64, macOS 26 runtime
+and real suspend/resume remain unverified. GPU/NPU/VRAM and sensor timestamp
+windows remain separate work. No app version, release, signing or notice change.

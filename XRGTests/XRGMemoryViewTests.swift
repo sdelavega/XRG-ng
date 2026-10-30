@@ -78,6 +78,71 @@ struct XRGMemoryViewTests {
             #expect(miner.faultData().numValues == 181)
         }
     }
+    @Test func memoryWindowsPreservePagingMeaningBaselinesAndRetainedPeaksWithoutPolling() async throws {
+        try await withFixture { settings, defaults in
+            settings.graphRefresh = 1
+            var reading = sample(), reads = 0, wall = 100.0
+            let miner = XRGMemoryMiner(pageSize: 4096, source: { reads += 1; return reading }, historyClock: { wall })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            wall = 101; reading.faults += 120; reading.pageIns += 30; reading.pageOuts += 50; view.graphUpdate(nil)
+            wall = 111; reading.faults += 12; reading.pageIns += 3; reading.pageOuts += 5; view.graphUpdate(nil)
+            var before = reads
+            let text = view.fullReading(), option = NSMenuItem(); option.tag = 1
+            view.selectHistoryWindow(option)
+            let layers = view.pagingLayers()
+            #expect(layers.maximum == 200 && layers.values.map(\.currentValue) == [20, 15, 12])
+            #expect(layers.values.allSatisfy { $0.numValues == 61 && $0.orderedValues[51..<60].allSatisfy { $0 == XRGGraphRenderer.missingValue } })
+            // Fill the five-slot resized buffer with small deltas so the old
+            // peak is demonstrably retained by timestamp history alone.
+            for tick in 112...115 {
+                wall = Double(tick); reading.faults += 12; reading.pageIns += 3; reading.pageOuts += 5
+                view.graphUpdate(nil)
+            }
+            before = reads
+            view.setFrameSize(NSSize(width: 24, height: 200))
+            #expect(miner.faultData().numValues == 5 && miner.faultData().max == 12)
+            #expect(view.pagingLayers().maximum == 200)
+            #expect(reads == before && view.fullReading() == text && miner.recentFaults() == 12)
+            settings.graphRefresh = 0.2
+            #expect(view.pagingLayers().values.allSatisfy { $0.numValues == 301 })
+            #expect(reads == before && miner.recentFaults() == 12)
+            let restored = panel(miner, settings: settings, defaults: defaults)
+            #expect(restored.historyMinutes == 1 && restored.pagingLayers().maximum == 200)
+            option.tag = 61; restored.selectHistoryWindow(option); #expect(restored.historyMinutes == 1)
+            let choices = try #require(restored.makeMenu().items.first { $0.title == "Memory Time Window" }?.submenu)
+            #expect(choices.items.allSatisfy { $0.target === restored })
+            #expect(choices.items.first { $0.tag == 1 }?.title == "1 minute")
+            option.tag = 300; restored.selectHistory(option)
+            #expect(restored.historyMinutes == 0 && restored.retainedSamples == 300 && reads == before)
+            reading.faults += 7; miner.getLatestMemoryInfo(); #expect(miner.recentFaults() == 7)
+            option.tag = 1; restored.selectHistoryWindow(option); restored.clearData(nil)
+            #expect(restored.pagingLayers().values.isEmpty && miner.recentFaults() == 0 && miner.activeBytes() == reading.active * 4096)
+            reading.faults += 7; miner.getLatestMemoryInfo(); #expect(miner.recentFaults() == 0)
+        }
+    }
+    @Test func memoryFailureGapsCounterRestartsAndWallRollbackRetainExistingDeltaPolicies() async throws {
+        try await withFixture { settings, defaults in
+            settings.graphRefresh = 1; defaults.set(1, forKey: XRGMemoryView.windowKey)
+            var reading = sample(), available = true, wall = 100.0
+            let miner = XRGMemoryMiner(pageSize: 4096, source: { available ? reading : nil }, historyClock: { wall })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            wall = 101; reading.faults += 12; reading.pageIns += 3; reading.pageOuts += 5; view.graphUpdate(nil)
+            wall = 110; available = false; view.graphUpdate(nil)
+            #expect(miner.recentFaults() == 12 && miner.faultData().currentValue == 12)
+            #expect(view.pagingLayers().values[0].currentValue == XRGGraphRenderer.missingValue)
+            #expect(view.pagingLayers().values[0].orderedValues[51] == 20)
+            wall = 111; available = true; reading.faults += 7; view.graphUpdate(nil)
+            #expect(miner.recentFaults() == 7 && view.pagingLayers().values[0].currentValue == 7)
+            #expect(view.pagingLayers().values[0].orderedValues[59] == XRGGraphRenderer.missingValue)
+            wall = 50; reading.faults += 4; view.graphUpdate(nil)
+            #expect(miner.recentFaults() == 4 && view.pagingLayers().values[0].currentValue == 4)
+            #expect(view.pagingLayers().values[0].orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            wall = 51; reading.faults = 1; reading.pageIns = 1; reading.pageOuts = 1; view.graphUpdate(nil)
+            #expect(miner.recentFaults() == 0 && view.pagingLayers().values.isEmpty)
+            let raw = try #require(miner.timedHistory.values(minutes: 1, interval: 1))
+            #expect(raw.allSatisfy { $0.last == 0 && $0.dropLast().allSatisfy { $0.isNaN } })
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults) async throws -> Void) async throws {
         _ = NSApplication.shared
         let domain = "XRG.memoryView.\(UUID().uuidString)"
@@ -272,7 +337,7 @@ struct XRGMemoryViewTests {
             let view = panel(miner, settings: settings, defaults: defaults, processMiner: processes)
             host.contentView?.addSubview(view); view.awakeFromNib()
             let menu = view.makeMenu()
-            #expect(menu.items.count == 10)
+            #expect(menu.items.count == 11)
             #expect(menu.items[1].title == "4768.4G - Big (id 3)")
             #expect(menu.items[2].title == "1.0M - Medium (id 2)")
             #expect(menu.items[3].title == "1K - Tiny (id 1)")
@@ -300,11 +365,11 @@ struct XRGMemoryViewTests {
             await processes.refresh()
             let view = panel(XRGMemoryMiner(pageSize: 4096, source: { sample() }), settings: settings, defaults: defaults, processMiner: processes)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 17)
+            #expect(menu.items.count == 18)
             #expect(menu.items[1].title.contains("Process12"))
             #expect(menu.items[10].title.contains("Process3"))
             let empty = panel(XRGMemoryMiner(pageSize: 4096, source: { nil }), settings: settings, defaults: defaults)
-            #expect(empty.makeMenu().items.count == 7)
+            #expect(empty.makeMenu().items.count == 8)
             #expect(XRGMemoryView.processMemoryText(1024) == "1024K")
             #expect(XRGMemoryView.processMemoryText(1_048_576) == "1024.0M")
         }
