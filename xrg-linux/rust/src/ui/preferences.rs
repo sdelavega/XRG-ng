@@ -716,6 +716,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
                 | settings::Module::Network
                 | settings::Module::Disk
                 | settings::Module::Gpu
+                | settings::Module::Tpu
         ) {
             ui.horizontal(|ui| {
                 let label = ui.label(format!("{title} time window (minutes; 0 uses samples)"));
@@ -748,6 +749,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
             s.metrics.history_samples.insert(module, count);
         }
     }
+    ui.small("NPU windows keep activity and unscoped producer rates separate; existing quantity and source boundaries remain. Mac power and traffic markers have separate native quantities.");
     ui.small("GPU windows retain each device’s activity quantity independently. Device, driver and activity-source boundaries keep their existing resets; unavailable activity stays unavailable.");
     ui.small("Memory windows retain independent RAM/cache/swap percentages; RAM and swap capacity changes begin fresh histories for their respective curves. Paging intervals remain independent.");
     ui.small("Network/Disk windows end at the latest completed normal observation; bins follow the sampling target. Unobserved time bins remain gaps. Source/replacement/counter-restart boundaries begin fresh time histories. Transfer totals and rate baselines are independent.");

@@ -1725,3 +1725,31 @@ Native captures show a 20-second missing interval inside a one-minute GPU window
 and the correct menu state; Linux Sources shows the independent GPU window field.
 Evidence: `dist/gpu-time-window-validation`. Physical Intel/Linux x86-64, macOS 26
 runtime and unavailable GPU vendors remain unverified.
+
+
+### NPU windows preserve quantity and asynchronous sample boundaries
+
+Mac NPU Time Window and Linux Sources offer 1–60 minutes (zero uses samples),
+centered bins at the sampling target (minimum 200 ms), one-hour / 20,000-observation
+limits per source/quantity and latest-observation anchoring. Mac timestamps only
+accepted new asynchronous readings; timer ticks and duplicate callbacks do not
+append observations. Residency percent, watts and positive traffic reports/s use
+separate histories/projections and retain current availability gates and axes.
+Existing stale/invalid/device/energy-unit/traffic-source resets clear appropriate
+time histories along with sample histories. Power still uses its monotonic energy
+interval independently of completion wall time. Linux retains separate timestamp
+buffers for each activity key and its unscoped inference producer, with existing
+source/mode/unavailable boundaries and graph resets. Capacity/window changes do
+not reset baselines; current readings and fallback samples remain independent.
+Schema 36 migrates older profiles in memory until explicit save. Source/type/bound
+validation remains atomic. No app version, release, dependency or notice change;
+standalone VRAM and sensor timestamp windows remain follow-up work.
+
+Validation: universal Debug build, 590 passing cases each ARM64/Rosetta x86_64,
+isolated native/packaged launches; Linux ARM64 37 shared Swift tests, exact C ABI
+smoke, strict Clippy and 581 Rust tests. Initial X11 restore validation timed out
+waiting for a startup report; the same binary/arguments/assertions/deadlines then
+passed all 16 X11/nested Wayland cases on rerun. Initial failure logs remain.
+Inspected native residency/menu and Linux Sources captures. Evidence:
+`dist/npu-time-window-validation`. Physical Intel/Linux x86-64, macOS 26 runtime,
+real suspend/resume and unowned accelerators remain unverified.

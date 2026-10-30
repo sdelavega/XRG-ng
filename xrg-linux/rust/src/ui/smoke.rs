@@ -234,6 +234,7 @@ impl Harness {
                                     .insert(Module::Network, 2);
                                 editor.draft.metrics.history_minutes.insert(Module::Disk, 3);
                                 editor.draft.metrics.history_minutes.insert(Module::Gpu, 5);
+                                editor.draft.metrics.history_minutes.insert(Module::Tpu, 6);
                             }
                             Ok("ai-time") => {
                                 editor.tab = 3;
@@ -330,6 +331,7 @@ impl Harness {
                     next.metrics.history_samples.insert(Module::Gpu, 720);
                     next.metrics.history_minutes.insert(Module::Gpu, 5);
                     next.metrics.history_samples.insert(Module::Tpu, 840);
+                    next.metrics.history_minutes.insert(Module::Tpu, 6);
                     next.metrics.history_samples.insert(Module::GpuMemory, 960);
                     next.metrics
                         .history_samples
@@ -392,6 +394,7 @@ impl Harness {
                         (Module::Battery, "Battery", 1320),
                     ] {
                         let (minutes, positions) = match module {
+                            Module::Tpu => (6, 1801),
                             Module::Gpu => (5, 1501),
                             Module::Memory => (4, 1201),
                             Module::Network => (2, 601),
@@ -417,7 +420,7 @@ impl Harness {
                         "SYSTEM_HISTORY_SMOKE_OK Memory=4min/1201positions (360 fallback) Network=2min/601positions Disk=3min/901positions at 200ms, 480/600 fallback samples, live worker acknowledged"
                     );
                     println!(
-                        "GRAPHICS_HISTORY_SMOKE_OK GPU=5min/1501positions (720 fallback) NPU=840 VRAM=960, capacities applied; unavailable inputs remain unavailable"
+                        "GRAPHICS_HISTORY_SMOKE_OK GPU=5min/1501positions (720 fallback) NPU=6min/1801positions (840 fallback) VRAM=960, capacities applied; unavailable inputs remain unavailable"
                     );
                     println!(
                         "SENSOR_HISTORY_SMOKE_OK Temperature=1080 Fans=1200 Battery=1320, capacities applied; unavailable inputs remain unavailable"

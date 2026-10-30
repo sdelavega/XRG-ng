@@ -168,7 +168,7 @@ Implemented in development for monitoring tools:
   history-only edits now resize the cached result without collecting, appending a
   duplicate observation or changing counters/alerts. They preserve the existing
   deadline and an in-flight scan; source/accounting edits and counter resets still
-  request collection. Schema 35 upgrades old files without writing until explicit
+  request collection. Schema 36 upgrades old files without writing until explicit
   save. AI now also offers 1–1,440-minute observation-timestamp windows through Mac
   AI Time Window / Linux AI preferences, using shared Swift five-second bins. The
   latest completed observation anchors the window; missing time bins remain gaps.
@@ -201,7 +201,12 @@ Implemented in development for monitoring tools:
   Mac projects its native memory/wait/utilization channels; Linux projects its
   selected activity quantity. Current/mini readings and fallback samples remain
   independent. Existing source/driver/replacement/unavailable boundaries remain.
-  NPU, standalone VRAM, sensor windows and remaining scheduling work remain open.
+  NPU now supports 1–60-minute windows with independent quantities and the same
+  bound/grid. Mac timestamps accepted asynchronous samples only; residency, power
+  and traffic markers retain their existing axes and reset rules. Linux separates
+  device/client activity from unscoped producer rates and retains source/mode
+  boundaries. Baselines/current readings stay independent. Standalone VRAM,
+  sensor windows and remaining scheduling work remain open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

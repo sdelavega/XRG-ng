@@ -104,22 +104,29 @@ public final class XRGNPUView: NSView, XRGModuleView {
                       mini: shouldDrawMiniGraph(), settings: settings)
         toolTip = fullReading(); setAccessibilityElement(true); setAccessibilityLabel(fullReading())
     }
+    @nonobjc private let projections = (0..<3).map { _ in XRGTimeWindowProjection(channels: 1) }
+    @nonobjc func historyData() -> [XRGDataSet] {
+        zip([miner.timedActivity, miner.timedPower, miner.timedTraffic], [miner.activityDataSet, miner.powerDataSet, miner.trafficDataSet]).enumerated().map { index, pair in
+            projections[index].values(from: pair.0, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))?.first ?? pair.1
+        }
+    }
     public override func draw(_ dirtyRect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
         settings.graphColor(.tpu, component: 0).set(); context.cgContext.fill(bounds)
+        let data = historyData()
         if miner.activeFraction != nil {
-            XRGGraphRenderer.drawCurve(miner.activityDataSet, upperBound: 100, lowerBound: 0,
+            XRGGraphRenderer.drawCurve(data[0], upperBound: 100, lowerBound: 0,
                                         in: bounds, flipped: false, filled: true, color: settings.graphColor(.tpu, component: 1), style: settings.curveStyle(.tpu))
         } else if miner.powerWatts != nil {
-            XRGGraphRenderer.drawCurve(miner.powerDataSet, upperBound: max(1, miner.powerDataSet.max * 1.1), lowerBound: 0,
+            XRGGraphRenderer.drawCurve(data[1], upperBound: max(1, data[1].max * 1.1), lowerBound: 0,
                                         in: bounds, flipped: false, filled: true, color: settings.graphColor(.tpu, component: 1), style: settings.curveStyle(.tpu))
         }
         if miner.activeFraction == nil, miner.trafficObserved != nil {
             // A narrow presence band cannot be mistaken for a 100% capacity
             // meter. The main graph keeps its watt scale and n/a% label.
             let band = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: min(6, bounds.height * 0.12))
-            XRGGraphRenderer.drawCurve(miner.trafficDataSet, upperBound: max(1, miner.trafficDataSet.max * 1.1), lowerBound: 0,
+            XRGGraphRenderer.drawCurve(data[2], upperBound: max(1, data[2].max * 1.1), lowerBound: 0,
                                         in: band, flipped: false, filled: true, color: settings.graphColor(.tpu, component: 2), style: settings.curveStyle(.tpu))
         }
         updateLabels(); XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .tpu)
@@ -132,13 +139,21 @@ public final class XRGNPUView: NSView, XRGModuleView {
         let reading = NSMenuItem(title: fullReading(), action: nil, keyEquivalent: ""); reading.isEnabled = false; menu.addItem(reading)
         menu.addItem(.separator())
         menu.addItem(XRGHistoryRetention.menu("NPU History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("NPU Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         let preferences = NSMenuItem(title: "Open Graph Preferences…", action: #selector(openPreferences(_:)), keyEquivalent: "")
         preferences.target = self; menu.addItem(preferences); return menu
+    }
+    @nonobjc static let windowKey = "XRGNPUView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGNPUView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}

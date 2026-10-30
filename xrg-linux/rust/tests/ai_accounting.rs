@@ -282,7 +282,7 @@ fn accounting_settings_migrate_without_enabling_tracking_or_alerts() {
     value["ai"].as_object_mut().unwrap().remove("accounting");
     let migrated =
         xrg_ng_linux::settings::Settings::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
-    assert_eq!(migrated.version, 35);
+    assert_eq!(migrated.version, 36);
     assert!(!migrated.ai.accounting.enabled);
     assert!(!migrated.ai.accounting.notifications);
     let mut bad = migrated;

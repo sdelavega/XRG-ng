@@ -228,6 +228,8 @@ pub struct Sampler {
     tpu_history: History,
     npu_histories: BTreeMap<String, History>,
     npu_activity_mode: bool,
+    npu_timed: BTreeMap<String, crate::shared::TimedHistory>,
+    producer_timed: crate::shared::TimedHistory,
     metrics: crate::metrics::Sampler,
     memory: crate::memory::View,
     sensors: crate::sensors::View,
@@ -295,6 +297,8 @@ impl Sampler {
             tpu_history: History::new(120),
             npu_histories: BTreeMap::new(),
             npu_activity_mode: false,
+            npu_timed: BTreeMap::new(),
+            producer_timed: crate::shared::TimedHistory::new_limited(1, 60),
             gpu_histories: BTreeMap::new(),
             gpu_history_interval: 1.,
             gpu_memory: crate::gpu_memory::View::default(),
@@ -330,6 +334,10 @@ impl Sampler {
                 }
             }
             Module::Tpu => {
+                self.producer_timed.clear();
+                for h in self.npu_timed.values_mut() {
+                    h.clear();
+                }
                 self.tpu_history.clear();
                 for h in self.npu_histories.values_mut() {
                     h.clear();
@@ -493,6 +501,14 @@ impl Sampler {
         self.tpu_panel_from(report)
     }
     fn tpu_panel_from(&mut self, report: crate::tpu::Report) -> Panel {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.tpu_panel_at(report, observed)
+    }
+    fn tpu_panel_at(&mut self, report: crate::tpu::Report, observed: f64) -> Panel {
+        let minutes = self.metrics.selection().retained_minutes(Module::Tpu);
         let mut details: Vec<Text> = vec!["Read-only TPU/NPU inventory. Detection or a bound driver does not prove usable inference. Graph: device activity or explicitly labeled busiest observed readable-client activity (%), when supported counters are readable; otherwise unscoped producer inference rate (inf/s). These quantities never share a scale. Producer statistics are not assigned to detected adapters.".into()];
         let activity_mode = report.devices.as_ref().is_ok_and(|r| {
             r.values.iter().any(|d| {
@@ -502,6 +518,8 @@ impl Sampler {
         if activity_mode != self.npu_activity_mode {
             self.tpu_history = History::new(self.metrics.selection().history_capacity(Module::Tpu));
             self.npu_histories.clear();
+            self.npu_timed.clear();
+            self.producer_timed.clear();
             self.npu_activity_mode = activity_mode;
         }
         let mut activity_labels = Vec::new();
@@ -528,6 +546,7 @@ impl Sampler {
                     .map(|d| d.activity_key())
                     .collect();
                 self.npu_histories.retain(|id, _| active_keys.contains(id));
+                self.npu_timed.retain(|id, _| active_keys.contains(id));
                 let capacity = self.metrics.selection().history_capacity(Module::Tpu);
                 detection_error = !readings.errors.is_empty();
                 for device in readings.values {
@@ -537,8 +556,19 @@ impl Sampler {
                             .entry(device.activity_key())
                             .or_insert_with(|| History::new(capacity));
                         history.append(value);
+                        let timed = self
+                            .npu_timed
+                            .entry(device.activity_key())
+                            .or_insert_with(|| crate::shared::TimedHistory::new_limited(1, 60));
+                        timed.append(observed, &[value]);
                         if activity_series.len() < 3 {
-                            activity_series.push(history.values());
+                            activity_series.push(if minutes > 0 {
+                                timed
+                                    .values_at(minutes, self.gpu_history_interval)
+                                    .remove(0)
+                            } else {
+                                history.values()
+                            });
                             activity_labels.push(format!(
                                 "{}{} {value:.1}%",
                                 device.label,
@@ -618,6 +648,7 @@ impl Sampler {
             }
         );
         let mut series = Vec::new();
+        let mut producer_value = f64::NAN;
         let inference_label = match report.inference {
             Err(error) => {
                 details.push(error.into());
@@ -659,6 +690,7 @@ impl Sampler {
                 }
                 let rate = if let Some(rate) = inference.rate {
                     if !activity_mode {
+                        producer_value = rate;
                         self.tpu_history.append(rate);
                         series.push(self.tpu_history.values());
                     }
@@ -677,6 +709,14 @@ impl Sampler {
                 }
             }
         };
+        if !activity_mode {
+            self.producer_timed.append(observed, &[producer_value]);
+            if minutes > 0 && !series.is_empty() {
+                series = self
+                    .producer_timed
+                    .values_at(minutes, self.gpu_history_interval);
+            }
+        }
         let label = if activity_mode {
             series = activity_series;
             if activity_labels.is_empty() {
@@ -1539,6 +1579,45 @@ mod npu_client_history_tests {
             }),
             inference: Err("No fixture inference producer".into()),
         }
+    }
+    #[test]
+    fn npu_windows_keep_sources_quantities_and_graph_resets_separate() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let mut selection = MetricSelection::default();
+        selection.history_minutes.insert(Module::Tpu, 1);
+        selection.history_samples.insert(Module::Tpu, 3);
+        sampler.set_selection(selection.clone()).unwrap();
+        sampler.tpu_panel_at(report("one", Some(50.), None), 100.);
+        let p = sampler.tpu_panel_at(report("one", Some(0.), None), 110.);
+        assert_eq!(p.series[0].len(), 61);
+        assert_eq!(p.series[0][50], 50.);
+        assert_eq!(p.series[0][60], 0.);
+        assert!(p.series[0][51..60].iter().all(|v| v.is_nan()));
+        sampler.gpu_history_interval = 0.2;
+        let p = sampler.tpu_panel_at(report("one", Some(10.), None), 111.);
+        assert_eq!(p.series[0].len(), 301);
+        let p = sampler.tpu_panel_at(report("two", Some(20.), None), 112.);
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        let p = sampler.tpu_panel_at(report("two", None, None), 113.);
+        assert!(p.series.is_empty());
+        let p = sampler.tpu_panel_at(report("two", Some(0.), Some(25.)), 114.);
+        assert_eq!(p.series[0][300], 25.);
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        sampler.clear_graph(Module::Tpu);
+        let p = sampler.tpu_panel_at(report("two", Some(0.), Some(25.)), 115.);
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        selection.history_minutes.remove(&Module::Tpu);
+        sampler.set_selection(selection).unwrap();
+        assert_eq!(
+            sampler
+                .tpu_panel_at(report("two", Some(0.), Some(25.)), 116.)
+                .series[0]
+                .len(),
+            3
+        );
     }
     #[test]
     fn retained_npu_capacity_survives_source_and_quantity_mode_changes() {

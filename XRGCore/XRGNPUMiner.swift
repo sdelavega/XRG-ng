@@ -27,6 +27,10 @@ private final class XRGNPUWorker: @unchecked Sendable {
 public final class XRGNPUMiner: NSObject {
     private let worker: XRGNPUWorker?
     private let source: (() -> XRGNPUReading?)?
+    private let historyClock: () -> TimeInterval
+    let timedPower = XRGTimedHistory(channels: 1, retentionMinutes: 60)!
+    let timedActivity = XRGTimedHistory(channels: 1, retentionMinutes: 60)!
+    let timedTraffic = XRGTimedHistory(channels: 1, retentionMinutes: 60)!
     private let clock: () -> TimeInterval
     private var previous: XRGNPUReading?
     private var lastReading: TimeInterval?
@@ -54,11 +58,11 @@ public final class XRGNPUMiner: NSObject {
     @objc public private(set) var numSamples = 1
 
     public override init() {
-        worker = XRGNPUWorker(); source = nil; clock = { ProcessInfo.processInfo.systemUptime }
+        historyClock = { Date().timeIntervalSince1970 }; worker = XRGNPUWorker(); source = nil; clock = { ProcessInfo.processInfo.systemUptime }
         super.init(); getLatestNPUInfo()
     }
-    init(source: @escaping () -> XRGNPUReading?, clock: @escaping () -> TimeInterval) {
-        worker = nil; self.source = source; self.clock = clock
+    init(source: @escaping () -> XRGNPUReading?, clock: @escaping () -> TimeInterval, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
+        self.historyClock = historyClock; worker = nil; self.source = source; self.clock = clock
         super.init(); getLatestNPUInfo()
     }
     @objc public func setDataSize(_ count: Int) {
@@ -68,10 +72,12 @@ public final class XRGNPUMiner: NSObject {
         trafficDataSet.resize(count, fillingWith: XRGGraphRenderer.missingValue)
     }
     private func resetHistory() {
+        timedPower.clear()
         powerDataSet = XRGDataSet(); powerDataSet.resize(numSamples)
         powerDataSet.setAllValues(XRGGraphRenderer.missingValue)
     }
     private func resetActivity() {
+        timedActivity.clear()
         activeFraction = nil
         activityDataSet.resize(numSamples, fillingWith: XRGGraphRenderer.missingValue)
         activityDataSet.setAllValues(XRGGraphRenderer.missingValue)
@@ -87,6 +93,7 @@ public final class XRGNPUMiner: NSObject {
         if fraction > 0 { lastActivityTime = interval.end; lastActivitySource = "active residency" }
     }
     private func resetTraffic() {
+        timedTraffic.clear()
         trafficObserved = nil
         trafficReportsPerSecond = nil
         trafficDataSet.resize(numSamples, fillingWith: XRGGraphRenderer.missingValue)
@@ -125,6 +132,12 @@ public final class XRGNPUMiner: NSObject {
         if current?.devices.map(\.id).sorted() != reading.devices.map(\.id).sorted() {
             lastActivityIntervalEnd = nil; lastActivityTime = nil; lastActivitySource = nil; resetActivity()
             lastTrafficIntervalEnd = nil; trafficSourceIDs = []; resetTraffic()
+        }
+        let observed = historyClock()
+        defer {
+            timedPower.append(time: observed, values: [powerWatts ?? .nan])
+            timedActivity.append(time: observed, values: [activeFraction.map { $0 * 100 } ?? .nan])
+            timedTraffic.append(time: observed, values: [trafficReportsPerSecond ?? .nan])
         }
         devices = reading.devices; current = reading; lastReading = reading.time
         acceptActivity(reading)

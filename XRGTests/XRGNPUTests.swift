@@ -42,6 +42,36 @@ import Testing
         option.tag = 20001; restored.selectHistory(option); #expect(miner.numSamples == 300)
         option.tag = 0; restored.selectHistory(option); #expect(miner.numSamples == 200)
     }
+    @Test func timeWindowsKeepAcceptedSamplesAndQuantitiesIndependentWithoutRebasing() throws {
+        _ = NSApplication.shared
+        let domain = "XRG.npu-history.\(UUID().uuidString)", prefs = try #require(UserDefaults(suiteName: domain))
+        defer { prefs.removePersistentDomain(forName: domain) }
+        let settings = XRGSettings(defaults: prefs); settings.graphRefresh = 1
+        var now = 1.0, wall = 100.0, value = reading(1,1000), calls = 0
+        let miner = XRGNPUMiner(source: { calls += 1; return value }, clock: { now }, historyClock: { wall })
+        let view = XRGNPUView(frame:NSRect(x:0,y:0,width:200,height:90),miner:miner,settings:settings,defaults:prefs)
+        now=2;wall=101;value=reading(2,3000);view.graphUpdate(nil)
+        now=3;wall=111;value=reading(3,3000);view.graphUpdate(nil)
+        let before=calls, option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+        #expect(view.historyData()[1].numValues==61 && view.historyData()[1].orderedValues[50]==2 && view.historyData()[1].currentValue==0)
+        #expect(view.historyData()[1].orderedValues[51..<60].allSatisfy { $0==XRGGraphRenderer.missingValue })
+        #expect(calls==before && miner.powerWatts==0)
+        let count=miner.timedPower.observationCount;wall=112;view.graphUpdate(nil)
+        #expect(miner.timedPower.observationCount==count)
+        settings.graphRefresh=0.2;#expect(view.historyData()[1].numValues==301)
+        let menu=try #require(view.makeMenu().items.first { $0.title=="NPU Time Window" }?.submenu)
+        #expect(menu.items.allSatisfy { $0.target===view })
+        now=4;wall=113;value=reading(4,nil)
+        value.activity = .init(start:3,end:4,clusters:[.init(id:"ANE",states:["ACT":50,"IDLE":50])])
+        value.traffic = .init(start:3,end:4,channels:[.init(id:"bus",states:["1GB/s":1])])
+        view.graphUpdate(nil)
+        #expect(miner.powerWatts==nil && view.historyData()[1].orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue })
+        #expect(view.historyData()[0].currentValue==50 && view.historyData()[2].currentValue==1)
+        option.tag=61;view.selectHistoryWindow(option);#expect(view.historyMinutes==1)
+        option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && miner.numSamples==300)
+        now=5;wall=114;value=reading(5,9000);view.graphUpdate(nil);#expect(miner.powerWatts==nil)
+        now=6;wall=115;value=reading(6,11000);view.graphUpdate(nil);#expect(miner.powerWatts==2)
+    }
     private let device = XRGNPUDevice(id: 1,cores: 16,architecture: "fixture",firmwareLoaded: true)
     private func reading(_ time: Double,_ value: Int64?,unit: String = "mJ",id: String = "ane") -> XRGNPUReading {
         XRGNPUReading(time: time,devices: [device],appleSilicon: true,

@@ -28,7 +28,7 @@ fn compact_defaults_and_existing_profiles_preserve_custom_choices() {
     old.module_mut(Module::Memory).style = GraphStyle::Hollow;
     old.activity_bars.use_series_colors = false;
     let loaded = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    old.version = 35;
+    old.version = 36;
     old.modules.push(weather);
     assert_eq!(loaded, old);
 }
