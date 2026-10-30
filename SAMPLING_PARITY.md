@@ -98,10 +98,42 @@ Hidden display is not proof of zero hardware I/O: initialization, shared consume
 in-flight requests and independent inspector windows can still read a source.
 No hardware-control writes or new permission/opt-in behavior are introduced here.
 
+## Native callback latency baseline
+
+`Tools/profile-macos-collectors.py` uses the opt-in module-manager diagnostic hook;
+normal app dispatch reads no measurement clock. A private-domain standalone helper
+measures normal main-actor callbacks, source calls and cached-label work, with setup
+reported separately. It excludes drawing, real menu interaction, NPU async execution
+and whole-app responsiveness. Cache/gated hits count as callbacks, not hardware reads.
+See `Tools/CollectorProfile/README.md` for reproducible invocation and limitations.
+
+Local Debug baseline, 2026-10-30: Mac17,4 on macOS 27.2, 60 cycles with 0.25-second
+delay/target and GPU/sensor paths requested. Both runs use the same physical Apple
+silicon machine; x86-64 is Rosetta, not physical Intel. Whole-cycle measurements
+include diagnostic overhead. No known temperature channels were reported, so these
+runs cannot establish fresh temperature-read latency or hardware coverage.
+
+| Callback / cycle | ARM64 median / p95 / max ms | Rosetta x86-64 median / p95 / max ms |
+| --- | --- | --- |
+| GPU | 4.074 / 5.044 / 5.155 | 5.253 / 6.372 / 7.318 |
+| Network | 1.396 / 1.646 / 2.164 | 1.719 / 2.142 / 2.228 |
+| CPU | 1.033 / 1.586 / 1.842 | 1.901 / 2.882 / 3.134 |
+| Disk | 1.009 / 1.343 / 1.491 | 1.494 / 2.065 / 2.919 |
+| Complete normal cycle | 8.617 / 10.291 / 10.911 | 12.660 / 14.683 / 15.259 |
+
+GPU is the largest measured callback here. This measures the combined callback,
+not isolated IOKit duration or a general performance guarantee. The first worker
+candidate is GPU snapshot collection; preserve shared GPU/VRAM deduplication,
+source identities, failure gaps and completion timestamps. Coalesce work rather
+than queueing missed ticks, reject results invalidated by lifecycle/reset changes,
+and prove UI delivery stays available with a deliberately stalled fixture reader.
+Keep histories/publication on the main actor and append once per completed read.
+
 ## Next work
 
-1. Measure native collector latency and interaction under real hardware load;
-   isolate expensive collection with cancellation/stale-result guards as needed.
+1. Move GPU snapshot reading off the main actor with coalescing and generation
+   guards; use the diagnostic baseline above, then measure real interaction and
+   unavailable sensor paths separately.
 2. Audit remaining optional-source visibility policies; specify any explicit
    Pause/Resume control, separating display freeze from stopping accounting.
 3. Audit wake/long-gap handling and interval-edit phase behavior for counter-based

@@ -692,3 +692,9 @@ Mac monitoring timers continue through AppKit menu/drag tracking and modal panel
 collectors still execute on the main thread. Sampling and lifecycle differences
 and the remaining plan are tracked in
 [SAMPLING_PARITY.md](SAMPLING_PARITY.md).
+
+Developer callback profiling is available through
+[Tools/CollectorProfile/README.md](Tools/CollectorProfile/README.md). It uses private
+preferences and an opt-in timing hook; normal app dispatch does not read a timing
+clock. Current local measurements and their limits are recorded in
+[SAMPLING_PARITY.md](SAMPLING_PARITY.md).

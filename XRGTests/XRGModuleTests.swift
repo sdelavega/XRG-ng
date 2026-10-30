@@ -131,6 +131,44 @@ struct XRGModuleTests {
         }
     }
 
+    @Test func callbackMeasurementsAreOptInAndPreserveSnapshotAndEligibility() throws {
+        try withDefaults { defaults in
+            let manager = XRGModuleManager(), first = module("first", 0, defaults: defaults), hidden = module("hidden", 1, defaults: defaults)
+            hidden.isDisplayed = false; hidden.alwaysDoesGraphUpdate = true
+            let a = try #require(first.reference as? ModuleView), b = try #require(hidden.reference as? ModuleView)
+            manager.addModule(first); manager.addModule(hidden)
+            defer { a.onGraph = nil; b.onGraph = nil }
+            var now = 1.0, clockReads = 0
+            manager.updateClock = { clockReads += 1; return now }
+            a.onGraph = { now += 0.25 }; b.onGraph = { now += 0.5 }
+            manager.graphUpdate(); #expect(clockReads == 0)
+            var records: [(String, String, Double)] = []
+            manager.onUpdateMeasurement = { records.append(($0, $1, $2)) }
+            a.onGraph = { now += 0.25; manager.removeModule(hidden); hidden.name = "changed" }
+            manager.graphUpdate()
+            #expect(records.map { $0.0 } == ["first", "hidden"] && records.allSatisfy { $0.1 == "normal" })
+            #expect(records.map { $0.2 } == [0.25, 0.5] && clockReads == 4)
+            first.doesFastUpdate = true; first.doesMin5Update = true; first.doesMin30Update = true
+            manager.fastUpdate(); manager.min5Update(); manager.min30Update()
+            #expect(records.suffix(3).map { $0.1 } == ["fast", "min5", "min30"] && records.suffix(3).allSatisfy { $0.2 == 0 })
+            #expect(b.events == ["graph", "graph"])
+        }
+    }
+    @Test func invalidMeasurementClocksNeverSuppressTheCollectorCallback() throws {
+        try withDefaults { defaults in
+            let manager = XRGModuleManager(), graph = module("graph", 0, defaults: defaults)
+            let view = try #require(graph.reference as? ModuleView); manager.addModule(graph)
+            var records = 0
+            manager.onUpdateMeasurement = { _, _, _ in records += 1 }
+            for pair in [(Double.nan, 2.0), (1.0, Double.infinity), (-1.0, 2.0), (2.0, 1.0)] {
+                var times = [pair.0, pair.1]
+                manager.updateClock = { times.removeFirst() }
+                manager.graphUpdate()
+            }
+            #expect(records == 0 && view.events == Array(repeating: "graph", count: 4))
+        }
+    }
+
     @Test func callbackMutationUsesRecipientSnapshotAndDisplayOrder() throws {
         try withDefaults { defaults in
             let manager = XRGModuleManager()

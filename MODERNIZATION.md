@@ -2006,3 +2006,42 @@ Linux was source-reviewed, not retested. Physical Intel/macOS 26 runtime, real
 sleep/wake, power impact and hardware-load latency remain unverified.
 Cleanup removed the two inventoried task build roots and 772 empty private test
 preferences, approximately 3.07 GiB reclaimed, with no errors.
+
+### Measure native collector callbacks before worker migration
+
+Added an internal opt-in module-manager timing observer and standalone profiling
+tool. With no observer, dispatch never reads the measurement clock. Recipient and
+name snapshots preserve mutation/visibility behavior across normal, fast and
+five-/thirty-minute phases. Invalid/reversed clocks drop only the measurement,
+never the callback. Deterministic regressions cover those boundaries and injected
+durations; default app operation does not retain or emit profiling data.
+
+The tool compiles/signs a local Debug helper from fresh testable products, copies
+the framework, isolates a generated preference domain and clears it afterward.
+Core panels are default; GPU/VRAM/temperature/fan reads require --hardware. No
+AI/provider or process-inspector collection is performed. Reports validate sample
+counts/statistics and retain OS/model, host/helper architecture and binary/source
+identities. Counts are callback counts, including cache/gate hits. Setup is
+separate; drawing, real menus, async worker work and whole-app responsiveness
+are excluded. No worker scheduling or collection policy changed in this pass.
+
+On Mac17,4/macOS 27.2, 60 cycles at a 0.25-second delay/target with hardware paths
+requested measured GPU median/p95/max 4.074/5.044/5.155 ms on ARM64, and
+5.253/6.372/7.318 ms under Rosetta. Whole-cycle medians were 8.617 and 12.660 ms,
+including diagnostics overhead. No known temperature channels were reported;
+these runs do not validate fresh sensor-read latency. GPU was the largest measured
+callback and is the next worker candidate, with GPU/VRAM coalescing, lifecycle/reset
+generation guards, completion timestamps and one observation per actual completed
+read preserved. SAMPLING_PARITY.md records the baseline and acceptance boundaries.
+
+Validation: full `Tools/ci-macos.sh Debug` passed 603 cases with zero failures on
+ARM64 and 603 under Rosetta x86-64, plus universal build, metadata/notices and
+retired-symbol guards, isolated AppKit restore and both packaged original-nib
+launch checks. Both 60-cycle profiles, a two-cycle core-only tool smoke, CLI bounds
+checks and private-domain cleanup passed. Evidence, reports and source/framework
+identities are in `dist/collector-latency-validation`, excluding DerivedData.
+Linux/Shared code is unchanged and was not retested. Physical Intel/macOS 26
+runtime, real suspend/resume and whole-app interaction remain unverified.
+Cleanup removed the exact inventoried build root and 600 empty private test
+preferences, approximately 1.94 GiB, with no errors. All profiling domains had
+already been cleared by the tool; no installed app preferences were changed.

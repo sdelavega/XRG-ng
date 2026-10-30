@@ -41,6 +41,9 @@ public final class XRGModuleManager: NSObject {
     private var allModules: [XRGModule] = []
     private weak var window: (any XRGModuleWindow)?
     private var laidOutSize: NSSize?
+    // Internal, opt-in diagnostics. Normal dispatch does not read a timing clock.
+    @nonobjc var onUpdateMeasurement: ((String, String, TimeInterval) -> Void)?
+    @nonobjc var updateClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     public var graphOrientationVertical = true
     public var moduleSeparatorWidth: CGFloat = 2
 
@@ -241,24 +244,35 @@ public final class XRGModuleManager: NSObject {
         updateWindowMinimum()
     }
 
-    // Copy the recipients before invoking views: a callback may change registration.
+    // Snapshot names and recipients before invoking views: callbacks can change registration.
+    @nonobjc private func dispatchUpdates(_ modules: [XRGModule], phase: String,
+                                          _ action: (any XRGModuleView) -> Void) {
+        let targets = modules.compactMap { module in module.updateTarget.map { (module.name ?? "Unnamed", $0) } }
+        guard let report = onUpdateMeasurement else {
+            for (_, target) in targets { action(target) }
+            return
+        }
+        for (name, target) in targets {
+            let start = updateClock()
+            action(target)
+            let end = updateClock()
+            if start.isFinite, end.isFinite, start >= 0, end >= start {
+                report(name, phase, end - start)
+            }
+        }
+    }
     public func min30Update() {
-        let targets = displayed.filter(\.doesMin30Update).compactMap(\.updateTarget)
-        for target in targets { target.min30Update(nil) }
+        dispatchUpdates(displayed.filter(\.doesMin30Update), phase: "min30") { $0.min30Update(nil) }
     }
     public func min5Update() {
-        let targets = displayed.filter(\.doesMin5Update).compactMap(\.updateTarget)
-        for target in targets { target.min5Update(nil) }
+        dispatchUpdates(displayed.filter(\.doesMin5Update), phase: "min5") { $0.min5Update(nil) }
     }
     public func graphUpdate() {
-        let targets = (displayed.filter(\.doesGraphUpdate)
-            + allModules.filter { !$0.isDisplayed && $0.alwaysDoesGraphUpdate })
-            .compactMap(\.updateTarget)
-        for target in targets { target.graphUpdate(nil) }
+        dispatchUpdates(displayed.filter(\.doesGraphUpdate)
+            + allModules.filter { !$0.isDisplayed && $0.alwaysDoesGraphUpdate }, phase: "normal") { $0.graphUpdate(nil) }
     }
     public func fastUpdate() {
-        let targets = displayed.filter(\.doesFastUpdate).compactMap(\.updateTarget)
-        for target in targets { target.fastUpdate(nil) }
+        dispatchUpdates(displayed.filter(\.doesFastUpdate), phase: "fast") { $0.fastUpdate(nil) }
     }
 
     @objc(resizeModuleNumber:byDelta:)
