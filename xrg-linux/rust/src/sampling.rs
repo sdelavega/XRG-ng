@@ -9,14 +9,17 @@ use std::{
     },
     time::{Duration, Instant},
 };
-pub const MIN_MS: u32 = 250;
+pub const MIN_MS: u32 = 200;
 pub const MAX_MS: u32 = 10_000;
 pub fn default_interval() -> u32 {
     1000
 }
 pub fn interval(milliseconds: u32) -> Result<Duration, String> {
-    if !(MIN_MS..=MAX_MS).contains(&milliseconds) {
-        return Err("System sampling interval must be between 250 and 10000 milliseconds".into());
+    let [min, max, _, _] = crate::shared::sampling_settings();
+    if !(min..=max).contains(&milliseconds) {
+        return Err(format!(
+            "System sampling interval must be between {min} and {max} milliseconds"
+        ));
     }
     Ok(Duration::from_millis(u64::from(milliseconds)))
 }
@@ -140,6 +143,10 @@ mod tests {
     use super::*;
     #[test]
     fn interval_bounds_and_default_are_explicit() {
+        assert_eq!(
+            crate::shared::sampling_settings(),
+            [MIN_MS, MAX_MS, default_interval(), 20_000]
+        );
         assert_eq!(
             interval(default_interval()).unwrap(),
             Duration::from_secs(1)

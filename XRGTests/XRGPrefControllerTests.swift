@@ -227,14 +227,17 @@ struct XRGPrefControllerTests {
         #expect(f.graph.appSettings?.netMinGraphScale == scale && !f.inputs.errors.isEmpty)
         #expect(!f.pref.persistPreferences() && NSDictionary(dictionary: f.defaults.persistentDomain(forName: f.domain) ?? [:]).isEqual(to: original))
     }
-    @Test(arguments: [0.125, 0.25, 1.0, 3600.0])
+    @Test(arguments: [0.125, 0.25, 0.375, 1.0, 3600.0])
     func openingAndSavingKeepsValidRefreshIntervals(refresh: Double) throws {
         let f = try PreferencesFixture(); defer { f.cleanUp() }
         f.graph.appSettings?.graphRefresh = refresh; f.pref.setUpGeneralPanel()
         #expect(f.pref.graphRefreshValue?.doubleValue == refresh)
+        #expect(f.pref.graphRefreshValue?.minValue == min(0.2, refresh))
+        #expect(f.pref.graphRefreshValue?.maxValue == max(10, refresh))
         #expect(f.pref.persistPreferences() && f.defaults.double(forKey: "graphRefresh") == refresh)
         f.pref.graphRefreshValue?.doubleValue = 0.31; try f.send(f.pref.graphRefreshValue!)
-        #expect(f.pref.graphRefreshValue?.doubleValue == 0.4 && f.graph.appSettings?.graphRefresh == 0.4)
+        #expect(f.pref.graphRefreshValue?.doubleValue == 0.31 && f.graph.appSettings?.graphRefresh == 0.31)
+        #expect(f.pref.graphRefreshText?.stringValue.contains("0.31") == true)
     }
     @Test func interfaceItemsKeepIdentityAndPersistTheirRepresentedValue() throws {
         let f = try PreferencesFixture(); defer { f.cleanUp() }

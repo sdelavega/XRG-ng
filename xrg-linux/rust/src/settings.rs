@@ -312,6 +312,9 @@ pub struct MetricSelection {
     pub battery_mode: crate::battery::Mode,
     /// None selects the aggregate; a number selects one logical CPU.
     pub cpu: Option<u32>,
+    /// Zero retains the historical 120-sample default; explicit counts survive resizing.
+    #[serde(skip_serializing_if = "zero_cpu_history")]
+    pub cpu_history_samples: u32,
     pub network: Option<String>,
     pub disk: Option<String>,
     /// Collector-provided identity, compared with inventory; never used as a path.
@@ -329,8 +332,14 @@ pub struct MetricSelection {
 fn empty_sensor_extras(value: &[Option<String>; 2]) -> bool {
     value.iter().all(Option::is_none)
 }
+fn zero_cpu_history(value: &u32) -> bool {
+    *value == 0
+}
 impl MetricSelection {
     pub fn validate(&self) -> Result<(), String> {
+        if self.cpu_history_samples > shared::sampling_settings()[3] {
+            return Err("CPU history must be automatic or between 1 and 20000 samples".into());
+        }
         if self.cpu.is_some_and(|n| n > 1_048_575) {
             return Err("CPU index is out of range".into());
         }
@@ -474,7 +483,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 25,
+            version: 26,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -544,7 +553,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 25 {
+        if self.version != 26 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -718,6 +727,9 @@ impl Settings {
         }
         if result.version == 24 {
             result.version = 25;
+        }
+        if result.version == 25 {
+            result.version = 26;
         }
         result.validate()?;
         Ok(result)

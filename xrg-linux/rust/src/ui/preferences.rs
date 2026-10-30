@@ -424,7 +424,7 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
             let label = ui.label("System sampling target");
             ui.add(
                 egui::DragValue::new(&mut s.sampling_interval_ms)
-                    .range(250..=10_000)
+                    .range(xrg_ng_linux::sampling::MIN_MS..=xrg_ng_linux::sampling::MAX_MS)
                     .speed(50.)
                     .suffix(" ms"),
             )
@@ -671,6 +671,20 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
     let mut cpu = s.metrics.cpu.map(|v| v.to_string());
     source(ui, "cpu", "CPU", &mut cpu, &options, "All logical CPUs");
     s.metrics.cpu = cpu.and_then(|s| s.parse().ok());
+    ui.horizontal(|ui| {
+        let label = ui.label("Retained CPU samples");
+        ui.add(
+            egui::DragValue::new(&mut s.metrics.cpu_history_samples)
+                .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+        )
+        .labelled_by(label.id);
+    });
+    let capacity = if s.metrics.cpu_history_samples == 0 {
+        120
+    } else {
+        s.metrics.cpu_history_samples
+    };
+    ui.small(format!("0 keeps the 120-sample default. Capacity: {capacity} samples, nominal span {:.3} s at the current target. Delays and cadence changes affect the actual span. Resizing preserves newest observations and collector baselines.", f64::from(capacity.saturating_sub(1)) * f64::from(s.sampling_interval_ms) / 1000.));
     for (label, value, options) in [
         ("Network", &mut s.metrics.network, &inventory.networks),
         ("Disk", &mut s.metrics.disk, &inventory.disks),

@@ -289,7 +289,12 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         bind(ai, #selector(XRGGraphWindow.setShowAITokenGraph(_:))); ai?.state = xrgGraphWindow?.moduleManager?.getModule(byName: "AI Tokens")?.isDisplayed == true ? .on : .off
         bind(graphRefreshValue, #selector(setGraphRefreshAction(_:)), target: self)
         let refresh = XRGGraphWindow.validRefresh(settings.graphRefresh)
-        if let slider = graphRefreshValue { slider.minValue = min(slider.minValue, refresh); slider.maxValue = max(slider.maxValue, refresh); slider.doubleValue = refresh }
+        if let slider = graphRefreshValue {
+            slider.minValue = min(Double(XRGSamplingSettings.minimumMilliseconds) / 1000, refresh)
+            slider.maxValue = max(Double(XRGSamplingSettings.maximumMilliseconds) / 1000, refresh)
+            slider.allowsTickMarkValuesOnly = false
+            slider.doubleValue = refresh
+        }
         updateRefreshText()
         popup(windowLevel, titles: ["Window Level", "Normal", "Foreground", "Background"], selected: settings.windowLevel + 1, action: #selector(XRGGraphWindow.setWindowLevel(_:)))
         windowLevel?.item(at: 0)?.isEnabled = false
@@ -484,7 +489,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     }
     private func updateRefreshText() {
         let refresh = XRGGraphWindow.validRefresh(settings?.graphRefresh)
-        graphRefreshText?.stringValue = abs(refresh - 1) < 0.05 ? "Graph updates every second" : String(format: "Graph updates every %.1f seconds", refresh)
+        graphRefreshText?.stringValue = refresh == 1 ? "Graph updates every second" : String(format: "Graph updates every %.12g seconds", refresh)
     }
     @IBAction public func setGraphRefreshAction(_ sender: Any?) {
         xrgGraphWindow?.setGraphRefreshActionPart2(sender)

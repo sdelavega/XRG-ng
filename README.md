@@ -392,14 +392,27 @@ per logical CPU. Graph width and historical padding no longer affect these readi
 normal/fast baselines, fast-bar smoothing and availability; it does not read hardware.
 Load, uptime and process listings remain system-wide when a core is pinned.
 
+Set CPU retention through **CPU History** in the Mac graph menu or
+**Preferences → Sources → Retained CPU samples** on Linux. Explicit capacities
+retain the newest samples and survive graph resizing without resetting CPU
+counters. Automatic keeps the original defaults: graph width on Mac, 120 samples
+on Linux. Linux accepts 1–20,000 samples; Mac offers presets and retains valid
+custom counts. Displayed time spans are nominal: sampling delays and cadence
+changes affect the actual span. These controls currently apply to CPU history.
+Both builds support sampling targets from 200 ms to 10 seconds. Mac edits retain
+millisecond precision; existing valid Mac preferences outside that range remain
+intact when opened/saved. AI collection keeps its separate five-second cadence.
+
 CPU warm-up, failed reads and zero-progress intervals show `n/a` and graph gaps;
 measured idle remains a valid 0%. Recovery establishes a fresh baseline before
 reporting an interval. All selected cores need valid intervals for an aggregate
 readout; a valid pinned core remains usable when another core has no interval.
 Normal and fast sampling fail/recover independently. CPU inventory count changes
 clear histories and invalidate both streams to avoid mixing logical-slot histories.
-OS tick accounting, retention around failed intervals and suspend/delayed-sampling
-policies still differ between Mac and Linux; Mac retains its stacked system/user/nice presentation.
+Both builds retain CPU observations around missing intervals and reject intervals
+over five minutes. Mac's continuous clock includes sleep; Linux's elapsed clock
+excludes suspend. OS tick accounting and topology/wrap policies still differ;
+Mac retains its stacked system/user/nice presentation.
 The shared Mac renderer now segments missing intervals even with the default curve
 style, so cleared/read-failure gaps do not draw ramps or extend stale values to the
 latest time. Fully measured histories retain the existing default rendering.

@@ -44,6 +44,11 @@ public final class XRGCPUView: NSView, XRGModuleView {
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
     @nonobjc static let sourceKey = "XRGCPUView.Source.v1"
+    @nonobjc static let historyKey = "XRGCPUView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int {
+        let value = defaults.integer(forKey: Self.historyKey)
+        return XRGSamplingSettings.validCPUHistorySamples(value) ? value : 0
+    }
     @nonobjc private(set) var selectedCPU: Int?
     private var sourceWarning: String?
     public private(set) weak var module: XRGModule?
@@ -115,7 +120,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int) {
         guard width >= 0 else { return }
-        let count = min(20_000, width) - (settings?.fastCPUUsage == true ? 7 : 0)
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, width) - (settings?.fastCPUUsage == true ? 7 : 0)
         guard count >= 0 else { return }
         if miner.systemValues.first?.numValues != count { miner.setDataSize(count) }
     }
@@ -275,6 +280,15 @@ public final class XRGCPUView: NSView, XRGModuleView {
             missing.tag = selectedCPU; missing.state = .on; submenu.addItem(missing)
         }
         sources.submenu = submenu; menu.addItem(sources)
+        let retention = item("CPU History", #selector(emptyEvent(_:)))
+        let choices = NSMenu(title: "CPU History")
+        var counts = XRGSamplingSettings.cpuHistoryPresets
+        if !counts.contains(retainedSamples) { counts.append(retainedSamples); counts.sort() }
+        for count in counts {
+            let option = item(count == 0 ? "Automatic (graph width)" : "\(count) samples", #selector(selectHistory(_:)))
+            option.tag = count; option.state = retainedSamples == count ? .on : .off; choices.addItem(option)
+        }
+        retention.submenu = choices; menu.addItem(retention)
         menu.addItem(item("CPU Details…", #selector(showDetails(_:))))
         menu.addItem(item("Processes…", #selector(openProcesses(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
@@ -285,13 +299,22 @@ public final class XRGCPUView: NSView, XRGModuleView {
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @objc func selectHistory(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, XRGSamplingSettings.validCPUHistorySamples(item.tag) else { return }
+        defaults.set(item.tag, forKey: Self.historyKey)
+        setGraphSize(bounds.size); needsDisplay = true
+    }
     public func openProcesses(_ sender: Any?) {
         if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .cpu) }
         processInspector?.present()
     }
     @nonobjc var detailText: String {
         let scope = selectedCPU.map { "logical CPU \($0)" } ?? "all \(miner.numberOfCPUs) logical CPUs"
+        let capacity = miner.systemValues.first?.numValues ?? 0
+        let nominal = XRGSamplingSettings.nominalSpan(samples: capacity, interval: XRGGraphWindow.validRefresh(settings?.graphRefresh))
+            .map { String(format: "%.3f seconds", $0) } ?? "unavailable"
         return [sourceWarning, "Scope: \(scope). \(sourceAvailable ? "Counters available." : "Selected CPU counters unavailable; no replacement is chosen.")",
+                "CPU history capacity: \(capacity) samples. Nominal span at the current sampling target: \(nominal). Delays and cadence changes affect the actual span. Explicit capacity survives graph resizing; Automatic follows graph width. Changing capacity retains newest samples and collector baselines.",
                 "CPU total is core-percent: each logical CPU contributes up to 100%. The aggregate history is normalized to 0–100%; a selected CPU uses its own 0–100% history. System, user and nice retain the existing stacked presentation.",
                 "Average is the latest interval’s mean across the selected logical CPUs, normalized to 0–100%. Graph width, resizing and clearing history do not affect it. All selected cores must have a measured interval; missing or zero-progress intervals show n/a, not idle. Load and uptime remain system-wide; load is not CPU percent. Process listings remain system-wide.",
                 "Selection switches among already collected per-CPU histories without another hardware read. Missing indices stay pinned. Indices are kernel logical-CPU slots and may refer to different hardware after reboot or topology changes. Fast bars are sorted by usage within the selected scope; they are not persistent physical-core labels.",

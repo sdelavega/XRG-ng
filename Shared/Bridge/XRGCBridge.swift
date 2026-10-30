@@ -7,6 +7,14 @@ import Foundation
 // the matching create function and release it exactly once. No Swift layout escapes.
 @c(xrg_shared_abi_version) public func abiVersion() -> UInt32 { 1 }
 
+@c(xrg_sampling_settings) public func samplingSettings(_ output: UnsafeMutablePointer<UInt32>?, _ capacity: UInt32) -> Int32 {
+    guard let output, capacity >= 4 else { return -1 }
+    let values = [XRGSamplingSettings.minimumMilliseconds, XRGSamplingSettings.maximumMilliseconds,
+                  XRGSamplingSettings.defaultMilliseconds, UInt32(XRGSamplingSettings.maximumCPUHistorySamples)]
+    for (index, value) in values.enumerated() { output[index] = value }
+    return 4
+}
+
 /// Additive ABI v1: the same CPU interval boundary on both platforms.
 @c(xrg_cpu_interval_valid) public func cpuIntervalValid(_ previous: Double, _ current: Double) -> Int32 {
     XRGCPUInterval.isValid(previous: previous, current: current) ? 1 : 0
@@ -63,6 +71,11 @@ import Foundation
 }
 @c(xrg_history_free) public func historyFree(_ handle: UnsafeMutableRawPointer?) {
     if let handle { Unmanaged<XRGDataSet>.fromOpaque(handle).release() }
+}
+@c(xrg_history_resize) public func historyResize(_ handle: UnsafeMutableRawPointer?, _ capacity: UInt32) -> Int32 {
+    guard let handle, (1...86_400).contains(capacity) else { return -1 }
+    Unmanaged<XRGDataSet>.fromOpaque(handle).takeUnretainedValue().resize(Int(capacity))
+    return 0
 }
 @c(xrg_history_append) public func historyAppend(_ handle: UnsafeMutableRawPointer?, _ value: Double) -> Int32 {
     guard let handle, value.isFinite else { return -1 }

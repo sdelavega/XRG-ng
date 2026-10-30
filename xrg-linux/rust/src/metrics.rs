@@ -271,6 +271,8 @@ impl Sampler {
     }
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
+        self.cpu
+            .set_history_samples(selection.cpu_history_samples)?;
         if self.selection.cpu != selection.cpu {
             self.cpu.reset_history();
         }

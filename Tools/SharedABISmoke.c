@@ -7,6 +7,10 @@
 #include <string.h>
 int main(void) {
     assert(xrg_shared_abi_version() == 1);
+    uint32_t sampling[4] = {99, 99, 99, 99};
+    assert(xrg_sampling_settings(sampling, 3) == -1 && sampling[0] == 99);
+    assert(xrg_sampling_settings(sampling, 4) == 4);
+    assert(sampling[0] == 200 && sampling[1] == 10000 && sampling[2] == 1000 && sampling[3] == 20000);
     assert(xrg_cpu_interval_valid(0, 300) == 1);
     assert(xrg_cpu_interval_valid(0, 300.001) == 0);
     assert(xrg_cpu_interval_valid(1, 1) == 0);
@@ -68,6 +72,11 @@ int main(void) {
     assert(values[0] == 99 && values[3] == 99);
     assert(xrg_history_copy(history, values, 3) == 3);
     assert(values[0] == 2 && values[1] == 3 && values[2] == 4 && values[3] == 99);
+    assert(xrg_history_resize(history, 0) == -1);
+    assert(xrg_history_resize(history, 2) == 0);
+    assert(xrg_history_copy(history, values, 4) == 2 && values[0] == 3 && values[1] == 4);
+    assert(xrg_history_resize(history, 4) == 0);
+    assert(xrg_history_copy(history, values, 4) == 4 && values[0] == 0 && values[1] == 0 && values[2] == 3 && values[3] == 4);
     xrg_history_free(history);
     void *rate = xrg_rate_create();
     uint64_t delta = 99;

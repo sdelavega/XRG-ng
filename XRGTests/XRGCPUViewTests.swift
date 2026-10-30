@@ -60,6 +60,33 @@ private final class CPUNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGCPUViewTests {
+    @Test func explicitHistoryRetainsNewestSamplesAndBaselinesAcrossResizingAndRelaunch() async throws {
+        try await withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            view.setGraphSize(view.bounds.size)
+            source.advance(); miner.graphUpdate(nil)
+            let value = miner.currentUsage(forCPU: 0), reads = source.reads
+            let option = NSMenuItem(); option.tag = 300
+            view.selectHistory(option)
+            #expect(miner.userValues[0].numValues == 300 && miner.currentUsage(forCPU: 0) == value && source.reads == reads)
+            #expect(miner.userValues[0].currentValue == 40)
+            #expect(miner.userValues[0].orderedValues.prefix(100).allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            view.setFrameSize(NSSize(width: 80, height: 90))
+            #expect(miner.userValues[0].numValues == 300 && source.reads == reads)
+            let restored = panel(miner, settings, defaults); restored.setGraphSize(restored.bounds.size)
+            #expect(restored.retainedSamples == 300 && miner.userValues[0].numValues == 300)
+            option.tag = 20_001; restored.selectHistory(option)
+            #expect(defaults.integer(forKey: XRGCPUView.historyKey) == 300)
+            option.tag = 1; restored.selectHistory(option)
+            source.samples = [XRGCPUTicks(user: 80, system: 40, idle: 60, nice: 20),
+                              XRGCPUTicks(user: 40, system: 20, idle: 140, nice: 0)]
+            miner.graphUpdate(nil)
+            #expect(miner.userValues[0].numValues == 1 && miner.currentUsage(forCPU: 0) == value)
+            option.tag = 0; restored.selectHistory(option)
+            #expect(restored.retainedSamples == 0 && miner.userValues[0].numValues == 200)
+            #expect(restored.detailText.contains("Nominal span") && restored.detailText.contains("actual span"))
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, CPUSource) async throws -> Void) async throws {
         _ = NSApplication.shared
         let domain = "XRG.cpuView.\(UUID().uuidString)"
@@ -433,7 +460,7 @@ struct XRGCPUViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             seed(miner, source)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 20)
+            #expect(menu.items.count == 21)
             #expect(menu.items[1].title == "1200.0% - Process12 (id 5000000012)")
             #expect(menu.items[10].title.contains("Process3"))
             for item in menu.items where !item.isSeparatorItem { #expect(item.target === view) }
@@ -451,14 +478,14 @@ struct XRGCPUViewTests {
     @Test func processMenuHandlesNoResultsAndTiedCPUUsage() async throws {
         try await withFixture { settings, defaults, source in
             let empty = panel(source.miner(), settings, defaults)
-            #expect(empty.makeMenu().items.count == 10)
+            #expect(empty.makeMenu().items.count == 11)
             let records = XRGProcessMiner.parse("20 8 1 1 - u Second\n20 2 1 1 - u First\n1 3 1 1 - u Last")
             let processes = XRGProcessMiner(source: { records }); await processes.refresh()
             let view = panel(source.miner(), settings, defaults, processMiner: processes)
             let menu = view.makeMenu()
             #expect(menu.items[1].title == "20.0% - First (id 2)")
             #expect(menu.items[2].title == "20.0% - Second (id 8)")
-            #expect(menu.items.count == 13)
+            #expect(menu.items.count == 14)
         }
     }
 

@@ -135,7 +135,7 @@ pub struct View {
     histories: [History; 3],
     // The shared finite-only history ABI stores placeholders for gaps. Keep
     // validity separately so unread intervals and initial padding never plot 0%.
-    observed: [bool; 120],
+    observed: Vec<bool>,
     scope: Option<Vec<u32>>,
 }
 impl Default for View {
@@ -144,12 +144,33 @@ impl Default for View {
             previous: None,
             selected: None,
             histories: std::array::from_fn(|_| History::new(120)),
-            observed: [false; 120],
+            observed: vec![false; 120],
             scope: None,
         }
     }
 }
 impl View {
+    pub fn set_history_samples(&mut self, requested: u32) -> Result<(), String> {
+        if requested > crate::shared::sampling_settings()[3] {
+            return Err("CPU history capacity is out of range".into());
+        }
+        let capacity = if requested == 0 {
+            120
+        } else {
+            requested as usize
+        };
+        if capacity != self.observed.len() {
+            let count = capacity.min(self.observed.len());
+            let mut observed = vec![false; capacity];
+            observed[capacity - count..]
+                .copy_from_slice(&self.observed[self.observed.len() - count..]);
+            for history in &mut self.histories {
+                history.resize(capacity as u32);
+            }
+            self.observed = observed;
+        }
+        Ok(())
+    }
     pub fn clear_graph(&mut self) {
         for history in &mut self.histories {
             history.clear();
@@ -271,7 +292,7 @@ impl View {
             result
         });
         self.observed.rotate_left(1);
-        self.observed[119] = result.is_ok();
+        *self.observed.last_mut().expect("Nonempty CPU history") = result.is_ok();
         let mut detail = Vec::new();
         let label = match result {
             Ok(value) => {
@@ -336,7 +357,7 @@ impl View {
                 history
                     .values()
                     .into_iter()
-                    .zip(self.observed)
+                    .zip(self.observed.iter().copied())
                     .map(|(value, observed)| if observed { value } else { f64::NAN })
                     .collect()
             })
@@ -365,6 +386,7 @@ impl View {
         detail.insert(0, label.clone());
         detail.push(format!("Scope: {}. Graph curves: total non-idle / user including nice / system including reported interrupts; independent percentages, not stacked. Idle includes iowait for the total curve. Guest time already in user/nice is not counted twice. Steal is hypervisor wait, not executed CPU work. Counter regressions (including iowait), counter layout and scope changes clear the affected history. Failed reads, zero-progress counters and invalid or delayed intervals leave gaps while retaining earlier observations. CPU intervals must increase on the worker's monotonic clock and be at most five minutes; it excludes suspend on Linux. Recovery establishes a fresh baseline. Clearing graphs preserves the collector baseline.", selected.map(|id| format!("logical CPU {id}")).unwrap_or_else(|| "all reported logical CPUs (100% is aggregate capacity)".into())));
         detail.push(overview.description());
+        detail.push(format!("CPU history capacity: {} samples. Capacity changes preserve newest samples, gaps and collector baselines. Sampling delays and cadence changes affect the actual retained time span.", self.observed.len()));
         (
             Panel {
                 title: "CPU",

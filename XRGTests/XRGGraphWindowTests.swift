@@ -102,7 +102,7 @@ struct XRGGraphWindowTests {
         #expect(f.graph.updates == [1, 1, 1, 1])
         let field = NSTextField(); field.doubleValue = 0.31
         f.window.setGraphRefreshActionPart2(field)
-        #expect(!timers[2].isValid && f.window.graphTimer?.timeInterval == 0.4 && f.window.appSettings?.graphRefresh == 0.4)
+        #expect(!timers[2].isValid && f.window.graphTimer?.timeInterval == 0.31 && f.window.appSettings?.graphRefresh == 0.31)
         #expect(f.window.min30Timer === timers[0] && f.window.min5Timer === timers[1] && f.window.fastTimer === timers[3] && f.window.aiTimer === timers[4])
         let replacement = f.window.graphTimer
         for value in [0, -1, Double.nan, Double.infinity] { field.doubleValue = value; f.window.setGraphRefreshActionPart2(field) }

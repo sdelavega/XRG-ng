@@ -325,8 +325,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     @IBAction public func setGraphRefreshActionPart2(_ sender: Any?) {
         guard let control = sender as? NSControl, control.doubleValue.isFinite, control.doubleValue > 0 else { return }
-        let value = max(0.2, (control.doubleValue * 5).rounded() / 5)
-        guard value.isFinite else { return }
+        guard let value = XRGSamplingSettings.editedSeconds(control.doubleValue) else { return }
         appSettings?.graphRefresh = value
         graphTimer?.invalidate(); graphTimer = timer(value, #selector(graphUpdate(_:)))
     }

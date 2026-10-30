@@ -109,6 +109,19 @@ Implemented in development for monitoring tools:
   Mac stacks system/user/nice while Linux plots
   independent non-idle/user/system curves. Linux may still have a valid kernel
   aggregate when an individual logical-CPU interval is unavailable.
+- CPU retention now has explicit capacities on both platforms. Mac's CPU History
+  graph menu offers presets; Linux Preferences / Sources accepts 1–20,000 retained
+  samples. Valid custom Mac counts remain selectable. Automatic preserves legacy
+  defaults (Mac graph width, Linux 120 samples). Resizing retains newest values and
+  gaps without resetting collector baselines; explicit capacity survives window
+  resizing. Nominal spans describe point spacing at the current target, not a
+  measured time axis. Shared Swift owns bounds and history resizing, exposed to
+  Rust by additive ABI v1 functions. Linux settings migrate read-only to version 26
+  and write the new version only on save. Preferences remain platform-local.
+  Both normal sampling controls cover 200 ms–10 s, with millisecond precision;
+  valid legacy Mac values outside that range survive opening/saving. Mac restarts
+  its graph timer on edits; Linux retimes from the worker's last sample start.
+  AI/fast sampling stays independent. Other graphs still need retention controls.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,
@@ -213,8 +226,9 @@ Remaining monitoring work:
    curves; Linux now has charge/power modes and independent weather units.
    Port Stocks if retained in the common set.
 4. Desktop behavior: align other supported window controls and preserve explicit
-   compositor limitations. Linux now supports collapse/hover expansion. Align history duration and sampling
-   controls without equating different OS memory or NPU measurements.
+   compositor limitations. Linux now supports collapse/hover expansion. Extend CPU
+   retention controls to other graphs and define timestamp-based retention;
+   align remaining scheduling behavior without equating different OS memory or NPU measurements.
 
 Each pass needs UI, persistence, cancellation, invalid/unavailable-data and fixture
 coverage on both platforms. Compare metric meaning and supported interactions,

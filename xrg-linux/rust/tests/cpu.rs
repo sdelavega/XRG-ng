@@ -306,6 +306,35 @@ fn recovery_after_invalid_clock_and_inventory_change_never_reuses_an_old_scope()
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+#[test]
+fn capacity_changes_preserve_latest_values_gaps_and_the_counter_baseline() {
+    let mut view = View::default();
+    view.set_history_samples(3).unwrap();
+    view.panel(records(0, true), &overview(), None, 0.);
+    view.panel(records(1, true), &overview(), None, 1.);
+    view.panel(records(2, true), &overview(), None, 2.);
+    view.panel(Err("read failed".into()), &overview(), None, 3.);
+    view.set_history_samples(6).unwrap();
+    view.panel(records(3, true), &overview(), None, 4.);
+    let recovered = view.panel(records(4, true), &overview(), None, 5.).0;
+    let values = &recovered.series[0];
+    assert_eq!(values.len(), 6);
+    assert!(values[0].is_nan() && values[3].is_nan() && values[4].is_nan());
+    assert_eq!([values[1], values[2], values[5]], [45., 45., 45.]);
+    view.set_history_samples(2).unwrap();
+    assert!(view.set_history_samples(20_001).is_err());
+    let panel = view.panel(records(5, true), &overview(), None, 6.).0;
+    assert_eq!(panel.series[0], [45., 45.]); // No warm-up or baseline reset.
+    view.clear_graph();
+    let panel = view.panel(records(6, true), &overview(), None, 7.).0;
+    assert!(panel.series[0][0].is_nan());
+    assert_eq!(panel.series[0][1], 45.);
+    view.set_history_samples(0).unwrap();
+    let panel = view.panel(records(7, true), &overview(), None, 8.).0;
+    assert_eq!(panel.series[0].len(), 120);
+    assert!(panel.series[0][..118].iter().all(|v| v.is_nan()));
+    assert_eq!(&panel.series[0][118..], &[45., 45.]);
+}
 struct Fixture(PathBuf);
 impl Drop for Fixture {
     fn drop(&mut self) {

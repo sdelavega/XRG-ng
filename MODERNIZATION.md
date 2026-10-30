@@ -1326,3 +1326,31 @@ timed out and passed an unchanged rerun; logs retain that limitation. The dispos
 image needed the X11/Wayland packages already listed in the hosted CI workflow.
 Evidence is in `dist/cpu-cadence-validation`; physical Intel, other Linux hardware
 and real sleep/wake behavior remain unverified.
+
+### CPU retention controls and precise sampling targets
+
+Mac's CPU History menu and Linux Preferences / Sources now provide explicit CPU
+sample capacities, preserving newest observations, gap masks and counter baselines
+when capacity changes. Explicit capacities survive window resizing. Automatic
+retains the original width-based Mac / 120-sample Linux defaults. Shared Swift owns
+the capacity/range policy and resizes histories through additive C ABI v1 functions.
+Linux settings version 26 upgrades old files without writing until save; invalid
+capacity edits preserve the saved file. Capacity estimates describe nominal point
+spacing, not actual elapsed time or timestamp-based retention.
+
+Normal sampling controls share 200 ms–10 s. Mac removes fifth-second quantization,
+keeps millisecond precision in edits and labels, and preserves valid legacy values
+outside the common range on open/save. Existing AI and fast timers remain separate.
+This pass covers CPU retention; other graph capacities and timer-phase/suspend
+differences remain tracked in PLATFORM_PARITY.md.
+
+Validation: universal Mac build, 564 tests per ARM64/x86_64 Rosetta architecture,
+and native/packaged launch checks; Linux ARM64 passed 31 shared Swift tests, the C
+ABI smoke, strict Clippy and 546 Rust tests, plus the egui and all sixteen X11 /
+nested-Wayland collapse cases at normal/scaled sizes. A GUI gate confirms 300
+samples and 200 ms reach the live worker and persist. The Sources preferences and
+native CPU history menu were visually inspected with private fixture settings.
+Linux Debug/test builds omitted debug symbols to reduce temporary disk use;
+optimization and test assertions were unchanged. Evidence is retained in
+`dist/cpu-retention-validation`. Physical Intel/Linux x86-64, macOS 26 runtime and
+actual sleep/wake remain unverified.

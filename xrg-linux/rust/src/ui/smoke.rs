@@ -174,7 +174,12 @@ impl Harness {
 
         if self.stage == 5
             && self.wake.is_some_and(|(before, t)| {
-                sequence <= before && t.elapsed() > Duration::from_secs(3)
+                (sequence <= before
+                    || app
+                        .snapshot
+                        .as_ref()
+                        .is_none_or(|s| s.selection.cpu_history_samples != 300))
+                    && t.elapsed() > Duration::from_secs(3)
             })
         {
             self.fail(
@@ -210,6 +215,7 @@ impl Harness {
                                     Some(xrg_ng_linux::weather::WindUnits::Knots);
                             }
                             Ok("graphs") => editor.tab = 1,
+                            Ok("sources") => editor.tab = 2,
                             _ => (),
                         }
                     }
@@ -287,7 +293,8 @@ impl Harness {
                 }
                 4 if app.saved_revision == app.revision => {
                     let mut next = app.settings.clone();
-                    next.sampling_interval_ms = 250;
+                    next.sampling_interval_ms = 200;
+                    next.metrics.cpu_history_samples = 300;
                     next.network_min_scale = 65_536;
                     next.graph_width = 180;
                     next.layout = Layout::Horizontal;
@@ -310,8 +317,24 @@ impl Harness {
                     self.stage = 5;
                 }
                 5 if app.saved_revision == app.revision
-                    && self.wake.is_some_and(|(before, _)| sequence > before) =>
+                    && self.wake.is_some_and(|(before, _)| sequence > before)
+                    && app
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.selection.cpu_history_samples == 300) =>
                 {
+                    if !app.snapshot.as_ref().is_some_and(|s| {
+                        s.panels.iter().find(|p| p.title == "CPU").is_some_and(|p| {
+                            p.series.len() == 3 && p.series.iter().all(|v| v.len() == 300)
+                        })
+                    }) {
+                        return Err(
+                            "Applied CPU history capacity did not reach the live worker".into()
+                        );
+                    }
+                    println!(
+                        "CPU_HISTORY_SMOKE_OK 300 samples, 200 ms cadence, live worker acknowledged"
+                    );
                     let (_, saved, error) = Store::open(Some(self.path()));
                     if error.is_some() || saved != app.settings {
                         return Err(format!("Settings reopen mismatch: {error:?}"));

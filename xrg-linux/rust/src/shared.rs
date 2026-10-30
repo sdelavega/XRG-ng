@@ -3,6 +3,8 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_sampling_settings(output: *mut u32, capacity: u32) -> i32;
+    fn xrg_history_resize(handle: *mut c_void, capacity: u32) -> i32;
     fn xrg_cpu_interval_valid(previous: f64, current: f64) -> i32;
     fn xrg_ai_sampling_milliseconds() -> u64;
     fn xrg_log_file_continues(
@@ -186,6 +188,19 @@ pub struct History {
     _local: PhantomData<Rc<()>>,
 }
 impl History {
+    pub fn resize(&mut self, length: u32) {
+        assert!((1..=86_400).contains(&length));
+        assert_eq!(
+            unsafe { xrg_history_resize(self.handle.as_ptr(), length) },
+            0
+        );
+        self.visible_after_clear = Some(
+            self.visible_after_clear
+                .unwrap_or(self.length as usize)
+                .min(length as usize),
+        );
+        self.length = length;
+    }
     pub fn new(length: u32) -> Self {
         assert!((1..=86_400).contains(&length));
         Self {
@@ -674,6 +689,12 @@ mod log_continuity_tests {
 
 pub fn ai_sampling_milliseconds() -> u64 {
     unsafe { xrg_ai_sampling_milliseconds() }
+}
+
+pub fn sampling_settings() -> [u32; 4] {
+    let mut values = [0; 4];
+    assert_eq!(unsafe { xrg_sampling_settings(values.as_mut_ptr(), 4) }, 4);
+    values
 }
 
 pub fn cpu_interval_valid(previous: f64, current: f64) -> bool {
