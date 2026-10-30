@@ -24,13 +24,15 @@
 #ifndef XRGHIDTransport_h
 #define XRGHIDTransport_h
 #import <Foundation/Foundation.h>
-#import "APSL/IOHIDEventTypes.h"
-#import "APSL/AppleHIDUsageTables.h"
 #import <IOKit/hidsystem/IOHIDEventSystemClient.h>
 #import <IOKit/hidsystem/IOHIDServiceClient.h>
 #include <TargetConditionals.h>
 
+// Minimal ABI declarations for the temperature event only; no vendor header copy.
 typedef struct __IOHIDEvent *IOHIDEventRef;
+typedef double IOHIDFloat;
+enum { XRGHIDVendorPage = 0xff00, XRGHIDTemperatureUsage = 5,
+       XRGHIDTemperatureEvent = 15, XRGHIDTemperatureField = 15 << 16 };
 #if defined(XRG_SENSOR_TEST_TRANSPORTS)
 #define XRGHIDCreateClient XRGTestHIDCreateClient
 #define XRGHIDSetMatching XRGTestHIDSetMatching

@@ -7,13 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		FCAD26003092000000000001 /* SMCInterface.m in Test Sources */ = {isa = PBXBuildFile; fileRef = 937851A8157CA243001D2A15 /* SMCInterface.m */; settings = {COMPILER_FLAGS = "-DXRG_SENSOR_TEST_TRANSPORTS=1"; }; };
-		FCAC26003091000000000001 /* SMCSensorNames.plist in Test Resources */ = {isa = PBXBuildFile; fileRef = 93151A0C254094EF0095E424 /* SMCSensorNames.plist */; };
+		FCAD26003092000000000001 /* XRGSMCChannel.m in Test Sources */ = {isa = PBXBuildFile; fileRef = 937851A8157CA243001D2A15 /* XRGSMCChannel.m */; settings = {COMPILER_FLAGS = "-DXRG_SENSOR_TEST_TRANSPORTS=1"; }; };
 		FCAB26013090000000000000 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = FCAB26003090000000000000 /* LICENSE */; };
 		FCAB26013090000000000001 /* COPYRIGHT in Resources */ = {isa = PBXBuildFile; fileRef = FCAB26003090000000000001 /* COPYRIGHT */; };
 		FCAB26013090000000000002 /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = FCAB26003090000000000002 /* THIRD_PARTY_NOTICES.md */; };
 		FCAB26013090000000000003 /* Credits.html in Resources */ = {isa = PBXBuildFile; fileRef = FCAB26003090000000000003 /* Credits.html */; };
-		FCAB26013090000000000004 /* APSL.txt in Resources */ = {isa = PBXBuildFile; fileRef = FCAB26003090000000000004 /* APSL.txt */; };
 		271FA60F15AC79A100E16233 /* Online Help in Resources */ = {isa = PBXBuildFile; fileRef = 271FA60E15AC79A100E16233 /* Online Help */; };
 		273ECE6A15740DE700E65D82 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 273ECE6915740DE700E65D82 /* Cocoa.framework */; };
 		273ECF0215740EAF00E65D82 /* XRGTemperatureHardwareReader.m in Sources */ = {isa = PBXBuildFile; fileRef = 273ECE9E15740EAF00E65D82 /* XRGTemperatureHardwareReader.m */; };
@@ -34,8 +32,7 @@
 		273ECF64157413D200E65D82 /* icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 273ECF63157413D200E65D82 /* icon.icns */; };
 		273ECF661574145100E65D82 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 273ECF651574145100E65D82 /* IOKit.framework */; };
 		278E90B923F21F6600874941 /* Sensors.xib in Resources */ = {isa = PBXBuildFile; fileRef = 278E90B823F21F6600874941 /* Sensors.xib */; };
-		93151A0D254094EF0095E424 /* SMCSensorNames.plist in Resources */ = {isa = PBXBuildFile; fileRef = 93151A0C254094EF0095E424 /* SMCSensorNames.plist */; };
-		937851AA157CA243001D2A15 /* SMCInterface.m in Sources */ = {isa = PBXBuildFile; fileRef = 937851A8157CA243001D2A15 /* SMCInterface.m */; };
+		937851AA157CA243001D2A15 /* XRGSMCChannel.m in Sources */ = {isa = PBXBuildFile; fileRef = 937851A8157CA243001D2A15 /* XRGSMCChannel.m */; };
 		93C915F32550346600220EC5 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 93C915F22550346600220EC5 /* Accelerate.framework */; };
 		A1B2C3D4E5F6071829AABBCC /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829AABBDD /* libsqlite3.tbd */; };
 		FC9F0ADD308E5AE2001445A9 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC9F0ADC308E5AE2001445A9 /* UniformTypeIdentifiers.framework */; };
@@ -46,13 +43,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		FCAD26003092000000000002 /* SMCPacket.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SMCPacket.h; sourceTree = "<group>"; };
 		FCAB26023090000000000001 /* XRGHIDTransport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = XRGHIDTransport.h; path = "Data Miners/XRGHIDTransport.h"; sourceTree = SOURCE_ROOT; };
 		FCAB26003090000000000000 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "LICENSE"; path = "LICENSE"; sourceTree = SOURCE_ROOT; };
 		FCAB26003090000000000001 /* COPYRIGHT */ = {isa = PBXFileReference; lastKnownFileType = text; name = "COPYRIGHT"; path = "COPYRIGHT"; sourceTree = SOURCE_ROOT; };
 		FCAB26003090000000000002 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "THIRD_PARTY_NOTICES.md"; path = "THIRD_PARTY_NOTICES.md"; sourceTree = SOURCE_ROOT; };
 		FCAB26003090000000000003 /* Credits.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = "Credits.html"; path = "Resources/Credits.html"; sourceTree = SOURCE_ROOT; };
-		FCAB26003090000000000004 /* APSL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = "APSL.txt"; path = "Data Miners/APSL/APSL.txt"; sourceTree = SOURCE_ROOT; };
 		27186E2A1D88EA7A003DF559 /* XRGCommon.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGCommon.h; sourceTree = "<group>"; };
 		271FA60E15AC79A100E16233 /* Online Help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "Online Help"; sourceTree = "<group>"; };
 		272DD59A21DE8B93007FA11C /* XRG.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = XRG.entitlements; sourceTree = SOURCE_ROOT; };
@@ -104,13 +99,9 @@
 		273ECF63157413D200E65D82 /* icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = icon.icns; sourceTree = "<group>"; };
 		273ECF651574145100E65D82 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		273ECF6D157803EF00E65D82 /* XRG-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "XRG-Info.plist"; sourceTree = SOURCE_ROOT; };
-		27461832273716B10065D1E4 /* XRGAppleSiliconSensorMiner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XRGAppleSiliconSensorMiner.h; sourceTree = "<group>"; };
-		2746183527371FB90065D1E4 /* IOHIDEventTypes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = IOHIDEventTypes.h; sourceTree = "<group>"; };
-		27461836273722E40065D1E4 /* AppleHIDUsageTables.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleHIDUsageTables.h; sourceTree = "<group>"; };
 		2746183A2738C1D90065D1E4 /* libsystem_kernel.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsystem_kernel.tbd; path = usr/lib/system/libsystem_kernel.tbd; sourceTree = SDKROOT; };
 		2746183B2738C1F30065D1E4 /* Kernel.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Kernel.framework; path = System/Library/Frameworks/Kernel.framework; sourceTree = SDKROOT; };
 		274AEDE32784BA5F008445AC /* XRGNonInteractableTextField.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XRGNonInteractableTextField.h; sourceTree = "<group>"; };
-		2755BBBA277E390200461C51 /* SMCSensorGroup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SMCSensorGroup.h; sourceTree = "<group>"; };
 		275842161D8E3F4800D0281F /* XRGNetMiner.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGNetMiner.h; sourceTree = "<group>"; };
 		2775AC211B42F4A700D867AC /* OpenGL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OpenGL.framework; path = System/Library/Frameworks/OpenGL.framework; sourceTree = SDKROOT; };
 		2786061F1B445FED00CC6249 /* XRGGPUMiner.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGGPUMiner.h; sourceTree = "<group>"; };
@@ -123,10 +114,7 @@
 		494DEE472EBFD0D800AF02EC /* XRGAITokensObserver.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XRGAITokensObserver.h; sourceTree = "<group>"; };
 		494DEE482EBFD10300AF02EC /* XRGAITokensNotifications.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XRGAITokensNotifications.h; sourceTree = "<group>"; };
 		8A5D2C466276EB8F8F50FA02 /* XRGAITokenMiner.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGAITokenMiner.h; sourceTree = "<group>"; };
-		93151A0C254094EF0095E424 /* SMCSensorNames.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = SMCSensorNames.plist; sourceTree = "<group>"; };
-		937851A7157CA243001D2A15 /* SMCInterface.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SMCInterface.h; sourceTree = "<group>"; };
-		937851A8157CA243001D2A15 /* SMCInterface.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SMCInterface.m; sourceTree = "<group>"; };
-		937851AB157CA5D0001D2A15 /* SMCSensors.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SMCSensors.h; sourceTree = "<group>"; };
+		937851A8157CA243001D2A15 /* XRGSMCChannel.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = "Data Miners/XRGSMCChannel.m"; sourceTree = SOURCE_ROOT; };
 		93C915F22550346600220EC5 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		A1B2C3D4E5F6071829AABBDD /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		F7916C368838EFEB44933A00 /* XRGAITokenView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGAITokenView.h; sourceTree = "<group>"; };
@@ -136,6 +124,7 @@
 		FC9F0B02308E6333001445A9 /* XRGAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XRGAppDelegate.swift; sourceTree = "<group>"; };
 		FC9F0B04308E6333001445A9 /* XRG-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "XRG-Bridging-Header.h"; sourceTree = "<group>"; };
 		FCAA3A02308F000100000001 /* XRGTemperatureHardwareReader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XRGTemperatureHardwareReader.h; sourceTree = "<group>"; };
+		FC3010260000000000000001 /* XRGSMCNative.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Data Miners/XRGSMCNative.h"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -256,7 +245,8 @@
 		273ECE9415740EAF00E65D82 /* Data Miners */ = {
 			isa = PBXGroup;
 			children = (
-				937851A5157CA243001D2A15 /* APSL */,
+				937851A8157CA243001D2A15 /* XRGSMCChannel.m */,
+				FC3010260000000000000001 /* XRGSMCNative.h */,
 				273ECE9715740EAF00E65D82 /* XRGCPUMiner.h */,
 				273ECE9915740EAF00E65D82 /* XRGMemoryMiner.h */,
 				273ECE9B15740EAF00E65D82 /* XRGProcessMiner.h */,
@@ -308,12 +298,10 @@
 				271FA60E15AC79A100E16233 /* Online Help */,
 				273ECF63157413D200E65D82 /* icon.icns */,
 				273ECF4F1574106600E65D82 /* InfoPlist.strings */,
-				93151A0C254094EF0095E424 /* SMCSensorNames.plist */,
 				FCAB26003090000000000000 /* LICENSE */,
 				FCAB26003090000000000001 /* COPYRIGHT */,
 				FCAB26003090000000000002 /* THIRD_PARTY_NOTICES.md */,
 				FCAB26003090000000000003 /* Credits.html */,
-				FCAB26003090000000000004 /* APSL.txt */,
 				273ECF501574106600E65D82 /* MainMenu.nib */,
 				273ECF511574106600E65D82 /* Preferences.nib */,
 				278E90B823F21F6600874941 /* Sensors.xib */,
@@ -356,21 +344,7 @@
 			name = "Recovered References";
 			sourceTree = "<group>";
 		};
-		937851A5157CA243001D2A15 /* APSL */ = {
-			isa = PBXGroup;
-			children = (
-				937851A7157CA243001D2A15 /* SMCInterface.h */,
-				937851A8157CA243001D2A15 /* SMCInterface.m */,
-				FCAD26003092000000000002 /* SMCPacket.h */,
-				937851AB157CA5D0001D2A15 /* SMCSensors.h */,
-				2755BBBA277E390200461C51 /* SMCSensorGroup.h */,
-				27461832273716B10065D1E4 /* XRGAppleSiliconSensorMiner.h */,
-				2746183527371FB90065D1E4 /* IOHIDEventTypes.h */,
-				27461836273722E40065D1E4 /* AppleHIDUsageTables.h */,
-			);
-			path = APSL;
-			sourceTree = "<group>";
-		};
+
 /* End PBXGroup section */
 
 /* Begin PBXHeadersBuildPhase section */
@@ -516,12 +490,10 @@
 				FCAB26013090000000000001 /* COPYRIGHT in Resources */,
 				FCAB26013090000000000002 /* THIRD_PARTY_NOTICES.md in Resources */,
 				FCAB26013090000000000003 /* Credits.html in Resources */,
-				FCAB26013090000000000004 /* APSL.txt in Resources */,
 				273ECF541574106600E65D82 /* MainMenu.nib in Resources */,
 				273ECF551574106600E65D82 /* Preferences.nib in Resources */,
 				273ECF64157413D200E65D82 /* icon.icns in Resources */,
 				271FA60F15AC79A100E16233 /* Online Help in Resources */,
-				93151A0D254094EF0095E424 /* SMCSensorNames.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -530,7 +502,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				FCAA3A01308F000100000001 /* Sensors.xib in Test Resources */,
-				FCAC26003091000000000001 /* SMCSensorNames.plist in Test Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -551,7 +522,7 @@
 				FC9F0B03308E6333001445A9 /* XRGAppDelegate.swift in Sources */,
 				273ECF0215740EAF00E65D82 /* XRGTemperatureHardwareReader.m in Sources */,
 				273ECF0D15740EAF00E65D82 /* main.swift in Sources */,
-				937851AA157CA243001D2A15 /* SMCInterface.m in Sources */,
+				937851AA157CA243001D2A15 /* XRGSMCChannel.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -561,7 +532,7 @@
 			files = (
 				FCAF26003093000000000001 /* XRGAppDelegate.swift in Test Sources */,
 				FCAA3A03308F000100000001 /* XRGTemperatureHardwareReader.m in Test Sources */,
-				FCAD26003092000000000001 /* SMCInterface.m in Test Sources */,
+				FCAD26003092000000000001 /* XRGSMCChannel.m in Test Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

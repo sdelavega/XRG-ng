@@ -1,3 +1,10 @@
+> Current sensor status (2026-10-30): the APSL SMC translations/native boundary,
+> vendor HID headers and inherited description catalog discussed in historical
+> stages below have been retired. New GPL `XRGSMCReader`, `XRGSMCSensors` and
+> `XRGSMCChannel` use read-only requests, strict numeric formats and generated
+> labels. Compatible dependency notices remain. Historical release notices are
+> not changed by this replacement.
+
 # XRG-ng modernization status
 
 ## Current baseline

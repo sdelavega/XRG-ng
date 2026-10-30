@@ -23,9 +23,6 @@
 
 #import <XCTest/XCTest.h>
 #import "../Data Miners/XRGTemperatureHardwareReader.h"
-#import "../Data Miners/APSL/SMCSensors.h"
-#import "../Data Miners/APSL/SMCInterface.h"
-#import "../Data Miners/APSL/XRGAppleSiliconSensorMiner.h"
 #define XRG_SENSOR_TEST_TRANSPORTS 1
 #import "../Data Miners/XRGHIDTransport.h"
 
@@ -66,27 +63,6 @@ static void readerFailure(void) {
 - (NSSet<NSString *> *)unknownTemperatureKeys { return [NSSet set]; }
 - (NSDictionary *)allValues { return @{}; }
 - (NSDictionary *)sensorValues { return @{}; }
-@end
-
-// The real Swift sensor cache uses this native-interface stub. It never opens IOKit.
-static BOOL throwSMCIndex, returnSMCError;
-@implementation SMCInterface
-- (instancetype)init {
-    if (throwSMCInit) readerFailure();
-    return [super init];
-}
-- (NSInteger)keyCount { if (throwKnown) readerFailure(); return 1; }
-- (FourCharCode)keyAtIndex:(NSInteger)index {
-    if (throwSMCIndex) readerFailure();
-    return index == 0 ? 0x54433050 : 0;
-}
-- (id)readValue:(FourCharCode)key error:(NSError **)outError {
-    if (outError) *outError = nil;
-    if (key == 0x54433050 && throwTemperatures) readerFailure();
-    if (key == 0x46532120 && throwFans) readerFailure();
-    if (returnSMCError && outError) *outError = [NSError errorWithDomain:@"XRGFixture" code:1 userInfo:nil];
-    return key == 0x54433050 ? @50 : key == 0x46532120 ? @0 : nil;
-}
 @end
 
 // Substitute only the C calls. Tests still execute the production Objective-C
@@ -134,7 +110,6 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
 - (void)setUp {
     [super setUp];
     throwSMCInit = throwTemperatures = throwFans = throwNames = throwKnown = throwHID = NO;
-    throwSMCIndex = returnSMCError = NO;
     throwHIDCreate = throwMatching = throwProduct = throwEvent = throwFloat = NO;
     missingClient = missingServices = missingEvent = NO;
     capturedMatching = nil;
@@ -173,32 +148,14 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
     XCTAssertEqual([reader siliconTemperatureValues].count, 0);
 }
 
-- (void)testSMCInitializationFailureStillAllowsHIDReadings {
-    throwSMCInit = YES;
+- (void)testUnavailableSMCStillAllowsHIDReadings {
     id<XRGTemperatureReader> reader = [XRGTemperatureHardwareReader makeTemperatureReader];
-    XCTAssertNotNil(reader);
+    [(NSObject *)reader setValue:nil forKey:@"smcSensors"];
     XCTAssertEqual([reader temperatureValuesIncludingUnknown:YES].count, 0);
     XCTAssertEqual([reader fanValues].count, 0);
-    XCTAssertEqualObjects([reader humanReadableNameForKey:@"hid"], @"hid");
     XCTAssertEqualObjects([reader siliconTemperatureValues][@"hid"], @60);
 }
 
-- (void)testSwiftMinerUsesTheFactoryAndDoesNotUnwindSensorExceptions {
-    XCTAssertTrue(NSThread.isMainThread);
-    XRGTemperatureMiner *miner = [[XRGTemperatureMiner alloc] init];
-    [miner setDataSize:2];
-    XCTAssertEqual(miner.knownTemperatureKeyCount, 1);
-    throwTemperatures = throwFans = throwNames = YES;
-    [miner updateCurrentTemperatures:YES];
-    XCTAssertNil([miner sensorForLocation:@"TC0P"]);
-    XRGSensorData *sensor = [miner sensorForLocation:@"hid"];
-    XCTAssertNotNil(sensor);
-    XCTAssertTrue(sensor.isEnabled);
-    XCTAssertEqual(sensor.currentValue, 60);
-    XCTAssertEqualObjects(sensor.label, @"hid");
-    XCTAssertFalse([miner isFanSensor:nil]);
-    XCTAssertEqual([miner maxSpeedForFan:nil], 0);
-}
 - (void)testNativeHIDMatchingAndEventABIAndBalancedOwnership {
     CFIndex clientsBefore = CFGetRetainCount(fixtureHIDClient), eventsBefore = CFGetRetainCount(fixtureHIDEvent);
     @autoreleasepool {
@@ -233,30 +190,5 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
     missingEvent = YES; XCTAssertEqualObjects([XRGAppleSiliconSensorMiner sensorData], @{}); missingEvent = NO;
     fixtureHIDServices = @[]; XCTAssertEqualObjects([XRGAppleSiliconSensorMiner sensorData], @{});
 }
-- (void)testNativeSMCTransportContainsExceptionsAndRejectsNSErrorValuesBeforeSwift {
-    Class<XRGSMCTransportFactory> factory = NSClassFromString(@"XRGSMCTransport");
-    id<XRGSMCTransport> transport = [factory makeSMCTransport];
-    XCTAssertNotNil(transport);
-    XCTAssertEqual(transport.keyCount, 1);
-    XCTAssertEqualObjects([transport keyAtIndex:0], @0x54433050);
-    XCTAssertEqualObjects([transport readValueForKey:0x54433050], @50);
-    XCTAssertNotNil(transport.descriptionsResourcePath);
-    throwKnown = YES; XCTAssertEqual(transport.keyCount, 0); throwKnown = NO;
-    throwSMCIndex = YES; XCTAssertNil([transport keyAtIndex:0]); throwSMCIndex = NO;
-    throwTemperatures = YES; XCTAssertNil([transport readValueForKey:0x54433050]); throwTemperatures = NO;
-    returnSMCError = YES; XCTAssertNil([transport readValueForKey:0x54433050]); returnSMCError = NO;
-    XCTAssertEqualObjects([transport readValueForKey:0x54433050], @50);
-    throwSMCInit = YES; XCTAssertNil([factory makeSMCTransport]);
-}
-- (void)testDefaultReaderUsesTheRealSwiftCacheAndBundledDescriptions {
-    id<XRGTemperatureReader> reader = [XRGTemperatureHardwareReader makeTemperatureReader];
-    XCTAssertEqual(reader.knownTemperatureKeyCount, 1);
-    XCTAssertTrue([reader isKnownKey:@"TC0P"]);
-    XCTAssertEqualObjects([reader humanReadableNameForKey:@"TC0P"], @"CPU Proximity");
-    XCTAssertEqualObjects([reader temperatureValuesIncludingUnknown:NO], (@{@"TC0P": @50}));
-    throwTemperatures = YES;
-    XCTAssertEqualObjects([reader temperatureValuesIncludingUnknown:YES], @{});
-    XCTAssertEqual(reader.knownTemperatureKeyCount, 1);
-    XCTAssertEqualObjects([reader siliconTemperatureValues], (@{@"hid": @60}));
-}
+
 @end

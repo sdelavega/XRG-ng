@@ -227,15 +227,15 @@ seconds. Modules opt in with `doesGraphUpdate`, `doesFastUpdate`, `doesMin5Updat
 
 Only two Objective-C implementation files are compiled into the app:
 
-- `Data Miners/APSL/SMCInterface.m`: legacy failable-init facade forwarding to
-  `XRGSMCInterface`, plus IOKit packet calls, cleanup and exception containment.
+- `Data Miners/XRGSMCChannel.m`: GPL read-only persistent IOKit channel, recovery,
+  cleanup and exception containment for `XRGSMCReader`.
 - `Data Miners/XRGTemperatureHardwareReader.m`: SMC/HID adapters with private C
   ABI calls, Core Foundation ownership and Objective-C exception containment.
 
 Packet construction, metadata caching, decoding, SMC sensor selection and HID
 sample collection are Swift. Do not move `@try` boundaries into Swift: Objective-C
 exceptions must be caught before returning to Swift. Keep the native SMC command
-allowlist read-only and preserve packet ABI assertions for both architectures.
+allowlist read-only and preserve packet ABI tests for both architectures.
 The test target compiles the same native bodies with injected C calls/runtime
 names, covering errors and cleanup without accessing real hardware.
 
@@ -379,8 +379,9 @@ gboolean preferences_get_bool(const char *key, gboolean default_value) {
 
 - **Network counters:** filter loopback and calculate deltas before advancing the
   previous counter. Cover resets and interface replacement with fixtures.
-- **Temperature names:** use `Resources/SMCSensorNames.plist`; wildcard selection,
-  ordering and known/unknown filtering have compatibility tests.
+- **Temperature names:** SMC labels are generated from raw keys; never restore the
+  inherited vendor catalog. HID uses driver product labels. Saved raw-key choices
+  remain stable. Relative-to-limit channels must not become absolute temperatures.
 - **Module layout:** preserve module identities and the default order table. The
   manager sorts nonsequential values and preserves registration order for ties;
   ensure registration is idempotent and old managers release detached modules.

@@ -22,7 +22,7 @@
  */
 
 #import <XCTest/XCTest.h>
-#import "../Data Miners/APSL/SMCSensorGroup.h"
+#import <XRGCore/XRGCore-Swift.h>
 @interface SMCSensorGroupBridgeTests : XCTestCase
 @end
 @implementation SMCSensorGroupBridgeTests

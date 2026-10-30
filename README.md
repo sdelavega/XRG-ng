@@ -433,7 +433,14 @@ legacy-settings import; existing installed files and settings are preserved.
 
 Project code uses **GNU GPL version 3 or later (GPL-3.0-or-later)**. See [LICENSE](LICENSE), [COPYRIGHT](COPYRIGHT), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
-Bundled Apple/CodeExchange sensor sources retain APSL licenses. APSL/GPL compatibility for distribution of the combined macOS executable remains unresolved; the project license update does not relicense those components.
+The current macOS sensor backend uses first-party GPL code in place of the former
+APSL-derived implementations, vendor headers and sensor-name catalog. Existing
+sensor keys remain the preference identities, with generated SMC labels; Apple HID
+product labels remain available. Relative-to-limit legacy SMC channels are not
+presented as absolute temperatures. Signed/fractional SMC values now follow their
+numeric formats rather than legacy decoder special cases. Compatible third-party
+dependencies retain their required notices. Historical releases keep the licenses
+and notices attached to their corresponding source revisions.
 
 ## Credits
 

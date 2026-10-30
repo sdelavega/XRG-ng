@@ -22,9 +22,6 @@
  */
 
 #import "XRGTemperatureHardwareReader.h"
-#import "APSL/SMCSensors.h"
-#import "APSL/SMCInterface.h"
-#import "APSL/XRGAppleSiliconSensorMiner.h"
 #import "XRGHIDTransport.h"
 
 @interface XRGTemperatureHardwareReader ()
@@ -40,7 +37,7 @@
 - (instancetype)init {
     if ((self = [super init])) {
         @try {
-            _smcSensors = [[SMCSensors alloc] init];
+            _smcSensors = [[XRGSMCSensors alloc] init];
         } @catch (NSException *exception) {
             // HID discovery can still work if SMC initialization fails.
         }
@@ -94,8 +91,8 @@
         transport->_client = XRGHIDCreateClient(kCFAllocatorDefault);
         if (!transport->_client) return nil;
         XRGHIDSetMatching(transport->_client, (__bridge CFDictionaryRef)@{
-            @"PrimaryUsagePage": @(kHIDPage_AppleVendor),
-            @"PrimaryUsage": @(kHIDUsage_AppleVendor_TemperatureSensor)
+            @"PrimaryUsagePage": @(XRGHIDVendorPage),
+            @"PrimaryUsage": @(XRGHIDTemperatureUsage)
         });
         return transport;
     } @catch (NSException *exception) { return nil; }
@@ -127,55 +124,13 @@
     IOHIDEventRef event = NULL;
     @try {
         if (CFGetTypeID((__bridge CFTypeRef)service) != XRGHIDServiceTypeID()) return nil;
-        event = XRGHIDCopyEvent((__bridge IOHIDServiceClientRef)service, kIOHIDEventTypeTemperature, 0, 0);
+        event = XRGHIDCopyEvent((__bridge IOHIDServiceClientRef)service, XRGHIDTemperatureEvent, 0, 0);
         if (!event) return nil;
-        return @(XRGHIDGetFloat(event, IOHIDEventFieldBase(kIOHIDEventTypeTemperature)));
+        return @(XRGHIDGetFloat(event, XRGHIDTemperatureField));
     } @catch (NSException *exception) { return nil; }
     @finally { if (event) CFRelease(event); }
 #else
     return nil;
 #endif
-}
-@end
-
-
-// SMC exceptions are contained here, before the Swift cache/decoder resumes.
-@interface XRGSMCTransport : NSObject <XRGSMCTransport, XRGSMCTransportFactory>
-@property (nonatomic) SMCInterface *connection;
-@end
-@implementation XRGSMCTransport
-+ (id<XRGSMCTransport>)makeSMCTransport {
-    @try {
-        SMCInterface *connection = [[SMCInterface alloc] init];
-        if (!connection) return nil;
-        XRGSMCTransport *transport = [[self alloc] init];
-        transport.connection = connection;
-        return transport;
-    } @catch (NSException *exception) { return nil; }
-}
-- (NSInteger)keyCount {
-    @try { return MAX(0, self.connection.keyCount); }
-    @catch (NSException *exception) { return 0; }
-}
-- (NSNumber *)keyAtIndex:(NSInteger)index {
-    @try { return index < 0 ? nil : @([self.connection keyAtIndex:index]); }
-    @catch (NSException *exception) { return nil; }
-}
-- (id)readValueForKey:(uint32_t)key {
-    @try {
-        NSError *error = nil;
-        id value = [self.connection readValue:key error:&error];
-        return error ? nil : value;
-    } @catch (NSException *exception) { return nil; }
-}
-- (NSString *)descriptionsResourcePath {
-    @try {
-#if defined(XRG_SENSOR_TEST_TRANSPORTS)
-        NSBundle *bundle = [NSBundle bundleForClass:self.class];
-#else
-        NSBundle *bundle = NSBundle.mainBundle;
-#endif
-        return [bundle pathForResource:@"SMCSensorNames" ofType:@"plist"];
-    } @catch (NSException *exception) { return nil; }
 }
 @end

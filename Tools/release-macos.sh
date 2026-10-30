@@ -12,6 +12,7 @@ identity="$2"
 notary_profile="$3"
 output="$4"
 cd "$(dirname "$0")/.."
+python3 Tools/check-macos-sensor-license.py
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected a numeric release version" >&2; exit 2; }
 [[ "$(cat latest_version.txt)" == "$version" ]] || { echo "Update latest_version.txt first" >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit source changes before building a release" >&2; exit 1; }
@@ -58,7 +59,9 @@ assert flags and int(flags.group(1), 16) & 0x10000
 entitlement_data = (output / 'entitlements.plist').read_bytes()
 entitlements = plistlib.loads(entitlement_data) if entitlement_data.strip() else {}
 assert not any(entitlements.values()), entitlements.keys()
-for name in ('LICENSE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md', 'APSL.txt', 'Credits.html'):
+assert not (app / 'Contents/Resources/APSL.txt').exists()
+assert not (app / 'Contents/Resources/SMCSensorNames.plist').exists()
+for name in ('LICENSE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md', 'Credits.html'):
     assert (app / 'Contents/Resources' / name).is_file(), name
 print('Verified version, build, bundle, deployment floor, both slices, Developer ID, hardened runtime and minimal entitlements')
 PY

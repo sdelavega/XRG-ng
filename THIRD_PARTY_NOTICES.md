@@ -5,32 +5,18 @@ The original project headers permitted GPL version 2 or any later version,
 which permits choosing GPL version 3. Existing third-party copyrights and
 licenses remain in force for their respective files.
 
-## Apple Public Source License 2.0
+## macOS sensor backend
 
-The following source files retain APSL 2.0:
+The current sensor backend is first-party GPL-3.0-or-later code. The APSL-derived
+SMC implementations, translated decoder/cache, copied HID vendor headers and
+inherited sensor-name catalog have been removed from this source tree and build.
+The replacement uses a read-only driver protocol, generated key-based labels,
+and SDK/system interfaces. It does not relicense the removed implementations.
 
-- `Data Miners/APSL/SMCInterface.h`, `SMCInterface.m`, and `SMCPacket.h`: Apple Computer, Inc., 2004; native-boundary modifications by Stephen de la Vega, 2026.
-- `XRGCore/XRGSMCInterface.swift`: Swift translation of the original SMC interface and CodeExchange decoder; Apple Computer, Inc., 2004, CodeExchange, 2012; modifications by Stephen de la Vega, 2026. This translation remains APSL 2.0.
-- `Data Miners/APSL/SMCSensors.h`: CodeExchange, 2012, and Apple Computer, Inc., 2004.
-- `XRGCore/SMCSensors.swift`: Swift translation of `SMCSensors.m`, CodeExchange, 2012; modifications by Stephen de la Vega, 2026. The translation remains APSL 2.0.
-- `Data Miners/APSL/AppleHIDUsageTables.h` and `IOHIDEventTypes.h`: Apple Computer, Inc., 1999–2003.
-
-The full license is preserved in `Data Miners/APSL/APSL.txt` and included
-in macOS app resources as `APSL.txt`. First-party sensor adapters and grouping
-code keep their GPL notices; the APSL-derived Swift translation is listed above.
-
-The macOS app currently compiles the SMC implementations into its executable.
-The FSF lists APSL 2.0 as incompatible with the GNU GPL. Keeping both license
-texts does not resolve that incompatibility: distribution of the combined
-executable requires a compatible replacement, suitable permission, or another
-resolved licensing arrangement. This project license update does not claim
-to resolve that existing issue.
-
-For the XRG-ng 0.1.0 release, the current maintainer has confirmed that distribution
-permission or a licensing arrangement is in place. The original APSL license
-notices and source attribution remain unchanged.
-
-Reference: https://www.gnu.org/licenses/license-list.en.html#apsl2
+Historical releases, including macOS 0.1.0, retain the notices and distribution
+arrangement recorded with their corresponding source revisions. Do not remove
+notices from those historical packages. The dependency notices below still apply
+to current distributions; replacement of the sensor backend does not remove them.
 
 ## Other contributors
 
