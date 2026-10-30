@@ -346,6 +346,8 @@ impl Sampler {
     }
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
+        self.memory
+            .set_history_samples(selection.retained_samples(Module::Memory))?;
         if self.metrics.selection().gpu != selection.gpu {
             self.gpu_histories.clear();
             self.gpu_memory.reset();

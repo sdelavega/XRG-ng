@@ -116,12 +116,25 @@ Implemented in development for monitoring tools:
   gaps without resetting collector baselines; explicit capacity survives window
   resizing. Nominal spans describe point spacing at the current target, not a
   measured time axis. Shared Swift owns bounds and history resizing, exposed to
-  Rust by additive ABI v1 functions. Linux settings migrate read-only to version 26
+  Rust by additive ABI v1 functions. Linux settings migrate read-only to version 27
   and write the new version only on save. Preferences remain platform-local.
   Both normal sampling controls cover 200 ms–10 s, with millisecond precision;
   valid legacy Mac values outside that range survive opening/saving. Mac restarts
   its graph timer on edits; Linux retimes from the worker's last sample start.
-  AI/fast sampling stays independent. Other graphs still need retention controls.
+  AI/fast sampling stays independent.
+- Memory, Network and Disk now share CPU's explicit-capacity workflow: Mac graph
+  history menus / Linux Preferences Sources, 1–20,000 samples, preserving original
+  automatic defaults. Capacity changes retain newest observations and normal/fast
+  rate/paging baselines and session transfers without polling hardware. Growing
+  explicit Mac capacities adds missing padding; paging stacks use CPU's gap-safe sums.
+  Source/failure reset policies remain unchanged and keep the chosen capacity.
+  Mac Memory retains paging activity; Linux retains RAM/cache/swap percentages.
+  Current RAM/swap bars and accounting remain separate from history settings.
+  The Linux per-module map migrates from v26 without a write; unsupported module
+  keys and invalid capacities reject the entire settings edit. GPU/NPU, VRAM,
+  Temperature/Fans and Battery still need retention controls. AI and Weather have
+  separate cadence/windows; timestamp-based retention remains open. Mac Memory's
+  existing Reset Graph still resets its paging baseline; Linux preserves it.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

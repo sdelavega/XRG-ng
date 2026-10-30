@@ -315,6 +315,9 @@ pub struct MetricSelection {
     /// Zero retains the historical 120-sample default; explicit counts survive resizing.
     #[serde(skip_serializing_if = "zero_cpu_history")]
     pub cpu_history_samples: u32,
+    /// Graph-local capacities; missing/zero keeps the original 120 samples.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub history_samples: std::collections::BTreeMap<Module, u32>,
     pub network: Option<String>,
     pub disk: Option<String>,
     /// Collector-provided identity, compared with inventory; never used as a path.
@@ -336,7 +339,16 @@ fn zero_cpu_history(value: &u32) -> bool {
     *value == 0
 }
 impl MetricSelection {
+    pub fn retained_samples(&self, module: Module) -> u32 {
+        self.history_samples.get(&module).copied().unwrap_or(0)
+    }
     pub fn validate(&self) -> Result<(), String> {
+        if self.history_samples.iter().any(|(module, count)| {
+            !matches!(module, Module::Memory | Module::Network | Module::Disk)
+                || *count > shared::sampling_settings()[3]
+        }) {
+            return Err("History capacity must be 0..20000 for Memory, Network or Disk".into());
+        }
         if self.cpu_history_samples > shared::sampling_settings()[3] {
             return Err("CPU history must be automatic or between 1 and 20000 samples".into());
         }
@@ -483,7 +495,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 26,
+            version: 27,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -553,7 +565,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 26 {
+        if self.version != 27 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -730,6 +742,9 @@ impl Settings {
         }
         if result.version == 25 {
             result.version = 26;
+        }
+        if result.version == 26 {
+            result.version = 27;
         }
         result.validate()?;
         Ok(result)

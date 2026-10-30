@@ -235,21 +235,7 @@ public final class XRGCPUMiner: NSObject {
     /// Preserve holes through both per-core averaging and stacked layers. Adding
     /// the sentinel numerically would turn an unknown interval into a fake zero.
     static func sumHistories(_ histories: [XRGDataSet], divisor: CGFloat = 1) -> XRGDataSet? {
-        guard let first = histories.first, divisor.isFinite, divisor > 0,
-              histories.allSatisfy({ $0.numValues == first.numValues }) else { return nil }
-        var sums = Array(repeating: CGFloat(0), count: first.numValues)
-        var valid = Array(repeating: true, count: first.numValues)
-        for history in histories {
-            for (index, value) in history.orderedValues.enumerated() {
-                if value.isFinite && value >= 0 { sums[index] += value }
-                else { valid[index] = false }
-            }
-        }
-        let result = XRGDataSet(); result.resize(first.numValues, fillingWith: XRGGraphRenderer.missingValue)
-        for index in sums.indices {
-            result.setNextValue(valid[index] ? sums[index] / divisor : XRGGraphRenderer.missingValue)
-        }
-        return result
+        XRGGraphRenderer.sumObservedHistories(histories, divisor: divisor)
     }
 
     @objc nonisolated public static func systemModelIdentifier() -> String? {

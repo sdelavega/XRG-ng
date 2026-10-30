@@ -75,6 +75,10 @@ public final class XRGDiskMiner: NSObject {
         guard count >= 0 else { return }
         for history in [readValues, writeValues, totalValues] { history.resize(min(count, 20_000)) }
     }
+    @nonobjc func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        for data in [readValues, writeValues, totalValues] { data.resize(count, fillingWith: XRGGraphRenderer.missingValue) }
+    }
     private func snapshot() -> [UInt64: XRGIOCounters]? {
         guard let samples = source() else { return nil }
         var counters: [UInt64: XRGIOCounters] = [:]

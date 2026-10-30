@@ -69,6 +69,10 @@ public final class XRGMemoryMiner: NSObject {
         guard count >= 0 else { return }
         for data in [faultsHistory, pageInHistory, pageOutHistory] { data.resize(count) }
     }
+    @nonobjc func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        for data in [faultsHistory, pageInHistory, pageOutHistory] { data.resize(count, fillingWith: XRGGraphRenderer.missingValue) }
+    }
     @objc public func reset() {
         for data in [faultsHistory, pageInHistory, pageOutHistory] { data.reset() }
         previous = nil

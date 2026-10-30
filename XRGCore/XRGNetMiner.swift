@@ -103,6 +103,10 @@ public final class XRGNetMiner: NSObject {
         guard count >= 0 else { return }
         for history in [rxValues, txValues, totalValues] { history.resize(count) }
     }
+    @nonobjc func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        for data in [rxValues, txValues, totalValues] { data.resize(count, fillingWith: XRGGraphRenderer.missingValue) }
+    }
     @objc public func reset() {
         for history in [rxValues, txValues, totalValues] { history.reset() }
     }

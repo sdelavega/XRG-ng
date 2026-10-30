@@ -685,6 +685,27 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
         s.metrics.cpu_history_samples
     };
     ui.small(format!("0 keeps the 120-sample default. Capacity: {capacity} samples, nominal span {:.3} s at the current target. Delays and cadence changes affect the actual span. Resizing preserves newest observations and collector baselines.", f64::from(capacity.saturating_sub(1)) * f64::from(s.sampling_interval_ms) / 1000.));
+    for (module, title) in [
+        (settings::Module::Memory, "Memory"),
+        (settings::Module::Network, "Network"),
+        (settings::Module::Disk, "Disk"),
+    ] {
+        let mut count = s.metrics.retained_samples(module);
+        ui.horizontal(|ui| {
+            let label = ui.label(format!("Retained {title} samples"));
+            ui.add(
+                egui::DragValue::new(&mut count)
+                    .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+            )
+            .labelled_by(label.id);
+        });
+        if count == 0 {
+            s.metrics.history_samples.remove(&module);
+        } else {
+            s.metrics.history_samples.insert(module, count);
+        }
+    }
+    ui.small("Memory / Network / Disk: 0 keeps 120 samples. Capacity changes preserve newest observations and collector baselines; source/failure resets keep their existing behavior. Mac Memory history covers paging activity; Linux plots RAM/cache/swap percentages.");
     for (label, value, options) in [
         ("Network", &mut s.metrics.network, &inventory.networks),
         ("Disk", &mut s.metrics.disk, &inventory.disks),

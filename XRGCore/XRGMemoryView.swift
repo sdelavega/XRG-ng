@@ -120,8 +120,10 @@ public final class XRGMemoryView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int32) {
         guard width >= 19 else { return }
-        let count = min(20_000, Int(width)) - 19
-        if memoryMiner.faultData().numValues != count { memoryMiner.setDataSize(count) }
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, Int(width)) - 19
+        if memoryMiner.faultData().numValues != count {
+            if retainedSamples > 0 { memoryMiner.resizeHistory(count) } else { memoryMiner.setDataSize(count) }
+        }
     }
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -193,13 +195,10 @@ public final class XRGMemoryView: NSView, XRGModuleView {
                       clip(NSRect(x: x + 10, y: rect.minY, width: 1, height: rect.height))])
     }
     @nonobjc func pagingLayers() -> (maximum: CGFloat, values: [XRGDataSet]) {
-        guard let all = XRGDataSet(contentsOfOtherDataSet: memoryMiner.faultData()) else { return (0, []) }
-        all.addOtherDataSetValues(memoryMiner.pageInData())
-        all.addOtherDataSetValues(memoryMiner.pageOutData())
+        guard let all = XRGGraphRenderer.sumObservedHistories([memoryMiner.faultData(), memoryMiner.pageInData(), memoryMiner.pageOutData()]),
+              let withoutPageOut = XRGGraphRenderer.sumObservedHistories([memoryMiner.faultData(), memoryMiner.pageInData()]) else { return (0, []) }
         let maximum = all.max
-        guard maximum.isFinite, maximum > 0,
-              let withoutPageOut = XRGDataSet(contentsOfOtherDataSet: all) else { return (0, []) }
-        withoutPageOut.subtractOtherDataSetValues(memoryMiner.pageOutData())
+        guard maximum.isFinite, maximum > 0 else { return (0, []) }
         return (maximum, [all, withoutPageOut, memoryMiner.faultData()])
     }
     @nonobjc func fullReading() -> String {
@@ -280,12 +279,19 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         }
         menu.addItem(.separator())
         menu.addItem(item("Processes…", action: #selector(openProcesses(_:))))
+        menu.addItem(XRGHistoryRetention.menu("Memory History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", action: #selector(clearData(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Open XRG-ng Memory Preferences...", action: #selector(openMemoryPreferences(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let historyKey = "XRGMemoryView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); needsDisplay = true
+    }
     public func clearData(_ sender: Any?) {
         memoryMiner.reset()
         updateLabels()

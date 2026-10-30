@@ -11,6 +11,44 @@ use xrg_ng_linux::{
     memory::{self, Paging, View},
 };
 const MEM: &str = "MemTotal: 1000 kB\nMemAvailable: 600 kB\nMemFree: 100 kB\nBuffers: 20 kB\nCached: 200 kB\nSlab: 50 kB\nSReclaimable: 30 kB\nSUnreclaim: 20 kB\nShmem: 40 kB\nDirty: 0 kB\nWriteback: 0 kB\nSwapTotal: 400 kB\nSwapFree: 300 kB\nHugePages_Total: 0\n";
+#[test]
+fn memory_capacity_preserves_paging_intervals_and_survives_missing_or_replaced_inputs() {
+    let reading = memory::parse(MEM);
+    let mut view = View::default();
+    view.set_history_samples(3).unwrap();
+    view.panel(&reading, &paging([100, 200], [2, 4]), 1.);
+    view.panel(&reading, &paging([200, 400], [4, 8]), 2.);
+    view.set_history_samples(6).unwrap();
+    let p = view.panel(&reading, &paging([300, 600], [6, 12]), 3.);
+    assert!(p.series.iter().all(|v| v.len() == 6 && v[0].is_nan()));
+    assert_eq!(&p.series[0][4..], &[40., 40.]);
+    assert!(p.detail.contains("Page I/O in / out: 100.0 / 200.0 KiB/s"));
+    assert!(p.detail.contains("Swap in / out: 2.0 / 4.0 pages/s"));
+    view.clear_graph();
+    let p = view.panel(&reading, &paging([400, 800], [8, 16]), 4.);
+    assert!(
+        p.series
+            .iter()
+            .all(|v| v.len() == 6 && v[..5].iter().all(|x| x.is_nan()))
+    );
+    assert!(view.set_history_samples(20001).is_err());
+    view.panel(&Err("unreadable".into()), &Err("unreadable".into()), 5.);
+    let p = view.panel(&reading, &paging([600, 1200], [12, 24]), 6.);
+    assert!(p.series.iter().all(|v| v.len() == 6));
+    let changed = memory::parse(
+        &MEM.replace("MemTotal: 1000", "MemTotal: 2000")
+            .replace("SwapTotal: 400", "SwapTotal: 800"),
+    );
+    let p = view.panel(&changed, &paging([700, 1400], [14, 28]), 7.);
+    assert!(p.series.iter().all(|v| v.len() == 6));
+    view.set_history_samples(0).unwrap();
+    assert!(
+        view.panel(&changed, &paging([800, 1600], [16, 32]), 8.)
+            .series
+            .iter()
+            .all(|v| v.len() == 120)
+    );
+}
 fn paging(io: [u64; 2], swap: [u64; 2]) -> Result<Paging, String> {
     Ok(Paging {
         io_kib: Ok(io),

@@ -29,6 +29,25 @@ import AppKit
 public final class XRGGraphRenderer: NSObject {
     @nonobjc static let missingValue: CGFloat = -1000
 
+    /// Sum nonnegative histories while preserving missing positions.
+    @nonobjc static func sumObservedHistories(_ histories: [XRGDataSet], divisor: CGFloat = 1) -> XRGDataSet? {
+        guard let first = histories.first, divisor.isFinite, divisor > 0,
+              histories.allSatisfy({ $0.numValues == first.numValues }) else { return nil }
+        var sums = Array(repeating: CGFloat(0), count: first.numValues)
+        var valid = Array(repeating: true, count: first.numValues)
+        for history in histories {
+            for (index, value) in history.orderedValues.enumerated() {
+                if value.isFinite && value >= 0 { sums[index] += value }
+                else { valid[index] = false }
+            }
+        }
+        let result = XRGDataSet(); result.resize(first.numValues, fillingWith: XRGGraphRenderer.missingValue)
+        for index in sums.indices {
+            result.setNextValue(valid[index] ? sums[index] / divisor : XRGGraphRenderer.missingValue)
+        }
+        return result
+    }
+
     @nonobjc static func validRect(_ rect: NSRect) -> Bool {
         rect.origin.x.isFinite && rect.origin.y.isFinite && rect.size.width.isFinite && rect.size.height.isFinite
             && rect.size.width > 0 && rect.size.height > 0 && rect.maxX.isFinite && rect.maxY.isFinite

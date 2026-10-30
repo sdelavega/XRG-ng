@@ -113,8 +113,10 @@ public final class XRGDiskView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int32) {
         guard width >= 0 else { return }
-        let count = min(20_000, Int(width))
-        if miner.readValues.numValues != count { miner.setDataSize(count) }
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, Int(width))
+        if miner.readValues.numValues != count {
+            if retainedSamples > 0 { miner.resizeHistory(count) } else { miner.setDataSize(count) }
+        }
     }
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -248,6 +250,7 @@ public final class XRGDiskView: NSView, XRGModuleView {
             item.target = self; return item
         }
         menu.addItem(item("Transfer Details…", #selector(showTransferDetails(_:))))
+        menu.addItem(XRGHistoryRetention.menu("Disk History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(item("Reset Session Transfers", #selector(resetTransfers(_:))))
         menu.addItem(.separator())
@@ -256,6 +259,13 @@ public final class XRGDiskView: NSView, XRGModuleView {
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    public func emptyEvent(_ sender: Any?) {}
+    @nonobjc static let historyKey = "XRGDiskView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); needsDisplay = true
+    }
     public func openDiskUtility(_ sender: Any?) { _ = openURL(Self.diskUtilityURL) }
     public func openDiskPreferences(_ sender: Any?) { host?.showDiskPreferences() }
     public func clearData(_ sender: Any?) {

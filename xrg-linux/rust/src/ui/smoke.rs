@@ -295,6 +295,9 @@ impl Harness {
                     let mut next = app.settings.clone();
                     next.sampling_interval_ms = 200;
                     next.metrics.cpu_history_samples = 300;
+                    next.metrics.history_samples.insert(Module::Memory, 360);
+                    next.metrics.history_samples.insert(Module::Network, 480);
+                    next.metrics.history_samples.insert(Module::Disk, 600);
                     next.network_min_scale = 65_536;
                     next.graph_width = 180;
                     next.layout = Layout::Horizontal;
@@ -334,6 +337,27 @@ impl Harness {
                     }
                     println!(
                         "CPU_HISTORY_SMOKE_OK 300 samples, 200 ms cadence, live worker acknowledged"
+                    );
+                    let snapshot = app.snapshot.as_ref().unwrap();
+                    for (module, title, count) in [
+                        (Module::Memory, "Memory", 360),
+                        (Module::Network, "Network", 480),
+                        (Module::Disk, "Disk", 600),
+                    ] {
+                        if snapshot.selection.retained_samples(module) != count
+                            || !snapshot
+                                .panels
+                                .iter()
+                                .find(|p| p.title == title)
+                                .is_some_and(|p| p.series.iter().all(|v| v.len() == count as usize))
+                        {
+                            return Err(format!(
+                                "Applied {title} history capacity did not reach the live worker"
+                            ));
+                        }
+                    }
+                    println!(
+                        "SYSTEM_HISTORY_SMOKE_OK Memory=360 Network=480 Disk=600, live worker acknowledged"
                     );
                     let (_, saved, error) = Store::open(Some(self.path()));
                     if error.is_some() || saved != app.settings {

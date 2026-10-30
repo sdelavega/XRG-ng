@@ -64,6 +64,27 @@ private final class NetworkNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGNetViewTests {
+    @Test func retentionKeepsNormalFastRatesAndTransfersAcrossResizeAndRelaunch() throws {
+        try withFixture { settings, defaults, source in
+            let view = panel(source, settings, defaults, height: 10)
+            source.advance(1, rx: 1600, tx: 400); view.graphUpdate(nil); view.fastUpdate(nil)
+            let reads = source.reads, fast = view.fastRXValue, total = view.miner.totalBytesSinceLoad
+            #expect(fast > 0)
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(source.reads == reads && view.fastRXValue == fast && view.miner.totalBytesSinceLoad == total)
+            #expect(view.miner.rxValues.numValues == 300 && view.miner.rxValues.currentValue == 600)
+            #expect(view.miner.rxValues.orderedValues.first == XRGGraphRenderer.missingValue)
+            view.setFrameSize(NSSize(width: 60, height: 10))
+            #expect(view.miner.rxValues.numValues == 300 && source.reads == reads)
+            let restored = panel(source, settings, defaults)
+            #expect(restored.retainedSamples == 300 && restored.miner.rxValues.numValues == 300)
+            source.advance(2, rx: 2200, tx: 600); view.graphUpdate(nil); view.fastUpdate(nil)
+            #expect(view.miner.currentRX() == 600 && view.miner.totalBytesSinceLoad == total + 800)
+            #expect(view.fastRXValue > fast)
+            option.tag = 20001; view.selectHistory(option); #expect(view.retainedSamples == 300)
+            option.tag = 0; view.selectHistory(option); #expect(view.miner.rxValues.numValues == 60)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, NetworkSource) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.networkView.\(UUID().uuidString)"

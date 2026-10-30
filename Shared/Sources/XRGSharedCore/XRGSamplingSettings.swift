@@ -7,10 +7,15 @@ public enum XRGSamplingSettings {
     public static let minimumMilliseconds: UInt32 = 200
     public static let maximumMilliseconds: UInt32 = 10_000
     public static let defaultMilliseconds: UInt32 = 1_000
-    public static let maximumCPUHistorySamples = 20_000
-    public static let cpuHistoryPresets = [0, 120, 300, 600, 1_800, 3_600]
+    public static let maximumHistorySamples = 20_000
+    public static let historyPresets = [0, 120, 300, 600, 1_800, 3_600]
+    public static let maximumCPUHistorySamples = maximumHistorySamples
+    public static let cpuHistoryPresets = historyPresets
+    public static func validHistorySamples(_ count: Int) -> Bool {
+        (0...maximumHistorySamples).contains(count)
+    }
     public static func validCPUHistorySamples(_ count: Int) -> Bool {
-        (0...maximumCPUHistorySamples).contains(count)
+        validHistorySamples(count)
     }
     public static func editedSeconds(_ seconds: Double) -> Double? {
         guard seconds.isFinite, seconds > 0 else { return nil }

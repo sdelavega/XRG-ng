@@ -14,7 +14,7 @@ extern "C" {
  * Histories start zero-filled; copy returns oldest-to-newest including that padding.
  * Rate output saturates at UINT32_MAX bytes/sec; first/reset samples return zero. */
 uint32_t xrg_shared_abi_version(void);
-/* Additive ABI v1: [min ms, max ms, default ms, maximum CPU history samples].
+/* Additive ABI v1: [min ms, max ms, default ms, maximum retained history samples].
  * Returns 4, or -1 without writing if output is NULL/capacity <4. */
 int32_t xrg_sampling_settings(uint32_t *output, uint32_t capacity);
 /* CPU interval: finite nonnegative timestamps on one monotonic clock,

@@ -61,6 +61,63 @@ impl Drop for Fixture {
     }
 }
 #[test]
+fn io_capacity_changes_keep_rates_totals_and_survive_failures_source_changes_and_clear() {
+    use xrg_ng_linux::settings::Module;
+    let f = Fixture::new();
+    let source = f.source();
+    let mut sampler = Sampler::default();
+    let mut selection = MetricSelection::default();
+    selection.history_samples.insert(Module::Network, 3);
+    selection.history_samples.insert(Module::Disk, 4);
+    sampler.set_selection(selection.clone()).unwrap();
+    sampler.sample(&source, 1.);
+    f.net(&[("eth0", 200, 400), ("wlan0", 300, 500)]);
+    f.disk(20, 40, 30, 40, 9999);
+    sampler.sample(&source, 2.);
+    let totals = sampler.transfer_totals();
+    selection.history_samples.insert(Module::Network, 6);
+    selection.history_samples.insert(Module::Disk, 2);
+    sampler.set_selection(selection.clone()).unwrap();
+    assert_eq!(sampler.transfer_totals(), totals);
+    f.net(&[("eth0", 300, 600), ("wlan0", 300, 500)]);
+    f.disk(30, 60, 30, 40, 9999);
+    let p = sampler.sample(&source, 3.);
+    assert_eq!(p.network.series[0].len(), 6);
+    assert!(p.network.series[0][0].is_nan());
+    assert_eq!(&p.network.series[0][4..], &[100., 100.]);
+    assert_eq!(p.disk.series[0], [5120., 5120.]);
+    assert_eq!(sampler.transfer_totals()[0].bytes, [200, 400]);
+    let totals = sampler.transfer_totals();
+    f.put("proc/net/dev", "broken");
+    f.put("proc/diskstats", "broken");
+    sampler.sample(&source, 4.);
+    assert_eq!(sampler.transfer_totals()[0].bytes, totals[0].bytes);
+    f.net(&[("eth0", 1000, 2000), ("wlan0", 300, 500)]);
+    f.disk(50, 80, 30, 40, 9999);
+    let p = sampler.sample(&source, 5.);
+    assert_eq!(p.network.series[0].len(), 6);
+    assert_eq!(p.disk.series[0].len(), 2);
+    sampler.clear_graph(Module::Network);
+    sampler.clear_graph(Module::Disk);
+    f.net(&[("eth0", 1100, 2200), ("wlan0", 300, 500)]);
+    f.disk(60, 100, 30, 40, 9999);
+    let p = sampler.sample(&source, 6.);
+    assert!(p.network.series[0][..5].iter().all(|v| v.is_nan()));
+    assert_eq!(p.network.series[0][5], 100.);
+    assert_eq!(p.disk.series[0][1], 5120.);
+    selection.network = Some("eth0".into());
+    selection.disk = Some("sda".into());
+    sampler.set_selection(selection).unwrap();
+    let p = sampler.sample(&source, 7.);
+    assert_eq!(p.network.series[0].len(), 6);
+    assert_eq!(p.disk.series[0].len(), 2);
+    assert_eq!(sampler.transfer_totals()[0].bytes, [0, 0]);
+    sampler.sample(&source, f64::NAN);
+    let p = sampler.sample(&source, 8.);
+    assert_eq!(p.network.series[0].len(), 6);
+    assert_eq!(p.disk.series[0].len(), 2);
+}
+#[test]
 fn aggregate_and_per_core_percentages_exclude_guest_and_keep_sparse_indices() {
     let f = Fixture::new();
     let source = f.source();

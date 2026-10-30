@@ -51,6 +51,27 @@ private final class DiskPanelNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGDiskViewTests {
+    @Test func retentionKeepsDiskRatesAndTransfersAcrossResizeAndRelaunch() throws {
+        try withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults, height: 10)
+            source.advance(1, read: 1600, written: 400); view.graphUpdate(nil); view.fastUpdate(nil)
+            let reads = source.reads, fast = view.fastReadValue, total = miner.totalBytesSinceLoad
+            #expect(fast > 0)
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(source.reads == reads && view.fastReadValue == fast && miner.totalBytesSinceLoad == total)
+            #expect(miner.readValues.numValues == 300 && miner.readValues.currentValue == 600)
+            #expect(miner.readValues.orderedValues.first == XRGGraphRenderer.missingValue)
+            view.setFrameSize(NSSize(width: 60, height: 10))
+            #expect(miner.readValues.numValues == 300 && source.reads == reads)
+            let restored = panel(miner, settings, defaults)
+            #expect(restored.retainedSamples == 300 && miner.readValues.numValues == 300)
+            source.advance(2, read: 2200, written: 600); view.graphUpdate(nil); view.fastUpdate(nil)
+            #expect(miner.readValues.currentValue == 600 && miner.totalBytesSinceLoad == total + 800)
+            #expect(view.fastReadValue > fast)
+            option.tag = 20001; restored.selectHistory(option); #expect(restored.retainedSamples == 300)
+            option.tag = 0; restored.selectHistory(option); #expect(miner.readValues.numValues == 240)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, DiskSampleSource) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.diskView.\(UUID().uuidString)"
@@ -261,7 +282,7 @@ struct XRGDiskViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             source.advance(1, read: 1600, written: 400); view.graphUpdate(nil)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 6)
+            #expect(menu.items.count == 7)
             for item in menu.items where !item.isSeparatorItem && item.title != "Transfer Details…" {
                 #expect(item.target === view)
                 let action = try #require(item.action)

@@ -53,6 +53,31 @@ private final class MemoryNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGMemoryViewTests {
+    @Test func retentionKeepsPagingBaselinesAndMissingStackPaddingAcrossResizeAndRelaunch() async throws {
+        try await withFixture { settings, defaults in
+            var reading = sample(), reads = 0
+            let miner = XRGMemoryMiner(pageSize: 4096, source: { reads += 1; return reading })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            reading.faults += 12; reading.pageIns += 3; reading.pageOuts += 5
+            miner.getLatestMemoryInfo()
+            let before = reads, option = NSMenuItem(); option.tag = 300
+            view.selectHistory(option)
+            #expect(reads == before && miner.recentFaults() == 12 && miner.faultData().numValues == 300)
+            let layers = view.pagingLayers()
+            #expect(layers.values.map(\.currentValue) == [20, 15, 12])
+            #expect(layers.values.allSatisfy { $0.orderedValues.first == XRGGraphRenderer.missingValue })
+            view.setFrameSize(NSSize(width: 60, height: 90))
+            #expect(miner.faultData().numValues == 300 && reads == before)
+            let restored = panel(miner, settings: settings, defaults: defaults)
+            #expect(restored.retainedSamples == 300 && miner.faultData().numValues == 300)
+            reading.faults += 7; miner.getLatestMemoryInfo()
+            #expect(miner.recentFaults() == 7)
+            option.tag = 20001; restored.selectHistory(option)
+            #expect(restored.retainedSamples == 300)
+            option.tag = 0; restored.selectHistory(option)
+            #expect(miner.faultData().numValues == 181)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults) async throws -> Void) async throws {
         _ = NSApplication.shared
         let domain = "XRG.memoryView.\(UUID().uuidString)"
@@ -247,7 +272,7 @@ struct XRGMemoryViewTests {
             let view = panel(miner, settings: settings, defaults: defaults, processMiner: processes)
             host.contentView?.addSubview(view); view.awakeFromNib()
             let menu = view.makeMenu()
-            #expect(menu.items.count == 9)
+            #expect(menu.items.count == 10)
             #expect(menu.items[1].title == "4768.4G - Big (id 3)")
             #expect(menu.items[2].title == "1.0M - Medium (id 2)")
             #expect(menu.items[3].title == "1K - Tiny (id 1)")
@@ -275,11 +300,11 @@ struct XRGMemoryViewTests {
             await processes.refresh()
             let view = panel(XRGMemoryMiner(pageSize: 4096, source: { sample() }), settings: settings, defaults: defaults, processMiner: processes)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 16)
+            #expect(menu.items.count == 17)
             #expect(menu.items[1].title.contains("Process12"))
             #expect(menu.items[10].title.contains("Process3"))
             let empty = panel(XRGMemoryMiner(pageSize: 4096, source: { nil }), settings: settings, defaults: defaults)
-            #expect(empty.makeMenu().items.count == 6)
+            #expect(empty.makeMenu().items.count == 7)
             #expect(XRGMemoryView.processMemoryText(1024) == "1024K")
             #expect(XRGMemoryView.processMemoryText(1_048_576) == "1024.0M")
         }

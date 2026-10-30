@@ -220,6 +220,7 @@ impl Interval {
 }
 #[derive(Default)]
 pub struct View {
+    history_samples: u32,
     ram: Option<(u64, History)>,
     cache: Option<History>,
     swap: Option<(u64, History)>,
@@ -227,6 +228,33 @@ pub struct View {
     swap_io: Interval,
 }
 impl View {
+    fn capacity(&self) -> u32 {
+        if self.history_samples == 0 {
+            120
+        } else {
+            self.history_samples
+        }
+    }
+    pub fn set_history_samples(&mut self, requested: u32) -> Result<(), String> {
+        if requested > crate::shared::sampling_settings()[3] {
+            return Err("Memory history capacity is out of range".into());
+        }
+        let old = self.capacity();
+        self.history_samples = requested;
+        let capacity = self.capacity();
+        if old != capacity {
+            if let Some((_, h)) = &mut self.ram {
+                h.resize(capacity);
+            }
+            if let Some(h) = &mut self.cache {
+                h.resize(capacity);
+            }
+            if let Some((_, h)) = &mut self.swap {
+                h.resize(capacity);
+            }
+        }
+        Ok(())
+    }
     pub fn clear_graph(&mut self) {
         if let Some((_, h)) = &mut self.ram {
             h.clear();
@@ -257,7 +285,9 @@ impl View {
         let reading = match memory {
             Ok(reading) => reading,
             Err(error) => {
+                let history_samples = self.history_samples;
                 *self = Self::default();
+                self.history_samples = history_samples;
                 panel.detail = error.clone();
                 return panel;
             }
@@ -267,7 +297,7 @@ impl View {
             .as_ref()
             .is_none_or(|(total, _)| *total != reading.total)
         {
-            self.ram = Some((reading.total, History::new(120)));
+            self.ram = Some((reading.total, History::new(self.capacity())));
             self.cache = None;
         }
         let percent = reading.used_percent();
@@ -283,7 +313,8 @@ impl View {
         )];
         if let Some(cached) = reading.cached {
             let percent = 100. * cached as f64 / reading.total as f64;
-            let history = self.cache.get_or_insert_with(|| History::new(120));
+            let capacity = self.capacity();
+            let history = self.cache.get_or_insert_with(|| History::new(capacity));
             history.append(percent);
             panel.series.push(history.values());
             labels.push(format!("cache {percent:.1}%"));
@@ -303,7 +334,7 @@ impl View {
                     .as_ref()
                     .is_none_or(|(total, _)| *total != swap.total)
                 {
-                    self.swap = Some((swap.total, History::new(120)));
+                    self.swap = Some((swap.total, History::new(self.capacity())));
                 }
                 let percent = 100. * swap.used as f64 / swap.total as f64;
                 let history = &mut self.swap.as_mut().unwrap().1;

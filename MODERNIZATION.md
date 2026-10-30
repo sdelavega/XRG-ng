@@ -1354,3 +1354,30 @@ Linux Debug/test builds omitted debug symbols to reduce temporary disk use;
 optimization and test assertions were unchanged. Evidence is retained in
 `dist/cpu-retention-validation`. Physical Intel/Linux x86-64, macOS 26 runtime and
 actual sleep/wake remain unverified.
+
+### Memory, Network and Disk retention
+
+The Mac graph menus and Linux Sources preferences now expose independent retained
+sample capacities for Memory, Network and Disk. Capacity edits retain newest
+samples. Chosen capacities survive window resizing, failures and source resets. Zero preserves
+each platform's original automatic default. Capacity edits preserve paging and
+normal/fast rate baselines, smoothing and observed session transfers. Existing
+source/failure/clear policies are otherwise unchanged. Mac Memory retains paging;
+Linux Memory retains RAM/cache/swap percentages, not equivalent OS measurements.
+
+Native menus share one builder and policy; explicit Mac capacity growth pads with missing values.
+CPU's gap-safe nonnegative history aggregation moved to the common renderer and
+is reused for paging stacks. Linux applies the module capacities to existing
+buffers and future/replacement sources. Settings version 27 introduces a validated
+module map, reads prior files without writing and preserves CPU settings and other
+preferences. Invalid or unsupported entries cannot partially replace saved data.
+
+Validation: universal Mac build, 567 tests on ARM64 and 567 under Rosetta x86_64,
+native/packaged launch smokes; Linux ARM64 passed 31 shared Swift tests, C ABI smoke,
+strict Clippy and 549 Rust tests, plus egui/file-picker/clipboard/reset and all
+sixteen X11/nested-Wayland collapse cases. A GUI gate verifies Memory=360,
+Network=480 and Disk=600 reach the live worker and persist. Native menus/paging
+gaps and the Linux Sources controls were visually inspected using private fixture
+settings. Evidence is in `dist/system-retention-validation`. Linux temporary
+Debug/test builds omit debug symbols without changing optimization/assertions.
+Physical Intel/Linux x86-64, macOS 26 runtime and actual sleep/wake remain unverified.

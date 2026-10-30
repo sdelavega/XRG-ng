@@ -10,7 +10,7 @@ import Foundation
 @c(xrg_sampling_settings) public func samplingSettings(_ output: UnsafeMutablePointer<UInt32>?, _ capacity: UInt32) -> Int32 {
     guard let output, capacity >= 4 else { return -1 }
     let values = [XRGSamplingSettings.minimumMilliseconds, XRGSamplingSettings.maximumMilliseconds,
-                  XRGSamplingSettings.defaultMilliseconds, UInt32(XRGSamplingSettings.maximumCPUHistorySamples)]
+                  XRGSamplingSettings.defaultMilliseconds, UInt32(XRGSamplingSettings.maximumHistorySamples)]
     for (index, value) in values.enumerated() { output[index] = value }
     return 4
 }

@@ -13,6 +13,55 @@ use xrg_ng_linux::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 #[test]
+fn system_retention_migrates_without_writes_and_rejects_invalid_maps_atomically() {
+    let f = Fixture::new();
+    let mut original = Settings::default();
+    original.metrics.cpu_history_samples = 257;
+    original.sampling_interval_ms = 375;
+    let mut wire = serde_json::to_value(&original).unwrap();
+    wire["version"] = 26.into();
+    wire["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("history_samples");
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, original);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    for (module, count) in [
+        (Module::Memory, 300),
+        (Module::Network, 600),
+        (Module::Disk, 1800),
+    ] {
+        loaded.metrics.history_samples.insert(module, count);
+    }
+    store.save(&loaded).unwrap();
+    let saved = fs::read(f.path()).unwrap();
+    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let mut invalid = loaded.clone();
+    invalid.metrics.history_samples.insert(Module::Disk, 20001);
+    assert!(store.save(&invalid).is_err());
+    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    invalid = loaded.clone();
+    invalid.metrics.history_samples.insert(Module::Gpu, 300);
+    assert!(store.save(&invalid).is_err());
+    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    for value in [
+        serde_json::json!({"memory": -1}),
+        serde_json::json!({"network": 2.5}),
+        serde_json::json!({"disk": "300"}),
+        serde_json::json!({"memory": true}),
+        serde_json::json!({"cpu": 300}),
+        serde_json::json!({"gpu": 300}),
+        serde_json::json!(null),
+    ] {
+        wire["metrics"]["history_samples"] = value;
+        assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
+}
+#[test]
 fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactionally() {
     let f = Fixture::new();
     let mut wire = serde_json::to_value(Settings::default()).unwrap();
@@ -26,7 +75,7 @@ fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactional
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = Store::open(Some(f.path()));
     assert!(error.is_none());
-    assert_eq!(loaded.version, 26);
+    assert_eq!(loaded.version, 27);
     assert_eq!(loaded.metrics.cpu_history_samples, 0);
     assert_eq!(loaded.sampling_interval_ms, 375);
     assert_eq!(fs::read(f.path()).unwrap(), original);
@@ -114,7 +163,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 27;
+    value.version = 28;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -447,7 +496,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        26
+        27
     );
 }
 #[test]
@@ -530,7 +579,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 26);
+    assert_eq!(migrated.version, 27);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -690,7 +739,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        26
+        27
     );
 }
 

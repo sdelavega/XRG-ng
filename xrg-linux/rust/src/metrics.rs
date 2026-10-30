@@ -49,18 +49,23 @@ struct IoHistory {
     session_started: Option<f64>,
     skip_next_transfer: bool,
     graph_cleared: bool,
+    capacity: u32,
 }
 impl IoHistory {
     fn new() -> Self {
+        Self::with_capacity(120)
+    }
+    fn with_capacity(capacity: u32) -> Self {
         Self {
             rates: Rates::new(),
-            histories: std::array::from_fn(|_| History::new(120)),
+            histories: std::array::from_fn(|_| History::new(capacity)),
             membership: None,
             totals: TransferTotals::default(),
             last_sample: None,
             session_started: None,
             skip_next_transfer: true,
             graph_cleared: false,
+            capacity,
         }
     }
     fn clear_graph(&mut self) {
@@ -75,7 +80,16 @@ impl IoHistory {
         self.skip_next_transfer = true;
     }
     fn reset(&mut self) {
-        *self = Self::new();
+        *self = Self::with_capacity(self.capacity);
+    }
+    fn set_history_samples(&mut self, requested: u32) {
+        let capacity = if requested == 0 { 120 } else { requested };
+        if self.capacity != capacity {
+            for history in &mut self.histories {
+                history.resize(capacity);
+            }
+            self.capacity = capacity;
+        }
     }
     fn panel(
         &mut self,
@@ -163,7 +177,7 @@ impl IoHistory {
                 // A failed interval cannot be reconstructed. Retain counted
                 // transfers, but rebaseline rates and flag incomplete coverage.
                 self.rates = Rates::new();
-                self.histories = std::array::from_fn(|_| History::new(120));
+                self.histories = std::array::from_fn(|_| History::new(self.capacity));
                 if self.graph_cleared {
                     for h in &mut self.histories {
                         h.clear();
@@ -273,6 +287,10 @@ impl Sampler {
         selection.validate()?;
         self.cpu
             .set_history_samples(selection.cpu_history_samples)?;
+        self.network
+            .set_history_samples(selection.retained_samples(Module::Network));
+        self.disk
+            .set_history_samples(selection.retained_samples(Module::Disk));
         if self.selection.cpu != selection.cpu {
             self.cpu.reset_history();
         }

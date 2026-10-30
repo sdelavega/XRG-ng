@@ -120,9 +120,13 @@ public final class XRGNetView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int32) {
         guard width >= 0 else { return }
-        let count = min(20_000, Int(width))
-        if miner.rxValues.numValues != count { miner.setDataSize(count) }
-        if fastMiner.rxValues.numValues != count { fastMiner.setDataSize(count) }
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, Int(width))
+        if miner.rxValues.numValues != count {
+            if retainedSamples > 0 { miner.resizeHistory(count) } else { miner.setDataSize(count) }
+        }
+        if fastMiner.rxValues.numValues != count {
+            if retainedSamples > 0 { fastMiner.resizeHistory(count) } else { fastMiner.setDataSize(count) }
+        }
     }
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -270,6 +274,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         }
         menu.addItem(.separator())
         menu.addItem(item("Transfer Details…", #selector(showTransferDetails(_:))))
+        menu.addItem(XRGHistoryRetention.menu("Network History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(item("Reset Session Transfers", #selector(resetTransfers(_:))))
         menu.addItem(.separator())
@@ -279,6 +284,12 @@ public final class XRGNetView: NSView, XRGModuleView {
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let historyKey = "XRGNetView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); needsDisplay = true
+    }
     public func emptyEvent(_ sender: Any?) {}
     public func openNetworkSystemPreferences(_ sender: Any?) { _ = openURL(Self.networkSettingsURL) }
     public func openNetworkUtility(_ sender: Any?) { if let url = utilityURL() { _ = openURL(url) } }
