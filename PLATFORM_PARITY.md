@@ -30,10 +30,15 @@ Implemented in development for monitoring tools:
 
 - Mac CPU and Memory graph menus open a searchable process table with saved
   filters/row limits, CPU/memory/name/PID sorting, explicit refresh-failure status
-  and frozen, read-only process details. Mac CPU is the recent decaying average
-  reported by `ps`; Linux CPU is an interval measurement. Mac filters by exact
-  reported user name; Linux supports numeric UID filtering. Linux retains its
-  live identity-aware details and process controls; Mac control parity remains open.
+  and instance-bound live process details. Mac table CPU is the recent decaying
+  average reported by `ps`; Mac live details and Linux use interval measurements.
+  Mac filters by exact reported user name; Linux supports numeric UID filtering.
+  Both now offer confirmation-based Terminate, Force Kill, Pause and Resume.
+  Mac uses SDK task-name/audit-token APIs and kernel token-based signal delivery,
+  with no numeric-PID fallback or privilege helper. Native identities bracket the
+  ps scan; unverified rows retain frozen, read-only details. Exit/identity changes
+  stop detail updates and actions; read failures retain explicitly stale details.
+  Process protections and permissions can still prevent access or delivery.
 - Linux has an all-sensor statistics inspector and a copyable diagnostic report.
   Temperature and fan statistics accumulate for the session independently of graph
   selection, retain missing-input history without stale current readings, and
@@ -141,8 +146,9 @@ Implemented in this pass:
 
 Remaining monitoring work:
 
-1. Monitoring tools: Mac process controls and richer live details; align optional
-   source selection, counter displays and remaining graph modes.
+1. Monitoring tools: align optional source selection, counter displays and remaining
+   graph modes. Process controls and live details are now present on both platforms;
+   account for their different permissions, CPU meanings and user filters.
    Retain the existing integrated Mac fan/VRAM readings.
 2. AI accounting: align retained history duration and remaining format-specific
    message identity/deduplication and source continuity details. Both now account with hidden graphs and preserve

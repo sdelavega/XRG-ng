@@ -300,11 +300,22 @@ On **macOS**, right-click CPU or Memory and choose **Processes…**. The table
 supports name/PID search, exact user-name filtering, CPU/memory/name/PID sorting
 and a saved row limit. It refreshes every five seconds while open, shows failures
 explicitly, and retains the last successful snapshot on collection failure.
-Double-click a row or choose **Inspect Selected…** for frozen, read-only details.
-Mac CPU percentages use `ps`'s recent decaying average; Linux uses interval CPU
-measurements. RSS can include shared pages. Neither arguments nor environments
-are collected. Mac process controls are still planned; Linux retains its existing
-process controls and live details.
+Double-click a row or choose **Inspect Selected…** for live, instance-bound details:
+state, parent PID, ownership, start time, threads, nice/priority, memory, lifetime
+CPU time and interval CPU usage. Details refresh every five seconds while open.
+The Mac table uses `ps`'s recent decaying CPU average; live details and Linux use
+interval measurements. RSS can include shared pages. Neither arguments nor
+environments are collected. Missing counters remain unavailable.
+
+Mac live detail windows offer **Terminate**, **Force Kill**, **Pause** and **Resume**.
+Every action requires confirmation with Cancel as the default. The reviewed audit
+token identifies the target at signal delivery; there is no numeric-PID fallback
+or privilege helper. macOS permissions and process protections still apply.
+Delivery is reported separately from the next observed state. Exit, identity or
+ownership changes stop live updates and disable actions, keeping the last details
+visible. Failed reads retain details with an explicit error and disable actions
+until recovery. Rows without a verified identity retain frozen, read-only details.
+Closing an inspector closes its detail windows and cancels pending refreshes.
 
 On **Linux**, choose **Sensors and statistics…** from the application menu or the
 Temperature/Fans graph menu. View current/minimum/average/maximum temperatures

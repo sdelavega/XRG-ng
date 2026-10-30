@@ -31,6 +31,12 @@ struct XRGProcessRecord: Sendable {
     let swaps: UInt64
     let user: String
     let command: String
+    let identity: XRGProcessIdentity?
+    init(cpu: Double, pid: Int, resident: UInt64, virtual: UInt64, swaps: UInt64, user: String, command: String,
+         identity: XRGProcessIdentity? = nil) {
+        self.cpu = cpu; self.pid = pid; self.resident = resident; self.virtual = virtual
+        self.swaps = swaps; self.user = user; self.command = command; self.identity = identity
+    }
 
     var dictionary: [String: Any] {
         ["%cpu": cpu, "pid": pid, "rss": resident, "vsz": virtual,
@@ -105,6 +111,7 @@ public final class XRGProcessMiner: NSObject {
 
     // Preserve ps's CPU averaging and KiB units while keeping subprocess work off the UI thread.
     nonisolated static func readProcesses() -> [XRGProcessRecord]? {
+        let identities = XRGProcessAccess.identities()
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -116,6 +123,13 @@ public final class XRGProcessMiner: NSObject {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0, let output = String(data: data, encoding: .utf8) else { return nil }
-        return parse(output)
+        return parse(output).map { row in
+            let pid = Int32(exactly: row.pid)
+            let before = pid.flatMap { identities[$0] }
+            let after = pid.flatMap { try? XRGProcessAccess.identity($0) }
+            return XRGProcessRecord(cpu: row.cpu, pid: row.pid, resident: row.resident, virtual: row.virtual,
+                                    swaps: row.swaps, user: row.user, command: row.command,
+                                    identity: before != nil && before == after ? before : nil)
+        }
     }
 }

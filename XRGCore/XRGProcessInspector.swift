@@ -26,8 +26,7 @@ struct XRGProcessOptions: Codable, Equatable {
     var valid: Bool { search.count <= 128 && user.count <= 128 && [25, 50, 100, 200].contains(limit) }
 }
 
-/// Uses only the existing name-only ps snapshot. Details are deliberately frozen:
-/// a reused numeric PID never redirects a detail window to another process.
+/// Keeps the existing name-only ps table; native identities bind live detail windows.
 @MainActor final class XRGProcessInspector: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     static let optionsKey = "processInspectorV1"
     private let miner: XRGProcessMiner
@@ -42,6 +41,7 @@ struct XRGProcessOptions: Codable, Equatable {
     let limit = NSPopUpButton(frame: .zero, pullsDown: false)
     let table = NSTableView()
     let status = NSTextField(wrappingLabelWithString: "Waiting for a process sample…")
+    private(set) var details: [XRGProcessIdentity: XRGProcessDetailController] = [:]
     private let detail = NSButton(title: "Inspect Selected…", target: nil, action: nil)
 
     init(miner: XRGProcessMiner, defaults: UserDefaults, sort initialSort: XRGProcessOptions.Sort) {
@@ -105,6 +105,7 @@ struct XRGProcessOptions: Codable, Equatable {
     }
     func windowWillClose(_ notification: Notification) {
         refreshTimer?.invalidate(); refreshTimer = nil; refreshTask?.cancel(); refreshTask = nil
+        let children = Array(details.values); details.removeAll(); children.forEach { $0.close() }
     }
     @objc func refresh(_ sender: Any?) {
         guard refreshTask == nil else { return }
@@ -115,9 +116,9 @@ struct XRGProcessOptions: Codable, Equatable {
         }
     }
     func reload() {
-        let selected = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].pid : nil
+        let selected = rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].identity : nil
         rows = options.ranked(miner.records); table.reloadData()
-        if let selected, let index = rows.firstIndex(where: { $0.pid == selected }) { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
+        if let selected, let index = rows.firstIndex(where: { $0.identity == selected }) { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
         else { table.deselectAll(nil) }
         detail.isEnabled = table.selectedRow >= 0
         if let date = miner.sampledAt {
@@ -165,7 +166,13 @@ struct XRGProcessOptions: Codable, Equatable {
     }
     @objc func inspectSelected(_ sender: Any?) {
         guard rows.indices.contains(table.selectedRow), let window else { return }
-        let alert = NSAlert(); alert.messageText = "Process snapshot"
+        if let identity = rows[table.selectedRow].identity {
+            if let existing = details[identity] { existing.present(); return }
+            guard details.count < 16 else { status.stringValue = "Close an existing process detail window before opening another."; return }
+            let controller = XRGProcessDetailController(identity: identity, onClose: { [weak self] in self?.details.removeValue(forKey: identity) })
+            details[identity] = controller; controller.present(); return
+        }
+        let alert = NSAlert(); alert.messageText = "Process snapshot · live identity unavailable"
         alert.informativeText = Self.detailText(rows[table.selectedRow], sampledAt: miner.sampledAt)
         alert.addButton(withTitle: "Done"); alert.beginSheetModal(for: window)
     }
