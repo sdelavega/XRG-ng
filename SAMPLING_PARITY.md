@@ -186,10 +186,18 @@ put the user's computer to sleep and do not validate actual OS/driver wake timin
 Counter policy remains source-specific. CPU's shared interval predicate requires
 strictly increasing finite monotonic observations no more than 300 seconds apart;
 Mac/Linux CPU paths use that predicate. Native Network/Disk tracking separates
-rates, session totals and identity evidence; valid counter deltas remain counted,
-while failed/invalid-time intervals retain totals and mark partial coverage.
-There is no blanket wake reset of these trackers: that could discard legitimate
-observed transfers. Their sleep-clock behavior and platform-level wake recovery
+rates, session totals and identity evidence. Wake now marks the next rate interval
+unknown without discarding the counter baseline: valid first post-wake deltas count
+toward session transfers, while graphs record a missing rate and current rate
+labels stay unavailable. That observation establishes fresh timing; the following
+valid interval restores rates. Normal and fast streams rebaseline independently,
+and mini-graph damping clears without a source read. Failed/invalid-time intervals
+still retain prior totals and mark partial coverage.
+There is no blanket wake reset of transfer/identity state: that could discard
+legitimate observed bytes. Explicit transfer reset still excludes its straddling
+interval; membership changes and counter rollbacks still start a new session.
+The synthetic window/miner/tracker tests cover those boundaries. Actual sleep-clock
+behavior and platform-level wake recovery
 still need a joint audit. AI keeps its existing independent accounting lifecycle.
 This pass does not add global Pause/Resume or change Linux/Shared code.
 

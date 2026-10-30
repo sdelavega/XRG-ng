@@ -64,6 +64,17 @@ private final class NetworkNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGNetViewTests {
+    @Test func wakeClearsMiniDampingWithoutReadingOrResettingTransfers() throws {
+        try withFixture { settings, defaults, source in
+            let view = panel(source, settings, defaults, height: 10)
+            source.advance(1, rx: 1600, tx: 400); view.graphUpdate(nil); view.fastUpdate(nil)
+            #expect(view.fastRXValue > 0)
+            let reads = source.reads, total = view.miner.totalBytesSinceLoad
+            view.samplingDidWake()
+            #expect(source.reads == reads && view.miner.totalBytesSinceLoad == total && view.fastRXValue == 0)
+        }
+    }
+
     @Test func retentionKeepsNormalFastRatesAndTransfersAcrossResizeAndRelaunch() throws {
         try withFixture { settings, defaults, source in
             let view = panel(source, settings, defaults, height: 10)

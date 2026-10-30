@@ -114,6 +114,7 @@ public final class XRGNetMiner: NSObject {
         timedHistory.clear()
     }
     public func resetTransfers() { tracker.resetTransfers() }
+    func invalidateRateInterval() { tracker.invalidateRateInterval() }
     public func rebase() { tracker = XRGIOCounterTracker(); rxRate = 0; txRate = 0 }
     @objc public func maxBandwidth() -> CGFloat { totalValues.max }
     @objc public func currentTX() -> CGFloat { txRate }
@@ -157,6 +158,7 @@ public final class XRGNetMiner: NSObject {
         })
         guard let reading = tracker.sample(counters, at: now) else { return failedRead(recordHistory: recordHistory) }
         if reading.newSession { reset() }
+        guard reading.ratesAvailable else { appendMissing(recordHistory: recordHistory); return false }
         rxRate = reading.firstRate; txRate = reading.secondRate
         rxValues.setNextValue(rxRate); txValues.setNextValue(txRate)
         totalValues.setNextValue(rxRate + txRate)
@@ -166,9 +168,12 @@ public final class XRGNetMiner: NSObject {
 
     private func failedRead(recordHistory: Bool) -> Bool {
         tracker.fail()
+        appendMissing(recordHistory: recordHistory)
+        return false
+    }
+    private func appendMissing(recordHistory: Bool) {
         for history in [rxValues, txValues, totalValues] { history.setNextValue(XRGGraphRenderer.missingValue) }
         if recordHistory { timedHistory.append(time: historyClock(), values: [.nan, .nan, .nan]) }
-        return false
     }
 
     nonisolated static func readSnapshot() -> [XRGNetworkSample]? {

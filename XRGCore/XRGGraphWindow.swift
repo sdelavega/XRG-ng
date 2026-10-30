@@ -187,6 +187,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     public func systemDidWake(_ notification: Notification) {
         woke = true
+        netView?.samplingDidWake(); diskView?.samplingDidWake()
         // Invalidate even if the sleep notification was missed. A read begun
         // before wake cannot repopulate current values or either history.
         gpuView?.setCollectionActive(false)

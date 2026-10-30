@@ -109,6 +109,11 @@ public final class XRGDiskMiner: NSObject {
         }
         if reading.newSession { reset() }
         updateRawCounters(counters)
+        guard reading.ratesAvailable else {
+            for history in [readValues, writeValues, totalValues] { history.setNextValue(XRGGraphRenderer.missingValue) }
+            timedHistory.append(time: historyClock(), values: [.nan, .nan, .nan])
+            return false
+        }
         readRate = reading.firstRate; writeRate = reading.secondRate
         readValues.setNextValue(readRate); writeValues.setNextValue(writeRate)
         totalValues.setNextValue(readRate + writeRate)
@@ -119,10 +124,12 @@ public final class XRGDiskMiner: NSObject {
         guard let counters = snapshot(), let reading = fast.sample(counters, at: clock()) else {
             fast.fail(); return false
         }
+        guard reading.ratesAvailable else { return false }
         fastReadRate = reading.firstRate; fastWriteRate = reading.secondRate
         return true
     }
     public func rebaseFast() { fast = XRGIOCounterTracker(); fastReadRate = 0; fastWriteRate = 0 }
+    func invalidateRateInterval() { normal.invalidateRateInterval(); fast.invalidateRateInterval() }
     public func resetTransfers() { normal.resetTransfers() }
     public func reset() {
         for history in [readValues, writeValues, totalValues] { history.reset() }

@@ -18,6 +18,8 @@ struct XRGIOCounterTracker<Key: Hashable> {
     private var membership: Set<Key>?
     private var time: TimeInterval?
     private var skipNextTransfer = true
+    private var needsRateBaseline = false
+    private var waitingForRateInterval = false
     private(set) var first: UInt64 = 0
     private(set) var second: UInt64 = 0
     private(set) var partial = false
@@ -41,14 +43,21 @@ struct XRGIOCounterTracker<Key: Hashable> {
         skipNextTransfer = true
     }
 
+    // Keep counter/identity evidence and exact byte accounting; only the next
+    // rate interval is unsuitable after an explicit lifecycle boundary.
+    mutating func invalidateRateInterval() {
+        needsRateBaseline = true; waitingForRateInterval = true; available = false
+    }
+
     mutating func fail() {
-        previous = nil; time = nil; available = false; partial = true
+        previous = nil; time = nil; available = false; partial = true; waitingForRateInterval = false
     }
 
     struct Reading {
         let firstRate: CGFloat
         let secondRate: CGFloat
         let newSession: Bool
+        let ratesAvailable: Bool
     }
 
     mutating func sample(_ counters: [Key: XRGIOCounters], at now: TimeInterval) -> Reading? {
@@ -77,8 +86,9 @@ struct XRGIOCounterTracker<Key: Hashable> {
                 a = x.value; b = y.value; overflow = overflow || x.overflow || y.overflow
             }
         }
-        let ar = elapsed > 0 ? Double(a) / elapsed : 0
-        let br = elapsed > 0 ? Double(b) / elapsed : 0
+        let suppressRates = needsRateBaseline
+        let ar = elapsed > 0 && !suppressRates ? Double(a) / elapsed : 0
+        let br = elapsed > 0 && !suppressRates ? Double(b) / elapsed : 0
         guard ar.isFinite, br.isFinite, (ar + br).isFinite else { fail(); return nil }
         if skipNextTransfer {
             skipNextTransfer = false; started = now; partial = false
@@ -87,14 +97,19 @@ struct XRGIOCounterTracker<Key: Hashable> {
             first = x.value; second = y.value
             saturated = saturated || overflow || x.overflow || y.overflow || Self.sum(first, second).overflow
         }
-        previous = counters; lastCounters = counters; time = now; available = true
-        return Reading(firstRate: CGFloat(ar), secondRate: CGFloat(br), newSession: newSession)
+        previous = counters; lastCounters = counters; time = now
+        available = !suppressRates; waitingForRateInterval = suppressRates; needsRateBaseline = false
+        return Reading(firstRate: CGFloat(ar), secondRate: CGFloat(br), newSession: newSession, ratesAvailable: !suppressRates)
     }
 
     func details(firstLabel: String, secondLabel: String) -> String {
         var text = "Session observed transfers: \(firstLabel) \(first) bytes / \(secondLabel) \(second) bytes.\n"
         text += "Totals count valid counter deltas since monitoring or Reset Session Transfers. The first sample establishes a baseline. Selection, membership, identity changes and counter restarts begin a new session.\nReset Graph preserves totals and rate baselines. Reset Session Transfers preserves graphs and rates; the next sample starts accounting, excluding the interval spanning the reset.\n"
-        if !available { text += "Current counters unavailable; last successful snapshot retained.\n" }
+        if !available {
+            text += waitingForRateInterval
+                ? "Current rates unavailable across a wake boundary; valid observed counter deltas still count toward transfers. The next completed interval restores rates.\n"
+                : "Current counters unavailable; last successful snapshot retained.\n"
+        }
         if partial { text += "Partial coverage: missed intervals are excluded; totals are lower bounds. Recovery establishes a fresh rate baseline.\n" }
         if saturated { text += "Counter arithmetic saturated at UInt64 maximum; totals are lower bounds.\n" }
         return text

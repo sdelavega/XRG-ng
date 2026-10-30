@@ -142,6 +142,11 @@ public final class XRGDiskView: NSView, XRGModuleView {
         }
         wasMini = mini
     }
+    @nonobjc func samplingDidWake() {
+        miner.invalidateRateInterval()
+        fastReadValue = 0; fastWriteValue = 0
+        updateLabels(); needsDisplay = true
+    }
     public func graphUpdate(_ timer: Timer?) {
         miner.update()
         updateLabels()

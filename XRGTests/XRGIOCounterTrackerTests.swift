@@ -10,6 +10,38 @@ struct XRGIOCounterTrackerTests {
         [1: XRGIOCounters(first: a, second: b)]
     }
 
+    @Test func wakeSuppressesOnlyRatesAndRetainsEveryValidObservedByte() throws {
+        var tracker = XRGIOCounterTracker<Int>()
+        _ = tracker.sample(counters(100, 200), at: 0)
+        _ = tracker.sample(counters(700, 400), at: 1)
+        tracker.invalidateRateInterval(); tracker.invalidateRateInterval()
+        #expect(!tracker.available && tracker.total == 800 && !tracker.lowerBound)
+        let wakeReading = tracker.sample(counters(10_700, 2_400), at: 2)
+        let wake = try #require(wakeReading)
+        #expect(!wake.ratesAvailable && wake.firstRate == 0 && !wake.newSession)
+        #expect(tracker.total == 12_800 && !tracker.available && !tracker.lowerBound)
+        #expect(tracker.details(firstLabel: "RX", secondLabel: "TX").contains("valid observed counter deltas"))
+        let freshReading = tracker.sample(counters(11_300, 2_600), at: 3)
+        let fresh = try #require(freshReading)
+        #expect(fresh.ratesAvailable && fresh.firstRate == 600 && fresh.secondRate == 200 && tracker.available)
+        #expect(tracker.total == 13_600)
+    }
+    @Test func wakeRetainsResetFailureAndRestartAccountingBoundaries() throws {
+        var tracker = XRGIOCounterTracker<Int>()
+        _ = tracker.sample(counters(100), at: 0); _ = tracker.sample(counters(200), at: 1)
+        tracker.resetTransfers(); tracker.invalidateRateInterval()
+        #expect(tracker.sample(counters(900), at: 2)?.ratesAvailable == false && tracker.total == 0)
+        _ = tracker.sample(counters(1000), at: 3); #expect(tracker.total == 100)
+        tracker.invalidateRateInterval(); tracker.fail()
+        #expect(tracker.sample(counters(2000), at: 4)?.ratesAvailable == false && tracker.total == 100 && tracker.partial)
+        _ = tracker.sample(counters(2100), at: 5); #expect(tracker.total == 200 && tracker.partial)
+        tracker.invalidateRateInterval()
+        let restartReading = tracker.sample(counters(10), at: 6)
+        let restart = try #require(restartReading)
+        #expect(restart.newSession && !restart.ratesAvailable && tracker.total == 0 && !tracker.partial)
+        _ = tracker.sample(counters(30), at: 7); #expect(tracker.total == 20 && tracker.available)
+    }
+
     @Test func resetExcludesTheStraddlingIntervalWithoutChangingRates() throws {
         var tracker = XRGIOCounterTracker<Int>()
         _ = tracker.sample(counters(100, 200), at: 0)

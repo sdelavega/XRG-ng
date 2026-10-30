@@ -707,3 +707,7 @@ Mac workspace sleep/wake events invalidate pending GPU publication and restore
 collection according to GPU/VRAM visibility. Histories and transfer totals are
 preserved; synthetic-notification coverage does not establish real hardware wake
 behavior.
+
+On Mac wake, Network and Disk retain valid observed byte deltas in session totals
+but mark the first post-wake rate unknown. A following valid interval restores
+rates; graph histories record a gap rather than a fabricated wake spike.

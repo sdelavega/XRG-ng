@@ -10,6 +10,22 @@ struct XRGNetworkMinerTests {
         XRGNetworkSample(name: name, index: index, received: rx, sent: tx)
     }
 
+    @Test func wakeCountsCounterDeltasButRecordsMissingRatesBeforeFreshInterval() {
+        var values = [sample(1000, 200)], time = 0.0
+        let miner = XRGNetMiner(source: { values }, clock: { time }, historyClock: { 100 + time })
+        miner.setDataSize(4)
+        time = 1; values = [sample(1600, 400)]; #expect(miner.getLatestNetInfo())
+        let count = miner.timedHistory.observationCount
+        miner.invalidateRateInterval()
+        #expect(miner.totalBytesSinceLoad == 800 && !miner.countersAvailable)
+        time = 2; values = [sample(11_600, 2400)]
+        #expect(!miner.getLatestNetInfo() && miner.totalBytesSinceLoad == 12_800 && !miner.transfersAreLowerBound)
+        #expect(miner.rxValues.currentValue == XRGGraphRenderer.missingValue && miner.currentRX() == 600)
+        #expect(miner.totalBytesSinceBoot == 14_000 && miner.timedHistory.observationCount == count + 1)
+        time = 3; values = [sample(12_200, 2600)]
+        #expect(miner.getLatestNetInfo() && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 13_600)
+    }
+
     @Test func ratesAndCurrentTotals() {
         var samples = [sample(5_000_000_000, 100)]
         var time = 10.0

@@ -51,6 +51,17 @@ private final class DiskPanelNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGDiskViewTests {
+    @Test func wakeClearsMiniDampingWithoutReadingOrResettingTransfers() throws {
+        try withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults, height: 10)
+            source.advance(1, read: 1600, written: 400); view.graphUpdate(nil); view.fastUpdate(nil)
+            #expect(view.fastReadValue > 0)
+            let reads = source.reads, total = miner.totalBytesSinceLoad
+            view.samplingDidWake()
+            #expect(source.reads == reads && miner.totalBytesSinceLoad == total && view.fastReadValue == 0)
+        }
+    }
+
     @Test func retentionKeepsDiskRatesAndTransfersAcrossResizeAndRelaunch() throws {
         try withFixture { settings, defaults, source in
             let miner = source.miner(), view = panel(miner, settings, defaults, height: 10)

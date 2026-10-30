@@ -2130,3 +2130,38 @@ suspend/resume remain unverified.
 Cleanup removed the two inventoried task build roots and 608 empty private test
 preferences, approximately 2.18 GiB, with no errors. Archived results remain on
 MacStorage; installed apps, ordinary settings and unrelated caches were preserved.
+
+### Network/Disk wake separates rate freshness from exact transfer accounting
+
+Added an explicit rate-interval boundary to native I/O tracking. Wake marks normal
+and fast rates unavailable without dropping counter/identity evidence or totals.
+The first valid post-wake snapshot still adds trustworthy byte deltas to session
+transfers and updates raw kernel counters, but records missing rate history and
+returns unavailable rate status. It establishes a new timing baseline; the next
+valid interval restores rates. Cached numeric values remain separate from rate
+availability, and mini-graph damping clears without reading a source.
+
+The boundary is idempotent. Explicit transfer reset still excludes the interval
+spanning the action, graph reset preserves accounting, failed/invalid-time reads
+retain existing lower-bound recovery, and membership/rollback still starts a new
+session. A valid wake boundary alone does not mark exact totals as lower bounds.
+The window invokes the view hooks from its wake handler. CPU, Battery, GPU/AI
+policies, Linux/Shared sources, schema and versions are unchanged. No actual system
+sleep, hardware wake latency or new performance claim is part of this pass.
+
+Seven new regressions cover tracker boundaries, normal/fast miner recovery, exact
+bytes across a large wake delta, missing rate observations, raw counters, transfer
+reset/failure/rollback, no-read mini damping, and full window-to-miner wake wiring.
+Initial test compilation hit Swift Testing's direct mutating-call macro expansion;
+those calls now execute before #require, preserving all assertions and coverage.
+
+Final validation: full `Tools/ci-macos.sh Debug` passed 615 cases with zero failures
+on ARM64 and 615 under Rosetta x86-64, plus universal build, metadata/notices and
+retired-symbol guards, isolated AppKit restore and both packaged original-nib
+launch checks. Evidence and twelve tested source hashes: `dist/io-wake-validation`,
+with initial macro compilation failure separated from the corrected final gate,
+and DerivedData excluded. Linux/Shared code was unchanged and not retested. No
+actual suspend/resume, physical Intel/macOS 26 runtime or new latency claim.
+Cleanup removed the two inventoried task build roots and 614 empty private test
+preferences, approximately 3.03 GiB, with no errors. Installed apps, ordinary
+settings, repository caches and unrelated project files were preserved.

@@ -264,6 +264,31 @@ struct XRGGraphWindowTests {
         #expect(f.window.frame == original && !f.window.minimized && f.defaults.bool(forKey: "windowIsMinimized"))
         #expect(!timer.isValid && f.window.graphTimer == nil)
     }
+    @Test func windowWakePreservesIOTransfersAndSuppressesOnlyTheSpanningRate() throws {
+        let f = try GraphWindowFixture(); defer { f.cleanUp() }
+        f.defaults.set(true, forKey: "showNetworkGraph"); f.defaults.set(true, forKey: "showDiskGraph")
+        var time = 0.0, reads = 0, first: UInt64 = 1000, second: UInt64 = 200
+        let network = XRGNetMiner(source: { reads += 1; return [XRGNetworkSample(name: "en0", index: 1, received: first, sent: second)] }, clock: { time })
+        let fast = XRGNetMiner(source: { reads += 1; return [XRGNetworkSample(name: "en0", index: 1, received: first, sent: second)] }, clock: { time })
+        let disk = XRGDiskMiner(source: { reads += 1; return [XRGDiskSample(id: 1, read: first, written: second)] }, clock: { time })
+        let netView = XRGNetView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: network, fastMiner: fast, settings: f.window.appSettings, defaults: f.defaults)
+        let diskView = XRGDiskView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: disk, settings: f.window.appSettings, defaults: f.defaults)
+        defer { netView.removeFromSuperview(); diskView.removeFromSuperview() }
+        f.window.contentView?.addSubview(netView); netView.awakeFromNib()
+        f.window.contentView?.addSubview(diskView); diskView.awakeFromNib()
+        time = 1; first = 1600; second = 400; f.window.graphUpdate(nil)
+        #expect(network.totalBytesSinceLoad == 800 && disk.totalBytesSinceLoad == 800)
+        let before = reads
+        f.window.systemDidWake(Notification(name: NSWorkspace.didWakeNotification))
+        #expect(reads == before && !network.countersAvailable && !disk.countersAvailable)
+        time = 2; first = 11_600; second = 2400; f.window.graphUpdate(nil)
+        #expect(network.totalBytesSinceLoad == 12_800 && disk.totalBytesSinceLoad == 12_800)
+        #expect(!network.countersAvailable && !disk.countersAvailable && !network.transfersAreLowerBound && !disk.transfersAreLowerBound)
+        time = 3; first = 12_200; second = 2600; f.window.graphUpdate(nil)
+        #expect(network.currentRX() == 600 && disk.readRate == 600 && network.countersAvailable && disk.countersAvailable)
+        #expect(network.totalBytesSinceLoad == 13_600 && disk.totalBytesSinceLoad == 13_600)
+    }
+
     @Test func runtimeWakeSubscriptionIsIdempotentAndWindowScoped() async throws {
         let f = try GraphWindowFixture(); defer { f.cleanUp() }
         let center = NotificationCenter()

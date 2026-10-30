@@ -37,6 +37,21 @@ import Testing
 
 @Suite @MainActor
 struct XRGDiskMinerTests {
+    @Test func wakeKeepsExactNormalTransfersAndIndependentlyRebasesFastRates() {
+        let source = DiskSampleSource(), miner = source.miner(); miner.setDataSize(4)
+        source.advance(1, read: 1600, written: 400); #expect(miner.update()); #expect(miner.updateFast())
+        miner.invalidateRateInterval()
+        #expect(!miner.countersAvailable && !miner.fastCountersAvailable && miner.totalBytesSinceLoad == 800)
+        source.advance(2, read: 11_600, written: 2400)
+        #expect(!miner.update() && !miner.updateFast())
+        #expect(miner.totalBytesSinceLoad == 12_800 && !miner.transfersAreLowerBound && miner.readRate == 600)
+        #expect(miner.readValues.currentValue == XRGGraphRenderer.missingValue)
+        #expect(miner.transferDetails.contains("Read 11600 bytes / Write 2400 bytes"))
+        source.advance(3, read: 12_200, written: 2600)
+        #expect(miner.update() && miner.updateFast() && miner.readRate == 600 && miner.fastReadRate == 600)
+        #expect(miner.totalBytesSinceLoad == 13_600)
+    }
+
     @Test func ratesUseElapsedTimeAndSessionTotalsCountBytes() {
         let source = DiskSampleSource(), miner = source.miner()
         miner.setDataSize(3)
