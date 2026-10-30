@@ -1,13 +1,14 @@
 # Sampling and lifecycle parity
 
-Source review: 2026-10-30. This pass changes the Mac Battery elapsed-time gate;
-Linux comparison is read-only. Actual system sleep/resume remains unverified.
+Source review: 2026-10-30. Implemented corrections cover Mac Battery elapsed-time
+gating and monitoring timer delivery during AppKit event tracking. Linux comparison
+is read-only. Actual system sleep/resume remains unverified.
 
 | Area | macOS | Linux | Follow-up |
 | --- | --- | --- | --- |
 | Normal target | Main-run-loop timer; supported UI target 200 ms–10 s, legacy values retained | Wakeable worker timer; target 200 ms–10 s | Preserve valid legacy settings and collector baselines |
 | Interval edit | Recreates the normal timer | Retimes from last sample start; identical intervals retain backoff | Choose and test a common phase policy |
-| Menus and dragging | Normal/fast timers use default run-loop mode; AI uses common modes | System worker runs independently of UI event tracking | Align supported collection behavior without introducing UI stalls |
+| Menus and dragging | Window-managed normal/fast, slow and AI timers use common modes | System worker runs independently of UI event tracking | Real scheduled mode fixtures cover delivery; collector latency still needs hardware measurement |
 | Slow collection | Collector-specific gates; main thread can defer normal updates | Worker skips missed deadlines and backs off after overruns | Keep one completed observation per collection, no catch-up backlog |
 | Battery gate | Now measures >10 real continuous-clock seconds after the last completed poll | Battery observes each normal worker sample | Cadence still differs intentionally in this pass; changing the target cannot manufacture elapsed time |
 | Temperature gate | Five-second source gate, separate from faster graph redraws | Sensor observation on the normal worker | Compare freshness and source costs before changing cadence |
@@ -41,10 +42,26 @@ time fixed across hundreds of callbacks and interval edits, checks the exact
 threshold, simulated long gaps, invalid/backward clocks and slow-read completion
 backoff. No real system sleep was triggered on the user's machine.
 
+## Monitoring during event tracking
+
+Window-managed timers now all register in common run-loop modes. Normal, fast and
+five-/thirty-minute callbacks can continue while AppKit tracks menus/drags or runs
+modal panels, matching AI's existing delivery policy. Refresh-interval replacement
+uses the same registration path; weak ownership and shutdown invalidation remain.
+The regression runs actual scheduled timers in default, event-tracking and modal
+modes, forces their deadlines without manually firing them, checks delivery and AI
+deduplication, replaces the graph timer, and verifies cleanup invalidates timers.
+The original code fails the tracking/modal delivery and replacement assertions.
+
+This is a scheduling correction, not a move to a background sampler. Native
+collectors still run on the main actor; a slow collector can delay interaction.
+Mode fixtures use injected sources, so they establish delivery but do not measure
+physical sensor latency or end-to-end responsiveness while a real menu is open.
+
 ## Next work
 
-1. Test normal collection during event tracking, then address the default/common
-   run-loop difference while measuring UI responsiveness of native collectors.
+1. Measure native collector latency and interaction under real hardware load;
+   isolate expensive collection with cancellation/stale-result guards as needed.
 2. Define hidden-system-graph collection and any explicit Pause/Resume policy;
    distinguish display freezing from stopping collection/accounting.
 3. Audit wake/long-gap handling and interval-edit phase behavior for counter-based

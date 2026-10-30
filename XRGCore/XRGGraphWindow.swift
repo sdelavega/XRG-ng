@@ -211,7 +211,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         default: return .notYet
         }
     }
-    private func timer(_ interval: TimeInterval, _ selector: Selector, common: Bool = false) -> Timer {
+    private func timer(_ interval: TimeInterval, _ selector: Selector) -> Timer {
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] timer in
             let alive = MainActor.assumeIsolated {
                 guard let self else { return false }
@@ -220,7 +220,9 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
             }
             if !alive { timer.invalidate() }
         }
-        if scheduleTimers { RunLoop.main.add(timer, forMode: common ? .common : .default) }
+        // Keep monitoring active while AppKit tracks menus, drags or modal panels.
+        // This changes delivery modes only; collectors still execute on the main actor.
+        if scheduleTimers { RunLoop.main.add(timer, forMode: .common) }
         return timer
     }
     @nonobjc static func validRefresh(_ value: CGFloat?) -> TimeInterval {
@@ -228,7 +230,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         return Double(value)
     }
     public func initTimers() {
-        if aiTimer?.isValid != true { aiTimer = timer(XRGAISamplingCadence.seconds, #selector(aiUpdate(_:)), common: true) }
+        if aiTimer?.isValid != true { aiTimer = timer(XRGAISamplingCadence.seconds, #selector(aiUpdate(_:))) }
         if min30Timer?.isValid != true { min30Timer = timer(1800, #selector(min30Update(_:))) }
         if min5Timer?.isValid != true { min5Timer = timer(300, #selector(min5Update(_:))) }
         if graphTimer?.isValid != true { graphTimer = timer(Self.validRefresh(appSettings?.graphRefresh), #selector(graphUpdate(_:))) }

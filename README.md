@@ -682,5 +682,7 @@ and notices attached to their corresponding source revisions.
 - **Stephen de la Vega — 2026–present:** XRG-ng maintenance and Swift migration.
 - Other contributors retain their source notices and Git attribution.
 
-Sampling and lifecycle differences and the remaining plan are tracked in
+Mac monitoring timers continue through AppKit menu/drag tracking and modal panels;
+collectors still execute on the main thread. Sampling and lifecycle differences
+and the remaining plan are tracked in
 [SAMPLING_PARITY.md](SAMPLING_PARITY.md).

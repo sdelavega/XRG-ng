@@ -51,11 +51,11 @@ import Testing
     let graph = WindowGraphSpy(frame: .zero)
     let module: XRGModule
     let background: XRGBackgroundView
-    init() throws {
+    init(scheduleTimers: Bool = false) throws {
         _ = NSApplication.shared
         defaults = try #require(UserDefaults(suiteName: domain))
         defaults.set(false, forKey: "checkForUpdates"); defaults.set(true, forKey: "isDockIconHidden")
-        window = XRGGraphWindow(contentRect: NSRect(x: 100, y: 200, width: 300, height: 400), defaults: defaults, center: center)
+        window = XRGGraphWindow(contentRect: NSRect(x: 100, y: 200, width: 300, height: 400), defaults: defaults, center: center, scheduleTimers: scheduleTimers)
         window.controller = controller
         module = XRGModule(name: "CPU", reference: graph, defaults: defaults)
         module.minWidth = 80; module.minHeight = 40; module.displayOrder = 0
@@ -113,6 +113,43 @@ struct XRGGraphWindowTests {
         #expect(f.window.graphTimer?.timeInterval == 1)
         f.window.cleanupBeforeExiting(); #expect(timers.allSatisfy { !$0.isValid })
         #expect(f.window.graphTimer == nil && f.window.fastTimer == nil && f.window.aiTimer == nil)
+    }
+    @Test(arguments: [RunLoop.Mode.default.rawValue, RunLoop.Mode.eventTracking.rawValue, RunLoop.Mode.modalPanel.rawValue])
+    func scheduledMonitoringContinuesAcrossAppKitRunLoopModes(modeName: String) throws {
+        let f = try GraphWindowFixture(scheduleTimers: true); defer { f.cleanUp() }
+        let mode = RunLoop.Mode(modeName)
+        f.defaults.set(false, forKey: "showAITokenGraph")
+        f.defaults.set(true, forKey: "aiTokensTrackingEnabled")
+        let source = AITokenPanelSource()
+        let observer = XRGAITokensObserver(defaults: f.defaults, center: NotificationCenter(), calendar: .current, now: Date.init)
+        let view = XRGAITokenView(frame: .zero, source: source, observer: observer, settings: f.window.appSettings!, defaults: f.defaults,
+            databaseURL: URL(fileURLWithPath: "/nonexistent-xrg-tracking-fixture"), now: { source.now })
+        f.window.contentView?.addSubview(view); view.awakeFromNib()
+        defer { view.removeFromSuperview() }
+        f.window.initTimers()
+        let timers = try [f.window.min30Timer, f.window.min5Timer, f.window.graphTimer, f.window.fastTimer, f.window.aiTimer].map { try #require($0) }
+        // Make every real scheduled timer due without waiting 30 minutes.
+        // No Timer.fire(): the selected run-loop mode must deliver callbacks.
+        for timer in timers { timer.fireDate = Date() }
+        let deadline = Date().addingTimeInterval(0.5)
+        while Date() < deadline && (f.graph.updates.contains(0) || source.updates == 0) {
+            _ = RunLoop.main.run(mode: mode, before: Date().addingTimeInterval(0.01))
+        }
+        #expect(f.graph.updates.allSatisfy { $0 > 0 })
+        #expect(source.updates == 1) // AI deduplicates normal and independent timer callbacks.
+        let previous = f.graph.updates[2]
+        let field = NSTextField(); field.doubleValue = 0.2
+        f.window.setGraphRefreshActionPart2(field)
+        #expect(!timers[2].isValid)
+        let replacement = try #require(f.window.graphTimer)
+        replacement.fireDate = Date()
+        let replacementDeadline = Date().addingTimeInterval(0.5)
+        while Date() < replacementDeadline && f.graph.updates[2] == previous {
+            _ = RunLoop.main.run(mode: mode, before: Date().addingTimeInterval(0.01))
+        }
+        #expect(f.graph.updates[2] > previous && source.updates == 1)
+        f.window.cleanupBeforeExiting()
+        #expect(timers.allSatisfy { !$0.isValid } && !replacement.isValid)
     }
     @Test func independentAITimerCollectsThroughSlowGraphRefreshWithoutDoubleSampling() throws {
         let f=try GraphWindowFixture();defer {f.cleanUp()}

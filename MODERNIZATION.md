@@ -1920,3 +1920,31 @@ only in this pass; no Linux/Shared code changed. Clock jumps were simulated; rea
 suspend/resume remains unverified. Exact task build scratch and empty private test
 preferences were inventoried after validation and removed; archived logs exclude
 DerivedData.
+
+### Monitoring timers continue during AppKit event tracking
+
+Normal/fast and five-/thirty-minute window timers now register in common run-loop
+modes, alongside the existing AI timer. Menus, drag tracking and modal panels no
+longer suppress these scheduled callbacks solely because the run-loop mode changes.
+Graph refresh edits reuse the same registration path. Weak timer ownership,
+shutdown invalidation, cadence values, source eligibility and AI deduplication are
+preserved. Collectors remain on the main actor; physical-source latency and real
+menu responsiveness remain measurement work, not an outcome established here.
+
+A real scheduled-timer regression covers default, event-tracking and modal modes,
+normal/fast/slow callbacks, AI deduplication, graph-timer replacement and cleanup.
+It never invokes Timer.fire(). Against the original implementation, normal mode
+passes while tracking and modal modes fail delivery and replacement assertions.
+An initial method-only Xcode filter selected zero cases and was discarded; running
+the entire graph-window suite supplies the before/after evidence. Linux/Shared
+sources, settings schema and app versions are unchanged.
+
+Validation: full `Tools/ci-macos.sh Debug` passed 596 cases with zero failures on
+ARM64 and 596 under Rosetta x86-64, plus universal build, metadata/notices and
+retired-symbol guards, isolated AppKit restore and both packaged original-nib
+launch checks. Before/after focused results, full logs and tested source hashes
+are archived in `dist/run-loop-mode-validation`, excluding DerivedData. No Linux
+validation was rerun for this Mac-only change. Physical Intel/macOS 26 runtime,
+real sleep/wake and interaction latency under hardware load remain unverified.
+Cleanup inventoried and removed only this task’s two build roots and 654 empty
+private test preferences: approximately 2.80 GiB reclaimed, with no errors.
