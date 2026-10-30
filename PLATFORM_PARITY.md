@@ -85,11 +85,23 @@ Implemented in development for monitoring tools:
   Read-only scrollable details explain scope, source identity and units. GPU reset
   clears only selected GPU histories and preserves readouts/optional VRAM settings;
   failed GPU reads append gaps and mark current values unavailable. Replacement
-  GPU instances/metadata start new histories. CPU failed reads retain history and
-  show unavailable; its next successful interval spans the tick gap. Remaining CPU
-  differences: Mac Average is historical (including padding), Linux instantaneous;
-  Mac CPU reset still rebases sampling, Linux history reset preserves baselines;
-  Mac stacks system/user/nice, Linux plots independent non-idle/user/system curves.
+  GPU instances/metadata start new histories.
+- Mac CPU Average now uses the latest interval across selected logical CPUs,
+  independently of graph size/history. Total remains core-percent and Average is
+  normalized to 0–100%. CPU graph reset preserves live readings, choices, both
+  sampling baselines, fast smoothing and availability, without reading hardware.
+  Cleared/resized histories use missing samples; aggregation/stacking preserve gaps.
+  The shared Mac default renderer now segments those gaps instead of bridging them
+  or extending a stale endpoint to now; complete histories retain legacy geometry.
+  Warm-up, zero-progress and failed intervals show unavailable instead of fake idle;
+  recovery first establishes a fresh baseline. Normal/fast streams recover separately.
+  An aggregate requires valid intervals on all selected cores; pinned valid cores
+  remain usable independently. Changed CPU counts clear history and both baselines
+  to avoid logical-slot mixing. Remaining differences: OS tick/CPU accounting and
+  suspend/delayed-interval policies and gap retention (Mac retains older valid CPU
+  samples around gaps; Linux clears affected CPU history). Mac stacks system/user/nice while Linux plots
+  independent non-idle/user/system curves. Linux may still have a valid kernel
+  aggregate when an individual logical-CPU interval is unavailable.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

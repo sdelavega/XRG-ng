@@ -41,7 +41,8 @@ public final class XRGCPUMiner: NSObject {
     private var slowBaseline: [XRGCPUTicks]?
     private var fastBaseline: [XRGCPUTicks]?
     private var sampleCount = 0
-    private var fast: [Int] = []
+    private var fast: [Int?] = []
+    private var current: [CGFloat?] = []
     public private(set) var countersAvailable = false
     public private(set) var fastCountersAvailable = false
     @objc public var loadAverage = true
@@ -55,7 +56,8 @@ public final class XRGCPUMiner: NSObject {
     @objc public private(set) var userValues: [XRGDataSet] = []
     @objc public private(set) var systemValues: [XRGDataSet] = []
     @objc public private(set) var niceValues: [XRGDataSet] = []
-    @objc public var fastValues: [NSNumber] { fast.map(NSNumber.init(value:)) }
+    /// Legacy numeric projection. Swift presentation uses fastUsage(forCPU:) to preserve unavailable slots.
+    @objc public var fastValues: [NSNumber] { fast.map { NSNumber(value: $0 ?? 0) } }
 
     public override convenience init() { self.init(source: Self.readTicks) }
     public init(source: @escaping () -> [XRGCPUTicks]?) {
@@ -65,7 +67,6 @@ public final class XRGCPUMiner: NSObject {
             configure(initial.count)
             slowBaseline = initial
             fastBaseline = initial
-            countersAvailable = true; fastCountersAvailable = true
         } else {
             configure(max(1, ProcessInfo.processInfo.processorCount))
         }
@@ -78,7 +79,7 @@ public final class XRGCPUMiner: NSObject {
             var values = Array(original.prefix(count))
             while values.count < count {
                 let data = XRGDataSet()
-                data.resize(sampleCount)
+                data.resize(sampleCount, fillingWith: XRGGraphRenderer.missingValue)
                 values.append(data)
             }
             return values
@@ -86,21 +87,26 @@ public final class XRGCPUMiner: NSObject {
         userValues = resized(userValues)
         systemValues = resized(systemValues)
         niceValues = resized(niceValues)
-        fast = Array(repeating: 0, count: count)
+        // A changed inventory may remap logical slots. Do not retain history or
+        // current readings attributed to the previous CPU topology.
+        for data in userValues + systemValues + niceValues { data.setAllValues(XRGGraphRenderer.missingValue) }
+        fast = Array(repeating: nil, count: count)
+        current = Array(repeating: nil, count: count)
+        countersAvailable = false; fastCountersAvailable = false
         slowBaseline = nil
         fastBaseline = nil
     }
 
     @objc public func setDataSize(_ count: Int) {
         guard count >= 0 else { return }
-        sampleCount = count
-        for data in userValues + systemValues + niceValues { data.resize(count) }
+        sampleCount = min(count, 20_000)
+        for data in userValues + systemValues + niceValues { data.resize(sampleCount, fillingWith: XRGGraphRenderer.missingValue) }
     }
 
     /// Mach CPU counters are unsigned 32-bit tick counts and may wrap.
-    private func usage(_ current: [XRGCPUTicks], previous: [XRGCPUTicks]?) -> [(CGFloat, CGFloat, CGFloat)] {
+    private func usage(_ current: [XRGCPUTicks], previous: [XRGCPUTicks]?) -> [(CGFloat, CGFloat, CGFloat)?] {
         guard let previous, previous.count == current.count else {
-            return Array(repeating: (0, 0, 0), count: current.count)
+            return Array(repeating: nil, count: current.count)
         }
         return zip(current, previous).map { current, previous in
             let user = UInt64(current.user &- previous.user)
@@ -108,47 +114,66 @@ public final class XRGCPUMiner: NSObject {
             let idle = UInt64(current.idle &- previous.idle)
             let nice = UInt64(current.nice &- previous.nice)
             let total = CGFloat(user + system + idle + nice)
-            guard total > 0 else { return (0, 0, 0) }
+            guard total > 0 else { return nil }
             return (CGFloat(user) / total * 100, CGFloat(system) / total * 100, CGFloat(nice) / total * 100)
         }
     }
 
     @objc public func graphUpdate(_ timer: Timer?) {
-        guard let current = source(), !current.isEmpty else { countersAvailable = false; return }
-        countersAvailable = true
-        configure(current.count)
-        let values = usage(current, previous: slowBaseline)
-        slowBaseline = current
-        for (index, value) in values.enumerated() {
-            userValues[index].setNextValue(value.0)
-            systemValues[index].setNextValue(value.1)
-            niceValues[index].setNextValue(value.2)
-        }
+        // System load/uptime are independent of availability of CPU tick records.
         if uptime { setCurrentUptime() }
         if loadAverage {
             let average = getLoadAverage()
             if average >= 0 { currentLoadAverage = average }
         }
+        guard let next = source(), !next.isEmpty else {
+            countersAvailable = false; slowBaseline = nil
+            current = Array(repeating: nil, count: numberOfCPUs)
+            for data in userValues + systemValues + niceValues { data.setNextValue(XRGGraphRenderer.missingValue) }
+            return
+        }
+        configure(next.count)
+        let values = usage(next, previous: slowBaseline)
+        slowBaseline = next
+        countersAvailable = values.contains { $0 != nil }
+        current = values.map { value in value.map { min(100, max(0, $0.0 + $0.1 + $0.2)) } }
+        for (index, value) in values.enumerated() {
+            userValues[index].setNextValue(value?.0 ?? XRGGraphRenderer.missingValue)
+            systemValues[index].setNextValue(value?.1 ?? XRGGraphRenderer.missingValue)
+            niceValues[index].setNextValue(value?.2 ?? XRGGraphRenderer.missingValue)
+        }
     }
 
     @objc public func fastUpdate(_ timer: Timer?) {
-        guard let current = source(), !current.isEmpty else { fastCountersAvailable = false; return }
-        fastCountersAvailable = true
-        configure(current.count)
-        let values = usage(current, previous: fastBaseline)
-        fastBaseline = current
+        guard let next = source(), !next.isEmpty else {
+            fastCountersAvailable = false; fastBaseline = nil
+            fast = Array(repeating: nil, count: numberOfCPUs)
+            return
+        }
+        configure(next.count)
+        let values = usage(next, previous: fastBaseline)
+        fastBaseline = next
+        fastCountersAvailable = values.contains { $0 != nil }
         for (index, value) in values.enumerated() {
+            guard let value else { fast[index] = nil; continue }
             let total = min(100, max(0, value.0 + value.1 + value.2))
-            let previous = CGFloat(fast[index])
+            let previous = CGFloat(fast[index] ?? 0)
             fast[index] = Int(abs(previous - total) < 5 ? total : previous + 0.25 * (total - previous))
         }
     }
 
+    /// Presentation-only: preserve both independent rate baselines, current
+    /// readings, smoothing and availability. No hardware read occurs here.
     @objc public func reset() {
-        for data in userValues + systemValues + niceValues { data.reset() }
-        fast = Array(repeating: 0, count: numberOfCPUs)
-        slowBaseline = source()
-        fastBaseline = slowBaseline
+        for data in userValues + systemValues + niceValues { data.setAllValues(XRGGraphRenderer.missingValue) }
+    }
+
+    public func currentUsage(forCPU index: Int) -> CGFloat? {
+        current.indices.contains(index) ? current[index] : nil
+    }
+    public func fastUsage(forCPU index: Int) -> CGFloat? {
+        guard fast.indices.contains(index), let value = fast[index] else { return nil }
+        return CGFloat(value)
     }
 
     @objc public func getNumCPUs() -> Int { numberOfCPUs }
@@ -175,12 +200,29 @@ public final class XRGCPUMiner: NSObject {
 
     @objc public func combinedData() -> [XRGDataSet]? {
         guard numberOfCPUs > 0 else { return nil }
-        return [systemValues, userValues, niceValues].compactMap { values in
-            guard let first = values.first, let result = XRGDataSet(contentsOfOtherDataSet: first) else { return nil }
-            for data in values.dropFirst() { result.addOtherDataSetValues(data) }
-            result.divideAllValues(by: CGFloat(numberOfCPUs))
-            return result
+        return [systemValues, userValues, niceValues].compactMap {
+            Self.sumHistories($0, divisor: CGFloat(numberOfCPUs))
         }
+    }
+
+    /// Preserve holes through both per-core averaging and stacked layers. Adding
+    /// the sentinel numerically would turn an unknown interval into a fake zero.
+    static func sumHistories(_ histories: [XRGDataSet], divisor: CGFloat = 1) -> XRGDataSet? {
+        guard let first = histories.first, divisor.isFinite, divisor > 0,
+              histories.allSatisfy({ $0.numValues == first.numValues }) else { return nil }
+        var sums = Array(repeating: CGFloat(0), count: first.numValues)
+        var valid = Array(repeating: true, count: first.numValues)
+        for history in histories {
+            for (index, value) in history.orderedValues.enumerated() {
+                if value.isFinite && value >= 0 { sums[index] += value }
+                else { valid[index] = false }
+            }
+        }
+        let result = XRGDataSet(); result.resize(first.numValues, fillingWith: XRGGraphRenderer.missingValue)
+        for index in sums.indices {
+            result.setNextValue(valid[index] ? sums[index] / divisor : XRGGraphRenderer.missingValue)
+        }
+        return result
     }
 
     @objc nonisolated public static func systemModelIdentifier() -> String? {

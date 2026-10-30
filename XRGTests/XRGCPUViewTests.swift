@@ -83,7 +83,9 @@ struct XRGCPUViewTests {
         XRGCPUView(frame: NSRect(x: 0, y: 0, width: width, height: height), miner: miner,
                    processMiner: processMiner ?? XRGProcessMiner(source: { [] }), settings: settings, defaults: defaults)
     }
-    private func seed(_ miner: XRGCPUMiner) {
+    private func seed(_ miner: XRGCPUMiner, _ source: CPUSource) {
+        miner.loadAverage = false
+        source.advance(); miner.graphUpdate(nil)
         miner.systemValues[0].setAllValues(20); miner.userValues[0].setAllValues(40); miner.niceValues[0].setAllValues(10)
         miner.systemValues[1].setAllValues(10); miner.userValues[1].setAllValues(20); miner.niceValues[1].setAllValues(0)
     }
@@ -139,7 +141,7 @@ struct XRGCPUViewTests {
             #expect(source.reads == reads)
             settings.fastCPUUsage = true; view.fastUpdate(nil)
             #expect(miner.fastValues.map(\.intValue) == [17, 7])
-            #expect(miner.userValues[0].currentValue == 0)
+            #expect(miner.userValues[0].currentValue == XRGGraphRenderer.missingValue)
             view.graphUpdate(nil)
             #expect(miner.userValues.map(\.currentValue) == [40, 20])
             #expect(miner.systemValues.map(\.currentValue) == [20, 10])
@@ -153,7 +155,7 @@ struct XRGCPUViewTests {
     @Test func historyLayersRetainSystemUserNiceStackWithoutMutatingSamples() async throws {
         try await withFixture { settings, defaults, source in
             let miner = source.miner(), view = panel(miner, settings, defaults)
-            seed(miner)
+            seed(miner, source)
             let before = (miner.systemValues + miner.userValues + miner.niceValues).map(\.orderedValues)
             #expect(view.historyLayers().map(\.currentValue) == [50, 45, 15])
             #expect(view.totalUsage == 100 && view.averageUsage == 50)
@@ -166,7 +168,7 @@ struct XRGCPUViewTests {
     @Test func textFlagsKeepTotalUsagePerCoreAverageLoadAndUptimeUnits() async throws {
         try await withFixture { settings, defaults, source in
             let miner = source.miner(), view = panel(miner, settings, defaults, width: 300)
-            seed(miner)
+            seed(miner, source)
             settings.cpuShowAverageUsage = true; settings.showLoadAverage = true; settings.cpuShowUptime = true
             view.updateMinSize()
             #expect(view.readings().left == "CPU\nAverage:\nLoad:\nUptime:")
@@ -244,7 +246,7 @@ struct XRGCPUViewTests {
             settings.graphFont = NSFont.systemFont(ofSize: font)
             settings.cpuShowAverageUsage = true; settings.showLoadAverage = true; settings.cpuShowUptime = true
             let miner = source.miner(), view = panel(miner, settings, defaults, width: width, height: 30)
-            seed(miner); view.updateMinSize()
+            seed(miner, source); view.updateMinSize()
             #expect(view.graphLabels.leftLabel.frame.maxX <= view.graphLabels.rightLabel.frame.minX)
             #expect(view.graphLabels.leftLabel.accessibilityValue() == view.readings().left)
             #expect(view.graphLabels.rightLabel.accessibilityValue() == view.readings().right)
@@ -259,9 +261,11 @@ struct XRGCPUViewTests {
             #expect(miner.userValues[0].numValues == 193)
             source.advance(); view.fastUpdate(nil); view.graphUpdate(nil)
             source.samples = nil; view.graphUpdate(nil)
-            #expect(view.totalUsage == 100)
+            #expect(!view.sourceAvailable)
+            let reads = source.reads
             view.clearData(nil)
-            #expect(view.totalUsage == 0 && view.sortedCoreUsage() == [0, 0] && view.averageUsage == 0)
+            #expect(source.reads == reads && !view.sourceAvailable && view.sortedCoreUsage() == [17, 7])
+            #expect(view.historyLayers().allSatisfy { $0.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue } })
             view.setGraphSize(NSSize(width: CGFloat.greatestFiniteMagnitude, height: 0))
             #expect(miner.userValues[0].numValues == 19_993)
             view.setWidth(6); #expect(miner.userValues[0].numValues == 19_993)
@@ -277,7 +281,7 @@ struct XRGCPUViewTests {
     @Test func logicalCPUSelectionUsesCachedPerCoreDataAndPersistsIndependently() async throws {
         try await withFixture { settings, defaults, source in
             let miner = source.miner(), view = panel(miner, settings, defaults)
-            seed(miner)
+            seed(miner, source)
             let before = miner.userValues.map(\.orderedValues), reads = source.reads
             defaults.set("GPU sentinel", forKey: XRGGPUView.sourceKey)
             try view.applyCPUSource(1)
@@ -310,6 +314,9 @@ struct XRGCPUViewTests {
             #expect(missing?.title == "Logical CPU 1 (unavailable)" && missing?.state == .on)
             source.samples = Array(repeating: XRGCPUTicks(user: 50, system: 20, idle: 30, nice: 10), count: 2)
             view.graphUpdate(nil)
+            #expect(view.selectedCPU == 1 && !view.sourceAvailable)
+            source.samples = Array(repeating: XRGCPUTicks(user: 60, system: 30, idle: 40, nice: 10), count: 2)
+            view.graphUpdate(nil)
             #expect(view.selectedCPU == 1 && view.sourceAvailable)
         }
     }
@@ -336,8 +343,78 @@ struct XRGCPUViewTests {
             let history = miner.userValues.map(\.orderedValues)
             source.samples = nil; view.graphUpdate(nil)
             #expect(view.readings().right == "n/a" && view.sortedCoreUsage().isEmpty)
-            #expect(miner.userValues.map(\.orderedValues) == history)
+            #expect(zip(miner.userValues, history).allSatisfy { data, old in
+                Array(data.orderedValues.dropLast()) == Array(old.dropFirst()) && data.currentValue == XRGGraphRenderer.missingValue
+            })
             #expect(view.toolTip?.contains("unavailable") == true)
+        }
+    }
+
+    @Test func averageUsesLatestIntervalInsteadOfRetainedHistoryOrPadding() async throws {
+        try await withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            source.advance(); view.graphUpdate(nil)
+            settings.cpuShowAverageUsage = true; view.updateMinSize()
+            #expect(view.totalUsage == 100 && view.averageUsage == 50)
+            // Change the next interval to 100% / 50%, with a different history.
+            source.samples = [XRGCPUTicks(user: 140, system: 20, idle: 30, nice: 10),
+                              XRGCPUTicks(user: 70, system: 10, idle: 120, nice: 0)]
+            view.graphUpdate(nil)
+            #expect(view.totalUsage == 150 && view.averageUsage == 75)
+            for width: CGFloat in [1, 500, 20_000] {
+                view.setFrameSize(NSSize(width: width, height: 100))
+                #expect(view.totalUsage == 150 && view.averageUsage == 75)
+            }
+            try view.applyCPUSource(0)
+            #expect(view.totalUsage == 100 && view.averageUsage == 100)
+            try view.applyCPUSource(1)
+            #expect(view.totalUsage == 50 && view.averageUsage == 50 && view.sourceAvailable)
+            source.samples = [XRGCPUTicks(user: 140, system: 20, idle: 130, nice: 10),
+                              XRGCPUTicks(user: 70, system: 10, idle: 220, nice: 0)]
+            view.graphUpdate(nil)
+            #expect(view.totalUsage == 0 && view.averageUsage == 0 && view.sourceAvailable)
+            #expect(view.readings().right == "0%\n0.0%")
+        }
+    }
+
+    @Test func graphResetPreservesLiveReadoutsAndBarsAndLeavesActualHistoryGaps() async throws {
+        try await withFixture { settings, defaults, source in
+            settings.fastCPUUsage = true; settings.cpuShowAverageUsage = true
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            source.advance(); view.graphUpdate(nil); view.fastUpdate(nil)
+            let reads = source.reads, bars = view.sortedCoreUsage(), text = view.readings().right
+            try view.applyCPUSource(1)
+            let selectedText = view.readings().right
+            view.clearData(nil)
+            #expect(source.reads == reads && view.readings().right == selectedText && view.selectedCPU == 1)
+            #expect(view.totalUsage == 30 && view.averageUsage == 30 && view.sortedCoreUsage() == [7])
+            #expect(view.historyLayers().allSatisfy { $0.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue } })
+            try view.applyCPUSource(nil)
+            #expect(view.readings().right == text && view.sortedCoreUsage() == bars && source.reads == reads)
+            source.samples = [XRGCPUTicks(user: 80, system: 40, idle: 60, nice: 20),
+                              XRGCPUTicks(user: 40, system: 20, idle: 140, nice: 0)]
+            view.graphUpdate(nil)
+            for layer in view.historyLayers() {
+                #expect(layer.orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+                #expect(layer.currentValue >= 0)
+            }
+            #expect(view.totalUsage == 100 && view.averageUsage == 50)
+        }
+    }
+
+    @Test func incompleteCoreIntervalsCannotMasqueradeAsAnIdleOrCompleteAggregate() async throws {
+        try await withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            #expect(!view.sourceAvailable && view.readings().right == "n/a")
+            source.samples = [XRGCPUTicks(user: 50, system: 0, idle: 50, nice: 0),
+                              XRGCPUTicks(user: 0, system: 0, idle: 0, nice: 0)]
+            view.graphUpdate(nil)
+            #expect(!view.sourceAvailable && view.readings().right == "n/a")
+            #expect(view.historyLayers().allSatisfy { $0.currentValue == XRGGraphRenderer.missingValue })
+            try view.applyCPUSource(0)
+            #expect(view.sourceAvailable && view.totalUsage == 50 && view.historyLayers()[0].currentValue == 50)
+            try view.applyCPUSource(1)
+            #expect(!view.sourceAvailable && view.historyLayers().allSatisfy { $0.currentValue == XRGGraphRenderer.missingValue })
         }
     }
 
@@ -354,7 +431,7 @@ struct XRGCPUViewTests {
             let host = CPUHost(settings: settings)
             defer { host.close() }
             host.contentView?.addSubview(view); view.awakeFromNib()
-            seed(miner)
+            seed(miner, source)
             let menu = view.makeMenu()
             #expect(menu.items.count == 20)
             #expect(menu.items[1].title == "1200.0% - Process12 (id 5000000012)")
@@ -364,7 +441,7 @@ struct XRGCPUViewTests {
                 let item = try #require(menu.items.first { $0.title == title })
                 #expect(NSApp.sendAction(try #require(item.action), to: item.target, from: item))
             }
-            #expect(view.totalUsage == 0 && opened == [XRGCPUView.activityMonitorURL] && host.preferencesOpened == 1)
+            #expect(view.totalUsage == 100 && opened == [XRGCPUView.activityMonitorURL] && host.preferencesOpened == 1)
             #expect(view.processInspector?.rows.first?.pid == 5_000_000_012)
             view.removeFromSuperview()
             #expect(view.processInspector?.refreshTimer == nil)
@@ -401,7 +478,7 @@ struct XRGCPUViewTests {
     @Test func fullMiniFastAndCombinedGraphsRenderToNativeBitmaps() async throws {
         try await withFixture { settings, defaults, source in
             let miner = source.miner(), view = panel(miner, settings, defaults)
-            seed(miner)
+            seed(miner, source)
             let separated = try png(view)
             settings.separateCPUColor = false
             #expect(try png(view) != separated)

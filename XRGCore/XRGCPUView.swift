@@ -153,33 +153,24 @@ public final class XRGCPUView: NSView, XRGModuleView {
     public func shouldDrawMiniGraph() -> Bool { XRGGraphLabels.shouldDrawMiniGraph(in: bounds, settings: settings) }
 
     @nonobjc private func currentUsage(forCPU index: Int) -> CGFloat {
-        guard let data = miner.dataForCPU(index) else { return 0 }
-        let total = data.reduce(CGFloat(0)) { $0 + $1.currentValue }
-        return total.isFinite ? min(100, max(0, total)) : 0
+        miner.currentUsage(forCPU: index) ?? 0
     }
     @nonobjc private var selectedIndices: [Int] {
         if let selectedCPU { return (0..<miner.numberOfCPUs).contains(selectedCPU) ? [selectedCPU] : [] }
         return Array(0..<miner.numberOfCPUs)
     }
-    @nonobjc var sourceAvailable: Bool { miner.countersAvailable && !selectedIndices.isEmpty }
+    @nonobjc var sourceAvailable: Bool { !selectedIndices.isEmpty && selectedIndices.allSatisfy { miner.currentUsage(forCPU: $0) != nil } }
     @nonobjc var totalUsage: CGFloat {
         selectedIndices.reduce(0) { $0 + currentUsage(forCPU: $1) }
     }
     @nonobjc var averageUsage: CGFloat {
         guard !selectedIndices.isEmpty else { return 0 }
-        var result: CGFloat = 0
-        for index in selectedIndices {
-            let value = miner.dataForCPU(index)?.reduce(CGFloat(0)) { $0 + $1.average } ?? 0
-            result += value.isFinite ? min(100, max(0, value)) : 0
-        }
-        return result / CGFloat(selectedIndices.count)
+        return totalUsage / CGFloat(selectedIndices.count)
     }
     @nonobjc func sortedCoreUsage() -> [CGFloat] {
-        guard settings?.fastCPUUsage == true ? miner.fastCountersAvailable : miner.countersAvailable else { return [] }
-        let values = selectedIndices.map { index in
-            settings?.fastCPUUsage == true ? CGFloat(miner.fastValues[index].doubleValue) : currentUsage(forCPU: index)
-        }
-        return values.map { $0.isFinite ? min(100, max(0, $0)) : 0 }.sorted(by: >)
+        selectedIndices.compactMap { index in
+            settings?.fastCPUUsage == true ? miner.fastUsage(forCPU: index) : miner.currentUsage(forCPU: index)
+        }.map { $0.isFinite ? min(100, max(0, $0)) : 0 }.sorted(by: >)
     }
     @nonobjc static func uptimeText(days: Int, hours: Int, minutes: Int) -> String {
         String(format: "%ldd %ld:%02ld", max(0, days), max(0, hours), max(0, minutes))
@@ -229,11 +220,9 @@ public final class XRGCPUView: NSView, XRGModuleView {
     @nonobjc func historyLayers() -> [XRGDataSet] {
         guard !selectedIndices.isEmpty,
               let data = selectedCPU.flatMap({ miner.dataForCPU($0) }) ?? (selectedCPU == nil ? miner.combinedData() : nil), data.count == 3,
-              let total = XRGDataSet(contentsOfOtherDataSet: data[0]) else { return [] }
-        total.addOtherDataSetValues(data[1]); total.addOtherDataSetValues(data[2])
+              let total = XRGCPUMiner.sumHistories(data) else { return [] }
         guard settings?.separateCPUColor == true,
-              let systemAndUser = XRGDataSet(contentsOfOtherDataSet: data[0]) else { return [total] }
-        systemAndUser.addOtherDataSetValues(data[1])
+              let systemAndUser = XRGCPUMiner.sumHistories(Array(data.prefix(2))) else { return [total] }
         return [total, systemAndUser, data[0]]
     }
     public override func draw(_ dirtyRect: NSRect) {
@@ -304,9 +293,9 @@ public final class XRGCPUView: NSView, XRGModuleView {
         let scope = selectedCPU.map { "logical CPU \($0)" } ?? "all \(miner.numberOfCPUs) logical CPUs"
         return [sourceWarning, "Scope: \(scope). \(sourceAvailable ? "Counters available." : "Selected CPU counters unavailable; no replacement is chosen.")",
                 "CPU total is core-percent: each logical CPU contributes up to 100%. The aggregate history is normalized to 0–100%; a selected CPU uses its own 0–100% history. System, user and nice retain the existing stacked presentation.",
-                "Average is the mean of the retained history (including initial/cleared zero padding), not the instantaneous average used by Linux. Load and uptime remain system-wide; load is not CPU percent. Process listings remain system-wide.",
+                "Average is the latest interval’s mean across the selected logical CPUs, normalized to 0–100%. Graph width, resizing and clearing history do not affect it. All selected cores must have a measured interval; missing or zero-progress intervals show n/a, not idle. Load and uptime remain system-wide; load is not CPU percent. Process listings remain system-wide.",
                 "Selection switches among already collected per-CPU histories without another hardware read. Missing indices stay pinned. Indices are kernel logical-CPU slots and may refer to different hardware after reboot or topology changes. Fast bars are sorted by usage within the selected scope; they are not persistent physical-core labels.",
-                "Reset Graph retains the source choice and uses the existing CPU reset/rebaseline behavior. Failed reads retain the last history; the next successful reading spans the elapsed CPU tick interval."].compactMap { $0 }.joined(separator: "\n\n")
+                "Reset Graph clears history only. It retains source choices, current readings, normal/fast sampling baselines, fast-bar smoothing and availability, without reading hardware. Failed reads append gaps and invalidate that stream’s baseline; recovery first establishes a fresh interval. CPU count changes clear histories and both streams’ baselines because logical slots may have changed. Mach tick counters wrap at 32 bits."].compactMap { $0 }.joined(separator: "\n\n")
     }
     @nonobjc func applyCPUSource(_ index: Int?) throws {
         let next = XRGMonitorSource(source: index.map(String.init)); try next.validateCPU()

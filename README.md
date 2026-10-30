@@ -385,8 +385,24 @@ unweighted mean when all selected utilization values are present; it is not a
 combined-capacity measure. GPU **Reset Graph** clears only selected GPU histories
 and preserves the latest readouts. Failed GPU reads append gaps and show `n/a`.
 Read-only **CPU Details…** / **GPU Details…** explain scope and measurement limits.
-Mac CPU's **Average** remains the retained-history mean, unlike Linux's instantaneous
-average; load, uptime and process listings remain system-wide when a core is pinned.
+Mac CPU's **Average** now uses the latest measured interval across selected logical
+CPUs (0–100% aggregate capacity). The total remains core-percent, with up to 100%
+per logical CPU. Graph width and historical padding no longer affect these readings.
+**Reset Graph** clears CPU history while preserving current readings, source choice,
+normal/fast baselines, fast-bar smoothing and availability; it does not read hardware.
+Load, uptime and process listings remain system-wide when a core is pinned.
+
+CPU warm-up, failed reads and zero-progress intervals show `n/a` and graph gaps;
+measured idle remains a valid 0%. Recovery establishes a fresh baseline before
+reporting an interval. All selected cores need valid intervals for an aggregate
+readout; a valid pinned core remains usable when another core has no interval.
+Normal and fast sampling fail/recover independently. CPU inventory count changes
+clear histories and invalidate both streams to avoid mixing logical-slot histories.
+OS tick accounting, retention around failed intervals and suspend/delayed-sampling
+policies still differ between Mac and Linux; Mac retains its stacked system/user/nice presentation.
+The shared Mac renderer now segments missing intervals even with the default curve
+style, so cleared/read-failure gaps do not draw ramps or extend stale values to the
+latest time. Fully measured histories retain the existing default rendering.
 CPU indices may remap after topology changes/reboot, and GPU registry IDs may change
 on reboot. Actual replacement GPU registry instances start fresh histories.
 

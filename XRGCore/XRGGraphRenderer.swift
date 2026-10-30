@@ -74,6 +74,16 @@ public final class XRGGraphRenderer: NSObject {
     @nonobjc private static func draw(_ samples: [CGFloat], upper: CGFloat, lower: CGFloat,
                                      in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?) {
         guard let color, NSGraphicsContext.current != nil else { return }
+        // The legacy polygon closes at the rectangle edges and filters holes,
+        // which would bridge missing intervals and extend stale values to now.
+        // Preserve its exact geometry for complete histories; segment gaps using
+        // the existing solid/hollow renderer for both dataset and raw APIs.
+        if samples.contains(where: { !$0.isFinite || $0 == missingValue }) {
+            drawCurveValues(samples, upper: upper, lower: lower, in: rect,
+                            flipped: flipped, filled: filled, color: color,
+                            style: filled ? .solid : .hollow, edgeBaseline: true)
+            return
+        }
         let points = graphPoints(samples, upper: upper, lower: lower, in: rect, flipped: flipped, filled: filled)
         guard let first = points.first else { return }
         color.set()
@@ -128,13 +138,13 @@ public final class XRGGraphRenderer: NSObject {
     }
 
     @nonobjc private static func drawCurveValues(_ values: [CGFloat], upper: CGFloat, lower: CGFloat,
-                                                in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?, positions: [CGFloat]? = nil) {
+                                                in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?, positions: [CGFloat]? = nil, edgeBaseline: Bool = false) {
         guard let style else { draw(values, upper: upper, lower: lower, in: rect, flipped: flipped, filled: filled, color: color); return }
         guard let color, NSGraphicsContext.current != nil,
               let (low, high) = limits(upper: upper, lower: lower, tolerance: 0.001), validRect(rect) else { return }
         let runs = curveRuns(values, upper: upper, lower: lower, in: rect, flipped: flipped, positions: positions)
         let zero = (min(high, max(low, 0)) - low) / (high - low)
-        let baseline = rect.minY + (flipped ? 1 - zero : zero) * rect.height
+        let baseline = edgeBaseline ? (flipped ? rect.maxY : rect.minY) : rect.minY + (flipped ? 1 - zero : zero) * rect.height
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
         NSBezierPath(rect: rect).addClip(); color.set()
         var remaining = 100_000

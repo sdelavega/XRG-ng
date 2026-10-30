@@ -126,6 +126,44 @@ struct XRGGraphRendererTests {
         #expect(XRGGraphRenderer.pixelPoints([1], upper: -1, in: rect).isEmpty)
     }
 
+    @Test(arguments: [false, true])
+    func defaultRendererDoesNotBridgeMissingIntervalsOrExtendStaleValues(filled: Bool) throws {
+        let data = XRGDataSet(); data.resize(10)
+        for value: CGFloat in [-1000, -1000, 80, 80, -1000, -1000, 60, 60, -1000, -1000] { data.setNextValue(value) }
+        let pixels = try bitmap {
+            XRGGraphRenderer.drawCurve(data, upperBound: 100, lowerBound: 0,
+                in: NSRect(x: 4, y: 4, width: 56, height: 56), flipped: false,
+                filled: filled, color: .red, style: nil)
+        }
+        func whiteColumn(_ x: Int) -> Bool { (0..<64).allSatisfy { pixels[($0 * 64 + x) * 4 + 1] > 240 } }
+        // Entire columns must remain untouched, including beneath a filled curve.
+        #expect((5...13).allSatisfy(whiteColumn))
+        #expect((27...38).allSatisfy(whiteColumn))
+        #expect((52...59).allSatisfy(whiteColumn))
+        #expect(!whiteColumn(20) && !whiteColumn(45))
+    }
+
+    @Test(arguments: [false, true])
+    func defaultGappedFillRetainsPlotEdgeBaselineOnNegativeAxes(flipped: Bool) throws {
+        let data = XRGDataSet(); data.resize(4)
+        for value: CGFloat in [-1000, -10, -10, -1000] { data.setNextValue(value) }
+        let pixels = try bitmap {
+            XRGGraphRenderer.drawDataSet(data, upperBound: 10, lowerBound: -20,
+                in: NSRect(x: 0, y: 0, width: 64, height: 64), flipped: flipped, filled: true, color: .red)
+        }
+        let complete = XRGDataSet(); complete.resize(4); complete.setAllValues(-10)
+        let reference = try bitmap {
+            XRGGraphRenderer.drawDataSet(complete, upperBound: 10, lowerBound: -20,
+                in: NSRect(x: 0, y: 0, width: 64, height: 64), flipped: flipped, filled: true, color: .red)
+        }
+        // Compare an interior column against the unchanged complete-history path.
+        // This checks the fill baseline without assuming bitmap row orientation.
+        let column = (0..<64).map { pixels[($0 * 64 + 32) * 4 + 1] }
+        let expected = (0..<64).map { reference[($0 * 64 + 32) * 4 + 1] }
+        #expect(expected.contains { $0 < 10 })
+        #expect(column == expected)
+    }
+
     @Test(arguments: [false, true], [false, true])
     func dataSetAndRawRendererHaveIdenticalPixels(flipped: Bool, filled: Bool) throws {
         let set = XRGDataSet()
