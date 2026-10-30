@@ -110,6 +110,17 @@ int main(void) {
     assert(xrg_timed_history_copy_interval(timed,61,1,cpu_channels,183)==-1 && cpu_channels[0]==99);
     assert(xrg_timed_history_copy_interval(timed,1,1,cpu_channels,183)==183 && cpu_channels[60]==0 && cpu_channels[121]==20 && isnan(cpu_channels[182]));
     xrg_timed_history_free(timed);
+    assert(!xrg_timed_history_create_signed_limited(0,60));
+    assert(!xrg_timed_history_create_signed_limited(1,0));
+    double signed_value=-10, signed_output[61];
+    timed=xrg_timed_history_create_limited(1,60);
+    assert(xrg_timed_history_append(timed,100,&signed_value,1)==-1);
+    xrg_timed_history_free(timed);
+    timed=xrg_timed_history_create_signed_limited(1,60);
+    assert(xrg_timed_history_append(timed,100,&signed_value,1)==0);
+    signed_value=0;assert(xrg_timed_history_append(timed,110,&signed_value,1)==0);
+    assert(xrg_timed_history_copy_interval(timed,1,1,signed_output,61)==61 && signed_output[50]==-10 && signed_output[60]==0 && isnan(signed_output[59]));
+    xrg_timed_history_free(timed);
     void *rate = xrg_rate_create();
     uint64_t delta = 99;
     assert(xrg_rate_sample(rate, 1, 10, 1, &delta) == 0 && delta == 0);

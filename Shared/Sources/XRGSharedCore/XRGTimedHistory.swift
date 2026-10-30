@@ -21,22 +21,23 @@ public final class XRGTimedHistory {
     }
     public let channels: Int
     public let retentionMinutes: Int
+    private let allowsNegativeValues: Bool
     public private(set) var revision: UInt64 = 0
     private struct Observation { let time: Double; let values: [Double] }
     private var observations: [Observation] = []
     private var head = 0
     public var observationCount: Int { observations.count - head }
     public var latestTime: Double? { observations.last?.time }
-    public init?(channels: Int, retentionMinutes: Int = maximumMinutes) {
+    public init?(channels: Int, retentionMinutes: Int = maximumMinutes, allowsNegativeValues: Bool = false) {
         guard (1...Self.maximumChannels).contains(channels), (1...Self.maximumMinutes).contains(retentionMinutes) else { return nil }
-        self.channels = channels; self.retentionMinutes = retentionMinutes
+        self.channels = channels; self.retentionMinutes = retentionMinutes; self.allowsNegativeValues = allowsNegativeValues
     }
     public func clear() {
         observations.removeAll(keepingCapacity: true); head = 0; revision &+= 1
     }
     @discardableResult public func append(time: Double, values: [Double]) -> Bool {
         guard time.isFinite, time >= 0, values.count == channels,
-              values.allSatisfy({ $0.isNaN || ($0.isFinite && $0 >= 0) }) else { return false }
+              values.allSatisfy({ $0.isNaN || ($0.isFinite && (allowsNegativeValues || $0 >= 0)) }) else { return false }
         if let previous = latestTime, time < previous { clear() }
         let observation = Observation(time: time, values: values)
         if latestTime == time { observations[observations.count - 1] = observation }

@@ -21,6 +21,8 @@ pub(crate) struct View {
     temperature_samples: u32,
     fan_samples: u32,
     fan_timed: BTreeMap<String, TimedHistory>,
+    temperature_timed: BTreeMap<String, TimedHistory>,
+    maximum_timed: TimedHistory,
     history_interval: f64,
 }
 impl Default for View {
@@ -34,6 +36,8 @@ impl Default for View {
             temperature_samples: 0,
             fan_samples: 0,
             fan_timed: BTreeMap::new(),
+            temperature_timed: BTreeMap::new(),
+            maximum_timed: TimedHistory::new_signed_limited(1, 60),
             history_interval: 1.,
         }
     }
@@ -117,6 +121,10 @@ impl View {
         Ok(())
     }
     pub fn clear_temperatures(&mut self) {
+        self.maximum_timed.clear();
+        for h in self.temperature_timed.values_mut() {
+            h.clear();
+        }
         self.maximum.clear();
         for h in self.temperatures.values_mut() {
             h.clear();
@@ -140,6 +148,19 @@ impl View {
         report: Result<Readings<Temperature>, String>,
         selection: &MetricSelection,
     ) -> (Panel, Vec<SourceOption>) {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.temperatures_at(report, selection, observed)
+    }
+    fn temperatures_at(
+        &mut self,
+        report: Result<Readings<Temperature>, String>,
+        selection: &MetricSelection,
+        observed: f64,
+    ) -> (Panel, Vec<SourceOption>) {
+        let minutes = selection.retained_minutes(crate::settings::Module::Temperature);
         let mut panel = Panel {
             title: "Temperature",
             label: String::new(),
@@ -155,6 +176,8 @@ impl View {
             Err(error) => {
                 self.maximum_members = None;
                 self.temperatures.clear();
+                self.temperature_timed.clear();
+                self.maximum_timed.clear();
                 return (
                     panel.with_temperature_text("Temperature unavailable".into(), error.into()),
                     Vec::new(),
@@ -175,6 +198,7 @@ impl View {
         let label;
         if let Some(primary) = &selection.temperature {
             self.maximum_members = None;
+            self.maximum_timed.clear();
             let sources = selected(primary, &selection.temperature_extra);
             let readings: Vec<_> = sources
                 .iter()
@@ -187,6 +211,31 @@ impl View {
                 .map(|r| r.map(|s| (s.id.as_str(), s.celsius)))
                 .collect();
             panel.series = curves(&mut self.temperatures, &slots, self.temperature_samples);
+            self.temperature_timed
+                .retain(|id, _| slots.iter().flatten().any(|(key, _)| *key == id));
+            for (id, value) in slots.iter().flatten() {
+                self.temperature_timed
+                    .entry((*id).into())
+                    .or_insert_with(|| TimedHistory::new_signed_limited(1, 60))
+                    .append(observed, &[*value]);
+            }
+            if minutes > 0 && !panel.series.is_empty() {
+                let projected: Vec<_> = slots
+                    .iter()
+                    .map(|slot| {
+                        slot.map(|(id, _)| {
+                            self.temperature_timed[id]
+                                .values_at(minutes, self.history_interval)
+                                .remove(0)
+                        })
+                    })
+                    .collect();
+                let count = projected.iter().flatten().next().map_or(0, Vec::len);
+                panel.series = projected
+                    .into_iter()
+                    .map(|v| v.unwrap_or_else(|| vec![f64::NAN; count]))
+                    .collect();
+            }
             panel
                 .readout
                 .top
@@ -231,12 +280,14 @@ impl View {
             };
         } else {
             self.temperatures.clear();
+            self.temperature_timed.clear();
             // The maximum retains the existing hwmon-first thermal fallback.
             if report.values.iter().any(|s| !s.thermal) {
                 report.values.retain(|s| !s.thermal);
             }
             if report.values.is_empty() {
                 self.maximum_members = None;
+                self.maximum_timed.clear();
                 label = if report.errors.is_empty() {
                     "No temperature sensors".into()
                 } else {
@@ -247,6 +298,7 @@ impl View {
                 let mut members: Vec<_> = report.values.iter().map(|s| s.id.clone()).collect();
                 members.sort();
                 if self.maximum_members.as_ref() != Some(&members) {
+                    self.maximum_timed.clear();
                     self.maximum = Self::fresh_history(self.temperature_samples);
                     self.maximum_members = Some(members);
                 }
@@ -256,7 +308,14 @@ impl View {
                     .map(|s| s.celsius)
                     .fold(f64::NEG_INFINITY, f64::max);
                 self.maximum.append(maximum);
-                panel.series.push(self.maximum.values());
+                self.maximum_timed.append(observed, &[maximum]);
+                panel.series.push(if minutes > 0 {
+                    self.maximum_timed
+                        .values_at(minutes, self.history_interval)
+                        .remove(0)
+                } else {
+                    self.maximum.values()
+                });
                 panel.readout.top.push(crate::dashboard::Row::new(
                     "Temp (max)",
                     Text::reading("", maximum, ""),
@@ -516,6 +575,65 @@ mod dashboard_tests {
             }],
             errors: vec![],
         })
+    }
+    #[test]
+    fn temperature_windows_keep_cold_values_physical_inputs_and_aggregate_membership() {
+        use crate::settings::{MetricSelection, Module};
+        let mut view = super::View::default();
+        let mut selection = MetricSelection {
+            temperature: Some("saved".into()),
+            temperature_extra: [Some("missing".into()), None],
+            ..Default::default()
+        };
+        selection.history_minutes.insert(Module::Temperature, 1);
+        view.fans_at(fan("fan-physical", 0), &MetricSelection::default(), 100.);
+        view.temperatures_at(thermal("physical", -10.), &selection, 100.);
+        let p = view
+            .temperatures_at(thermal("physical", 0.), &selection, 110.)
+            .0;
+        assert_eq!(p.series[0].len(), 61);
+        assert_eq!(p.series[0][50], -10.);
+        assert_eq!(p.series[0][60], 0.);
+        assert!(p.series[0][51..60].iter().all(|v| v.is_nan()));
+        assert!(p.series[1].iter().all(|v| v.is_nan()));
+        view.set_history_samples(300, 600).unwrap();
+        view.set_history_interval(0.2);
+        let p = view
+            .temperatures_at(thermal("physical", 5.), &selection, 111.)
+            .0;
+        assert_eq!(p.series[0].len(), 301);
+        view.clear_temperatures();
+        assert!(view.fans["fan-physical"].values().contains(&0.));
+        let p = view
+            .temperatures_at(thermal("replacement", -5.), &selection, 112.)
+            .0;
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        assert!(
+            view.temperatures_at(Err("offline".into()), &selection, 113.)
+                .0
+                .series
+                .is_empty()
+        );
+        let p = view
+            .temperatures_at(thermal("replacement", -5.), &selection, 114.)
+            .0;
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        selection.temperature = None;
+        selection.temperature_extra = [None, None];
+        view.temperatures_at(thermal("a", -10.), &selection, 115.);
+        let mut group = thermal("a", -5.).unwrap();
+        group.values.extend(thermal("b", -20.).unwrap().values);
+        let p = view.temperatures_at(Ok(group), &selection, 116.).0;
+        assert_eq!(p.series[0][300], -5.);
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        selection.history_minutes.remove(&Module::Temperature);
+        assert_eq!(
+            view.temperatures_at(thermal("a", 5.), &selection, 117.)
+                .0
+                .series[0]
+                .len(),
+            300
+        );
     }
     #[test]
     fn fan_windows_preserve_physical_boundaries_zero_and_temperature_state() {

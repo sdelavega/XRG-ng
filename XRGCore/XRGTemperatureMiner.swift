@@ -59,10 +59,12 @@ public final class XRGTemperatureMiner: NSObject {
     }
 
     @nonobjc init(reader: (any XRGTemperatureReader)?,
-                  clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+                  clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                  historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         self.reader = reader
         self.clock = clock
         super.init()
+        state.historyClock = historyClock
     }
 
     public var knownTemperatureKeyCount: Int { reader?.knownTemperatureKeyCount ?? 0 }

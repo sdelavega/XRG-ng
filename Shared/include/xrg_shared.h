@@ -74,6 +74,8 @@ int32_t xrg_timed_history_copy(void *handle, uint32_t minutes, double *output, u
  * across the complete window; per-instance retention limits are enforced. */
 int32_t xrg_timed_history_projection_settings(uint32_t *output, uint32_t capacity);
 void *xrg_timed_history_create_limited(uint32_t channels, uint32_t minutes);
+/* Explicit signed quantities; existing constructors still reject negative values. */
+void *xrg_timed_history_create_signed_limited(uint32_t channels, uint32_t minutes);
 int32_t xrg_timed_history_bin_count(uint32_t minutes, double interval);
 int32_t xrg_timed_history_copy_interval(void *handle, uint32_t minutes, double interval, double *output, uint32_t capacity);
 void *xrg_rate_create(void);

@@ -341,6 +341,10 @@ private struct WeatherHistoryRow: Encodable {
     guard let history = XRGTimedHistory(channels: Int(channels), retentionMinutes: Int(minutes)) else { return nil }
     return Unmanaged.passRetained(history).toOpaque()
 }
+@c(xrg_timed_history_create_signed_limited) public func timedHistoryCreateSignedLimited(_ channels: UInt32, _ minutes: UInt32) -> UnsafeMutableRawPointer? {
+    guard let history = XRGTimedHistory(channels: Int(channels), retentionMinutes: Int(minutes), allowsNegativeValues: true) else { return nil }
+    return Unmanaged.passRetained(history).toOpaque()
+}
 @c(xrg_timed_history_bin_count) public func timedHistoryBinCount(_ minutes: UInt32, _ interval: Double) -> Int32 {
     guard let count = XRGTimedHistory.binCount(minutes: Int(minutes), interval: interval) else { return -1 }
     return Int32(count)

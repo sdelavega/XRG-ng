@@ -1813,3 +1813,46 @@ or deadlines were weakened. Inspected native fan/menu gap captures and Linux
 Sources controls. Evidence: `dist/fans-time-window-validation`. Physical
 Intel/Linux x86-64, macOS 26 runtime, real suspend/resume and unowned hardware
 remain unverified.
+
+
+### Temperature windows record completed sensor batches
+
+Mac Temperature Time Window and Linux Sources now offer 1–60 minutes (zero uses
+sample count), centered sampling-target bins (minimum 200 ms), latest-observation
+anchors and shared one-hour / 20,000-observation limits per sensor/aggregate.
+Mac state records completed batches after collection, retaining the five-second
+poll gate; faster redraws do not append observations or modify stats. Direct
+sensor publications also carry completion times. Disabled inputs add missing time
+observations while retaining legacy sample-mode zero placeholders. Unit/metadata
+changes begin fresh time histories. Integrated fan RPM and percentage quantities
+retain separate sensor buffers/ranges. Fahrenheit display leaves Celsius data
+unchanged. Native full-graph ranges use projected observations; mini bars preserve
+their prior current-reading/sample-range behavior. Reset clears time/sample data
+with the existing Temperature-statistics reset; retention edits do not clear stats.
+
+Linux retains selected physical-input time buffers separately from the automatic
+maximum. Membership/source/failure/reset boundaries remain, preserving valid cold
+and zero temperatures and empty-slot color positions. Fan history and session
+statistics stay independent. Schema 39 migration remains read-only until explicit
+save, with invalid bounds/types rejecting edits atomically. No app version,
+release, dependency or notice change. Battery windows remain follow-up work.
+
+
+Cold-input validation exposed the original shared time buffer's nonnegative-value
+contract. Temperature now opts into signed values through an explicit Swift
+constructor option and additive C ABI constructor/Rust wrapper. Existing constructors
+still reject negatives; timestamps, nonfinite values, dimensions and bounds retain
+their guards. Swift, Rust and C smoke fixtures assert both contracts and retain
+negative cold values across gaps. This also provides a signed foundation for the
+pending battery-power window without changing that graph yet.
+
+Validation: final universal Debug gate passed 593 cases each ARM64/Rosetta x86_64
+and isolated native/packaged launch checks. Linux ARM64 passed 38 shared Swift
+tests, extended exact-artifact C ABI smoke, strict Clippy, 588 Rust tests and all
+16 X11/nested Wayland desktop cases. Initial Linux fixtures caught an initializer
+lint, the substantive signed-value limitation, and a smoke request that omitted
+the window setting it asserted. Corrected those without relaxing existing guards,
+assertions or deadlines; reran full gates. Inspected final native five-second
+cadence/gap/menu and Linux Sources captures. Evidence:
+`dist/temperature-time-window-validation`. Physical Intel/Linux x86-64,
+macOS 26 runtime, real suspend/resume and unowned sensors remain unverified.

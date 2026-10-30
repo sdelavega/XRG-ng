@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 38 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 39 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -508,7 +508,26 @@ append gaps, while automatic disappearance and Linux unreadable inputs discard
 the affected histories. Graph reset clears both modes and preserves current
 readouts and temperature/session statistics. Mac Fans and VRAM window settings
 are independent. Temperature’s integrated fan curves retain Temperature’s own
-history behavior; Temperature and Battery time windows remain follow-up work.
+history behavior; Temperature windows are described below; Battery windows remain follow-up work.
+
+Temperature supports **Temperature Time Window** on Mac and a Linux Sources
+field: 1–60 minutes, zero uses sample counts, with the same sampling-target grid
+and one-hour / 20,000-observation bound per sensor/aggregate. Mac timestamps
+completed sensor batches, retaining its five-second collection gate. Quicker graph
+ticks do not invent observations or accelerate polling; sparse time bins remain
+gaps. Integrated fan curves keep RPM and percentage inputs retain their own units.
+Sensor unit/metadata changes start fresh Mac time history. Disabled Mac sensors
+add missing timestamp observations while preserving legacy sample-mode zero
+placeholders. Displaying Fahrenheit does not change stored Celsius readings. Temperature uses
+an explicit signed time buffer; other existing time buffers still reject negative
+values.
+Linux keeps named physical-input histories separate from its automatic maximum;
+aggregate membership changes start fresh history. Existing failure/replacement
+rules remain, and cold/zero readings stay values where accepted by the collector.
+Window/resize edits preserve session statistics and collector state. Mac Reset
+Graph retains its existing Temperature-statistics reset; Linux graph reset keeps
+sensor statistics independent. Current readings and mini bars remain separate
+from time projection. Battery time windows remain follow-up work.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

@@ -136,7 +136,7 @@ fn mode_is_persistent_and_queued_percentage_plots_do_not_match_power_selection()
         .unwrap()
         .remove("battery_mode");
     let migrated = Settings::parse(&serde_json::to_vec(&wire).unwrap()).unwrap();
-    assert_eq!(migrated.version, 38);
+    assert_eq!(migrated.version, 39);
     assert_eq!(migrated.metrics.battery_mode, Mode::Charge);
     wire["metrics"]["battery_mode"] = "invented".into();
     assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());

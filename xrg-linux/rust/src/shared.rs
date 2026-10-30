@@ -5,6 +5,7 @@ use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 unsafe extern "C" {
     fn xrg_timed_history_projection_settings(output: *mut u32, capacity: u32) -> i32;
     fn xrg_timed_history_create_limited(channels: u32, minutes: u32) -> *mut c_void;
+    fn xrg_timed_history_create_signed_limited(channels: u32, minutes: u32) -> *mut c_void;
     fn xrg_timed_history_bin_count(minutes: u32, interval: f64) -> i32;
     fn xrg_timed_history_copy_interval(
         handle: *mut c_void,
@@ -307,6 +308,16 @@ impl TimedHistory {
             _local: PhantomData,
         }
     }
+    pub fn new_signed_limited(channels: u32, minutes: u32) -> Self {
+        Self {
+            handle: NonNull::new(unsafe {
+                xrg_timed_history_create_signed_limited(channels, minutes)
+            })
+            .expect("signed timed history limits"),
+            channels,
+            _local: PhantomData,
+        }
+    }
     pub fn clear(&mut self) {
         assert_eq!(unsafe { xrg_timed_history_clear(self.handle.as_ptr()) }, 0);
     }
@@ -448,6 +459,21 @@ impl Default for Rates {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn signed_timestamps_are_explicit_and_do_not_relax_unsigned_contracts() {
+        let mut unsigned = super::TimedHistory::new_limited(1, 60);
+        assert!(!unsigned.append(100., &[-10.]));
+        let mut signed = super::TimedHistory::new_signed_limited(1, 60);
+        assert!(signed.append(100., &[-10.]));
+        assert!(signed.append(110., &[0.]));
+        let values = signed.values_at(1, 1.);
+        assert_eq!(values[0][50], -10.);
+        assert_eq!(values[0][60], 0.);
+        assert!(values[0][51..60].iter().all(|v| v.is_nan()));
+        assert!(!signed.append(111., &[f64::INFINITY]));
+        assert!(!signed.append(-1., &[-10.]));
+    }
+
     use super::*;
     #[test]
     fn swift_history_ownership_and_wrap() {

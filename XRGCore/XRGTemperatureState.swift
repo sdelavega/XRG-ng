@@ -40,6 +40,7 @@ public final class XRGSensorData: NSObject {
     public var key: String
     public var currentValue = 0.0
     public let dataSet = XRGDataSet()
+    @nonobjc let timedHistory = XRGTimedHistory(channels: 1, retentionMinutes: 60, allowsNegativeValues: true)!
     public var isEnabled = false
 
     @objc(initWithSensorKey:)
@@ -53,6 +54,8 @@ public final class XRGSensorData: NSObject {
 @MainActor
 @objc(XRGTemperatureState) @objcMembers
 public final class XRGTemperatureState: NSObject {
+    @nonobjc var historyClock: () -> TimeInterval = { Date().timeIntervalSince1970 }
+    private var isUpdating = false
     private var sensors: [String: XRGSensorData] = [:]
     private var count = 0
     private var missingPadding = false
@@ -70,6 +73,7 @@ public final class XRGTemperatureState: NSObject {
     }
 
     public func beginUpdate() {
+        isUpdating = true
         for sensor in sensors.values { sensor.isEnabled = false }
     }
     public func finishUpdate() {
@@ -77,6 +81,9 @@ public final class XRGTemperatureState: NSObject {
             sensor.currentValue = 0
             sensor.dataSet.setNextValue(0)
         }
+        let observed = historyClock()
+        for sensor in sensors.values { sensor.timedHistory.append(time: observed, values: [sensor.isEnabled ? sensor.currentValue : .nan]) }
+        isUpdating = false
         regenerateLocationKeyOrder()
     }
 
@@ -93,11 +100,13 @@ public final class XRGTemperatureState: NSObject {
             if !missingPadding { sensor.dataSet.setAllValues(value) }
             sensors[location] = sensor
         }
+        if sensor.units != units || sensor.humanReadableName != name { sensor.timedHistory.clear() }
         sensor.units = units
         sensor.humanReadableName = name
         sensor.currentValue = value
         sensor.isEnabled = true
         sensor.dataSet.setNextValue(value)
+        if !isUpdating { sensor.timedHistory.append(time: historyClock(), values: [value]) }
         XRGStatsManager.shared.observeStat(value, forKey: location, inModule: .nameTemperature)
         regenerateLocationKeyOrder()
     }
@@ -157,7 +166,7 @@ public final class XRGTemperatureState: NSObject {
         for sensor in sensors.values { sensor.dataSet.resize(size, fillingWith: XRGGraphRenderer.missingValue) }
     }
     public func reset() {
-        for sensor in sensors.values { sensor.dataSet.reset() }
+        for sensor in sensors.values { sensor.dataSet.reset(); sensor.timedHistory.clear() }
     }
     public func regenerateLocationKeyOrder() {
         func rank(_ sensor: XRGSensorData) -> (Int, Int) {

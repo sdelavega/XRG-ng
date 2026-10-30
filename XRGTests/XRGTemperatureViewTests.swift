@@ -120,6 +120,35 @@ struct XRGTemperatureViewTests {
             #expect(view.rows().first?.value == "14.0°F" && sensor.dataSet.currentValue == -10)
         }
     }
+    @Test func timeWindowsFollowAcceptedSensorPollsAndKeepUnitsAndStatisticsIndependent() throws {
+        try withFixture { settings, defaults, reader in
+            settings.graphRefresh=1;var wall=100.0
+            let miner=XRGTemperatureMiner(reader:reader,clock:{reader.time},historyClock:{wall}),stats=XRGStatsManager()
+            let view=panel(miner,settings,defaults,stats:stats);view.graphUpdate(nil)
+            let sensor=try #require(miner.sensor(forLocation:"cpu"))
+            reader.time=5;wall=110;reader.smc["cpu"]=60;view.graphUpdate(nil)
+            stats.observeStat(55,forKey:"window",inModule:.nameTemperature)
+            let reads=reader.requests.count,fanReads=reader.fanRequests,option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+            #expect(view.historyData(sensor).numValues==61 && view.historyData(sensor).orderedValues[50]==50 && view.historyData(sensor).currentValue==60)
+            #expect(view.historyData(sensor).orderedValues[51..<60].allSatisfy { $0==XRGGraphRenderer.missingValue })
+            view.setFrameSize(NSSize(width:1,height:160));#expect(view.historyData(sensor).orderedValues[50]==50 && reader.requests.count==reads && reader.fanRequests==fanReads)
+            #expect(stats.stat(forKey:"window",inModule:.nameTemperature)?.last==55)
+            let count=sensor.timedHistory.observationCount;reader.time=6;wall=111;view.graphUpdate(nil)
+            #expect(sensor.timedHistory.observationCount==count && reader.requests.count==reads)
+            settings.graphRefresh=0.2;settings.tempUnits = .f;#expect(view.historyData(sensor).numValues==301 && view.historyData(sensor).currentValue==60)
+            let fan=try #require(miner.sensor(forLocation:"F0Ac"));#expect(view.historyData(fan).currentValue==1500 && fan.units==" rpm")
+            let menu=try #require(view.makeMenu().items.first { $0.title=="Temperature Time Window" }?.submenu);#expect(menu.items.allSatisfy { $0.target===view })
+            option.tag=61;view.selectHistoryWindow(option);#expect(view.historyMinutes==1)
+            view.clearData(nil);#expect(view.historyData(sensor).orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue } && sensor.currentValue==60)
+            reader.time=10;wall=50;reader.smc["cpu"]=70;view.graphUpdate(nil);#expect(view.historyData(sensor).currentValue==70 && view.historyData(sensor).orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            reader.time=15;wall=55;reader.smc.removeValue(forKey:"cpu");view.graphUpdate(nil)
+            #expect(!sensor.isEnabled && sensor.dataSet.currentValue==0 && view.historyData(sensor).currentValue==XRGGraphRenderer.missingValue)
+            reader.time=20;wall=60;reader.smc["cpu"]=80;view.graphUpdate(nil);#expect(view.historyData(sensor).currentValue==80)
+            miner.setCurrentValue(40,andUnits:"%",forLocation:"cpu");#expect(view.historyData(sensor).currentValue==40 && view.historyData(sensor).orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            miner.setCurrentValue(-10,andUnits:"°C",forLocation:"cpu");#expect(view.historyData(sensor).currentValue == -10)
+            option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && sensor.dataSet.numValues==300)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, PanelTemperatureReader) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.temperatureView.\(UUID().uuidString)"
@@ -418,7 +447,7 @@ struct XRGTemperatureViewTests {
             let menu = view.makeMenu()
             #expect(reader.requests == requests && reader.fanRequests == fans)
             #expect(menu.items.contains { $0.title == "CPU Core: 50.0°C" })
-            #expect(menu.items.count == 11)
+            #expect(menu.items.count == 12)
             for item in menu.items where !item.isSeparatorItem { #expect(item.target === view) }
             stats.observeStat(5, forKey: "reset", inModule: .nameTemperature)
             for title in ["Reset Graph", "Open XRG-ng Temperature Preferences...", "Open Temperature Sensors Window..."] {

@@ -3,6 +3,19 @@
 import Testing
 @testable import XRGSharedCore
 struct TimedHistoryTests {
+    @Test func signedQuantitiesAreExplicitAndKeepOldValidationAndGapRules() throws {
+        let unsigned = try #require(XRGTimedHistory(channels: 1, retentionMinutes: 60))
+        #expect(!unsigned.append(time: 100, values: [-10]) && unsigned.observationCount == 0)
+        let signed = try #require(XRGTimedHistory(channels: 1, retentionMinutes: 60, allowsNegativeValues: true))
+        #expect(signed.append(time: 100, values: [-10]))
+        #expect(signed.append(time: 110, values: [0]))
+        let values = try #require(signed.values(minutes: 1, interval: 1))
+        #expect(values[0][50] == -10 && values[0][60] == 0)
+        #expect(values[0][51..<60].allSatisfy { $0.isNaN })
+        #expect(!signed.append(time: 111, values: [.infinity]))
+        #expect(!signed.append(time: -1, values: [-10]))
+    }
+
     @Test func exactCutoffSparseBinsAndLatestValueAreBasedOnTimestamps() throws {
         let history = try #require(XRGTimedHistory(channels: 1))
         history.append(time: 0, values: [10]); history.append(time: 5, values: [20]); history.append(time: 65, values: [30])

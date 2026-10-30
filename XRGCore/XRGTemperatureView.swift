@@ -157,6 +157,12 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         let upper: CGFloat
         var hasRange: Bool { lower.isFinite && upper.isFinite && upper > lower }
     }
+    @nonobjc private var timeProjections: [String: XRGTimeWindowProjection] = [:]
+    @nonobjc func historyData(_ sensor: XRGSensorData) -> XRGDataSet {
+        let cache = timeProjections[sensor.key] ?? XRGTimeWindowProjection(channels: 1)
+        timeProjections[sensor.key] = cache
+        return cache.values(from: sensor.timedHistory, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))?.first ?? sensor.dataSet
+    }
     @nonobjc func rows() -> [Row] {
         let keys = [settings?.tempFG1Location, settings?.tempFG2Location, settings?.tempFG3Location]
         let selected = keys.enumerated().compactMap { index, key -> (Int, XRGSensorData)? in
@@ -165,7 +171,7 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         }
         let fans = miner.cachedFanValues
         let fanKeys = Set(fans.map(\.key))
-        let thermal = selected.map(\.1).filter { !fanKeys.contains($0.key) && $0.units != " rpm" && $0.units != "%" && $0.dataSet.numValues > 0 }
+        let thermal = selected.map(\.1).filter { !fanKeys.contains($0.key) && $0.units != " rpm" && $0.units != "%" && (historyMinutes > 0 || $0.dataSet.numValues > 0) }
         let observed = thermal.flatMap { observedValues($0) }
         let low = observed.min() ?? 0, high = observed.max() ?? 100
         let padding = max(20, high - low) * 0.1
@@ -212,7 +218,7 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         if primary.sensor.isEnabled && primary.sensor.currentValue.isFinite {
             var lower = primary.lower, upper = primary.upper
             if !fans.contains(where: { $0.key == primary.sensor.key }) && primary.sensor.units != " rpm" && primary.sensor.units != "%" {
-                let values = observedValues(primary.sensor)
+                let values = primary.sensor.dataSet.orderedValues.filter { $0.isFinite && $0 != XRGGraphRenderer.missingValue }
                 lower = min(values.min() ?? 20, 20); upper = max(values.max() ?? 90, 90)
             }
             if lower.isFinite && upper.isFinite && upper > lower {
@@ -266,7 +272,7 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
                 context.shouldAntialias = settings.antiAliasing
                 for row in rows() where row.hasRange {
                     let color = [settings.graphColor(.temperature, component: 1), settings.graphColor(.temperature, component: 2), settings.graphColor(.temperature, component: 3)][row.slot]
-                    XRGGraphRenderer.drawCurve(row.sensor.dataSet, upperBound: row.upper, lowerBound: row.lower,
+                    XRGGraphRenderer.drawCurve(historyData(row.sensor), upperBound: row.upper, lowerBound: row.lower,
                         in: historyRect(in: bounds), flipped: false, filled: row.slot == 0, color: color, style: settings.curveStyle(.temperature))
                 }
             }
@@ -286,20 +292,28 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         }
         menu.addItem(.separator())
         menu.addItem(XRGHistoryRetention.menu("Temperature History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("Temperature Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(.separator()); menu.addItem(item("Open XRG-ng Temperature Preferences...", #selector(openTemperaturePreferences(_:))))
         menu.addItem(item("Open Temperature Sensors Window...", #selector(showSensorWindow(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let windowKey = "XRGTemperatureView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
+    }
     @nonobjc static let historyKey = "XRGTemperatureView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     private func observedValues(_ sensor: XRGSensorData) -> [CGFloat] {
-        sensor.dataSet.orderedValues.filter { $0.isFinite && $0 != XRGGraphRenderer.missingValue }
+        historyData(sensor).orderedValues.filter { $0.isFinite && $0 != XRGGraphRenderer.missingValue }
     }
     public func clearData(_ sender: Any?) {
         miner.reset(); statsManager.clearHistory(forModule: .nameTemperature); updateLabels(); needsDisplay = true
