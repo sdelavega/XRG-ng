@@ -2045,3 +2045,54 @@ runtime, real suspend/resume and whole-app interaction remain unverified.
 Cleanup removed the exact inventoried build root and 600 empty private test
 preferences, approximately 1.94 GiB, with no errors. All profiling domains had
 already been cleared by the tool; no installed app preferences were changed.
+
+### Live GPU snapshots move off the main actor
+
+Default native GPU readers now run on a serial utility queue; immutable Sendable
+value snapshots cross to main-actor history/current-value publication. Existing
+injected synchronous sources retain their behavior. One pending request coalesces
+redraws/ticks with no catch-up queue. Completion timestamps are captured after the
+worker read, not at delayed UI delivery. GPU and visible VRAM share each accepted
+completion; deferred VRAM callbacks skip pending/already-consumed revisions rather
+than recording cached data as a new observation.
+
+Both-hidden, GPU detachment, shutdown and graph resets invalidate older in-flight
+publication. GPU-hidden/VRAM-visible remains eligible; resuming allows a fresh read.
+In-flight kernel calls finish normally and their invalidated results are dropped.
+Source identities, units, missing/failure behavior, sample/time bounds and existing
+optional-source policy remain. No hardware writes, permission, Linux/Shared, schema
+or version changes. Four blocked-reader regressions cover main-run-loop delivery,
+coalescing, completion time/failure, shared observations, visibility, reset and
+suspend/resume/detach and replaced-view ownership boundaries. Initial focused GPU
+suites passed unchanged existing
+assertions plus new cases. The profiler now pumps main-loop completions and reports
+GPU accepted reads/pending state; completion publication is outside normal-callback
+measurements, so enqueue latency is not total GPU/UI cost.
+
+Review added a guard preventing a replaced GPU view from notifying the window's
+new VRAM consumer when the old read completes. The full gate was repeated after
+that guard and its dedicated regression; the earlier 606-case gate and ARM
+profile remain preliminary evidence, not the final source validation.
+
+Final live profiles (60 cycles, 0.25-second delay/target) measured ARM64 GPU normal
+callback median/p95/max 0.183/0.337/0.379 ms and cycle 5.224/6.520/6.709 ms. Rosetta
+GPU callback was 0.447/0.749/0.916 ms and cycle 7.995/9.666/10.389 ms. Both accepted
+61 reads with valid counters and none pending. Worker execution and completion
+publication are outside those normal-cycle measurements; this does not establish
+total UI/CPU improvement. GPU entries differed (ARM64 one, Rosetta two; baseline
+one), so environment/device membership was not controlled. No known temperature
+channels were reported, and sensor latency remains unverified.
+
+Final validation: full `Tools/ci-macos.sh Debug` passed 607 cases with zero failures
+on ARM64 and 607 under Rosetta x86-64, plus universal build, metadata/notices and
+retired-symbol guards, isolated AppKit restore and both packaged original-nib
+launch checks. Final sequential 60-cycle hardware profiles and a two-cycle core-only
+smoke passed, including source/framework identity checks and private-domain cleanup.
+Evidence: `dist/gpu-worker-validation` (initial and final gates clearly separated,
+DerivedData excluded). Linux was unchanged and not retested. Physical Intel/macOS
+26 runtime, real suspend/resume and real-menu/hardware-load interaction remain
+unverified.
+Cleanup removed both inventoried CI build roots, the focused build cache and
+1,253 empty private test preferences, approximately 4.51 GiB total, with no errors.
+Profile domains were cleared by their runner; archived evidence remains on
+MacStorage. Repository caches, installed apps and ordinary settings were preserved.

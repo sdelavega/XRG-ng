@@ -2,7 +2,8 @@
 
 Source review: 2026-10-30. Implemented corrections cover Mac Battery elapsed-time
 gating, monitoring timer delivery during AppKit event tracking, and collection and
-buffer retention for hidden core/Battery graphs. Linux comparison is read-only.
+buffer retention for hidden core/Battery graphs, and live GPU snapshot workers.
+Linux comparison is read-only.
 Actual system sleep/resume remains unverified.
 
 | Area | macOS | Linux | Follow-up |
@@ -10,7 +11,7 @@ Actual system sleep/resume remains unverified.
 | Normal target | Main-run-loop timer; supported UI target 200 ms–10 s, legacy values retained | Wakeable worker timer; target 200 ms–10 s | Preserve valid legacy settings and collector baselines |
 | Interval edit | Recreates the normal timer | Retimes from last sample start; identical intervals retain backoff | Choose and test a common phase policy |
 | Menus and dragging | Window-managed normal/fast, slow and AI timers use common modes | System worker runs independently of UI event tracking | Real scheduled mode fixtures cover delivery; collector latency still needs hardware measurement |
-| Slow collection | Collector-specific gates; main thread can defer normal updates | Worker skips missed deadlines and backs off after overruns | Keep one completed observation per collection, no catch-up backlog |
+| Slow collection | GPU/NPU use background collection; other collector-specific gates can still defer main-thread updates | Worker skips missed deadlines and backs off after overruns | Keep one completed observation per collection, no catch-up backlog |
 | Battery gate | Now measures >10 real continuous-clock seconds after the last completed poll | Battery observes each normal worker sample | Cadence still differs intentionally in this pass; changing the target cannot manufacture elapsed time |
 | Temperature gate | Five-second source gate, separate from faster graph redraws | Sensor observation on the normal worker | Compare freshness and source costs before changing cadence |
 | Collapsed window | Displayed modules keep collection; geometry changes do not stop timers | Worker keeps collection | Preserve collapse/hover behavior |
@@ -88,7 +89,7 @@ from presentation work remains an optimization task.
 
 | Source | Native behavior retained in this pass | Linux comparison / remaining work |
 | --- | --- | --- |
-| GPU / VRAM | GPU normal polling follows module eligibility, but visible VRAM can refresh the shared GPU miner through the same graph-generation token. VRAM retains its own visible-only history callback. | System sampler builds both panels each normal cycle; preserve shared-source deduplication before changing native policy. |
+| GPU / VRAM | Live GPU snapshots use a coalesced serial worker when GPU or VRAM is visible. Main-actor publication updates GPU history and visible VRAM once per accepted completion; VRAM uses the completion wall timestamp. | System sampler builds both panels each normal cycle; native both-hidden suppression remains intentional pending wider policy alignment. |
 | NPU | Displayed normal callbacks request a coalesced serial worker. Construction requests an initial reading; hiding does not cancel an already queued read. | System worker samples NPU independently of panel visibility; define cancellation and rebaseline policy before aligning hidden collection. |
 | Temperature / Fans | Temperature batches are five-second gated. Visible Fans uses the shared sensor service's separate fan reader/cache; this does not itself request a temperature batch. | System sampler requests sensor/fan reports each normal cycle. Align optional-source eligibility without broadening access or overriding source selections. |
 | Weather / Stocks | Native views have visibility/window-dependent active guards and suspension/cancellation paths. | Audit provider enablement and publication lifecycle separately from local hardware histories. |
@@ -122,18 +123,56 @@ runs cannot establish fresh temperature-read latency or hardware coverage.
 | Complete normal cycle | 8.617 / 10.291 / 10.911 | 12.660 / 14.683 / 15.259 |
 
 GPU is the largest measured callback here. This measures the combined callback,
-not isolated IOKit duration or a general performance guarantee. The first worker
-candidate is GPU snapshot collection; preserve shared GPU/VRAM deduplication,
+not isolated IOKit duration or a general performance guarantee. That baseline identified GPU snapshot collection as the first worker candidate;
+preserve shared GPU/VRAM deduplication,
 source identities, failure gaps and completion timestamps. Coalesce work rather
 than queueing missed ticks, reject results invalidated by lifecycle/reset changes,
 and prove UI delivery stays available with a deliberately stalled fixture reader.
 Keep histories/publication on the main actor and append once per completed read.
 
+## GPU snapshot worker
+
+Live GPU construction and polling now enqueue a read-only snapshot on a serial
+utility queue. Parsed value snapshots are Sendable; histories, labels and current
+values publish on the main actor. Existing injected synchronous sources retain
+their fixture/API behavior. A single in-flight request coalesces redraws and graph
+ticks without accumulating a queue or automatically replaying missed ticks.
+
+A completion carries its worker-captured wall timestamp and revision. A replaced
+GPU view cannot forward its late completion into the window’s new VRAM consumer. Visible
+VRAM consumes each accepted revision once; pending/cached callbacks do not invent
+observations. GPU and VRAM share the same read. Hiding GPU while VRAM is visible
+keeps collection eligible; hiding both, detaching GPU or shutting down invalidates
+pending publication. Resuming waits for a fresh read. GPU or VRAM graph reset also
+invalidates an older in-flight read. Kernel I/O already running is not interrupted;
+its result is discarded. Failure and source-identity policies remain unchanged.
+No new permissions, hardware writes or hidden collection policy are introduced.
+
+Deterministic blocked-reader tests verify a real main-run-loop timer still fires,
+request coalescing, completion timestamps, failure handling, one VRAM observation
+per completion, reset/suspend/resume, both visibility combinations, replacement ownership and
+detachment.
+The profiling helper now pumps the run loop between cycles and reports GPU completed
+read count/pending state. GPU publication occurs outside measured normal callbacks;
+a short enqueue is not a measurement of worker execution or total UI cost.
+
+The final worker profiles use the same Debug helper shape, 60 cycles and 0.25-second
+delay/target. ARM64 GPU callback median/p95/max was 0.183/0.337/0.379 ms; the measured
+normal cycle was 5.224/6.520/6.709 ms. Rosetta GPU callback was
+0.447/0.749/0.916 ms; the normal cycle was 7.995/9.666/10.389 ms. Both accepted 61
+reads, reported valid GPU counters and ended with no read pending. These callbacks
+exclude worker execution and completion publication, unlike the earlier synchronous
+callback's combined cost; this is not a total UI/CPU improvement measurement.
+Reported GPU entries were one on ARM64 and two under Rosetta (the baseline reported
+one); environmental/device membership was not controlled. No known temperature
+channels were reported. No physical Intel, release-build, macOS 26 runtime or
+real-menu responsiveness claim follows from these local profiles.
+
 ## Next work
 
-1. Move GPU snapshot reading off the main actor with coalescing and generation
-   guards; use the diagnostic baseline above, then measure real interaction and
-   unavailable sensor paths separately.
+1. Compare the worker profile with the baseline, then measure real interaction,
+   completion-publication cost and unavailable sensor paths separately. Select
+   additional synchronous collectors using measured cost and lifecycle contracts.
 2. Audit remaining optional-source visibility policies; specify any explicit
    Pause/Resume control, separating display freeze from stopping accounting.
 3. Audit wake/long-gap handling and interval-edit phase behavior for counter-based

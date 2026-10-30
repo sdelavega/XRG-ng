@@ -698,3 +698,7 @@ Developer callback profiling is available through
 preferences and an opt-in timing hook; normal app dispatch does not read a timing
 clock. Current local measurements and their limits are recorded in
 [SAMPLING_PARITY.md](SAMPLING_PARITY.md).
+
+Live Mac GPU/VRAM snapshot reads run on a shared serial worker. Pending ticks
+coalesce, histories publish on the main thread once per accepted completion, and
+hiding both consumers, reset or detachment rejects stale in-flight results.

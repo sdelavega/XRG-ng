@@ -34,6 +34,7 @@ import AppKit
 @MainActor
 @objc(XRGGPUView) @objcMembers
 public final class XRGGPUView: NSView, XRGModuleView {
+    private var lastMemoryRevision: UInt64 = 0
     private let miner: XRGGPUMiner
     private let defaults: UserDefaults
     private let standaloneSettings: XRGSettings?
@@ -73,6 +74,13 @@ public final class XRGGPUView: NSView, XRGModuleView {
         prepare()
     }
     private func prepare() {
+        miner.onUpdate = { [weak self] in
+            guard let self else { return }
+            self.updateLabels(); self.needsDisplay = true
+            if self.host?.gpuView === self {
+                (self.host as? any XRGGraphicsSnapshotHost)?.graphicsSnapshotDidComplete()
+            }
+        }
         do { selectedSource = try XRGMonitorSource.load(defaults, key: Self.sourceKey).source }
         catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
         if let raw = defaults.object(forKey: Self.modeKey) {
@@ -99,6 +107,7 @@ public final class XRGGPUView: NSView, XRGModuleView {
     private func bindToWindow() {
         let next = window as? any XRGGPUViewHost
         if host !== next {
+            if host != nil || next == nil { miner.setCollectionActive(false) }
             if host?.gpuView === self { host?.gpuView = nil }
             if let module { registeredManager?.removeModule(module) }
             registeredManager = nil
@@ -117,6 +126,7 @@ public final class XRGGPUView: NSView, XRGModuleView {
         self.module = module
         registeredManager = manager
         host.gpuView = self
+        miner.setCollectionActive(true)
         host.initTimers()
         updateMinSize()
         manager.addModule(module)
@@ -153,6 +163,21 @@ public final class XRGGPUView: NSView, XRGModuleView {
         miner.refreshForGraphTick(tick)
         return miner.memorySnapshot
     }
+    @nonobjc func setCollectionActive(_ active: Bool) {
+        miner.setCollectionActive(active)
+        if !active { lastMemoryRevision = miner.completionRevision }
+    }
+    @nonobjc func completedMemoryReadings(tick: UInt64) -> Result<[XRGHardwareReading], Error>? {
+        // A completion callback consumes its snapshot without starting another read.
+        if miner.usesWorker, miner.completionRevision != lastMemoryRevision {
+            lastMemoryRevision = miner.completionRevision
+            return miner.memorySnapshot
+        }
+        miner.refreshForGraphTick(tick)
+        return miner.usesWorker ? nil : miner.memorySnapshot
+    }
+    @nonobjc var memoryObservationTime: TimeInterval? { miner.lastObservationTime }
+    @nonobjc func invalidatePendingGraphics() { miner.invalidatePending(); lastMemoryRevision = miner.completionRevision }
     public func fastUpdate(_ timer: Timer?) {}
     public func min5Update(_ timer: Timer?) {}
     public func min30Update(_ timer: Timer?) {}

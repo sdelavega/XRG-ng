@@ -45,10 +45,15 @@ import AppKit
         var durations: [String: [Double]] = [:], cycles: [Double] = []
         window.moduleManager?.onUpdateMeasurement = { name, phase, seconds in durations["\(phase)/\(name)", default: []].append(seconds * 1000) }
         for _ in 0..<count {
-            Thread.sleep(forTimeInterval: interval)
+            RunLoop.main.run(until: Date().addingTimeInterval(interval))
             let start = ProcessInfo.processInfo.systemUptime
             window.graphUpdate(nil)
             cycles.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+        }
+        // Give the final worker completion a bounded publication opportunity.
+        if let gpu {
+            let deadline = Date().addingTimeInterval(0.5)
+            while gpu.isCollecting && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         }
         func summary(_ values: [Double]) -> [String: Any] {
             let sorted = values.sorted(), n = sorted.count
@@ -66,13 +71,15 @@ import AppKit
         if let gpu {
             sourceStatus["gpuCountersAvailable"] = gpu.countersAvailable
             sourceStatus["gpuCount"] = gpu.numberOfGPUs
+            sourceStatus["gpuCompletedReads"] = gpu.completionRevision
+            sourceStatus["gpuPendingRead"] = gpu.isCollecting
             sourceStatus["knownTemperatureChannels"] = XRGTemperatureMiner.shared.locationKeys(includingUnknown: false).count
         }
         let result: [String: Any] = ["schema": 1, "architecture": architecture,
             "os": ProcessInfo.processInfo.operatingSystemVersionString, "iterations": count, "intervalSeconds": interval,
             "hardwareEnabled": hardware, "sourceStatus": sourceStatus, "setupMs": setupMs, "cycles": summary(cycles),
             "callbacks": durations.mapValues(summary),
-            "scope": "Main-actor normal callbacks: source calls and label updates. Includes gated/cache hits; excludes drawing, real menus, initialization (reported separately), async worker execution and whole-app responsiveness. Debug build; local hardware only. No AI/provider/process-inspector collection."]
+            "scope": "Main-actor normal callbacks: synchronous source calls/enqueues and label updates. GPU publication runs on completion outside the measured normal cycle. Includes gated/cache hits; excludes drawing, real menus, initialization (reported separately), async worker execution and whole-app responsiveness. Debug build; local hardware only. No AI/provider/process-inspector collection."]
         try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: report), options: .atomic)
     }
 }

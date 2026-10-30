@@ -4,7 +4,7 @@ import Foundation
 
 /// Read-only reported values. Capacity is optional and never inferred from RAM,
 /// allocation limits, GART apertures or an assumed device model.
-struct XRGHardwareReading {
+struct XRGHardwareReading: Sendable {
     let id: String
     let name: String
     let value: Double
@@ -48,4 +48,8 @@ struct XRGHardwareReading {
 
 @MainActor protocol XRGGraphicsSampleClock: AnyObject {
     var graphicsSampleGeneration: UInt64 { get }
+}
+
+@MainActor protocol XRGGraphicsSnapshotHost: AnyObject {
+    func graphicsSnapshotDidComplete()
 }

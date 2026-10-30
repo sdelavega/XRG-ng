@@ -1,9 +1,136 @@
+import AppKit
 import Foundation
 import Testing
 @testable import XRGCore
 
+private final class GPUReadGate: @unchecked Sendable {
+    private let lock = NSLock(), gate = DispatchSemaphore(value: 0)
+    private var count = 0, mainThread = false, failed = false
+    private var timestamp = 123.0
+    private let sample = XRGGPUSample(id: 1, vendor: "Apple", total: 100, free: 60, wait: nil, utilization: 50,
+        memoryReading: XRGHardwareReading(id: "memory", name: "Fixture", value: 40, capacity: 100))
+    var reads: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var readOnMain: Bool { lock.lock(); defer { lock.unlock() }; return mainThread }
+    var time: Double { lock.lock(); defer { lock.unlock() }; return timestamp }
+    func configure(time: Double, failed: Bool = false) { lock.lock(); timestamp = time; self.failed = failed; lock.unlock() }
+    func read() -> [XRGGPUSample]? {
+        lock.lock(); count += 1; mainThread = mainThread || Thread.isMainThread; lock.unlock()
+        gate.wait()
+        lock.lock(); defer { lock.unlock() }; return failed ? nil : [sample]
+    }
+    func release(_ count: Int = 1) { for _ in 0..<count { gate.signal() } }
+}
+
 @Suite @MainActor
 struct XRGGPUMinerTests {
+    private func eventually(_ predicate: () -> Bool) async -> Bool {
+        for _ in 0..<600 {
+            if predicate() { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return predicate()
+    }
+    @Test func workerCoalescesBlockedReadsWhileMainRunLoopDeliversAndFailuresStayMissing() async throws {
+        let gate = GPUReadGate(); defer { gate.release(10) }
+        let miner = XRGGPUMiner(asyncSource: { gate.read() }, completionClock: { gate.time })
+        try #require(await eventually { gate.reads == 1 })
+        var heartbeat = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: false) { _ in MainActor.assumeIsolated { heartbeat = true } }
+        defer { timer.invalidate() }
+        for tick in 0..<100 { miner.refreshForGraphTick(UInt64(tick)) }
+        try #require(await eventually { heartbeat })
+        #expect(gate.reads == 1 && !gate.readOnMain && miner.completionRevision == 0)
+        gate.release(); try #require(await eventually { miner.completionRevision == 1 })
+        let history = try #require(miner.timedHistory(sourceID: "ioreg-id:1"))
+        #expect(history.observationCount == 1 && miner.lastObservationTime == 123 && miner.utilizationDataSets[0].currentValue == 50)
+        try await Task.sleep(for: .milliseconds(20)); #expect(gate.reads == 1)
+        gate.configure(time: 124, failed: true); miner.refreshForGraphTick(1000)
+        try #require(await eventually { gate.reads == 2 }); gate.release()
+        try #require(await eventually { miner.completionRevision == 2 })
+        #expect(history.observationCount == 2 && !miner.countersAvailable && miner.utilizationDataSets[0].currentValue == XRGGraphRenderer.missingValue)
+        if case .success = miner.memorySnapshot { Issue.record("Failed worker read exposed cached memory") }
+    }
+    @Test func resetAndSuspendRejectInflightResultsWithoutQueueingCatchup() async throws {
+        let gate = GPUReadGate(); defer { gate.release(10) }
+        let miner = XRGGPUMiner(asyncSource: { gate.read() }, completionClock: { gate.time })
+        try #require(await eventually { gate.reads == 1 })
+        miner.resetHistory(sourceID: nil); gate.release()
+        try #require(await eventually { !miner.isCollecting }); #expect(miner.completionRevision == 0)
+        miner.refreshForGraphTick(1); try #require(await eventually { gate.reads == 2 })
+        miner.setCollectionActive(false); miner.setCollectionActive(true); miner.getLatestGraphicsInfo()
+        #expect(gate.reads == 2); gate.release()
+        try #require(await eventually { !miner.isCollecting }); #expect(miner.completionRevision == 0)
+        miner.refreshForGraphTick(2); try #require(await eventually { gate.reads == 3 }); gate.release()
+        try #require(await eventually { miner.completionRevision == 1 })
+        let history = try #require(miner.timedHistory(sourceID: "ioreg-id:1"))
+        miner.refreshForGraphTick(3); try #require(await eventually { gate.reads == 4 })
+        miner.resetHistory(sourceID: "ioreg-id:1"); gate.release()
+        try #require(await eventually { !miner.isCollecting })
+        #expect(history.observationCount == 0 && miner.completionRevision == 1 && gate.reads == 4)
+    }
+    @Test func sharedAsyncGPUAndVRAMObserveCompletionsOnceAndHonorVisibilityResetAndDetach() async throws {
+        _ = NSApplication.shared
+        let domain = "XRG.gpu-worker.\(UUID().uuidString)", gate = GPUReadGate()
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { gate.release(10); defaults.removePersistentDomain(forName: domain) }
+        defaults.set(true, forKey: "showGPUGraph"); defaults.set(true, forKey: "showVRAMGraph")
+        defaults.set(false, forKey: "showFansGraph"); defaults.set(false, forKey: "checkForUpdates")
+        let window = XRGGraphWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), defaults: defaults)
+        defer { window.cleanupBeforeExiting(); window.close() }
+        let miner = XRGGPUMiner(asyncSource: { gate.read() }, completionClock: { gate.time })
+        let view = XRGGPUView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: miner, settings: window.appSettings, defaults: defaults)
+        window.contentView?.addSubview(view); view.awakeFromNib(); window.initializeHardwareViews()
+        let vram = try #require(window.vramView), manager = try #require(window.moduleManager)
+        try #require(await eventually { gate.reads == 1 })
+        for _ in 0..<100 { window.graphUpdate(nil) }
+        #expect(vram.curve("memory").isEmpty && gate.reads == 1)
+        gate.release(); try #require(await eventually { vram.readings.count == 1 })
+        #expect(vram.curve("memory").filter { $0 != XRGGraphRenderer.missingValue }.count == 1)
+        manager.setModule("GPU", isDisplayed: false); window.graphUpdate(nil)
+        try #require(await eventually { gate.reads == 2 })
+        for _ in 0..<100 { window.graphUpdate(nil) }
+        #expect(vram.curve("memory").filter { $0 != XRGGraphRenderer.missingValue }.count == 1)
+        manager.setModule("VRAM", isDisplayed: false); gate.release()
+        try #require(await eventually { !miner.isCollecting }); #expect(miner.completionRevision == 1)
+        manager.setModule("VRAM", isDisplayed: true)
+        try #require(await eventually { gate.reads == 3 }); gate.configure(time: 124); gate.release()
+        try #require(await eventually { miner.completionRevision == 2 })
+        #expect(vram.curve("memory").filter { $0 != XRGGraphRenderer.missingValue }.count == 2)
+        window.graphUpdate(nil); try #require(await eventually { gate.reads == 4 })
+        vram.clearData(nil); gate.release(); try #require(await eventually { !miner.isCollecting })
+        #expect(miner.completionRevision == 2 && vram.curve("memory").allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        window.graphUpdate(nil); try #require(await eventually { gate.reads == 5 })
+        view.removeFromSuperview(); gate.release(); try #require(await eventually { !miner.isCollecting })
+        #expect(miner.completionRevision == 2 && window.gpuView == nil)
+    }
+
+    @Test func replacedGPUViewCannotPublishIntoTheNewVRAMConsumer() async throws {
+        _ = NSApplication.shared
+        let domain = "XRG.gpu-worker.\(UUID().uuidString)", gate = GPUReadGate()
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { gate.release(10); defaults.removePersistentDomain(forName: domain) }
+        defaults.set(true, forKey: "showGPUGraph"); defaults.set(true, forKey: "showVRAMGraph")
+        defaults.set(false, forKey: "showFansGraph"); defaults.set(false, forKey: "checkForUpdates")
+        let window = XRGGraphWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), defaults: defaults)
+        defer { window.cleanupBeforeExiting(); window.close() }
+        let miner = XRGGPUMiner(asyncSource: { gate.read() }, completionClock: { gate.time })
+        let old = XRGGPUView(frame: .zero, miner: miner, settings: window.appSettings, defaults: defaults)
+        window.contentView?.addSubview(old); old.awakeFromNib(); window.initializeHardwareViews()
+        try #require(await eventually { gate.reads == 1 })
+        var newReads = 0
+        let sample = XRGGPUSample(id: 2, vendor: "AMD", total: 100, free: 30, wait: nil, utilization: 25,
+            memoryReading: XRGHardwareReading(id: "new", name: "New", value: 70, capacity: 100))
+        let replacementMiner = XRGGPUMiner(source: { newReads += 1; return [sample] })
+        let replacement = XRGGPUView(frame: .zero, miner: replacementMiner, settings: window.appSettings, defaults: defaults)
+        defer { old.removeFromSuperview(); replacement.removeFromSuperview() }
+        window.contentView?.addSubview(replacement); replacement.awakeFromNib()
+        #expect(window.gpuView === replacement && newReads == 1)
+        gate.release(); try #require(await eventually { !miner.isCollecting })
+        #expect(newReads == 1 && window.vramView?.readings.isEmpty == true)
+        window.graphUpdate(nil)
+        #expect(newReads == 2 && window.vramView?.readings.first?.id == "new")
+    }
+
     private func card(_ perf: [String: Any], id: UInt64 = 1,
                       extra: [String: Any] = [:]) -> XRGGPUSample {
         var accelerator = extra

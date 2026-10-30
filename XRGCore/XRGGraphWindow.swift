@@ -256,6 +256,13 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         npuView = view; contentView?.addSubview(view); view.awakeFromNib()
         moduleManager?.windowChanged(to: frame.size)
     }
+    public func moduleVisibilityChanged() {
+        let active = gpuView?.module?.isDisplayed == true || vramView?.module?.isDisplayed == true
+        gpuView?.setCollectionActive(active)
+    }
+    public func graphicsSnapshotDidComplete() {
+        if vramView?.module?.isDisplayed == true { vramView?.graphUpdate(nil) }
+    }
     public func initializeHardwareViews() {
         initializeHardwareViews(vram: { [weak self] in
             guard let self, let gpu = self.gpuView else {
@@ -263,6 +270,13 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
             }
             return gpu.memoryReadings(tick: self.graphicsSampleGeneration)
         }, fans: { .success(XRGTemperatureMiner.shared.fanGraphReadings()) })
+        vramView?.deferredSource = { [weak self] in
+            guard let self, let gpu = self.gpuView else { return .failure(NSError(domain: "XRGGPU", code: 2)) }
+            return gpu.completedMemoryReadings(tick: self.graphicsSampleGeneration)
+        }
+        vramView?.deferredObservationTime = { [weak self] in self?.gpuView?.memoryObservationTime }
+        vramView?.onReset = { [weak self] in self?.gpuView?.invalidatePendingGraphics() }
+        moduleVisibilityChanged()
     }
     @nonobjc func initializeHardwareViews(vram: @escaping () -> Result<[XRGHardwareReading], Error>,
                                         fans: @escaping () -> Result<[XRGHardwareReading], Error>) {
@@ -418,6 +432,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     public func windowDidResize(_ notification: Notification) { moduleManager?.windowChanged(to: frame.size) }
     public func cleanupBeforeExiting() {
+        gpuView?.setCollectionActive(false)
         let wasMinimized = defaults.bool(forKey: "windowIsMinimized")
         backgroundView?.expandWindow(); defaults.set(wasMinimized, forKey: "windowIsMinimized")
         for timer in [min30Timer, min5Timer, graphTimer, fastTimer, aiTimer] { timer?.invalidate() }
@@ -467,3 +482,5 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         return rect.origin
     }
 }
+
+extension XRGGraphWindow: XRGGraphicsSnapshotHost {}

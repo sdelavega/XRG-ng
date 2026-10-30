@@ -29,6 +29,9 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     let kind: Kind
     private let historyClock: () -> TimeInterval
     private let source: () -> Result<[XRGHardwareReading], Error>
+    var deferredSource: (() -> Result<[XRGHardwareReading], Error>?)?
+    var deferredObservationTime: (() -> TimeInterval?)?
+    var onReset: (() -> Void)?
     private let defaults: UserDefaults
     private let standaloneSettings: XRGSettings?
     private weak var host: (any XRGHardwareViewHost)?
@@ -104,7 +107,11 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         updateLabels()
     }
     func graphUpdate(_ timer: Timer?) {
-        let result = source()
+        let result: Result<[XRGHardwareReading], Error>
+        if let deferredSource {
+            guard let completed = deferredSource() else { return }
+            result = completed
+        } else { result = source() }
         let next: [XRGHardwareReading]
         switch result {
         case .success(let values):
@@ -113,7 +120,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
             readError = nil
         case .failure(let error): next = []; readError = error.localizedDescription
         }
-        readings = next; project(appendSample: true, observedAt: historyClock())
+        readings = next; project(appendSample: true, observedAt: deferredObservationTime?() ?? historyClock())
     }
     private func project(appendSample: Bool, observedAt: TimeInterval? = nil) {
         let next = readings
@@ -279,6 +286,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         host.endSheet(sheet, returnCode: .cancel); sheet.orderOut(nil)
     }
     @objc func clearData(_ sender: Any?) {
+        onReset?()
         for history in histories.values { history.data.setAllValues(XRGGraphRenderer.missingValue); history.timed.clear() }
         needsDisplay = true
     }

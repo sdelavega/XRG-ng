@@ -32,6 +32,7 @@ import AppKit
     var minSize: NSSize { get set }
     var frame: NSRect { get }
     func checkWindowSize()
+    @objc optional func moduleVisibilityChanged()
     func setFrame(_ frame: NSRect, display: Bool, animate: Bool)
 }
 
@@ -102,6 +103,7 @@ public final class XRGModuleManager: NSObject {
         } else if !allModules.contains(where: { $0 === module }) {
             allModules.append(module)
         }
+        window?.moduleVisibilityChanged?()
         if module.isDisplayed { window?.checkWindowSize() }
         updateWindowMinimum()
     }
@@ -110,6 +112,7 @@ public final class XRGModuleManager: NSObject {
     public func removeModule(_ module: XRGModule) {
         guard allModules.contains(where: { $0 === module }) else { return }
         allModules.removeAll { $0 === module }
+        window?.moduleVisibilityChanged?()
         updateWindowMinimum()
         if let window { windowChanged(to: window.frame.size) }
         redisplayModules()
@@ -124,6 +127,7 @@ public final class XRGModuleManager: NSObject {
     public func setModule(_ name: String, isDisplayed: Bool) {
         guard let module = getModule(byName: name) else { return }
         module.isDisplayed = isDisplayed
+        window?.moduleVisibilityChanged?()
         if isDisplayed {
             window?.checkWindowSize()
             let target = module.updateTarget

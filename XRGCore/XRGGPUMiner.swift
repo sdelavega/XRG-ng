@@ -24,7 +24,7 @@
 import Foundation
 import IOKit
 
-struct XRGGPUSample {
+struct XRGGPUSample: Sendable {
     let id: UInt64
     let vendor: String
     let total: Double?
@@ -97,7 +97,17 @@ public final class XRGGPUMiner: NSObject {
         var all: [XRGDataSet] { [total, free, wait, utilization] }
     }
     private let historyClock: () -> TimeInterval
-    private let source: () -> [XRGGPUSample]?
+    private let source: (() -> [XRGGPUSample]?)?
+    private let asyncSource: (@Sendable () -> [XRGGPUSample]?)?
+    private let completionClock: @Sendable () -> TimeInterval
+    private let queue = DispatchQueue(label: "com.sdelavega.XRG-ng.gpu", qos: .utility)
+    private var generation = UUID()
+    private var collectionActive = true
+    @nonobjc private(set) var isCollecting = false
+    @nonobjc private(set) var completionRevision: UInt64 = 0
+    @nonobjc private(set) var lastObservationTime: TimeInterval?
+    @nonobjc var onUpdate: (() -> Void)?
+    @nonobjc var usesWorker: Bool { asyncSource != nil }
     private var histories: [UInt64: History] = [:]
     private var missingPadding = false
     private var lastGraphTick: UInt64?
@@ -115,12 +125,31 @@ public final class XRGGPUMiner: NSObject {
     @objc public private(set) var memoryAvailable: [NSNumber] = []
     @objc public private(set) var utilizationAvailable: [NSNumber] = []
 
-    public override convenience init() { self.init(source: Self.readSnapshot) }
+    public override convenience init() { self.init(asyncSource: Self.readSnapshot) }
     init(source: @escaping () -> [XRGGPUSample]?, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         self.historyClock = historyClock
-        self.source = source
+        self.source = source; asyncSource = nil; completionClock = { Date().timeIntervalSince1970 }
         super.init()
         getLatestGraphicsInfo()
+    }
+
+    init(asyncSource: @escaping @Sendable () -> [XRGGPUSample]?,
+         completionClock: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }) {
+        source = nil; self.asyncSource = asyncSource; self.completionClock = completionClock
+        historyClock = { Date().timeIntervalSince1970 }
+        super.init(); getLatestGraphicsInfo()
+    }
+    func invalidatePending() { generation = UUID(); lastGraphTick = nil }
+    func setCollectionActive(_ active: Bool) {
+        guard collectionActive != active else { return }
+        collectionActive = active
+        if !active {
+            invalidatePending()
+            if usesWorker {
+                countersAvailable = false
+                memorySnapshot = .failure(NSError(domain: "XRGGPU", code: 3, userInfo: [NSLocalizedDescriptionKey: "GPU collection suspended"]))
+            }
+        }
     }
 
     @objc public func setDataSize(_ count: Int) {
@@ -140,20 +169,41 @@ public final class XRGGPUMiner: NSObject {
     }
 
     @objc public func getLatestGraphicsInfo() {
-        let observedAt: TimeInterval
-
-        guard let samples = source(), Set(samples.map(\.id)).count == samples.count,
+        guard collectionActive else { return }
+        if let asyncSource {
+            guard !isCollecting else { return }
+            isCollecting = true
+            let token = generation, clock = completionClock
+            queue.async { [weak self] in
+                let samples = asyncSource(), observedAt = clock()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.isCollecting = false
+                    guard self.collectionActive, self.generation == token else { return }
+                    self.accept(samples, observedAt: observedAt)
+                    self.completionRevision &+= 1
+                    self.lastObservationTime = observedAt
+                    self.onUpdate?()
+                }
+            }
+        } else {
+            let samples = source?()
+            let observedAt = historyClock()
+            accept(samples, observedAt: observedAt)
+            completionRevision &+= 1; lastObservationTime = observedAt
+        }
+    }
+    private func accept(_ snapshot: [XRGGPUSample]?, observedAt: TimeInterval) {
+        guard let samples = snapshot, Set(samples.map(\.id)).count == samples.count,
               Set(samples.map(\.selectionID)).count == samples.count else {
             countersAvailable = false
             memorySnapshot = .failure(NSError(domain: "XRGGPU", code: 1, userInfo: [NSLocalizedDescriptionKey: "GPU readings unavailable or identities ambiguous"]))
-            observedAt = historyClock()
             for history in histories.values {
                 history.timed.append(time: observedAt, values: [.nan, .nan, .nan, .nan])
                 for values in history.all { values.setNextValue(XRGGraphRenderer.missingValue) }
             }
             return
         }
-        observedAt = historyClock()
         countersAvailable = true
         currentSamples = samples.sorted { $0.id < $1.id }
         sourceIDs = currentSamples.map(\.selectionID)
@@ -196,6 +246,7 @@ public final class XRGGPUMiner: NSObject {
     }
 
     func resetHistory(sourceID: String?) {
+        invalidatePending()
         for history in histories.values where sourceID == nil || history.identity == sourceID {
             history.timed.clear()
             for values in history.all { values.setAllValues(XRGGraphRenderer.missingValue) }

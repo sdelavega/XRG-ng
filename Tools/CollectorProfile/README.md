@@ -23,8 +23,10 @@ and whole-cycle count, minimum, median, nearest-rank p95, maximum and total dura
 in milliseconds, setup duration, basic source availability, host/helper architecture,
 OS/model, and framework/helper-source hashes. Samples are bounded to 1–300 and the
 finite delay/graph target to 0.2–10 seconds. Invalid arguments fail before output
-creation. Each cycle waits the requested delay before collection; actual starts
-also include callback execution time.
+creation. Each cycle pumps the main run loop for the requested delay before collection;
+actual starts also include callback execution time. This lets worker completions
+publish between cycles. GPU reports completed reads and final pending state, with
+a bounded final publication drain.
 
 The internal module-manager hook measures normal callbacks on the main actor,
 including source calls and cached-label work. It reads no timing clock when its
@@ -42,3 +44,10 @@ tracking or whole-app responsiveness benchmark is performed. Background worker
 duration cannot be inferred from a short main-thread enqueue callback. Use the
 profile to select a source for further tracing; retain cancellation, generation,
 source-identity, publication-time and accounting contracts in any worker rewrite.
+
+Live GPU snapshot reads now use a worker. Its main-thread callback measures
+enqueue/cached-label work; completion publication to GPU/VRAM happens outside the
+normal cycle and its time is not included. Compare callback latency with the old
+baseline only within that scope. The worker still consumes CPU/I/O and publication
+still uses the main actor; these numbers are not total GPU cost or an app-frame
+performance guarantee.
