@@ -615,6 +615,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             if let ICAOCode, settings.ICAO != ICAOCode.stringValue { graph.setICAO(ICAOCode) }
             if let stockSymbols, settings.stockSymbols != stockSymbols.stringValue { graph.setStockSymbols(stockSymbols) }
             if let windowTitle { graph.setWindowTitle(windowTitle) }
+            graph.aiTokenView?.graphUpdate(nil)
             return true
         } catch { errorNotice("The preferences contain an invalid value. Check the network scale, refresh interval, budget and percentages.", window); return false }
     }

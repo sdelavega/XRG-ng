@@ -83,6 +83,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public var minimized = false
     public var min30Timer: Timer?
     public var min5Timer: Timer?
+    public var aiTimer: Timer?
     public var graphTimer: Timer?
     public var fastTimer: Timer?
     public var fontManager: NSFontManager?
@@ -157,7 +158,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         if appSettings?.checkForUpdates == true { checkServerForUpdates() }
     }
     isolated deinit {
-        for timer in [min30Timer, min5Timer, graphTimer, fastTimer] { timer?.invalidate() }
+        for timer in [min30Timer, min5Timer, graphTimer, fastTimer, aiTimer] { timer?.invalidate() }
         xrgCheckURL?.cancelLoading()
         if let wakeObserver { wakeCenter.removeObserver(wakeObserver) }
     }
@@ -210,7 +211,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         default: return .notYet
         }
     }
-    private func timer(_ interval: TimeInterval, _ selector: Selector) -> Timer {
+    private func timer(_ interval: TimeInterval, _ selector: Selector, common: Bool = false) -> Timer {
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] timer in
             let alive = MainActor.assumeIsolated {
                 guard let self else { return false }
@@ -219,7 +220,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
             }
             if !alive { timer.invalidate() }
         }
-        if scheduleTimers { RunLoop.main.add(timer, forMode: .default) }
+        if scheduleTimers { RunLoop.main.add(timer, forMode: common ? .common : .default) }
         return timer
     }
     @nonobjc static func validRefresh(_ value: CGFloat?) -> TimeInterval {
@@ -227,6 +228,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         return Double(value)
     }
     public func initTimers() {
+        if aiTimer?.isValid != true { aiTimer = timer(XRGAISamplingCadence.seconds, #selector(aiUpdate(_:)), common: true) }
         if min30Timer?.isValid != true { min30Timer = timer(1800, #selector(min30Update(_:))) }
         if min5Timer?.isValid != true { min5Timer = timer(300, #selector(min5Update(_:))) }
         if graphTimer?.isValid != true { graphTimer = timer(Self.validRefresh(appSettings?.graphRefresh), #selector(graphUpdate(_:))) }
@@ -239,6 +241,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         moduleManager?.graphUpdate(); checkServerForUpdatesPostProcess()
     }
     public func fastUpdate(_ timer: Timer?) { moduleManager?.fastUpdate() }
+    public func aiUpdate(_ timer: Timer?) { aiTokenView?.graphUpdate(timer) }
     public func initializeAITokenView() {
         guard aiTokenView == nil else { return }
         let view = XRGAITokenView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
@@ -416,8 +419,8 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public func cleanupBeforeExiting() {
         let wasMinimized = defaults.bool(forKey: "windowIsMinimized")
         backgroundView?.expandWindow(); defaults.set(wasMinimized, forKey: "windowIsMinimized")
-        for timer in [min30Timer, min5Timer, graphTimer, fastTimer] { timer?.invalidate() }
-        min30Timer = nil; min5Timer = nil; graphTimer = nil; fastTimer = nil
+        for timer in [min30Timer, min5Timer, graphTimer, fastTimer, aiTimer] { timer?.invalidate() }
+        min30Timer = nil; min5Timer = nil; graphTimer = nil; fastTimer = nil; aiTimer = nil
         xrgCheckURL?.cancelLoading(); xrgCheckURL = nil
         weatherView?.cancelLoading()
         aiTokenView?.suspendCollection()

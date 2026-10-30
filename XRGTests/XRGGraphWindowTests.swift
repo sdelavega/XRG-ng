@@ -95,15 +95,15 @@ struct XRGGraphWindowTests {
     @Test func timersAreIdempotentForwardExactlyOnceAndReplaceOnlyTheGraphTimer() throws {
         let f = try GraphWindowFixture(); defer { f.cleanUp() }
         f.window.initTimers()
-        let timers = try [f.window.min30Timer, f.window.min5Timer, f.window.graphTimer, f.window.fastTimer].map { try #require($0) }
-        #expect(timers.map(\.timeInterval) == [1800, 300, 1, 0.125])
+        let timers = try [f.window.min30Timer, f.window.min5Timer, f.window.graphTimer, f.window.fastTimer, f.window.aiTimer].map { try #require($0) }
+        #expect(timers.map(\.timeInterval) == [1800, 300, 1, 0.125, 5])
         f.window.initTimers(); #expect(f.window.graphTimer === timers[2] && f.window.fastTimer === timers[3])
         for timer in timers { timer.fire() }
         #expect(f.graph.updates == [1, 1, 1, 1])
         let field = NSTextField(); field.doubleValue = 0.31
         f.window.setGraphRefreshActionPart2(field)
         #expect(!timers[2].isValid && f.window.graphTimer?.timeInterval == 0.4 && f.window.appSettings?.graphRefresh == 0.4)
-        #expect(f.window.min30Timer === timers[0] && f.window.min5Timer === timers[1] && f.window.fastTimer === timers[3])
+        #expect(f.window.min30Timer === timers[0] && f.window.min5Timer === timers[1] && f.window.fastTimer === timers[3] && f.window.aiTimer === timers[4])
         let replacement = f.window.graphTimer
         for value in [0, -1, Double.nan, Double.infinity] { field.doubleValue = value; f.window.setGraphRefreshActionPart2(field) }
         #expect(f.window.graphTimer === replacement)
@@ -112,8 +112,27 @@ struct XRGGraphWindowTests {
         f.window.appSettings?.graphRefresh = .nan; f.window.graphTimer?.invalidate(); f.window.initTimers()
         #expect(f.window.graphTimer?.timeInterval == 1)
         f.window.cleanupBeforeExiting(); #expect(timers.allSatisfy { !$0.isValid })
-        #expect(f.window.graphTimer == nil && f.window.fastTimer == nil)
+        #expect(f.window.graphTimer == nil && f.window.fastTimer == nil && f.window.aiTimer == nil)
     }
+    @Test func independentAITimerCollectsThroughSlowGraphRefreshWithoutDoubleSampling() throws {
+        let f=try GraphWindowFixture();defer {f.cleanUp()}
+        f.defaults.set(false,forKey:"showAITokenGraph");f.defaults.set(true,forKey:"aiTokensTrackingEnabled")
+        let source=AITokenPanelSource()
+        let observer=XRGAITokensObserver(defaults:f.defaults,center:NotificationCenter(),calendar:.current,now:Date.init)
+        let view=XRGAITokenView(frame:.zero,source:source,observer:observer,settings:f.window.appSettings!,defaults:f.defaults,
+            databaseURL:URL(fileURLWithPath:"/nonexistent-xrg-cadence-fixture"),now:{source.now})
+        f.window.contentView?.addSubview(view);view.awakeFromNib()
+        f.window.appSettings?.graphRefresh=60;f.window.graphTimer?.invalidate();f.window.initTimers()
+        let timer=try #require(f.window.aiTimer)
+        #expect(timer.timeInterval == 5 && f.window.graphTimer?.timeInterval == 60)
+        timer.fire();source.now=5;timer.fire()
+        #expect(source.updates == 2 && view.module?.isDisplayed == false)
+        f.window.graphTimer?.fire()
+        #expect(source.updates == 2)
+        view.removeFromSuperview()
+        #expect(source.pauses == 1)
+    }
+
     @Test(arguments: [true, false], [0, 1])
     func orientationChangesPreserveTheTopAnchorAndCollapsedState(minimized: Bool, direction: Int) throws {
         let f = try GraphWindowFixture(); defer { f.cleanUp() }
@@ -230,7 +249,7 @@ struct XRGGraphWindowTests {
         var timers: [Timer] = []
         autoreleasepool {
             var window: XRGGraphWindow? = XRGGraphWindow(contentRect: f.window.frame, defaults: f.defaults, scheduleTimers: true)
-            window?.initTimers(); timers = [window!.min30Timer!, window!.min5Timer!, window!.graphTimer!, window!.fastTimer!]
+            window?.initTimers(); timers = [window!.min30Timer!, window!.min5Timer!, window!.graphTimer!, window!.fastTimer!, window!.aiTimer!]
             weakWindow = window; window?.close(); window = nil
         }
         #expect(weakWindow == nil && timers.allSatisfy { !$0.isValid })

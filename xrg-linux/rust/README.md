@@ -1045,6 +1045,29 @@ ambiguous transitions. A live new log's first snapshot and concurrent activity i
 other files may therefore be excluded. It is not an exact per-request or billing
 ledger. Metadata alone cannot identify a same-inode, nonshrinking rewrite with a
 nondecreasing counter; unobserved changes between polls and duplicate transcripts
-can also remain ambiguous, with format-specific deduplication differing by platform. Provider sampling
-cadence and those deeper format-specific cases remain future work. No settings
+can also remain ambiguous, with format-specific deduplication differing by platform. Those deeper format-specific cases and retained-history duration still need alignment. No settings
 migration or tracking-default change is required.
+
+
+## AI collection cadence
+
+Both platforms use a shared nominal **five-second** AI collection interval. Linux
+continues to use its independent AI worker; Mac now has a dedicated common-mode
+AppKit timer and a monotonic cadence gate independent of graph refresh. Updating
+or resizing graphs does not fetch another observation. A slower system graph
+refresh does not prevent the AI timer from collecting, including hidden accounting.
+
+The Mac miner consumes completed background log scans and localhost responses
+before publishing one rate/accounting observation. Metadata caching avoids rereading
+unchanged logs, while an eligible cycle bypasses the old scan-start throttle.
+Overlapping requests coalesce; missed ticks do not add invented samples or replay
+an accumulated backlog. Counter resets, resume and applied tracking changes can
+wake collection immediately. Pause, detach, reset and shutdown cancel outstanding
+work and reject late results. Existing graph/usage counters remain intact.
+
+Five seconds is a nominal interval: scan/endpoint latency, a busy Mac main run loop
+or a slow Linux worker can delay samples. Rates use actual elapsed monotonic time.
+Provider logs can arrive in bursts; these are not real-time per-request counters.
+History capacity remains platform-specific, and Ollama model lists remain inventory,
+not token measurements. System sampling, existing settings and tracking defaults
+are unchanged; no schema migration is needed.

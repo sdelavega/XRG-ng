@@ -286,3 +286,8 @@ private struct WeatherHistoryRow: Encodable {
     XRGLogFileState(device: device, inode: inode, bytes: bytes, tokens: tokens)
         .continues(XRGLogFileState(device: oldDevice, inode: oldInode, bytes: oldBytes, tokens: oldTokens)) ? 1 : 0
 }
+
+/// Additive ABI v1: shared nominal AI polling cadence.
+@c(xrg_ai_sampling_milliseconds) public func aiSamplingMilliseconds() -> UInt64 {
+    XRGAISamplingCadence.milliseconds
+}

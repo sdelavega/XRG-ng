@@ -113,7 +113,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     }
 
     /// Checked parsers may reject incomplete I/O without replacing a good snapshot.
-    @nonobjc public func refreshChecked(root: String, layout: Int,
+    @nonobjc public func refreshChecked(root: String, layout: Int, force: Bool = false,
                         parse: @escaping @Sendable (String) throws -> XRGScanTotals) {
         lock.withLock {
             if source != root || sourceLayout != layout {
@@ -122,7 +122,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 sourceLayout = layout
             }
             let now = ProcessInfo.processInfo.systemUptime
-            guard task == nil, lastStart.map({ now - $0 >= interval }) ?? true else { return }
+            guard task == nil, force || (lastStart.map({ now - $0 >= interval }) ?? true) else { return }
             lastStart = now
             let id = generation
             let previous = entries

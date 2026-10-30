@@ -676,7 +676,8 @@ impl Worker {
             let mut generation = 0;
             let mut accountant: Option<accounting::Accountant> = None;
             loop {
-                let next = Instant::now() + Duration::from_secs(5);
+                let next =
+                    Instant::now() + Duration::from_millis(shared::ai_sampling_milliseconds());
                 let (requested_preferences, session_reset, daily_reset, revision) = {
                     let mut state = control.0.lock().unwrap();
                     while let Ok(message) = receiver.try_recv() {

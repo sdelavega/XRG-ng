@@ -49,12 +49,19 @@ private final class AITokenPanelNibOwner: NSObject {}
 @MainActor final class AITokenPanelSource: XRGAITokenViewSource {
     var usageEventHandler: ((String, XRGTokenAccounting.Delta) -> Void)?
     var pauses = 0
+    var holdCompletion = false
+    var pendingCompletions: [() -> Void] = []
+    func requestLatestTokenInfo(completion: @escaping () -> Void) {
+        getLatestTokenInfo()
+        if holdCompletion { pendingCompletions.append(completion) } else { completion() }
+    }
     var onUpdate: (() -> Void)?
     func pauseCollection() { pauses += 1 }
     var accountingResets = 0
     var trackingStates: [Bool] = []
     func resetAccountingBaseline() { accountingResets += 1 }
     func setAccountingEnabled(_ enabled: Bool) { trackingStates.append(enabled) }
+    var now: TimeInterval = 0
     var updates = 0
     var sizes: [Int] = []
     var state = XRGAITokenViewSnapshot()
@@ -119,13 +126,47 @@ struct XRGAITokenViewTests {
     private func panel(_ settings: XRGSettings, _ defaults: UserDefaults, _ observer: XRGAITokensObserver,
                        _ source: AITokenPanelSource, width: CGFloat = 240, height: CGFloat = 300) -> XRGAITokenView {
         XRGAITokenView(frame: NSRect(x: 0, y: 0, width: width, height: height), source: source, observer: observer,
-            settings: settings, defaults: defaults, databaseURL: URL(fileURLWithPath: "/tmp/xrg-ai-fixture/monitoring"))
+            settings: settings, defaults: defaults, databaseURL: URL(fileURLWithPath: "/tmp/xrg-ai-fixture/monitoring"), now: { source.now })
     }
     private func png(_ view: XRGAITokenView) throws -> Data {
         view.needsDisplay = true
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return try #require(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    @Test func redrawFrequencyDoesNotChangeSamplingAndResetWakesImmediately() throws {
+        try withFixture { settings,defaults,observer,source in
+            let view=panel(settings,defaults,observer,source)
+            view.graphUpdate(nil)
+            for tick in 1..<50 { source.now=Double(tick)/10;view.graphUpdate(nil) }
+            #expect(source.updates == 1)
+            source.now=5;view.graphUpdate(nil);view.graphUpdate(nil)
+            #expect(source.updates == 2)
+            source.now=120;view.graphUpdate(nil);view.graphUpdate(nil)
+            #expect(source.updates == 3)
+            view.resetSessionCounters(nil)
+            #expect(source.updates == 4 && source.accountingResets == 2)
+            #expect(view.makeMenu().items.contains { $0.title == "AI sampling: nominal 5 seconds, independent of graph refresh" })
+        }
+    }
+
+    @Test func pendingCollectionCoalescesTicksAndLateCompletionCannotReleaseANewerCycle() throws {
+        try withFixture { settings,defaults,observer,source in
+            source.holdCompletion=true
+            let view=panel(settings,defaults,observer,source)
+            view.graphUpdate(nil)
+            source.now=30
+            for _ in 0..<10 {view.graphUpdate(nil)}
+            #expect(source.updates == 1 && source.pendingCompletions.count == 1)
+            view.suspendCollection();view.graphUpdate(nil)
+            #expect(source.updates == 2 && source.pendingCompletions.count == 2)
+            source.pendingCompletions.removeFirst()()
+            source.now=35;view.graphUpdate(nil)
+            #expect(source.updates == 2)
+            source.pendingCompletions.removeFirst()();view.graphUpdate(nil)
+            #expect(source.updates == 3)
+        }
     }
 
     @Test func hiddenAccountingDeliversBudgetThroughTheInjectedNotificationTransport() async throws {
@@ -152,7 +193,7 @@ struct XRGAITokenViewTests {
         host.contentView?.addSubview(view); view.awakeFromNib()
         let manager = try #require(host.moduleManager)
         manager.windowChanged(to: host.frame.size)
-        manager.graphUpdate(); manager.graphUpdate(); manager.graphUpdate()
+        manager.graphUpdate(); source.now=5; manager.graphUpdate(); source.now=10; manager.graphUpdate()
         for _ in 0..<100 { if !delivered.isEmpty { break }; try await Task.sleep(for: .milliseconds(5)) }
         #expect(delivered == [100] && observer.dailyTotalTokens == 15 && view.isHidden)
         view.suspendCollection()
@@ -176,9 +217,9 @@ struct XRGAITokenViewTests {
             manager.graphUpdate()
             #expect(source.updates == 0 && observer.sessionTotalTokens == 0)
             defaults.set(true, forKey: "aiTokensTrackingEnabled")
-            manager.graphUpdate(); manager.graphUpdate()
+            manager.graphUpdate(); source.now=5; manager.graphUpdate()
             #expect(source.updates == 2 && observer.dailyTotalTokens == 10)
-            host.minimized = true; manager.graphUpdate()
+            host.minimized = true; source.now=10; manager.graphUpdate()
             #expect(source.updates == 3 && observer.sessionTotalTokens == 15)
             defaults.set(false, forKey: "aiTokensTrackingEnabled")
             manager.graphUpdate(); manager.graphUpdate()
@@ -186,7 +227,7 @@ struct XRGAITokenViewTests {
             host.minimized = false
             manager.setModule("AI Tokens", isDisplayed: true)
             #expect(source.updates == 4 && observer.dailyTotalTokens == 15)
-            manager.graphUpdate()
+            source.now=15; manager.graphUpdate()
             #expect(source.updates == 5) // visible + always-update is still one recipient.
             view.removeFromSuperview()
             #expect(source.pauses == 2)

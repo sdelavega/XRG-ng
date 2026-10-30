@@ -7,6 +7,7 @@
 #include <string.h>
 int main(void) {
     assert(xrg_shared_abi_version() == 1);
+    assert(xrg_ai_sampling_milliseconds() == 5000);
     uint8_t station[4] = {42, 42, 42, 42};
     assert(xrg_metar_station((const uint8_t *)"too-long", 8, station, 4) == -1 && station[0] == 42);
     assert(xrg_metar_station((const uint8_t *)" ksea ", 6, station, 4) == 4);

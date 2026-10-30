@@ -3,6 +3,7 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_ai_sampling_milliseconds() -> u64;
     fn xrg_log_file_continues(
         old_device: u64,
         old_inode: u64,
@@ -667,5 +668,17 @@ mod log_continuity_tests {
                 });
             assert_eq!(continuing, case.continues, "{}", case.name);
         }
+    }
+}
+
+pub fn ai_sampling_milliseconds() -> u64 {
+    unsafe { xrg_ai_sampling_milliseconds() }
+}
+
+#[cfg(test)]
+mod ai_cadence_tests {
+    #[test]
+    fn worker_cadence_matches_shared_swift_contract() {
+        assert_eq!(super::ai_sampling_milliseconds(), 5000);
     }
 }

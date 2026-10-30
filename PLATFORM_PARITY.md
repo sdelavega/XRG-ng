@@ -79,8 +79,9 @@ Implemented in this pass:
   or collapsed, with no duplicate visible-module dispatch. Hidden modules with
   tracking disabled cancel outstanding scans/HTTP work and rebaseline on resume;
   detachment and application shutdown also stop collection. Budget delivery remains
-  independent of visibility. Mac uses its configured graph cadence; Linux uses its
-  separate five-second AI worker.
+  independent of visibility. Both now use a nominal five-second AI cadence,
+  independent of system graph refresh: Mac has a separate common-mode timer and
+  Linux a separate worker.
 - Linux Battery offers its existing charge-percent history and an optional signed
   power history. Charging is positive, discharging negative, with a symmetric
   axis of at least ±30 W. Missing power or ambiguous direction remains a gap;
@@ -118,16 +119,27 @@ Implemented in this pass:
   baseline, matching Linux's existing error/recovery rule. Draft sweeps never commit
   an inventory identity. These conservative transitions can undercount real activity.
 
+- Mac AI collection now uses the same nominal five-second interval as the Linux
+  worker, through a shared Swift cadence contract. Repaints, high-rate system graph
+  timers and a slow graph refresh no longer determine AI polling or add duplicate
+  samples. The Mac miner awaits complete background log sweeps and localhost
+  responses, then publishes one observation; overlapping requests coalesce. Log
+  metadata caching remains active without the old 30-second scan throttle.
+  Hidden accounting continues on the separate timer. Reset/apply/resume can wake
+  immediately; pause, detach and shutdown cancel in-flight work, and late responses
+  cannot cross a reset. Delayed ticks do not create a catch-up sample backlog.
+  This is a nominal interval, not a real-time deadline under load.
+
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
    source selection, counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
-2. AI accounting: align source continuity/model attribution and Mac/Linux observed
-   windows and sampling cadence. Both now account with hidden graphs and preserve
+2. AI accounting: align retained history duration and remaining format-specific
+   message identity/deduplication and source continuity details. Both now account with hidden graphs and preserve
    recorded Codex input/output components and conservatively qualified turn models.
-   Log inventory/replacement boundaries now rebaseline both platforms; source cadence
-   and semantic rewrite detection still differ. Ollama inventory is not token accounting.
+   Log inventory/replacement boundaries now rebaseline both platforms; periodic
+   sampling is nominally five seconds on both. Semantic rewrite detection still differs. Ollama inventory is not token accounting.
    Mac log scans retain cached data for display through failed scans while breaking
    accounting continuity; database/endpoint failure also breaks continuity. Keep cost estimates
    optional and labeled; neither platform's observed counters are billing records.

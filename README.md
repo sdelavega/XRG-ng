@@ -121,7 +121,10 @@ XRG-ng displays real-time graphs for:
 
 ## AI Token Monitoring
 
-**New in this fork**: Real-time monitoring of AI token usage and costs across multiple AI providers.
+**New in this fork**: Monitoring of locally recorded AI usage and estimated/source
+costs across multiple providers. AI collection uses a nominal five-second cadence
+on Mac and Linux, independently of system graph refresh. Logs may arrive in bursts;
+observed usage counters are not billing records.
 
 ### Supported Providers
 

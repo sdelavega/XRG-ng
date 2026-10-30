@@ -59,7 +59,11 @@ struct XRGAITokenViewSnapshot {
     func setAccountingEnabled(_ enabled: Bool)
     func setDataSize(_ count: Int)
     func getLatestTokenInfo()
+    func requestLatestTokenInfo(completion: @escaping () -> Void)
     func viewSnapshot() -> XRGAITokenViewSnapshot
+}
+extension XRGAITokenViewSource {
+    func requestLatestTokenInfo(completion: @escaping () -> Void) { getLatestTokenInfo(); completion() }
 }
 extension XRGAITokenMiner: XRGAITokenViewSource {
     func viewSnapshot() -> XRGAITokenViewSnapshot {
@@ -94,6 +98,10 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
     private var isSampling = false
+    private let now: () -> TimeInterval
+    private var cadence = XRGAISamplingCadence()
+    private var collectionID: UUID?
+    private var lastTracking: Bool?
     private var accountingGeneration: UUID?
     private var historyWidth: Int?
     private var cachedLayers: [XRGDataSet] = []
@@ -103,12 +111,14 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
 
     public override init(frame frameRect: NSRect) {
+        now = { ProcessInfo.processInfo.systemUptime }
         source = XRGAITokenMiner(); observer = .shared; defaults = .standard; standaloneSettings = nil
         openURL = { NSWorkspace.shared.open($0) }
         databaseURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/monitoring", isDirectory: true)
         super.init(frame: frameRect); prepare()
     }
     public required init?(coder: NSCoder) {
+        now = { ProcessInfo.processInfo.systemUptime }
         source = XRGAITokenMiner(); observer = .shared; defaults = .standard; standaloneSettings = nil
         openURL = { NSWorkspace.shared.open($0) }
         databaseURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/monitoring", isDirectory: true)
@@ -116,11 +126,14 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     }
     @nonobjc init(frame: NSRect, source: any XRGAITokenViewSource, observer: XRGAITokensObserver,
                   settings: XRGSettings, defaults: UserDefaults, databaseURL: URL,
-                  openURL: @escaping (URL) -> Bool = { _ in true }) {
+                  openURL: @escaping (URL) -> Bool = { _ in true },
+                  now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
         self.source = source; self.observer = observer; standaloneSettings = settings; self.defaults = defaults
         self.databaseURL = databaseURL; self.openURL = openURL
         super.init(frame: frame); prepare()
     }
+    isolated deinit { if isSampling { source.pauseCollection() } }
     private func prepare() {
         for label in [graphLabels.leftLabel, graphLabels.centerLabel, graphLabels.rightLabel] { addSubview(label) }
         source.usageEventHandler = { [observer] provider, delta in observer.recordUsage(delta, provider: provider) }
@@ -167,6 +180,9 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     }
     public func graphUpdate(_ timer: Timer?) {
         let tracking = defaults.bool(forKey: "aiTokensTrackingEnabled")
+        if lastTracking != tracking {
+            collectionID = nil; cadence.reset(); lastTracking = tracking
+        }
         source.setAccountingEnabled(tracking)
         guard module?.isDisplayed != false || tracking else {
             if isSampling { suspendCollection() }
@@ -174,10 +190,22 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         }
         isSampling = true
         let generation = observer.accountingGeneration
-        if accountingGeneration != generation { source.resetAccountingBaseline(); accountingGeneration = generation }
-        source.getLatestTokenInfo(); updateLabels(); needsDisplay = true
+        if accountingGeneration != generation {
+            collectionID = nil; cadence.reset()
+            source.resetAccountingBaseline(); accountingGeneration = generation
+        }
+        if collectionID == nil, cadence.begin(at: now()) {
+            let id = UUID(); collectionID = id
+            source.requestLatestTokenInfo { [weak self] in
+                guard let self, self.collectionID == id else { return }
+                self.collectionID = nil
+                self.updateLabels(); self.needsDisplay = true
+            }
+        }
+        updateLabels(); needsDisplay = true
     }
     @nonobjc func suspendCollection() {
+        collectionID = nil; cadence.reset()
         source.pauseCollection(); isSampling = false
     }
     public func fastUpdate(_ timer: Timer?) {}
@@ -379,6 +407,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         item("  Unknown split: \(Self.compactCount(observer.sessionUnclassifiedTokens)) tokens")
         item("  Total: \(Self.compactCount(observer.sessionTotalTokens)) tokens")
         item("Observed since tracking began; initial history excluded", enabled: false)
+        item("AI sampling: nominal 5 seconds, independent of graph refresh", enabled: false)
         menu.addItem(.separator()); item("Daily Statistics", enabled: false)
         let daily = observer.dailyTotalTokens, budget = settings?.aiTokensDailyBudget ?? 0
         item("  Total: \(Self.compactCount(daily)) tokens")
@@ -420,8 +449,8 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     public func formatNumber(_ number: UInt64) -> String { Self.compactCount(number) }
     public func emptyEvent(_ sender: Any?) {}
-    public func resetSessionCounters(_ sender: Any?) { observer.resetSession(); updateLabels(); needsDisplay = true }
-    public func resetDailyCounters(_ sender: Any?) { observer.resetDaily(); updateLabels(); needsDisplay = true }
+    public func resetSessionCounters(_ sender: Any?) { observer.resetSession(); graphUpdate(nil) }
+    public func resetDailyCounters(_ sender: Any?) { observer.resetDaily(); graphUpdate(nil) }
     public func openDatabaseLocation(_ sender: Any?) { _ = openURL(databaseURL) }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override func mouseDown(with event: NSEvent) { window?.mouseDown(with: event) }

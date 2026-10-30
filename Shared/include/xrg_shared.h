@@ -42,6 +42,8 @@ int32_t xrg_metar_history_parse(const uint8_t *bytes, uint32_t length,
 int32_t xrg_log_file_continues(uint64_t old_device, uint64_t old_inode,
     uint64_t old_bytes, uint64_t old_tokens, uint64_t device, uint64_t inode,
     uint64_t bytes, uint64_t tokens);
+/* Shared nominal AI polling cadence, independent of graph repaint. */
+uint64_t xrg_ai_sampling_milliseconds(void);
 void *xrg_history_create(uint32_t capacity);
 void xrg_history_free(void *handle);
 int32_t xrg_history_append(void *handle, double value);

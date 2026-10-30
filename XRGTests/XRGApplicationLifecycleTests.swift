@@ -48,8 +48,8 @@ struct XRGApplicationLifecycleTests {
         try scene.launched()
         scene.background.minimizeWindow()
         #expect(scene.window.minimized && defaults.bool(forKey: "windowIsMinimized"))
-        let timers = [scene.window.graphTimer, scene.window.fastTimer, scene.window.min5Timer, scene.window.min30Timer]
-        #expect(timers.compactMap({ $0 }).count == 4)
+        let timers = [scene.window.graphTimer, scene.window.fastTimer, scene.window.min5Timer, scene.window.min30Timer, scene.window.aiTimer]
+        #expect(timers.compactMap({ $0 }).count == 5)
         scene.delegate.workspaceWillPowerOff(Notification(name: NSWorkspace.willPowerOffNotification))
         #expect(timers.compactMap({ $0 }).allSatisfy { !$0.isValid })
         scene.shutdown()

@@ -58,7 +58,7 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
         }
     }
     try require(try property(window, "xrgCheckURL") == nil, "Update request was started")
-    let timers = try ["graphTimer", "fastTimer", "min5Timer", "min30Timer"].map { key -> Timer in
+    let timers = try ["graphTimer", "fastTimer", "min5Timer", "min30Timer", "aiTimer"].map { key -> Timer in
         guard let timer = try property(window, key) as? Timer else { throw Failure.failed("Missing runtime timer: \(key)") }
         try require(timer.isValid, "Runtime timer is not active: \(key)")
         return timer
@@ -115,7 +115,7 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
                   let phase = report["phase"] as? String, let orientation = report["orientation"] as? String else {
                 throw Failure.failed("Unexpected termination callback")
             }
-            try require(stoppingTimers.count == 4 && stoppingTimers.allSatisfy { !$0.isValid }, "Production shutdown did not invalidate timers")
+            try require(stoppingTimers.count == 5 && stoppingTimers.allSatisfy { !$0.isValid }, "Production shutdown did not invalidate timers")
             try require(UserDefaults.standard.synchronize(), "Private defaults did not synchronize")
             report["timersStopped"] = true; report["appKitTerminationCallback"] = true
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])

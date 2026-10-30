@@ -83,8 +83,11 @@ public final class XRGAITokenMiner: NSObject {
     private let geminiScan: XRGScanCache
     private let tracker = XRGRateTracker()
     private let otelRequest: XRGURL
-    private let tagsRequest = XRGURL(timeoutInterval: 2)
-    private let runningRequest = XRGURL(timeoutInterval: 2)
+    private let tagsRequest: XRGURL
+    private let runningRequest: XRGURL
+    private var collectionTask: Task<Void, Never>?
+    private var collectionGeneration = UUID()
+    private var completions: [() -> Void] = []
     private var lastOllamaPoll: TimeInterval?
     private var models: [String] = []
     private var rates = [UInt32](repeating: 0, count: 5)
@@ -126,11 +129,13 @@ public final class XRGAITokenMiner: NSObject {
     public override convenience init() {
         self.init(home: NSHomeDirectory(), clock: { ProcessInfo.processInfo.systemUptime })
     }
-    init(home: String, clock: @escaping () -> TimeInterval, otelRequest: XRGURL = XRGURL(timeoutInterval: 2), scanInterval: TimeInterval = 30) {
+    init(home: String, clock: @escaping () -> TimeInterval, otelRequest: XRGURL = XRGURL(timeoutInterval: 2),
+         tagsRequest: XRGURL = XRGURL(timeoutInterval: 2), runningRequest: XRGURL = XRGURL(timeoutInterval: 2),
+         scanInterval: TimeInterval = XRGAISamplingCadence.seconds) {
         claudeScan = XRGScanCache(interval: scanInterval)
         codexScan = XRGScanCache(interval: scanInterval)
         geminiScan = XRGScanCache(interval: scanInterval)
-        self.otelRequest = otelRequest
+        self.otelRequest = otelRequest; self.tagsRequest = tagsRequest; self.runningRequest = runningRequest
         self.home = home
         self.clock = clock
         super.init()
@@ -165,6 +170,7 @@ public final class XRGAITokenMiner: NSObject {
     }
 
     @objc public func reset() {
+        cancelCollection()
         for scan in [claudeScan, codexScan, geminiScan] { scan.reset() }
         for request in [otelRequest, tagsRequest, runningRequest] { request.cancelLoading() }
         for history in histories + [costHistory] { history.reset() }
@@ -186,6 +192,9 @@ public final class XRGAITokenMiner: NSObject {
     }
 
     func resetAccountingBaseline() {
+        cancelCollection()
+        for request in [otelRequest, tagsRequest, runningRequest] { request.cancelLoading() }
+        claudeUsage = nil; lastOllamaPoll = nil
         accounting = XRGTokenAccounting()
         // A scan started before a reset/enable transition must not later appear
         // as post-reset activity. Fresh complete sweeps establish the baseline.
@@ -215,6 +224,59 @@ public final class XRGAITokenMiner: NSObject {
         _ = fetchFromOllamaAPI()
         let hermesReady = fetchFromHermesDatabase()
         publish(time: clock(), hermesReady: hermesReady)
+    }
+
+    private func cancelCollection() {
+        collectionGeneration = UUID()
+        collectionTask?.cancel(); collectionTask = nil; completions = []
+    }
+
+    /// One asynchronous observation per collection cycle. Complete scans and
+    /// endpoint responses are consumed once, before rates/accounting are published.
+    func requestLatestTokenInfo(completion: @escaping () -> Void) {
+        completions.append(completion)
+        guard collectionTask == nil else { return }
+        let generation = collectionGeneration
+        collectionTask = Task { [weak self] in
+            guard let self, generation == self.collectionGeneration, !Task.isCancelled else { return }
+            defer {
+                if generation == self.collectionGeneration {
+                    self.collectionTask = nil
+                    let callbacks = self.completions; self.completions = []
+                    for callback in callbacks { callback() }
+                }
+            }
+            let strategy = self.activeStrategy
+            if strategy == .JSONL { self.refreshClaude(force: true) }
+            self.refreshCodex(force: true); self.refreshGemini(force: true)
+            let usesEndpoint = strategy == .none || strategy == .OTel
+            if usesEndpoint {
+                self.otelRequest.setURLString("http://localhost:8889/metrics")
+                if !self.otelRequest.isLoading { self.otelRequest.loadURLInBackground() }
+            }
+            self.tagsRequest.setURLString("http://localhost:11434/api/tags")
+            self.runningRequest.setURLString("http://localhost:11434/api/ps")
+            if !self.tagsRequest.isLoading { self.tagsRequest.loadURLInBackground() }
+            if !self.runningRequest.isLoading { self.runningRequest.loadURLInBackground() }
+            self.lastOllamaPoll = self.clock()
+            // A cancellable, nonblocking wait also handles injected transports
+            // that do not immediately honor cancellation. No work runs in paint.
+            while self.isScanningLogs || (usesEndpoint && self.otelRequest.isLoading)
+                    || self.tagsRequest.isLoading || self.runningRequest.isLoading {
+                guard generation == self.collectionGeneration, !Task.isCancelled else { return }
+                do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
+            }
+            guard generation == self.collectionGeneration, !Task.isCancelled else { return }
+            let success: Bool
+            switch strategy {
+            case .JSONL: self.consumeClaudeLogSnapshot(); success = self.claudeReady
+            case .SQLite: success = self.fetchFromSQLiteDatabase()
+            case .OTel, .none: success = self.consumeOTelResponse()
+            }
+            if !success { self.detectBestStrategy() }
+            self.consumeCodexLogSnapshot(); self.consumeGeminiLogSnapshot(); self.consumeOllamaResponses()
+            self.publish(time: self.clock(), hermesReady: self.fetchFromHermesDatabase())
+        }
     }
 
     func publish(time: TimeInterval, hermesReady: Bool) {
@@ -265,7 +327,7 @@ public final class XRGAITokenMiner: NSObject {
         costHistory.setNextValue(costRate * 1000)
     }
 
-    @objc public func fetchFromJSONLTranscripts() -> Bool {
+    private func consumeClaudeLogSnapshot() {
         let observation = claudeScan.completedObservation
         claudeReady = observation.map { !$0.failed } ?? false
         if let observation {
@@ -276,13 +338,17 @@ public final class XRGAITokenMiner: NSObject {
             claudeModels = sample.modelTotals
             costs[0] = sample.cost
         }
+    }
+    @objc public func fetchFromJSONLTranscripts() -> Bool {
+        consumeClaudeLogSnapshot()
         updateJSONLCacheInBackground()
         return true
     }
-    @objc public func updateJSONLCacheInBackground() {
-        claudeScan.refresh(root: path(".claude/projects"), layout: 0) { XRGAIPricing.parse($0, gemini: false) }
+    @objc public func updateJSONLCacheInBackground() { refreshClaude(force: false) }
+    private func refreshClaude(force: Bool) {
+        claudeScan.refreshChecked(root: path(".claude/projects"), layout: 0, force: force) { XRGAIPricing.parse($0, gemini: false) }
     }
-    @objc public func fetchFromCodexCLI() -> Bool {
+    private func consumeCodexLogSnapshot() {
         let observation = codexScan.completedObservation
         codexHasSnapshot = observation != nil
         codexReady = observation.map { !$0.failed } ?? false
@@ -293,20 +359,24 @@ public final class XRGAITokenMiner: NSObject {
             codexUsage = XRGTokenUsage(input: sample.input, output: sample.output, total: sample.tokens)
             codexModels = sample.modelTotals
         }
+    }
+    @objc public func fetchFromCodexCLI() -> Bool {
+        consumeCodexLogSnapshot()
         updateCodexCacheInBackground()
         return true
     }
     var codexLastScanFailed: Bool { codexScan.lastScanFailed }
     var codexRecordedUsage: XRGTokenUsage? { codexHasSnapshot ? codexUsage : nil }
     var codexRecordedModels: [String: UInt64] { codexHasSnapshot ? codexModels : [:] }
-    @objc public func updateCodexCacheInBackground() {
-        codexScan.refreshChecked(root: path(".codex/sessions"), layout: 1) {
+    @objc public func updateCodexCacheInBackground() { refreshCodex(force: false) }
+    private func refreshCodex(force: Bool) {
+        codexScan.refreshChecked(root: path(".codex/sessions"), layout: 1, force: force) {
             let snapshot = try XRGCodexLogParser.snapshot(atPath: $0)
             return XRGScanTotals(tokens: snapshot.usage.total, input: snapshot.usage.input,
                 output: snapshot.usage.output, cost: 0, modelTotals: snapshot.modelTotals)
         }
     }
-    @objc public func fetchFromGeminiCLI() -> Bool {
+    private func consumeGeminiLogSnapshot() {
         let observation = geminiScan.completedObservation
         geminiReady = observation.map { !$0.failed } ?? false
         if let observation {
@@ -317,11 +387,15 @@ public final class XRGAITokenMiner: NSObject {
             geminiInput = sample.input; geminiOutput = sample.output
             costs[2] = sample.cost
         }
+    }
+    @objc public func fetchFromGeminiCLI() -> Bool {
+        consumeGeminiLogSnapshot()
         updateGeminiCacheInBackground()
         return true
     }
-    @objc public func updateGeminiCacheInBackground() {
-        geminiScan.refresh(root: path(".gemini/tmp"), layout: 2) { XRGAIPricing.parse($0, gemini: true) }
+    @objc public func updateGeminiCacheInBackground() { refreshGemini(force: false) }
+    private func refreshGemini(force: Bool) {
+        geminiScan.refreshChecked(root: path(".gemini/tmp"), layout: 2, force: force) { XRGAIPricing.parse($0, gemini: true) }
     }
     @objc public func fetchFromSQLiteDatabase() -> Bool {
         guard let sample = XRGClaudeStore.snapshot(atPath: path(".claude/monitoring/claude_usage.db")) else {
@@ -345,6 +419,11 @@ public final class XRGAITokenMiner: NSObject {
     }
     @objc public func fetchFromOTelEndpoint() -> Bool {
         otelRequest.setURLString("http://localhost:8889/metrics")
+        let result = consumeOTelResponse()
+        if !otelRequest.isLoading { otelRequest.loadURLInBackground() }
+        return result
+    }
+    private func consumeOTelResponse() -> Bool {
         var received = false
         if otelRequest.isDataReady(), let data = otelRequest.getData(), let text = String(data: data, encoding: .utf8) {
             let sample = XRGLocalProviderParser.metrics(from: text)
@@ -359,7 +438,6 @@ public final class XRGAITokenMiner: NSObject {
         claudeReady = received
         let failed = otelRequest.didErrorOccur()
         if failed { claudeUsage = nil }
-        if !otelRequest.isLoading { otelRequest.loadURLInBackground() }
         return received || !failed
     }
     @objc public func fetchFromOllamaAPI() -> Bool {
@@ -369,6 +447,15 @@ public final class XRGAITokenMiner: NSObject {
     @objc public func updateOllamaStatusInBackground() {
         tagsRequest.setURLString("http://localhost:11434/api/tags")
         runningRequest.setURLString("http://localhost:11434/api/ps")
+        consumeOllamaResponses()
+        let now = clock()
+        if lastOllamaPoll.map({ now - $0 >= XRGAISamplingCadence.seconds }) ?? true, !tagsRequest.isLoading, !runningRequest.isLoading {
+            lastOllamaPoll = now
+            tagsRequest.loadURLInBackground()
+            runningRequest.loadURLInBackground()
+        }
+    }
+    private func consumeOllamaResponses() {
         if tagsRequest.isDataReady(), let data = tagsRequest.getData() {
             let names = XRGLocalProviderParser.modelNames(from: data)
             ollamaAvailable = names != nil
@@ -380,12 +467,6 @@ public final class XRGAITokenMiner: NSObject {
         if ollamaAvailable, runningRequest.isDataReady(), let data = runningRequest.getData() {
             ollamaRunningModels = XRGLocalProviderParser.modelNames(from: data) ?? []
         } else if runningRequest.didErrorOccur() { ollamaRunningModels = [] }
-        let now = clock()
-        if lastOllamaPoll.map({ now - $0 >= 5 }) ?? true, !tagsRequest.isLoading, !runningRequest.isLoading {
-            lastOllamaPoll = now
-            tagsRequest.loadURLInBackground()
-            runningRequest.loadURLInBackground()
-        }
     }
     @objc public func ollamaStatusString() -> String {
         guard ollamaAvailable else { return "Ollama: Not running" }

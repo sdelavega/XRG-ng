@@ -93,8 +93,8 @@ import Darwin
     app.run()
     if let failure { throw failure }
     try smokeCheck(launched, "AppKit did not finish launching")
-    let timers = [scene.window.graphTimer, scene.window.fastTimer, scene.window.min5Timer, scene.window.min30Timer].compactMap { $0 }
-    try smokeCheck(timers.count == 4, "Expected all four graph timers before shutdown")
+    let timers = [scene.window.graphTimer, scene.window.fastTimer, scene.window.min5Timer, scene.window.min30Timer, scene.window.aiTimer].compactMap { $0 }
+    try smokeCheck(timers.count == 5, "Expected graph and independent AI timers before shutdown")
     let moduleCount = scene.window.moduleManager?.moduleList().count ?? 0
     scene.shutdown()
     try smokeCheck(timers.allSatisfy { !$0.isValid }, "Shutdown left graph timers active")
