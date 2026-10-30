@@ -781,6 +781,18 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
 }
 fn ai(ui: &mut egui::Ui, s: &mut Settings) {
     ui.heading("AI monitoring");
+    ui.horizontal(|ui| {
+        let label = ui.label("Retained AI samples");
+        ui.add(
+            egui::DragValue::new(&mut s.ai.history_samples)
+                .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+        )
+        .labelled_by(label.id);
+    });
+    let capacity = s.ai.history_capacity();
+    let span =
+        (capacity - 1) as f64 * xrg_ng_linux::shared::ai_sampling_milliseconds() as f64 / 1000.;
+    ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Preference changes may wake collection."));
     ui.checkbox(
         &mut s.ai.accounting.enabled,
         "Track observed session/daily usage",

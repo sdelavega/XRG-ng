@@ -18,6 +18,8 @@ pub enum ClaudeSource {
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
     pub accounting: super::accounting::Preferences,
+    /// Zero preserves the original 120-sample default; independent of accounting.
+    pub history_samples: u32,
     pub enabled: [bool; 4],
     pub ollama: bool,
     pub claude_source: ClaudeSource,
@@ -33,6 +35,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             accounting: super::accounting::Preferences::default(),
+            history_samples: 0,
             enabled: [true; 4],
             ollama: true,
             claude_source: ClaudeSource::Auto,
@@ -47,15 +50,27 @@ impl Default for Preferences {
     }
 }
 impl Preferences {
+    pub fn history_capacity(&self) -> u32 {
+        if self.history_samples == 0 {
+            120
+        } else {
+            self.history_samples
+        }
+    }
     pub fn same_sources(&self, other: &Self) -> bool {
         let mut a = self.clone();
         let mut b = other.clone();
+        a.history_samples = 0;
+        b.history_samples = 0;
         a.accounting = Default::default();
         b.accounting = Default::default();
         a == b
     }
     pub fn validate(&self) -> Result<(), String> {
         self.accounting.validate()?;
+        if self.history_samples > crate::shared::sampling_settings()[3] {
+            return Err("AI history capacity must be 0..20000 samples".into());
+        }
         for path in [
             &self.claude_logs,
             &self.claude_database,

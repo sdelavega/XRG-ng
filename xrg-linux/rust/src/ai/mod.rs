@@ -319,9 +319,16 @@ impl Display {
             .is_none_or(|p| !p.same_sources(preferences))
         {
             *self = Self::default();
+            if preferences.history_samples > 0 {
+                self.history.clear();
+            }
         }
+        self.history.resize(preferences.history_capacity());
         self.preferences = Some(preferences.clone());
         let mut detail = vec!["Token totals cover locally retained logs/database rows, not account billing. Graph: observed token-counter change per second, sampled every 5 s; log writes may arrive in bursts. Costs are shown only when recorded by the source.".to_owned()];
+        let samples = preferences.history_capacity();
+        let span = (samples - 1) as f64 * shared::ai_sampling_milliseconds() as f64 / 1000.;
+        detail.push(format!("AI history: {samples} samples; nominal {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Capacity changes preserve rate baselines and observed accounting."));
         let mut readout = crate::dashboard::Readout::default();
         readout
             .top

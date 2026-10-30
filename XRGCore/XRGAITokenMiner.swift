@@ -169,6 +169,13 @@ public final class XRGAITokenMiner: NSObject {
         for history in histories + [costHistory] { history.resize(count) }
     }
 
+    @nonobjc func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        for history in histories + [costHistory] {
+            history.resize(count, fillingWith: XRGGraphRenderer.missingValue)
+        }
+    }
+
     @objc public func reset() {
         cancelCollection()
         for scan in [claudeScan, codexScan, geminiScan] { scan.reset() }

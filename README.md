@@ -407,11 +407,20 @@ boundaries; capacity changes never turn unavailable counters into activity.
 Temperature and fan capacities are independent, including their sensor selection and
 session statistics. The standalone Mac Fans graph has its own capacity; fan curves
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
-power separately on Linux;
-Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
+power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 29 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 30 in memory
 and are written only on an explicit save.
+AI retention is separate: use the Mac **AI History** menu or Linux
+**Preferences → AI → Retained AI samples**. Explicit counts retain newest observations
+and preserve rate baselines and session/daily counters. The original automatic
+choices remain (Mac graph width minus the reserved indicator strip; 120 on Linux).
+At the nominal five-second AI cadence, 300 samples span about 1,495 seconds between
+oldest and newest. Pauses, slow scans and wakeups affect actual coverage; this is
+sample-count retention, not a timestamp-based window. Linux AI preference edits
+retain their existing behavior of waking collection. Capacity changes do not alter
+source selection, cost policy, notifications or recorded accounting.
+
 Both builds support sampling targets from 200 ms to 10 seconds. Mac edits retain
 millisecond precision; existing valid Mac preferences outside that range remain
 intact when opened/saved. AI collection keeps its separate five-second cadence.

@@ -934,3 +934,42 @@ fn collector_inventory_boundaries_reach_observed_accounting_and_graph_rates() {
     );
     assert_eq!(accounting.snapshot().session.total(), 20);
 }
+
+#[test]
+fn ai_retention_keeps_rate_baselines_and_newest_observations_across_source_resets() {
+    let mut display = Display::default();
+    let mut prefs = ai::Preferences::default();
+    display.panel_for(report(100, "same"), 1., &prefs);
+    assert_eq!(
+        display.panel_for(report(200, "same"), 3., &prefs).series[0][119],
+        50.
+    );
+    let original = prefs.clone();
+    prefs.history_samples = 300;
+    assert!(prefs.same_sources(&original));
+    let grown = display.panel_for(report(300, "same"), 5., &prefs);
+    assert_eq!(grown.series[0].len(), 300);
+    assert_eq!(&grown.series[0][298..], [50., 50.]);
+    assert!(grown.series[0][..179].iter().all(|v| v.is_nan()));
+    assert!(grown.detail.contains("1495 seconds"));
+    prefs.history_samples = 1;
+    assert_eq!(
+        display.panel_for(report(400, "same"), 7., &prefs).series[0],
+        [50.]
+    );
+    prefs.history_samples = 257;
+    prefs.enabled[1] = false;
+    let boundary = display.panel_for(report(500, "same"), 9., &prefs);
+    assert_eq!(boundary.series[0].len(), 257);
+    assert!(boundary.series[0][..256].iter().all(|v| v.is_nan()));
+    assert_eq!(boundary.series[0][256], 0.);
+    display.clear_graph();
+    let fresh = display.panel_for(report(600, "same"), 11., &prefs);
+    assert_eq!(fresh.series[0][256], 50.);
+    assert!(fresh.series[0][..256].iter().all(|v| v.is_nan()));
+    prefs.history_samples = 0;
+    assert_eq!(
+        display.panel_for(report(700, "same"), 13., &prefs).series[0].len(),
+        120
+    );
+}

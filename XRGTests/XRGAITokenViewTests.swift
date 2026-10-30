@@ -75,6 +75,7 @@ private final class AITokenPanelNibOwner: NSObject {}
         state.hermesModels = ["Zeta": ["input": 500, "output": 100], "Alpha": ["input": 1000, "output": 500], "Other model": ["input": 300, "output": 300]]
         state.totalCost = 20; state.costPerHour = 2; state.projectedDailyCost = 48
     }
+    func resizeHistory(_ count: Int) { sizes.append(count); for provider in state.providers { provider.history.resize(count, fillingWith: XRGGraphRenderer.missingValue) } }
     func setDataSize(_ count: Int) { sizes.append(count); for provider in state.providers { provider.history.resize(count) } }
     func getLatestTokenInfo() { updates += 1; onUpdate?() }
     func viewSnapshot() -> XRGAITokenViewSnapshot { state }
@@ -102,6 +103,45 @@ struct XRGAITokenViewTests {
             #expect(view.makeMenu().items.contains { $0.title == "Recorded input: 60 tokens" })
             source.state.providers[index].recordedUsage = nil
             #expect(!view.makeMenu().items.contains { $0.title == "Codex Log Snapshot" })
+        }
+    }
+    @Test func retentionPreservesCurrentRatesCadenceAccountingAndIndependentGapSafeStacks() throws {
+        try withFixture { settings, defaults, observer, source in
+            let view = panel(settings, defaults, observer, source); source.seed()
+            view.graphUpdate(nil)
+            source.usageEventHandler?("Codex", .init(usage: .init(total: 30), models: [:]))
+            let rates = source.state.providers.map(\.rate), totals = source.state.providers.map(\.total)
+            let reads = source.updates, resets = source.accountingResets, pauses = source.pauses
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(source.state.providers.allSatisfy { $0.history.numValues == 300 && $0.history.orderedValues.first == XRGGraphRenderer.missingValue })
+            #expect(source.state.providers.map(\.rate) == rates && source.state.providers.map(\.total) == totals)
+            #expect(source.updates == reads && source.accountingResets == resets && source.pauses == pauses)
+            #expect(observer.sessionTotalTokens == 30 && observer.dailyTotalTokens == 30)
+            let layers = view.historyLayers()
+            #expect(layers.allSatisfy { $0.data.orderedValues.first == XRGGraphRenderer.missingValue })
+            #expect(layers.first?.data.currentValue == 1500)
+            view.setFrameSize(NSSize(width: 60, height: 90)); #expect(source.sizes.last == 300)
+            #expect(view.historyDescription.contains("1495 seconds"))
+            source.now = 4.9; view.graphUpdate(nil); #expect(source.updates == reads)
+            source.now = 5; view.graphUpdate(nil); #expect(source.updates == reads + 1)
+            option.tag = 20001; view.selectHistory(option); #expect(view.retainedSamples == 300)
+            option.tag = 1; view.selectHistory(option)
+            #expect(source.state.providers.allSatisfy { $0.history.numValues == 1 && $0.history.currentValue > 0 })
+            #expect(observer.sessionTotalTokens == 30 && observer.dailyTotalTokens == 30)
+            option.tag = 0; view.selectHistory(option); #expect(source.sizes.last == 41)
+            let menu = try #require(view.makeMenu().items.first { $0.title == "AI History" }?.submenu)
+            #expect(menu.items.allSatisfy { $0.target === view })
+        }
+    }
+    @Test func savedAIHistoryRestoresCustomCountsAndKeepsNewPaddingUnavailable() throws {
+        try withFixture { settings, defaults, observer, source in
+            defaults.set(257, forKey: XRGAITokenView.historyKey)
+            let view = panel(settings, defaults, observer, source)
+            #expect(source.sizes.last == 257 && view.retainedSamples == 257 && source.updates == 0)
+            #expect(view.historyLayers().allSatisfy { $0.data.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue } })
+            let menu = try #require(view.makeMenu().items.first { $0.title == "AI History" }?.submenu)
+            #expect(menu.items.contains { $0.tag == 257 && $0.state == .on })
+            #expect(view.historyDescription.contains("1280 seconds"))
         }
     }
     private func withFixture(_ body: (XRGSettings, UserDefaults, XRGAITokensObserver, AITokenPanelSource) throws -> Void) throws {

@@ -1441,3 +1441,39 @@ without changing optimization/assertions. Physical Intel/Linux x86-64, macOS 26
 runtime, other sensor/battery hardware and actual sleep/wake remain unverified.
 AI duration, weather provider/default behavior, timestamp-based retention and
 remaining scheduling parity are separate work.
+
+### Independent AI history retention
+
+The Mac AI History menu and Linux Preferences → AI now accept independent sample
+capacities, using the common bounds/presets and preserving original automatic
+defaults (Mac graph width minus its reserved indicator strip; Linux 120 samples).
+Both describe nominal oldest-to-newest spans at the shared five-second AI cadence:
+300 samples means 1,495 seconds. This is sample-count retention; delayed scans,
+pauses and preference wakeups affect actual coverage. Timestamp-based windows and
+remaining scheduling parity are still separate work.
+
+Mac resizing retains provider and cost histories, cached readouts, current rates,
+source state, accounting and cadence without requesting collection. Stacked sums
+now propagate missing padding through every cumulative layer without modifying
+source histories or losing the existing layer caches. Linux excludes retention
+from AI source identity, preserving the collector, rate baseline and accounting
+ledger through capacity edits. The display retains newest samples; replacement
+buffers use the configured size. Existing source/failure policies remain. Linux
+AI preference edits still wake collection through the existing control path.
+No cost policy, notification, model attribution or source selection changed.
+
+Linux settings schema 30 loads old profiles without writing and saves the new
+capacity only on explicit save. Invalid capacities/types and future versions
+remain transactional. The desktop smoke persists/reopens 1,440 samples with live
+AI disabled; a controlled-worker fixture proves applied capacities and uninterrupted
+session/daily deltas. Other regressions cover custom/native persistence, shrinking,
+automatic defaults, graph resizing, padding, unchanged rate/cost state, cadence,
+source boundaries and accounting independence.
+
+Validation: universal Mac build, 577 tests on ARM64 and 577 under Rosetta x86_64,
+isolated native/packaged launch checks; Linux ARM64 passed 31 shared Swift tests,
+C ABI smoke, strict Clippy and 561 Rust tests. Full gates, graph/menu captures and
+AI preference captures are archived in `dist/ai-retention-validation`. Debug/test
+builds omit debug symbols without changing optimization/assertions. Physical
+Intel/Linux x86-64, macOS 26 runtime, actual suspend/resume and unowned hardware
+remain unverified. Compatible dependency notices remain required and unchanged.

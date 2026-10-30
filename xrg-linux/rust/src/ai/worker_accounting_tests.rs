@@ -97,3 +97,64 @@ fn reset_during_collection_discards_old_result_and_preserves_graphs() {
     drop(worker);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn retention_edits_preserve_live_accounting_continuity_and_worker_rate_baselines() {
+    struct Api(u64);
+    impl LocalApi for Api {
+        fn get(&mut self, _: Endpoint) -> Result<Vec<u8>, String> {
+            self.0 += 10;
+            Ok(format!("claude_code_token_usage_total{{type=\"input\"}} {}", self.0).into_bytes())
+        }
+    }
+    let root = std::env::temp_dir().join(format!("xrg-retention-worker-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let control = Control::default();
+    let mut prefs = Preferences {
+        enabled: [true, false, false, false],
+        ollama: false,
+        claude_source: ClaudeSource::Metrics,
+        ..Default::default()
+    };
+    prefs.accounting.enabled = true;
+    let worker = Worker::controlled_impl(
+        Config { home: root.clone() },
+        prefs.clone(),
+        control.clone(),
+        Api(90),
+        None,
+        |_| Ok(()),
+    );
+    let receive = |revision| {
+        let end = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(update) = worker.latest.lock().unwrap().take()
+                && update.control_revision == revision
+            {
+                break update;
+            }
+            assert!(Instant::now() < end, "AI retention update not acknowledged");
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    assert_eq!(receive(0).accounting.session.total(), 0);
+    for (index, requested) in [300, 1, 0].into_iter().enumerate() {
+        prefs.history_samples = requested;
+        control.set(prefs.clone()).unwrap();
+        let update = receive(control.revision());
+        assert_eq!(update.preferences.history_samples, requested);
+        assert_eq!(
+            update.panel.series[0].len(),
+            prefs.history_capacity() as usize
+        );
+        assert!(*update.panel.series[0].last().unwrap() > 0.);
+        assert_eq!(update.accounting.session.total(), 10 * (index as u64 + 1));
+        assert_eq!(update.accounting.daily.total(), 10 * (index as u64 + 1));
+    }
+    let revision = control.revision();
+    prefs.history_samples = 20001;
+    assert!(control.set(prefs).is_err());
+    assert_eq!(control.revision(), revision);
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}

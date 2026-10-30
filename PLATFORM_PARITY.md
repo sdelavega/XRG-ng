@@ -155,6 +155,17 @@ Implemented in development for monitoring tools:
   charge/discharge watt curves. Source, failure and aggregate membership boundaries
   keep their existing policies. Linux schema 29 upgrades older profiles without writing
   until explicit save. AI/Weather duration and timestamp-based retention remain open.
+- AI rate history now has independent sample capacities on both platforms: Mac
+  **AI History** and Linux **Preferences → AI → Retained AI samples**. Explicit
+  counts keep newest values and gaps while preserving current rates, rate/cost
+  baselines and session/daily accounting. Mac stacked sums propagate missing
+  padding. Linux excludes retention from source identity, preserving the collector
+  and accounting ledger through capacity edits. Source/failure policies remain.
+  Both describe nominal spans at the shared five-second cadence. Original automatic
+  defaults remain (Mac width minus indicator strip, Linux 120); collection delays
+  mean equal capacities are not guaranteed equal wall-clock windows. Linux AI
+  preference edits still wake collection. Schema 30 upgrades old files without
+  writing until explicit save. Timestamp-based retention and scheduling remain open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,
@@ -245,7 +256,7 @@ Remaining monitoring work:
    graph modes. Process controls and live details are now present on both platforms;
    account for their different permissions, CPU meanings and user filters.
    Retain the existing integrated Mac fan/VRAM readings.
-2. AI accounting: align retained history duration and remaining format-specific
+2. AI accounting: define timestamp-based history retention and align remaining format-specific
    message identity/deduplication and source continuity details. Both now account with hidden graphs and preserve
    recorded Codex input/output components and conservatively qualified turn models.
    Log inventory/replacement boundaries now rebaseline both platforms; periodic
@@ -259,8 +270,8 @@ Remaining monitoring work:
    curves; Linux now has charge/power modes and independent weather units.
    Port Stocks if retained in the common set.
 4. Desktop behavior: align other supported window controls and preserve explicit
-   compositor limitations. Linux now supports collapse/hover expansion. Extend CPU
-   retention controls to AI and define timestamp-based retention;
+   compositor limitations. Linux now supports collapse/hover expansion. Define
+   timestamp-based retention windows where appropriate;
    align remaining scheduling behavior without equating different OS memory or NPU measurements.
 
 Each pass needs UI, persistence, cancellation, invalid/unavailable-data and fixture

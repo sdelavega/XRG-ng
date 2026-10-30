@@ -5,6 +5,23 @@ import Testing
 
 @Suite @MainActor
 struct XRGAITokenMinerTests {
+    @Test func retentionPreservesProviderAndCostHistoryRateBaselinesAndTotals() {
+        let miner = XRGAITokenMiner(home: "/nonexistent-xrg-retention-fixture", clock: { 0 })
+        miner.setDataSize(3); miner.totalHermesTokens = 100; miner.publish(time: 1, hermesReady: true)
+        miner.totalHermesTokens = 200; miner.publish(time: 3, hermesReady: true)
+        miner.costData().setNextValue(7)
+        #expect(miner.hermesTokenRate() == 50)
+        miner.resizeHistory(6)
+        #expect(miner.hermesTokenData().orderedValues.prefix(3).allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        #expect(miner.hermesTokenData().currentValue == 50 && miner.costData().currentValue == 7)
+        #expect(miner.totalHermesTokens == 200 && miner.hermesTokenRate() == 50)
+        miner.totalHermesTokens = 300; miner.publish(time: 5, hermesReady: true)
+        #expect(miner.hermesTokenRate() == 50)
+        miner.resizeHistory(1)
+        #expect(miner.hermesTokenData().orderedValues == [50] && miner.costData().numValues == 1)
+        miner.resizeHistory(20001); #expect(miner.hermesTokenData().numValues == 1)
+    }
+
     @Test func pauseCancelsEndpointAndRebasesAccountingWithoutErasingGraphs() async throws {
         let request = XRGURL(timeoutInterval: 2, transport: { _ in
             try await Task.sleep(for: .seconds(30))

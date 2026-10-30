@@ -57,12 +57,19 @@ struct XRGAITokenViewSnapshot {
     func resetAccountingBaseline()
     func pauseCollection()
     func setAccountingEnabled(_ enabled: Bool)
+    func resizeHistory(_ count: Int)
     func setDataSize(_ count: Int)
     func getLatestTokenInfo()
     func requestLatestTokenInfo(completion: @escaping () -> Void)
     func viewSnapshot() -> XRGAITokenViewSnapshot
 }
 extension XRGAITokenViewSource {
+    func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        for provider in viewSnapshot().providers {
+            provider.history.resize(count, fillingWith: XRGGraphRenderer.missingValue)
+        }
+    }
     func requestLatestTokenInfo(completion: @escaping () -> Void) { getLatestTokenInfo(); completion() }
 }
 extension XRGAITokenMiner: XRGAITokenViewSource {
@@ -168,9 +175,11 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         setWidth(Int32(min(20_000, max(23, width))))
     }
     public func setWidth(_ width: Int32) {
-        let count = min(20_000, Int(width)) - 19
+        guard width >= 19 else { return }
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, Int(width)) - 19
         guard count >= 0, historyWidth != count else { return }
-        source.setDataSize(count); historyWidth = count
+        if retainedSamples > 0 { source.resizeHistory(count) } else { source.setDataSize(count) }
+        historyWidth = count
     }
     public override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); setGraphSize(newSize); updateLabels() }
     public func updateMinSize() {
@@ -315,9 +324,10 @@ public final class XRGAITokenView: NSView, XRGModuleView {
               providers.allSatisfy({ $0.history.numValues == first.history.numValues }) else { return [] }
         while cachedLayers.count < providers.count { cachedLayers.append(XRGDataSet()) }
         if cachedLayers.count > providers.count { cachedLayers.removeLast(cachedLayers.count - providers.count) }
-        for (index, item) in providers.enumerated() {
-            cachedLayers[index].copyValues(from: index == 0 ? item.history : cachedLayers[index - 1])
-            if index > 0 { cachedLayers[index].addOtherDataSetValues(item.history) }
+        for index in providers.indices {
+            let inputs = index == 0 ? [providers[index].history] : [cachedLayers[index - 1], providers[index].history]
+            guard let sum = XRGGraphRenderer.sumObservedHistories(inputs) else { return [] }
+            cachedLayers[index].copyValues(from: sum)
         }
         return providers.enumerated().map { Layer(provider: $0.element.provider, data: cachedLayers[$0.offset]) }.reversed()
     }
@@ -441,10 +451,26 @@ public final class XRGAITokenView: NSView, XRGModuleView {
             menu.addItem(.separator()); item("By Provider", enabled: false)
             for key in observer.dailyByProvider.keys.sorted() { item("  \(key): \(Self.compactCount(observer.dailyByProvider[key]?.uint64Value ?? 0)) tokens") }
         }
-        menu.addItem(.separator()); item("Reset Session Counters", #selector(resetSessionCounters(_:)))
+        menu.addItem(.separator())
+        menu.addItem(XRGHistoryRetention.menu("AI History", count: retainedSamples, target: self,
+            action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        item(historyDescription, enabled: false)
+        item("Nominal span only; collection delays affect actual time coverage", enabled: false)
+        item("Reset Session Counters", #selector(resetSessionCounters(_:)))
         item("Reset Daily Counters", #selector(resetDailyCounters(_:)))
         item("Open Database Location...", #selector(openDatabaseLocation(_:)))
         return menu
+    }
+    @nonobjc static let historyKey = "XRGAITokenView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var historyDescription: String {
+        let count = historyWidth ?? 0
+        let span = XRGSamplingSettings.nominalSpan(samples: count, interval: XRGAISamplingCadence.seconds) ?? 0
+        return String(format: "AI history: %d samples; nominal %.0f seconds at 5 s cadence", count, span)
+    }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     public func formatNumber(_ number: UInt64) -> String { Self.compactCount(number) }
