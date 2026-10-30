@@ -36,6 +36,8 @@ struct XRGDiskSample: Sendable {
 public final class XRGDiskMiner: NSObject {
     private let source: () -> [XRGDiskSample]?
     private let clock: () -> TimeInterval
+    private let historyClock: () -> TimeInterval
+    let timedHistory = XRGTimedHistory(channels: 3, retentionMinutes: XRGTimedHistory.systemMaximumMinutes)!
     private var normal = XRGIOCounterTracker<UInt64>()
     private var fast = XRGIOCounterTracker<UInt64>()
     public let readValues = XRGDataSet()
@@ -62,8 +64,8 @@ public final class XRGDiskMiner: NSObject {
     private var rawSaturated = false
 
     public override convenience init() { self.init(source: Self.readSamples, clock: { ProcessInfo.processInfo.systemUptime }) }
-    init(source: @escaping () -> [XRGDiskSample]?, clock: @escaping () -> TimeInterval) {
-        self.source = source; self.clock = clock
+    init(source: @escaping () -> [XRGDiskSample]?, clock: @escaping () -> TimeInterval, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
+        self.source = source; self.clock = clock; self.historyClock = historyClock
         super.init()
         if let counters = snapshot() {
             let time = clock()
@@ -102,6 +104,7 @@ public final class XRGDiskMiner: NSObject {
         guard let counters = snapshot(), let reading = normal.sample(counters, at: clock()) else {
             normal.fail()
             for history in [readValues, writeValues, totalValues] { history.setNextValue(XRGGraphRenderer.missingValue) }
+            timedHistory.append(time: historyClock(), values: [.nan, .nan, .nan])
             return false
         }
         if reading.newSession { reset() }
@@ -109,6 +112,7 @@ public final class XRGDiskMiner: NSObject {
         readRate = reading.firstRate; writeRate = reading.secondRate
         readValues.setNextValue(readRate); writeValues.setNextValue(writeRate)
         totalValues.setNextValue(readRate + writeRate)
+        timedHistory.append(time: historyClock(), values: [Double(readRate), Double(writeRate), Double(readRate + writeRate)])
         return true
     }
     @discardableResult public func updateFast() -> Bool {
@@ -122,6 +126,7 @@ public final class XRGDiskMiner: NSObject {
     public func resetTransfers() { normal.resetTransfers() }
     public func reset() {
         for history in [readValues, writeValues, totalValues] { history.reset() }
+        timedHistory.clear()
     }
 
     nonisolated static func decodeStatistics(id: UInt64, _ statistics: [String: Any]) -> XRGDiskSample? {

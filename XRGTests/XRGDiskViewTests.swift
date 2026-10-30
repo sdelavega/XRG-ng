@@ -72,6 +72,54 @@ struct XRGDiskViewTests {
             option.tag = 0; restored.selectHistory(option); #expect(miner.readValues.numValues == 240)
         }
     }
+    @Test func diskTimeWindowKeepsRatesTransfersFastStateAndRealGapsIndependent() throws {
+        try withFixture { settings, defaults, source in
+            settings.graphRefresh=1;var wall=100.0
+            let miner=XRGDiskMiner(source:{source.reads+=1;return source.samples},clock:{source.time},historyClock:{wall})
+            let view=panel(miner,settings,defaults)
+            wall=101;source.advance(1,read:7000,written:2200);view.graphUpdate(nil)
+            wall=111;source.advance(2,read:7600,written:2400);view.graphUpdate(nil);_ = miner.updateFast()
+            let reads=source.reads, total=miner.totalBytesSinceLoad, fast=miner.fastReadRate
+            let option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+            #expect(view.historyMinutes==1 && view.plots()[0].data.numValues==61 && view.plots()[0].data.currentValue==800)
+            #expect(view.plots()[0].data.orderedValues[50]==8000 && view.plots()[0].data.orderedValues[51..<60].allSatisfy{$0==XRGGraphRenderer.missingValue})
+            view.setFrameSize(NSSize(width:1,height:100))
+            #expect(miner.totalValues.numValues==1 && view.graphScale()==8000)
+            #expect(source.reads==reads && miner.totalBytesSinceLoad==total && miner.fastReadRate==fast)
+            let before=view.plots()[0].data.orderedValues
+            view.resetTransfers(nil)
+            #expect(miner.totalBytesSinceLoad==0 && view.plots()[0].data.orderedValues==before && miner.readRate==600)
+            wall=112;source.advance(3,read:8200,written:2600);view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==0 && miner.readRate==600)
+            wall=113;source.advance(4,read:8800,written:2800);view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==800)
+            view.clearData(nil)
+            #expect(miner.totalBytesSinceLoad==800 && view.plots()[0].data.orderedValues.allSatisfy{$0==XRGGraphRenderer.missingValue})
+            wall=50;source.advance(5,read:9400,written:3000);view.graphUpdate(nil)
+            #expect(view.plots()[0].data.currentValue==800 && miner.totalBytesSinceLoad==1600)
+            #expect(view.plots()[0].data.orderedValues.dropLast().allSatisfy{$0==XRGGraphRenderer.missingValue})
+            let restored=panel(miner,settings,defaults);#expect(restored.historyMinutes==1 && restored.plots()[0].data.currentValue==800)
+            option.tag=61;restored.selectHistoryWindow(option);#expect(restored.historyMinutes==1)
+            let menu=try #require(restored.makeMenu().items.first{$0.title=="Disk Time Window"}?.submenu)
+            #expect(menu.items.allSatisfy{$0.target===restored})
+            option.tag=300;restored.selectHistory(option);#expect(restored.historyMinutes==0 && restored.retainedSamples==300)
+        }
+    }
+    @Test func diskWindowShowsFailureGapAndClearsReplacementIdentityWithoutImportingBytes() throws {
+        try withFixture { settings,defaults,source in
+            settings.graphRefresh=1;defaults.set(1,forKey:XRGDiskView.windowKey);var wall=100.0
+            let miner=XRGDiskMiner(source:{source.reads+=1;return source.samples},clock:{source.time},historyClock:{wall})
+            let view=panel(miner,settings,defaults)
+            wall=101;source.advance(1,read:1600,written:400);view.graphUpdate(nil);let total=miner.totalBytesSinceLoad
+            wall=110;source.time=2;source.samples=nil;view.graphUpdate(nil)
+            #expect(view.plots()[0].data.currentValue==XRGGraphRenderer.missingValue && miner.totalBytesSinceLoad==total)
+            #expect(view.plots()[0].data.orderedValues[51]==800)
+            wall=111;source.advance(3,read:2200,written:600);view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==total && miner.transfersAreLowerBound)
+            wall=112;source.time=4;source.samples=[XRGDiskSample(id:2,read:1_000_000,written:900_000)];view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==0 && view.plots()[0].data.orderedValues.dropLast().allSatisfy{$0==XRGGraphRenderer.missingValue})
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, DiskSampleSource) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.diskView.\(UUID().uuidString)"
@@ -282,7 +330,7 @@ struct XRGDiskViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             source.advance(1, read: 1600, written: 400); view.graphUpdate(nil)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 7)
+            #expect(menu.items.count == 8)
             for item in menu.items where !item.isSeparatorItem && item.title != "Transfer Details…" {
                 #expect(item.target === view)
                 let action = try #require(item.action)

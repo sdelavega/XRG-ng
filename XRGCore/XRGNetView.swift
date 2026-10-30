@@ -167,7 +167,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         updateMode()
         guard shouldDrawMiniGraph() else { return }
         synchronizeSelection()
-        guard fastMiner.getLatestNetInfo() else { updateLabels(); needsDisplay = true; return }
+        guard fastMiner.getLatestFastInfo() else { updateLabels(); needsDisplay = true; return }
         fastRXValue = XRGCommon.dampedValue(usingPreviousValue: fastRXValue, currentValue: fastMiner.currentRX())
         fastTXValue = XRGCommon.dampedValue(usingPreviousValue: fastTXValue, currentValue: fastMiner.currentTX())
         updateLabels()
@@ -181,7 +181,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         return mode == 0 || mode == 1 ? mode : 2
     }
     @nonobjc func graphScale(fast: Bool = false) -> CGFloat {
-        let maximum = fast ? fastMiner.maxBandwidth() : miner.maxBandwidth()
+        let maximum = fast ? fastMiner.maxBandwidth() : (windowData()?[2].max ?? miner.maxBandwidth())
         return max(1, CGFloat(max(0, settings?.netMinGraphScale ?? 1024)), maximum.isFinite ? maximum : 0)
     }
     @nonobjc func miniValues() -> [NSNumber] {
@@ -189,7 +189,8 @@ public final class XRGNetView: NSView, XRGModuleView {
             : [NSNumber(value: Double(fastRXValue)), NSNumber(value: Double(fastTXValue))]
     }
     @nonobjc func plots() -> [(data: XRGDataSet, flipped: Bool)] {
-        [(graphMode == 0 ? miner.totalValues : miner.rxValues, graphMode == 2), (miner.txValues, graphMode == 1)]
+        let data = windowData() ?? [miner.rxValues, miner.txValues, miner.totalValues]
+        return [(graphMode == 0 ? data[2] : data[0], graphMode == 2), (data[1], graphMode == 1)]
     }
     private func title() -> String {
         let font = settings?.graphFont ?? NSFont.systemFont(ofSize: 10)
@@ -275,6 +276,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         menu.addItem(.separator())
         menu.addItem(item("Transfer Details…", #selector(showTransferDetails(_:))))
         menu.addItem(XRGHistoryRetention.menu("Network History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("Network Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(item("Reset Session Transfers", #selector(resetTransfers(_:))))
         menu.addItem(.separator())
@@ -284,10 +286,21 @@ public final class XRGNetView: NSView, XRGModuleView {
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let windowKey = "XRGNetView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc private let timeProjection = XRGTimeWindowProjection(channels: 3)
+    @nonobjc private func windowData() -> [XRGDataSet]? {
+        timeProjection.values(from: miner.timedHistory, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))
+    }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
+    }
     @nonobjc static let historyKey = "XRGNetView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}

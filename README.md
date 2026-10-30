@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 32 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 33 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -427,6 +427,21 @@ timestamps for older miner data. Native window actions do not poll CPU counters;
 Linux retains the system worker’s existing settings-wake behavior. Paused graphs
 stay anchored to their last observation, and backward completion timestamps start
 a new presentation era without altering counter baselines.
+
+Network and Disk also offer independent **Network Time Window** / **Disk Time
+Window** menus on Mac, and time-window fields in Linux Sources. Each supports
+1–60 minutes (zero uses samples), with the same sampling-target grid, latest
+completed observation anchor and one-hour / 20,000-observation bound as CPU.
+Only normal observations enter these histories; fast bars, rate baselines and
+session transfer totals stay independent. Window or capacity edits do not reset
+transfers; resetting transfers does not clear the graph. Reset Graph clears the
+time history, while source identity, membership and counter restarts begin fresh
+sessions. Existing I/O baseline warm-up still reports zero rates. Failed reads
+append missing observations. Linux hides unavailable series and retains its older
+sample-mode failure reset, while time mode preserves earlier observations across
+the gap and resumes on recovery. Mac retains earlier observations in both modes.
+Native window actions do not poll counters; Linux keeps its system-settings wake
+behavior. Choosing a Mac sample count returns to sample mode.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

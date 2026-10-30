@@ -167,7 +167,7 @@ Implemented in development for monitoring tools:
   history-only edits now resize the cached result without collecting, appending a
   duplicate observation or changing counters/alerts. They preserve the existing
   deadline and an in-flight scan; source/accounting edits and counter resets still
-  request collection. Schema 32 upgrades old files without writing until explicit
+  request collection. Schema 33 upgrades old files without writing until explicit
   save. AI now also offers 1–1,440-minute observation-timestamp windows through Mac
   AI Time Window / Linux AI preferences, using shared Swift five-second bins. The
   latest completed observation anchors the window; missing time bins remain gaps.
@@ -181,7 +181,14 @@ Implemented in development for monitoring tools:
   current readings, fast bars and legacy sample buffers. Scope/topology changes
   begin fresh time histories; Mac view observers are weak and detached on deinit.
   Native window actions do not poll; Linux keeps existing system-settings wakes.
-  Other system graphs and remaining scheduling work are still open.
+  Network and Disk now also offer independent 1–60-minute timestamp windows,
+  using that sampling-target grid and bound. Normal observations, fast bars, rate
+  baselines and session totals remain independent. Source/membership/replacement
+  and counter restart boundaries remain; graph and transfer resets are separate.
+  Failed reads add gaps. Linux retains its sample-mode failure reset and hides
+  unavailable series, but preserves earlier timestamp observations for recovery;
+  Mac retains earlier observations in both modes. I/O warm-up remains zero-rate.
+  Memory and other system windows and remaining scheduling work are still open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

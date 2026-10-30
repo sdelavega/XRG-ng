@@ -222,6 +222,12 @@ impl Harness {
                             Ok("sources-time") => {
                                 editor.tab = 2;
                                 editor.draft.metrics.cpu_history_minutes = 1;
+                                editor
+                                    .draft
+                                    .metrics
+                                    .history_minutes
+                                    .insert(Module::Network, 2);
+                                editor.draft.metrics.history_minutes.insert(Module::Disk, 3);
                             }
                             Ok("ai-time") => {
                                 editor.tab = 3;
@@ -311,6 +317,8 @@ impl Harness {
                     next.metrics.cpu_history_minutes = 1;
                     next.metrics.history_samples.insert(Module::Memory, 360);
                     next.metrics.history_samples.insert(Module::Network, 480);
+                    next.metrics.history_minutes.insert(Module::Network, 2);
+                    next.metrics.history_minutes.insert(Module::Disk, 3);
                     next.metrics.history_samples.insert(Module::Disk, 600);
                     next.metrics.history_samples.insert(Module::Gpu, 720);
                     next.metrics.history_samples.insert(Module::Tpu, 840);
@@ -375,12 +383,20 @@ impl Harness {
                         (Module::Fans, "Fans", 1200),
                         (Module::Battery, "Battery", 1320),
                     ] {
-                        if snapshot.selection.retained_samples(module) != count
+                        let (minutes, positions) = match module {
+                            Module::Network => (2, 601),
+                            Module::Disk => (3, 901),
+                            _ => (0, count),
+                        };
+                        if snapshot.selection.retained_minutes(module) != minutes
+                            || snapshot.selection.retained_samples(module) != count
                             || !snapshot
                                 .panels
                                 .iter()
                                 .find(|p| p.title == title)
-                                .is_some_and(|p| p.series.iter().all(|v| v.len() == count as usize))
+                                .is_some_and(|p| {
+                                    p.series.iter().all(|v| v.len() == positions as usize)
+                                })
                         {
                             return Err(format!(
                                 "Applied {title} history capacity did not reach the live worker"
@@ -388,7 +404,7 @@ impl Harness {
                         }
                     }
                     println!(
-                        "SYSTEM_HISTORY_SMOKE_OK Memory=360 Network=480 Disk=600, live worker acknowledged"
+                        "SYSTEM_HISTORY_SMOKE_OK Memory=360 Network=2min/601positions Disk=3min/901positions at 200ms, 480/600 fallback samples, live worker acknowledged"
                     );
                     println!(
                         "GRAPHICS_HISTORY_SMOKE_OK GPU=720 NPU=840 VRAM=960, capacities applied; unavailable inputs remain unavailable"

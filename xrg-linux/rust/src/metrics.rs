@@ -43,6 +43,9 @@ impl TransferTotals {
 struct IoHistory {
     rates: Rates,
     histories: [History; 2],
+    timed: crate::shared::TimedHistory,
+    window_minutes: u32,
+    history_interval: f64,
     membership: Option<Vec<String>>,
     totals: TransferTotals,
     last_sample: Option<([u64; 2], f64)>,
@@ -59,6 +62,12 @@ impl IoHistory {
         Self {
             rates: Rates::new(),
             histories: std::array::from_fn(|_| History::new(capacity)),
+            timed: crate::shared::TimedHistory::new_limited(
+                2,
+                crate::shared::timed_projection_settings()[0],
+            ),
+            window_minutes: 0,
+            history_interval: 1.,
             membership: None,
             totals: TransferTotals::default(),
             last_sample: None,
@@ -73,6 +82,7 @@ impl IoHistory {
             h.clear();
         }
         self.graph_cleared = true;
+        self.timed.clear();
     }
     fn reset_transfers(&mut self) {
         self.totals = TransferTotals::default();
@@ -80,7 +90,17 @@ impl IoHistory {
         self.skip_next_transfer = true;
     }
     fn reset(&mut self) {
+        let (minutes, interval) = (self.window_minutes, self.history_interval);
         *self = Self::with_capacity(self.capacity);
+        self.window_minutes = minutes;
+        self.history_interval = interval;
+    }
+    fn set_time_window(&mut self, minutes: u32) -> Result<(), String> {
+        if minutes > crate::shared::timed_projection_settings()[0] {
+            return Err("I/O time window must be 0..60 minutes".into());
+        }
+        self.window_minutes = minutes;
+        Ok(())
     }
     fn set_history_samples(&mut self, requested: u32) {
         let capacity = if requested == 0 { 120 } else { requested };
@@ -91,12 +111,13 @@ impl IoHistory {
             self.capacity = capacity;
         }
     }
-    fn panel(
+    fn panel_at(
         &mut self,
         title: &'static str,
         source: Result<Devices, String>,
         target: Option<&str>,
         time: f64,
+        observed_at: f64,
     ) -> (Panel, bool, Vec<String>) {
         let mut valid = false;
         let mut names = Vec::new();
@@ -130,6 +151,7 @@ impl IoHistory {
             detail.push_str(&format!("Scope: {scope}\nMembers ({}): {visible}{suffix}", members.len()));
             Ok((values, identities))
         });
+        let mut timed_values = [f64::NAN; 2];
         let label = match values {
             Ok((values, membership)) => {
                 let counter_restarted = self.last_sample.is_some_and(|(old, at)| {
@@ -142,6 +164,7 @@ impl IoHistory {
                 let (delta_a, a) = self.rates.sample(0, values[0], time);
                 let (delta_b, b) = self.rates.sample(1, values[1], time);
                 let (a, b) = (a as f64, b as f64);
+                timed_values = [a, b];
                 if self.last_sample.is_none_or(|(_, at)| time > at) {
                     if self.skip_next_transfer {
                         self.skip_next_transfer = false;
@@ -188,6 +211,15 @@ impl IoHistory {
                 error
             }
         };
+        self.timed.append(observed_at, &timed_values);
+        if !series.is_empty() && self.window_minutes > 0 {
+            series = self
+                .timed
+                .values_at(self.window_minutes, self.history_interval);
+        }
+        if self.window_minutes > 0 {
+            detail.push_str(&format!("\n{title} time window: {} {} ending at latest completed observation. Projection target: {} seconds; unobserved bins stay gaps. Rates and session transfers are independent. Up to one hour / 20,000 observations. Source identity, membership and counter restarts start fresh time histories.", self.window_minutes, if self.window_minutes == 1 {"minute"} else {"minutes"}, self.history_interval));
+        }
         if self.membership.is_some() {
             use crate::dashboard::{Row, bytes};
             let (heading, first, second) = if title == "Disk" {
@@ -286,6 +318,10 @@ impl Sampler {
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
         self.cpu.set_time_window(selection.cpu_history_minutes)?;
+        self.network
+            .set_time_window(selection.retained_minutes(Module::Network))?;
+        self.disk
+            .set_time_window(selection.retained_minutes(Module::Disk))?;
         self.cpu
             .set_history_samples(selection.cpu_history_samples)?;
         self.network
@@ -304,8 +340,14 @@ impl Sampler {
         self.selection = selection;
         Ok(())
     }
-    pub(crate) fn set_cpu_history_interval(&mut self, seconds: f64) {
+    pub(crate) fn set_history_interval(&mut self, seconds: f64) {
         self.cpu.set_history_interval(seconds);
+        if seconds.is_finite()
+            && seconds >= f64::from(crate::shared::timed_projection_settings()[1]) / 1000.
+        {
+            self.network.history_interval = seconds;
+            self.disk.history_interval = seconds;
+        }
     }
     pub fn sample(&mut self, source: &LinuxSources, time: f64) -> Sample {
         if !time.is_finite() || time < 0. {
@@ -344,18 +386,30 @@ impl Sampler {
         let mut inventory = Inventory::default();
         let (cpu, valid_cpu, cpus) = self.cpu.sample(source, self.selection.cpu, time);
         inventory.cpus = cpus;
-        let (network, valid_network, names) = self.network.panel(
+        let records = metric_sources::network(source);
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        let (network, valid_network, names) = self.network.panel_at(
             "Network",
-            metric_sources::network(source),
+            records,
             self.selection.network.as_deref(),
             time,
+            observed,
         );
         inventory.networks = names;
-        let (disk, valid_disk, names) = self.disk.panel(
+        let records = metric_sources::disks(source);
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        let (disk, valid_disk, names) = self.disk.panel_at(
             "Disk",
-            metric_sources::disks(source),
+            records,
             self.selection.disk.as_deref(),
             time,
+            observed,
         );
         inventory.disks = names;
         Sample {
@@ -377,5 +431,97 @@ mod transfer_tests {
         totals.add([5, 3]);
         assert_eq!(totals.bytes, [u64::MAX, 5]);
         assert!(totals.saturated);
+    }
+}
+
+#[cfg(test)]
+mod io_time_window_tests {
+    use super::*;
+    fn devices(n: u64, identity: &str) -> Result<Devices, String> {
+        Ok(Devices {
+            devices: std::collections::BTreeMap::from([(
+                "dev".into(),
+                crate::metric_sources::Counter {
+                    values: [1000 + 600 * n, 200 + 200 * n],
+                    identity: identity.into(),
+                },
+            )]),
+            aggregate: std::collections::BTreeSet::from(["dev".into()]),
+            identity_incomplete: false,
+        })
+    }
+    fn bits(values: Vec<Vec<f64>>) -> Vec<u64> {
+        values.into_iter().flatten().map(f64::to_bits).collect()
+    }
+    #[test]
+    fn io_windows_preserve_rates_totals_and_samples_across_projection_changes_and_resets() {
+        for title in ["Network", "Disk"] {
+            let mut view = IoHistory::new();
+            view.set_time_window(1).unwrap();
+            view.panel_at(title, devices(0, "same"), None, 0., 90.);
+            view.panel_at(title, devices(1, "same"), None, 1., 100.);
+            let second = view.panel_at(title, devices(2, "same"), None, 2., 110.).0;
+            assert_eq!(second.series[0].len(), 61);
+            assert_eq!(second.series[0][50], 600.);
+            assert_eq!(second.series[0][60], 600.);
+            assert!(second.series[0][51..60].iter().all(|v| v.is_nan()));
+            assert_eq!(view.totals.bytes, [1200, 400]);
+            view.set_history_samples(300);
+            view.history_interval = 0.2;
+            let old = bits(view.timed.values_at(1, 0.2));
+            view.reset_transfers();
+            assert_eq!(bits(view.timed.values_at(1, 0.2)), old);
+            assert_eq!(view.totals.bytes, [0, 0]);
+            let after = view.panel_at(title, devices(3, "same"), None, 3., 110.2).0;
+            assert_eq!(after.series[0].len(), 301);
+            assert_eq!(after.series[0][300], 600.);
+            assert_eq!(view.totals.bytes, [0, 0]);
+            view.panel_at(title, devices(4, "same"), None, 4., 110.4);
+            assert_eq!(view.totals.bytes, [600, 200]);
+            view.clear_graph();
+            let next = view.panel_at(title, devices(5, "same"), None, 5., 50.).0;
+            assert!(next.series[0][..300].iter().all(|v| v.is_nan()));
+            assert_eq!(next.series[0][300], 600.);
+            assert_eq!(view.totals.bytes, [1200, 400]);
+            assert!(view.set_time_window(61).is_err());
+            view.set_time_window(0).unwrap();
+            let sample = view.panel_at(title, devices(6, "same"), None, 6., 50.2).0;
+            assert_eq!(sample.series[0].len(), 300);
+            assert_eq!(sample.series[0][299], 600.);
+        }
+    }
+    #[test]
+    fn io_timestamp_failures_leave_gaps_while_identity_and_counter_restart_begin_fresh_sessions() {
+        for title in ["Network", "Disk"] {
+            let mut view = IoHistory::new();
+            view.set_time_window(1).unwrap();
+            view.panel_at(title, devices(0, "same"), None, 0., 100.);
+            view.panel_at(title, devices(1, "same"), None, 1., 101.);
+            let failed = view
+                .panel_at(title, Err("fixture offline".into()), None, 2., 110.)
+                .0;
+            assert!(failed.series.is_empty());
+            assert_eq!(view.totals.bytes, [600, 200]);
+            assert!(view.totals.partial);
+            let recovered = view.panel_at(title, devices(2, "same"), None, 3., 111.).0;
+            assert_eq!(recovered.series[0][50], 600.);
+            assert!(recovered.series[0][59].is_nan());
+            assert_eq!(view.totals.bytes, [600, 200]);
+            view.history_interval = 0.2;
+            let changed = view
+                .panel_at(title, devices(3, "replacement"), None, 4., 112.)
+                .0;
+            assert_eq!(changed.series[0].len(), 301);
+            assert!(changed.series[0][..300].iter().all(|v| v.is_nan()));
+            assert_eq!(view.totals.bytes, [0, 0]);
+            view.panel_at(title, devices(4, "replacement"), None, 5., 112.2);
+            assert_eq!(view.totals.bytes, [600, 200]);
+            let restarted = view
+                .panel_at(title, devices(0, "replacement"), None, 6., 112.4)
+                .0;
+            assert_eq!(restarted.series[0].len(), 301);
+            assert!(restarted.series[0][..300].iter().all(|v| v.is_nan()));
+            assert_eq!(view.totals.bytes, [0, 0]);
+        }
     }
 }

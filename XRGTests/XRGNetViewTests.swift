@@ -85,6 +85,51 @@ struct XRGNetViewTests {
             option.tag = 0; view.selectHistory(option); #expect(view.miner.rxValues.numValues == 60)
         }
     }
+    @Test func networkWindowsPreserveTransfersRateBaselinesFastStreamAndScale() throws {
+        try withFixture { settings,defaults,source in
+            settings.graphRefresh=1;settings.netMinGraphScale=1;settings.netGraphMode=0;var wall=100.0
+            let miner=XRGNetMiner(source:{source.reads+=1;return source.samples},clock:{source.time},historyClock:{wall}), fast=source.miner()
+            let view=XRGNetView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,fastMiner:fast,settings:settings,defaults:defaults)
+            wall=101;source.advance(1,rx:7000,tx:2200);view.graphUpdate(nil)
+            wall=111;source.advance(2,rx:7600,tx:2400);view.graphUpdate(nil);_ = fast.getLatestFastInfo()
+            let reads=source.reads,total=miner.totalBytesSinceLoad,fastRate=fast.currentRX()
+            let option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+            #expect(view.historyMinutes==1 && view.plots()[0].data.numValues==61 && view.plots()[0].data.currentValue==800)
+            #expect(view.plots()[0].data.orderedValues[50]==8000 && view.plots()[0].data.orderedValues[51..<60].allSatisfy{$0==XRGGraphRenderer.missingValue})
+            view.setFrameSize(NSSize(width:1,height:100));#expect(view.graphScale()==8000 && miner.totalValues.numValues==1)
+            #expect(source.reads==reads && miner.totalBytesSinceLoad==total && fast.currentRX()==fastRate && fast.timedHistory.observationCount==1)
+            let before=view.plots()[0].data.orderedValues;view.resetTransfers(nil)
+            #expect(miner.totalBytesSinceLoad==0 && view.plots()[0].data.orderedValues==before && miner.currentRX()==600)
+            wall=112;source.advance(3,rx:8200,tx:2600);view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==0 && miner.currentRX()==600)
+            wall=113;source.advance(4,rx:8800,tx:2800);view.graphUpdate(nil);#expect(miner.totalBytesSinceLoad==800)
+            let restored=XRGNetView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,fastMiner:fast,settings:settings,defaults:defaults)
+            #expect(restored.historyMinutes==1 && restored.plots()[0].data.currentValue==800)
+            option.tag=61;restored.selectHistoryWindow(option);#expect(restored.historyMinutes==1)
+            let choices=try #require(restored.makeMenu().items.first{$0.title=="Network Time Window"}?.submenu)
+            #expect(choices.items.allSatisfy{$0.target===restored})
+            restored.clearData(nil)
+            #expect(miner.totalBytesSinceLoad==800 && restored.plots()[0].data.orderedValues.allSatisfy{$0==XRGGraphRenderer.missingValue})
+            option.tag=300;restored.selectHistory(option);#expect(restored.historyMinutes==0 && restored.retainedSamples==300)
+        }
+    }
+    @Test func networkWindowFailureAndInterfaceReplacementRespectProvenance() throws {
+        try withFixture { settings,defaults,source in
+            settings.graphRefresh=1;settings.netGraphMode=0;defaults.set(1,forKey:XRGNetView.windowKey);var wall=100.0
+            let miner=XRGNetMiner(source:{source.reads+=1;return source.samples},clock:{source.time},historyClock:{wall})
+            let view=XRGNetView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,fastMiner:source.miner(),settings:settings,defaults:defaults)
+            wall=101;source.advance(1,rx:1600,tx:400);view.graphUpdate(nil);let total=miner.totalBytesSinceLoad
+            wall=110;source.time=2;source.samples=nil;view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==total && view.plots()[0].data.currentValue==XRGGraphRenderer.missingValue)
+            #expect(view.plots()[0].data.orderedValues[51]==800)
+            wall=111;source.advance(3,rx:2200,tx:600);view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==total && miner.transfersAreLowerBound)
+            wall=112;source.time=4;source.samples=[XRGNetworkSample(name:"en0",index:7,received:900_000,sent:800_000)];view.graphUpdate(nil)
+            #expect(miner.totalBytesSinceLoad==0 && view.plots()[0].data.orderedValues.dropLast().allSatisfy{$0==XRGGraphRenderer.missingValue})
+            let reads=source.reads;miner.monitorNetworkInterface="en0"
+            #expect(source.reads==reads && view.plots()[0].data.orderedValues.allSatisfy{$0==XRGGraphRenderer.missingValue})
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, NetworkSource) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.networkView.\(UUID().uuidString)"

@@ -709,14 +709,32 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
         (settings::Module::Fans, "Fans"),
         (settings::Module::Battery, "Battery"),
     ] {
+        let mut minutes = s.metrics.retained_minutes(module);
+        if matches!(module, settings::Module::Network | settings::Module::Disk) {
+            ui.horizontal(|ui| {
+                let label = ui.label(format!("{title} time window (minutes; 0 uses samples)"));
+                ui.add(
+                    egui::DragValue::new(&mut minutes)
+                        .range(0..=xrg_ng_linux::shared::timed_projection_settings()[0]),
+                )
+                .labelled_by(label.id);
+            });
+            if minutes == 0 {
+                s.metrics.history_minutes.remove(&module);
+            } else {
+                s.metrics.history_minutes.insert(module, minutes);
+            }
+        }
         let mut count = s.metrics.retained_samples(module);
-        ui.horizontal(|ui| {
-            let label = ui.label(format!("Retained {title} samples"));
-            ui.add(
-                egui::DragValue::new(&mut count)
-                    .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
-            )
-            .labelled_by(label.id);
+        ui.add_enabled_ui(minutes == 0, |ui| {
+            ui.horizontal(|ui| {
+                let label = ui.label(format!("Retained {title} samples"));
+                ui.add(
+                    egui::DragValue::new(&mut count)
+                        .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+                )
+                .labelled_by(label.id);
+            });
         });
         if count == 0 {
             s.metrics.history_samples.remove(&module);
@@ -724,6 +742,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
             s.metrics.history_samples.insert(module, count);
         }
     }
+    ui.small("Network/Disk windows end at the latest completed normal observation; bins follow the sampling target. Unobserved time bins remain gaps. Source/replacement/counter-restart boundaries begin fresh time histories. Transfer totals and rate baselines are independent.");
     ui.small("System histories: 0 keeps 120 samples. Capacity changes preserve newest observations and collector baselines; source/failure resets keep their existing behavior. Sensor statistics stay independent. Battery charge and signed power retain separate axes. Collector cadence and delays affect the actual time span.");
     for (label, value, options) in [
         ("Network", &mut s.metrics.network, &inventory.networks),

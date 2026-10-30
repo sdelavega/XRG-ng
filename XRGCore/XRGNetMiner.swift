@@ -50,6 +50,8 @@ public final class XRGNetworkInterface: NSObject {
 public final class XRGNetMiner: NSObject {
     private let source: () -> [XRGNetworkSample]?
     private let clock: () -> TimeInterval
+    private let historyClock: () -> TimeInterval
+    let timedHistory = XRGTimedHistory(channels: 3, retentionMinutes: XRGTimedHistory.systemMaximumMinutes)!
     private var tracker = XRGIOCounterTracker<String>()
     private var rxRate: CGFloat = 0
     private var txRate: CGFloat = 0
@@ -92,9 +94,9 @@ public final class XRGNetMiner: NSObject {
         self.init(source: Self.readSnapshot, clock: { ProcessInfo.processInfo.systemUptime })
     }
 
-    init(source: @escaping () -> [XRGNetworkSample]?, clock: @escaping () -> TimeInterval) {
+    init(source: @escaping () -> [XRGNetworkSample]?, clock: @escaping () -> TimeInterval, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         self.source = source
-        self.clock = clock
+        self.clock = clock; self.historyClock = historyClock
         super.init()
         getLatestNetInfo()
     }
@@ -109,6 +111,7 @@ public final class XRGNetMiner: NSObject {
     }
     @objc public func reset() {
         for history in [rxValues, txValues, totalValues] { history.reset() }
+        timedHistory.clear()
     }
     public func resetTransfers() { tracker.resetTransfers() }
     public func rebase() { tracker = XRGIOCounterTracker(); rxRate = 0; txRate = 0 }
@@ -130,37 +133,41 @@ public final class XRGNetMiner: NSObject {
         }
     }
 
-    @discardableResult @objc public func getLatestNetInfo() -> Bool {
-        guard let samples = source() else { return failedRead() }
+    @discardableResult @objc public func getLatestNetInfo() -> Bool { collect(recordHistory: true) }
+    @discardableResult func getLatestFastInfo() -> Bool { collect(recordHistory: false) }
+    private func collect(recordHistory: Bool) -> Bool {
+        guard let samples = source() else { return failedRead(recordHistory: recordHistory) }
         var next: [String: XRGNetworkSample] = [:]
         for sample in samples where sample.name != "lo0" {
             // Ambiguous identities invalidate the snapshot instead of picking an
             // arbitrary duplicate and counting a fabricated delta.
-            guard next[sample.name] == nil else { return failedRead() }
+            guard next[sample.name] == nil else { return failedRead(recordHistory: recordHistory) }
             next[sample.name] = sample
         }
         let now = clock()
-        guard now.isFinite else { return failedRead() }
+        guard now.isFinite else { return failedRead(recordHistory: recordHistory) }
         // Discovery is independent of the pinned selection. A missing selected
         // interface must not hide newly attached interfaces from preferences.
         interfaceStats = next.values.sorted { $0.name < $1.name }.map(XRGNetworkInterface.init)
         updateBootTotal()
         let chosen = next.values.filter { selected($0.name) }
-        guard monitorNetworkInterface == "All" || !chosen.isEmpty else { return failedRead() }
+        guard monitorNetworkInterface == "All" || !chosen.isEmpty else { return failedRead(recordHistory: recordHistory) }
         let counters = Dictionary(uniqueKeysWithValues: chosen.map {
             ("\($0.name):\($0.index)", XRGIOCounters(first: $0.received, second: $0.sent))
         })
-        guard let reading = tracker.sample(counters, at: now) else { return failedRead() }
+        guard let reading = tracker.sample(counters, at: now) else { return failedRead(recordHistory: recordHistory) }
         if reading.newSession { reset() }
         rxRate = reading.firstRate; txRate = reading.secondRate
         rxValues.setNextValue(rxRate); txValues.setNextValue(txRate)
         totalValues.setNextValue(rxRate + txRate)
+        if recordHistory { timedHistory.append(time: historyClock(), values: [Double(rxRate), Double(txRate), Double(rxRate + txRate)]) }
         return true
     }
 
-    private func failedRead() -> Bool {
+    private func failedRead(recordHistory: Bool) -> Bool {
         tracker.fail()
         for history in [rxValues, txValues, totalValues] { history.setNextValue(XRGGraphRenderer.missingValue) }
+        if recordHistory { timedHistory.append(time: historyClock(), values: [.nan, .nan, .nan]) }
         return false
     }
 

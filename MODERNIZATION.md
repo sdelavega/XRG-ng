@@ -1594,3 +1594,45 @@ labels found during visual inspection. Results/captures are in
 interval inside one minute. Physical Intel/Linux x86-64, macOS 26 runtime and real
 suspend/resume remain unverified. Memory, Network, Disk and other system timestamp
 windows remain separate work; no app version, release, signing or notice change.
+
+### Network and Disk timestamp windows preserve transfer sessions
+
+Mac Network Time Window / Disk Time Window and Linux Sources now support separate
+1–60-minute windows (zero uses sample count). Both use the shared Swift bounded
+history and the normal sampling target, minimum 200 ms, with centered bins and
+latest-observation anchoring. Normal rate measurements and completion wall clocks
+are separate; paused collection freezes the window, missing time remains gaps,
+and backward completion clocks start a fresh presentation era. Raw histories are
+bounded to one hour / 20,000 observations and remain separate from sample buffers.
+
+Mac miners retain normal observations; Network fast sampling has a separate entry
+point that does not append normal timestamp data, and Disk fast sampling remains
+separate. Each view caches its projection. Scaling includes earlier peaks still
+inside the time window, even if graph resizing discards those peaks from the legacy
+sample buffer. Window/capacity edits preserve normal/fast baselines and session
+transfers. Reset Graph and Reset session transfers remain independent. Source,
+membership, replacement and counter-restart boundaries retain their session rules.
+Existing I/O warm-up reports zero rates. Failed reads append missing observations;
+Linux hides unavailable series and retains its sample-mode failure reset, while its
+time history preserves earlier observations for recovery. Mac retains earlier
+observations in both modes. Native window actions do not read counters; Linux keeps
+its existing system-settings wake behavior.
+
+Linux schema 33 upgrades old settings in memory until explicit save. Unsupported
+module keys, invalid types and windows over 60 minutes reject the edit atomically.
+The desktop gate applies Network two-minute and Disk three-minute windows at 200 ms
+and checks the live worker's 601/901 positions, retained fallback capacities and
+settings acknowledgment under the existing timeout.
+
+Validation: universal Debug build; 585 passing cases on ARM64 and 585 under
+Rosetta x86_64; isolated native and packaged launch checks. Linux ARM64 passed 37
+shared Swift tests, the C ABI smoke against that same artifact, strict Clippy,
+573 Rust tests and 16 X11/nested Wayland collapse/restore cases at normal and
+scaled/zoomed settings. Native fixture captures show a genuine 20-second gap
+inside each one-minute I/O window; Linux captures show independent window fields
+and disabled fallback sample controls. Evidence is in
+`dist/io-time-window-validation`. The initial Mac compile caught a CGFloat/Double
+mismatch, fixed with explicit conversion before the final full gate. Physical
+Intel/Linux x86-64, macOS 26 runtime and actual suspend/resume remain unverified.
+Memory and other system timestamp windows remain separate work. No release,
+version, signing or third-party-notice policy changed.

@@ -163,13 +163,17 @@ public final class XRGDiskView: NSView, XRGModuleView {
         let mode = settings?.diskGraphMode ?? 0
         return mode == 0 || mode == 1 ? mode : 2
     }
-    @nonobjc func graphScale() -> CGFloat { max(1, miner.totalValues.max.isFinite ? miner.totalValues.max : 0) }
+    @nonobjc func graphScale() -> CGFloat {
+        let maximum = windowData()?[2].max ?? miner.totalValues.max
+        return max(1, maximum.isFinite ? maximum : 0)
+    }
     @nonobjc func miniValues() -> [NSNumber] {
         graphMode == 2 ? [NSNumber(value: Double(fastWriteValue)), NSNumber(value: Double(fastReadValue))]
             : [NSNumber(value: Double(fastReadValue)), NSNumber(value: Double(fastWriteValue))]
     }
     @nonobjc func plots() -> [(data: XRGDataSet, flipped: Bool)] {
-        [(graphMode == 0 ? miner.totalValues : miner.readValues, graphMode == 1), (miner.writeValues, graphMode == 2)]
+        let data = windowData() ?? [miner.readValues, miner.writeValues, miner.totalValues]
+        return [(graphMode == 0 ? data[2] : data[0], graphMode == 1), (data[1], graphMode == 2)]
     }
     private func title() -> String {
         let font = settings?.graphFont ?? NSFont.systemFont(ofSize: 10)
@@ -251,6 +255,7 @@ public final class XRGDiskView: NSView, XRGModuleView {
         }
         menu.addItem(item("Transfer Details…", #selector(showTransferDetails(_:))))
         menu.addItem(XRGHistoryRetention.menu("Disk History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("Disk Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(item("Reset Session Transfers", #selector(resetTransfers(_:))))
         menu.addItem(.separator())
@@ -260,10 +265,21 @@ public final class XRGDiskView: NSView, XRGModuleView {
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     public func emptyEvent(_ sender: Any?) {}
+    @nonobjc static let windowKey = "XRGDiskView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc private let timeProjection = XRGTimeWindowProjection(channels: 3)
+    @nonobjc private func windowData() -> [XRGDataSet]? {
+        timeProjection.values(from: miner.timedHistory, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))
+    }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
+    }
     @nonobjc static let historyKey = "XRGDiskView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     public func openDiskUtility(_ sender: Any?) { _ = openURL(Self.diskUtilityURL) }
