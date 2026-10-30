@@ -285,7 +285,18 @@ impl Sampler {
     }
     pub fn sample(&mut self, source: &LinuxSources, time: f64) -> Sample {
         if !time.is_finite() || time < 0. {
-            self.cpu = crate::cpu::View::default();
+            // An invalid worker clock breaks CPU continuity, but must not erase
+            // already observed CPU history. Do not poll counters on this path.
+            let error = "Invalid sample time".to_owned();
+            let (cpu, _, _) = self.cpu.panel(
+                Err(error.clone()),
+                &crate::cpu::Overview {
+                    load: Err(error.clone()),
+                    uptime: Err(error),
+                },
+                self.selection.cpu,
+                time,
+            );
             self.network.reset();
             self.disk.reset();
             let panel = |title| Panel {
@@ -299,7 +310,7 @@ impl Sampler {
                 readout: Default::default(),
             };
             return Sample {
-                cpu: panel("CPU"),
+                cpu,
                 network: panel("Network"),
                 disk: panel("Disk"),
                 inventory: Inventory::default(),

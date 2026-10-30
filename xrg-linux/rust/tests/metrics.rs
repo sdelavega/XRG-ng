@@ -80,7 +80,7 @@ fn aggregate_and_per_core_percentages_exclude_guest_and_keep_sparse_indices() {
     f.cpu(2);
     let core = s.sample(&source, 4.);
     assert_eq!(core.cpu.series[0].last(), Some(&50.));
-    assert!(core.cpu.series[0][..119].iter().all(|n| *n == 0.));
+    assert!(core.cpu.series[0][..119].iter().all(|n| n.is_nan()));
     assert!(core.cpu.label.starts_with("CPU 0"));
 }
 #[test]
@@ -101,17 +101,17 @@ fn offline_core_does_not_fall_back_to_aggregate_or_fake_idle() {
         "cpu 200 0 0 1200 0 0 0 0\ncpu0 110 0 0 590 0 0 0 0\n",
     );
     let missing = s.sample(&source, 3.);
-    assert!(missing.cpu.series.is_empty());
+    assert!(missing.cpu.series.iter().flatten().all(|n| n.is_nan()));
     assert!(missing.cpu.label.contains("unavailable"));
     f.cpu(3);
     let returned = s.sample(&source, 4.);
-    assert!(returned.cpu.series.is_empty());
+    assert!(returned.cpu.series.iter().flatten().all(|n| n.is_nan()));
     assert!(returned.cpu.label.contains("waiting"));
     f.cpu(4);
     assert_eq!(s.sample(&source, 5.).cpu.series[0].last(), Some(&0.));
 }
 #[test]
-fn cpu_recovery_and_invalid_sample_time_clear_the_old_plot() {
+fn cpu_recovery_and_invalid_sample_time_preserve_measurements_around_gaps() {
     let f = Fixture::new();
     let source = f.source();
     let mut s = Sampler::default();
@@ -119,19 +119,30 @@ fn cpu_recovery_and_invalid_sample_time_clear_the_old_plot() {
     f.cpu(1);
     assert_eq!(s.sample(&source, 2.).cpu.series[0].last(), Some(&25.));
     f.put("proc/stat", "broken");
-    assert!(s.sample(&source, 3.).cpu.series.is_empty());
+    let failed = s.sample(&source, 3.).cpu;
+    assert_eq!(failed.series[0][118], 25.);
+    assert!(failed.series[0][119].is_nan());
     f.cpu(3);
-    assert!(s.sample(&source, 4.).cpu.series.is_empty());
+    let warmup = s.sample(&source, 4.).cpu;
+    assert_eq!(warmup.series[0][117], 25.);
+    assert!(warmup.series[0][118..].iter().all(|n| n.is_nan()));
     f.cpu(4);
     let recovered = s.sample(&source, 5.);
     assert_eq!(recovered.cpu.series[0].last(), Some(&25.));
-    assert!(recovered.cpu.series[0][..119].iter().all(|n| *n == 0.));
-    assert!(s.sample(&source, f64::NAN).cpu.series.is_empty());
+    assert_eq!(recovered.cpu.series[0][116], 25.);
+    assert!(recovered.cpu.series[0][117..119].iter().all(|n| n.is_nan()));
+    assert!(s.sample(&source, f64::NAN).cpu.series[0][119].is_nan());
     f.cpu(5);
-    assert!(s.sample(&source, 6.).cpu.series.is_empty());
+    assert!(
+        s.sample(&source, 6.).cpu.series[0][118..]
+            .iter()
+            .all(|n| n.is_nan())
+    );
     f.cpu(6);
     let recovered = s.sample(&source, 7.);
-    assert!(recovered.cpu.series[0][..119].iter().all(|n| *n == 0.));
+    assert_eq!(recovered.cpu.series[0][116], 25.);
+    assert!(recovered.cpu.series[0][117..119].iter().all(|n| n.is_nan()));
+    assert_eq!(recovered.cpu.series[0][119], 25.);
 }
 #[test]
 fn chosen_interface_and_loopback_rates_are_distinct_from_aggregate() {

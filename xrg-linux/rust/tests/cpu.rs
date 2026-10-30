@@ -130,7 +130,7 @@ fn system_load_is_a_count_and_uptime_accepts_combined_idle_above_elapsed_time() 
 fn cpu_curves_and_auxiliary_readings_reach_details_with_distinct_scopes() {
     let mut view = View::default();
     let first = view.panel(records(0, true), &overview(), None, 1.).0;
-    assert!(first.series.is_empty());
+    assert!(first.series.iter().flatten().all(|v| v.is_nan()));
     assert!(
         first.detail.contains("1.25 / 2.50 / 3.75") && first.detail.contains("Uptime: 1d 01:01:01")
     );
@@ -149,7 +149,8 @@ fn cpu_curves_and_auxiliary_readings_reach_details_with_distinct_scopes() {
     let panel = view.panel(records(2, true), &overview(), Some(2), 3.).0;
     assert!(panel.label.starts_with("CPU 2"));
     assert!(panel.detail.contains("logical CPU 2") && panel.detail.contains("stay system-wide"));
-    assert_eq!(&panel.series[0][118..], &[0., 45.]);
+    assert!(panel.series[0][..119].iter().all(|v| v.is_nan()));
+    assert_eq!(panel.series[0][119], 45.);
 }
 #[test]
 fn missing_optional_overview_files_never_suppress_cpu_or_leave_stale_overview_values() {
@@ -170,15 +171,19 @@ fn missing_optional_overview_files_never_suppress_cpu_or_leave_stale_overview_va
     let broken = view
         .panel(Err("stat unreadable".into()), &overview(), None, 3.)
         .0;
-    assert!(broken.series.is_empty() && broken.detail.contains("Uptime: 1d"));
+    assert!(broken.series[0][119].is_nan() && broken.detail.contains("Uptime: 1d"));
+    assert_eq!(broken.series[0][118], 45.);
     assert!(
         view.panel(records(2, false), &overview(), None, 4.)
             .0
-            .series
-            .is_empty()
+            .series[0][118..]
+            .iter()
+            .all(|v| v.is_nan())
     );
     let recovered = view.panel(records(3, false), &overview(), None, 5.).0;
-    assert_eq!(&recovered.series[0][118..], &[0., 45.]);
+    assert_eq!(recovered.series[0][116], 45.);
+    assert!(recovered.series[0][117..119].iter().all(|v| v.is_nan()));
+    assert_eq!(recovered.series[0][119], 45.);
 }
 #[test]
 fn hotplug_resets_aggregate_but_an_existing_selected_core_keeps_its_own_baseline() {
@@ -192,7 +197,9 @@ fn hotplug_resets_aggregate_but_an_existing_selected_core_keeps_its_own_baseline
         all.panel(Ok(next.clone()), &overview(), None, 2.)
             .0
             .series
-            .is_empty()
+            .iter()
+            .flatten()
+            .all(|v| v.is_nan())
     );
     assert_eq!(
         one.panel(Ok(next), &overview(), Some(0), 2.).0.series[0].last(),
@@ -201,16 +208,21 @@ fn hotplug_resets_aggregate_but_an_existing_selected_core_keeps_its_own_baseline
     let mut next = records(2, true).unwrap();
     next.cores.remove(&2);
     let panel = all.panel(Ok(next), &overview(), None, 3.).0;
-    assert_eq!(&panel.series[0][118..], &[0., 45.]);
+    assert!(panel.series[0][..119].iter().all(|v| v.is_nan()));
+    assert_eq!(panel.series[0][119], 45.);
     let mut absent = records(3, true).unwrap();
     absent.cores.remove(&0);
     let panel = one.panel(Ok(absent), &overview(), Some(0), 4.).0;
-    assert!(panel.label.contains("unavailable") && panel.series.is_empty());
+    assert!(
+        panel.label.contains("unavailable") && panel.series.iter().flatten().all(|v| v.is_nan())
+    );
     assert!(
         one.panel(records(4, true), &overview(), Some(0), 5.)
             .0
             .series
-            .is_empty()
+            .iter()
+            .flatten()
+            .all(|v| v.is_nan())
     );
 }
 #[test]
@@ -222,7 +234,9 @@ fn clock_regressions_stale_gaps_and_raw_resets_wait_for_a_fresh_interval() {
             view.panel(records(1, true), &overview(), None, time)
                 .0
                 .series
-                .is_empty()
+                .iter()
+                .flatten()
+                .all(|v| v.is_nan())
         );
     }
     let mut view = View::default();
@@ -232,10 +246,13 @@ fn clock_regressions_stale_gaps_and_raw_resets_wait_for_a_fresh_interval() {
         view.panel(records(0, true), &overview(), None, 3.)
             .0
             .series
-            .is_empty()
+            .iter()
+            .flatten()
+            .all(|v| v.is_nan())
     );
     let panel = view.panel(records(1, true), &overview(), None, 4.).0;
-    assert_eq!(&panel.series[0][118..], &[0., 45.]);
+    assert!(panel.series[0][..119].iter().all(|v| v.is_nan()));
+    assert_eq!(panel.series[0][119], 45.);
     let mut idle = View::default();
     let a = metric_sources::cpu_records("cpu 0 0 0 100 0 0 0 0");
     idle.panel(a, &overview(), None, 1.);
@@ -249,6 +266,45 @@ fn clock_regressions_stale_gaps_and_raw_resets_wait_for_a_fresh_interval() {
         .0;
     assert!(panel.series.iter().all(|s| s.last() == Some(&0.)));
 }
+#[test]
+fn delayed_intervals_and_zero_progress_preserve_observations_without_fake_idle() {
+    let mut view = View::default();
+    view.panel(records(0, true), &overview(), None, 0.);
+    let panel = view.panel(records(1, true), &overview(), None, 300.).0;
+    assert_eq!(panel.series[0][119], 45.); // Five-minute boundary is inclusive.
+    let panel = view.panel(records(2, true), &overview(), None, 600.001).0;
+    assert_eq!(panel.series[0][118], 45.);
+    assert!(panel.series[0][119].is_nan());
+    let panel = view.panel(records(3, true), &overview(), None, 601.).0;
+    assert_eq!(panel.series[0][119], 45.);
+    let panel = view.panel(records(3, true), &overview(), None, 602.).0;
+    assert!(panel.series[0][119].is_nan());
+    assert_eq!(panel.series[0][118], 45.);
+    view.clear_graph();
+    let panel = view.panel(records(4, true), &overview(), None, 603.).0;
+    assert_eq!(panel.series[0][119], 45.); // Clear did not discard the baseline.
+    assert!(panel.series[0][..119].iter().all(|v| v.is_nan()));
+}
+
+#[test]
+fn recovery_after_invalid_clock_and_inventory_change_never_reuses_an_old_scope() {
+    let mut view = View::default();
+    view.panel(records(0, true), &overview(), None, 0.);
+    view.panel(records(1, true), &overview(), None, 1.);
+    let panel = view.panel(records(2, true), &overview(), None, f64::NAN).0;
+    assert_eq!(panel.series[0][118], 45.);
+    assert!(panel.series[0][119].is_nan());
+    let panel = view.panel(records(3, true), &overview(), None, 3.).0;
+    assert!(panel.series[0][118..].iter().all(|v| v.is_nan()));
+    let panel = view.panel(records(4, true), &overview(), None, 4.).0;
+    assert_eq!(panel.series[0][119], 45.);
+    view.panel(Err("unreadable".into()), &overview(), None, 5.);
+    let mut changed = records(5, true).unwrap();
+    changed.cores.remove(&2);
+    let panel = view.panel(Ok(changed), &overview(), None, 6.).0;
+    assert!(panel.series.iter().flatten().all(|v| v.is_nan()));
+}
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Drop for Fixture {

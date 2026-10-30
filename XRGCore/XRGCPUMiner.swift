@@ -38,8 +38,11 @@ public struct XRGCPUTicks: Sendable {
 @objc(XRGCPUMiner)
 public final class XRGCPUMiner: NSObject {
     private let source: () -> [XRGCPUTicks]?
+    private let clock: () -> Double
     private var slowBaseline: [XRGCPUTicks]?
     private var fastBaseline: [XRGCPUTicks]?
+    private var slowTime: Double?
+    private var fastTime: Double?
     private var sampleCount = 0
     private var fast: [Int?] = []
     private var current: [CGFloat?] = []
@@ -60,16 +63,33 @@ public final class XRGCPUMiner: NSObject {
     @objc public var fastValues: [NSNumber] { fast.map { NSNumber(value: $0 ?? 0) } }
 
     public override convenience init() { self.init(source: Self.readTicks) }
-    public init(source: @escaping () -> [XRGCPUTicks]?) {
+    public convenience init(source: @escaping () -> [XRGCPUTicks]?) {
+        self.init(source: source, clock: Self.continuousSeconds)
+    }
+    public init(source: @escaping () -> [XRGCPUTicks]?, clock: @escaping () -> Double) {
         self.source = source
+        self.clock = clock
         super.init()
         if let initial = source(), !initial.isEmpty {
             configure(initial.count)
-            slowBaseline = initial
-            fastBaseline = initial
+            let time = clock()
+            if time.isFinite && time >= 0 {
+                slowBaseline = initial; slowTime = time
+                fastBaseline = initial; fastTime = time
+            }
         } else {
             configure(max(1, ProcessInfo.processInfo.processorCount))
         }
+    }
+
+    private static let timebase: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom) / 1_000_000_000
+    }()
+    private static func continuousSeconds() -> Double {
+        // Unlike uptime ticks, this clock also advances during system sleep.
+        Double(mach_continuous_time()) * timebase
     }
 
     private func configure(_ count: Int) {
@@ -95,6 +115,7 @@ public final class XRGCPUMiner: NSObject {
         countersAvailable = false; fastCountersAvailable = false
         slowBaseline = nil
         fastBaseline = nil
+        slowTime = nil; fastTime = nil
     }
 
     @objc public func setDataSize(_ count: Int) {
@@ -127,14 +148,17 @@ public final class XRGCPUMiner: NSObject {
             if average >= 0 { currentLoadAverage = average }
         }
         guard let next = source(), !next.isEmpty else {
-            countersAvailable = false; slowBaseline = nil
+            countersAvailable = false; slowBaseline = nil; slowTime = nil
             current = Array(repeating: nil, count: numberOfCPUs)
             for data in userValues + systemValues + niceValues { data.setNextValue(XRGGraphRenderer.missingValue) }
             return
         }
         configure(next.count)
-        let values = usage(next, previous: slowBaseline)
-        slowBaseline = next
+        let time = clock()
+        let intervalValid = slowTime.map { XRGCPUInterval.isValid(previous: $0, current: time) } ?? false
+        let values = usage(next, previous: intervalValid ? slowBaseline : nil)
+        slowBaseline = time.isFinite && time >= 0 ? next : nil
+        slowTime = slowBaseline == nil ? nil : time
         countersAvailable = values.contains { $0 != nil }
         current = values.map { value in value.map { min(100, max(0, $0.0 + $0.1 + $0.2)) } }
         for (index, value) in values.enumerated() {
@@ -146,13 +170,16 @@ public final class XRGCPUMiner: NSObject {
 
     @objc public func fastUpdate(_ timer: Timer?) {
         guard let next = source(), !next.isEmpty else {
-            fastCountersAvailable = false; fastBaseline = nil
+            fastCountersAvailable = false; fastBaseline = nil; fastTime = nil
             fast = Array(repeating: nil, count: numberOfCPUs)
             return
         }
         configure(next.count)
-        let values = usage(next, previous: fastBaseline)
-        fastBaseline = next
+        let time = clock()
+        let intervalValid = fastTime.map { XRGCPUInterval.isValid(previous: $0, current: time) } ?? false
+        let values = usage(next, previous: intervalValid ? fastBaseline : nil)
+        fastBaseline = time.isFinite && time >= 0 ? next : nil
+        fastTime = fastBaseline == nil ? nil : time
         fastCountersAvailable = values.contains { $0 != nil }
         for (index, value) in values.enumerated() {
             guard let value else { fast[index] = nil; continue }

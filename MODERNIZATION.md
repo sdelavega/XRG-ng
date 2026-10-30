@@ -1299,3 +1299,30 @@ avoidance of memory-domain load. All 60 Rust tests and the complete local Linux
 Debug/Release scripts pass. The earlier ARM integration commit (064b5d8) passed all four hosted jobs on native
 x86_64/ARM64 in Debug/Release; the load addition is validated again on the same
 matrix after push.
+
+### CPU interval validity and retained missing-history gaps
+
+Both platforms now use the shared Swift CPU interval predicate, with an additive
+C ABI for Rust: finite nonnegative timestamps, strictly increasing and no more
+than 300 seconds apart. Mac normal and fast streams retain independent clock and
+counter baselines; graph clearing/resizing does not rebase either stream. Mac uses
+the continuous Mach clock, including sleep. Linux retains its existing worker
+elapsed clock, which excludes suspend; actual sleep/wake equivalence remains open.
+
+Linux CPU history now retains observations around failed reads, invalid/delayed
+intervals and zero-progress counters. Initial padding and missing positions are
+masked as gaps rather than idle. Scope/inventory, counter layout and rollback
+boundaries still clear the affected plot. Inventory persists independently of
+interval baselines, including through read failures. The outer metric sampler also
+preserves CPU history when rejecting an invalid clock, without polling counters.
+Refresh settings, graph styles and unrelated collectors retain their behavior.
+
+Validation: 563 Mac tests passed on ARM64 and 563 under x86_64 Rosetta, with
+universal build, launch/packaged-app checks and five live CPU intervals per
+architecture. Linux ARM64 passed 29 shared Swift tests, the C ABI smoke, strict
+Clippy and 544 Rust tests, plus egui/preferences/file-picker/clipboard/reset and
+X11/nested-Wayland collapse checks at normal/scaled sizes. One scaled X11 relaunch
+timed out and passed an unchanged rerun; logs retain that limitation. The disposable
+image needed the X11/Wayland packages already listed in the hosted CI workflow.
+Evidence is in `dist/cpu-cadence-validation`; physical Intel, other Linux hardware
+and real sleep/wake behavior remain unverified.

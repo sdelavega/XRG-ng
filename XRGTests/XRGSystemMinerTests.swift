@@ -124,6 +124,45 @@ struct XRGCPUMinerTests {
         #expect(miner.fastUsage(forCPU: 0) == 12 && miner.currentUsage(forCPU: 0) == 40)
     }
 
+    @Test func invalidAndDelayedClocksLeaveGapsWithoutErasingObservedHistory() {
+        for badTime in [1.0, 0.5, 301.001, .nan, .infinity, -1] {
+            var time = 0.0
+            var values = [ticks(0, 0, 0)]
+            let miner = XRGCPUMiner(source: { values }, clock: { time })
+            miner.setDataSize(5)
+            time = 1; values = [ticks(20, 0, 80)]; miner.graphUpdate(nil)
+            #expect(miner.currentUsage(forCPU: 0) == 20)
+            time = badTime; values = [ticks(40, 0, 160)]; miner.graphUpdate(nil)
+            #expect(!miner.countersAvailable && miner.currentUsage(forCPU: 0) == nil)
+            #expect(miner.userValues[0].orderedValues.suffix(2) == [20, XRGGraphRenderer.missingValue])
+            time = badTime.isFinite && badTime >= 0 ? badTime + 1 : 10
+            values = [ticks(60, 0, 240)]; miner.graphUpdate(nil)
+            if !badTime.isFinite || badTime < 0 {
+                #expect(miner.currentUsage(forCPU: 0) == nil)
+                time += 1; values = [ticks(80, 0, 320)]; miner.graphUpdate(nil)
+            }
+            #expect(miner.currentUsage(forCPU: 0) == 20)
+        }
+    }
+
+    @Test func intervalBoundaryAndGraphClearingPreserveIndependentClockBaselines() {
+        var time = 0.0
+        var values = [ticks(0, 0, 0)]
+        let miner = XRGCPUMiner(source: { values }, clock: { time }); miner.setDataSize(3)
+        time = 299; values = [ticks(20, 0, 80)]; miner.fastUpdate(nil)
+        time = 300; values = [ticks(40, 0, 160)]; miner.graphUpdate(nil)
+        #expect(miner.currentUsage(forCPU: 0) == 20) // Inclusive five-minute limit.
+        miner.reset(); miner.setDataSize(4)
+        time = 600; values = [ticks(60, 0, 240)]; miner.fastUpdate(nil)
+        #expect(miner.fastUsage(forCPU: 0) == nil && miner.currentUsage(forCPU: 0) == 20)
+        miner.graphUpdate(nil)
+        #expect(miner.currentUsage(forCPU: 0) == 20) // Reset did not rebase the slow clock.
+        time = 601; values = [ticks(80, 0, 320)]; miner.fastUpdate(nil)
+        #expect(miner.fastUsage(forCPU: 0) == 5)
+        time = 901; values = [ticks(100, 0, 400)]; miner.graphUpdate(nil)
+        #expect(miner.currentUsage(forCPU: 0) == nil && miner.fastUsage(forCPU: 0) == 5)
+    }
+
     @Test func liveMachCPUReader() throws {
         for _ in 0..<20 {
             let ticks = try #require(XRGCPUMiner.readTicks())

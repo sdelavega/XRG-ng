@@ -3,6 +3,7 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_cpu_interval_valid(previous: f64, current: f64) -> i32;
     fn xrg_ai_sampling_milliseconds() -> u64;
     fn xrg_log_file_continues(
         old_device: u64,
@@ -673,6 +674,10 @@ mod log_continuity_tests {
 
 pub fn ai_sampling_milliseconds() -> u64 {
     unsafe { xrg_ai_sampling_milliseconds() }
+}
+
+pub fn cpu_interval_valid(previous: f64, current: f64) -> bool {
+    unsafe { xrg_cpu_interval_valid(previous, current) == 1 }
 }
 
 #[cfg(test)]

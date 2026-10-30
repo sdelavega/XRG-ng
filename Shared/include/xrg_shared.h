@@ -14,6 +14,9 @@ extern "C" {
  * Histories start zero-filled; copy returns oldest-to-newest including that padding.
  * Rate output saturates at UINT32_MAX bytes/sec; first/reset samples return zero. */
 uint32_t xrg_shared_abi_version(void);
+/* CPU interval: finite nonnegative timestamps on one monotonic clock,
+ * strictly increasing, at most 300 seconds apart. Returns 1 valid, else 0. */
+int32_t xrg_cpu_interval_valid(double previous, double current);
 /* Weather additions retain ABI v1. Station returns 4 uppercase ASCII bytes,
  * no NUL, or -1. Input <=64 bytes; capacity >=4; failures leave output untouched. */
 int32_t xrg_metar_station(const uint8_t *bytes, uint32_t length, uint8_t *output, uint32_t capacity);

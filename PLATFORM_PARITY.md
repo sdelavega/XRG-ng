@@ -97,9 +97,16 @@ Implemented in development for monitoring tools:
   recovery first establishes a fresh baseline. Normal/fast streams recover separately.
   An aggregate requires valid intervals on all selected cores; pinned valid cores
   remain usable independently. Changed CPU counts clear history and both baselines
-  to avoid logical-slot mixing. Remaining differences: OS tick/CPU accounting and
-  suspend/delayed-interval policies and gap retention (Mac retains older valid CPU
-  samples around gaps; Linux clears affected CPU history). Mac stacks system/user/nice while Linux plots
+  to avoid logical-slot mixing. Both now share a CPU interval boundary: finite,
+  nonnegative, strictly increasing monotonic timestamps at most five minutes apart.
+  Missing reads, invalid/delayed intervals and zero-progress counters leave gaps
+  while retaining earlier observations; Linux initial padding is also missing.
+  Graph clearing preserves interval baselines. Linux counter rollback/layout or
+  graph scope changes still clear the affected history; inventory survives failed
+  reads so recovery cannot mix scopes. Mac uses a continuous clock that includes
+  sleep; the Linux worker's elapsed clock excludes suspend. Remaining differences:
+  OS tick/CPU accounting, suspend detection, and topology/wrap policies.
+  Mac stacks system/user/nice while Linux plots
   independent non-idle/user/system curves. Linux may still have a valid kernel
   aggregate when an individual logical-CPU interval is unavailable.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,

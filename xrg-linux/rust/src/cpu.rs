@@ -5,7 +5,7 @@ use crate::{
     collectors::{LinuxSources, cpu_usage},
     engine::{Panel, Scale},
     metric_sources::{self, CpuRecords},
-    shared::History,
+    shared::{History, cpu_interval_valid},
     system_file,
 };
 use std::{path::Path, time::Duration};
@@ -133,6 +133,10 @@ pub struct View {
     previous: Option<(CpuRecords, f64)>,
     selected: Option<u32>,
     histories: [History; 3],
+    // The shared finite-only history ABI stores placeholders for gaps. Keep
+    // validity separately so unread intervals and initial padding never plot 0%.
+    observed: [bool; 120],
+    scope: Option<Vec<u32>>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -140,6 +144,8 @@ impl Default for View {
             previous: None,
             selected: None,
             histories: std::array::from_fn(|_| History::new(120)),
+            observed: [false; 120],
+            scope: None,
         }
     }
 }
@@ -148,9 +154,10 @@ impl View {
         for history in &mut self.histories {
             history.clear();
         }
+        self.observed.fill(false);
     }
     pub fn reset_history(&mut self) {
-        self.histories = std::array::from_fn(|_| History::new(120));
+        self.clear_graph();
     }
     pub fn sample(
         &mut self,
@@ -184,9 +191,38 @@ impl View {
         }
         let result = records.and_then(|next| {
             inventory = next.cores.keys().copied().collect();
-            let previous = self.previous.take().filter(|(_, old)| {
-                time.is_finite() && time >= 0. && time > *old && time - old <= 300.
-            });
+            let scope = selected.map_or_else(
+                || inventory.clone(),
+                |id| {
+                    next.cores
+                        .contains_key(&id)
+                        .then_some(id)
+                        .into_iter()
+                        .collect()
+                },
+            );
+            // Keep inventory across failed reads, independently of the interval
+            // baseline, so recovery cannot combine different graph scopes.
+            if self.scope.as_ref().is_some_and(|old| *old != scope) {
+                self.reset_history();
+            }
+            self.scope = Some(scope);
+            let previous = self.previous.take();
+            if previous.as_ref().is_some_and(|(old, _)| {
+                let pair = selected.map_or(Some((old.total, next.total)), |id| {
+                    old.cores
+                        .get(&id)
+                        .zip(next.cores.get(&id))
+                        .map(|(a, b)| (*a, *b))
+                });
+                pair.is_some_and(|(old, next)| {
+                    old.fields != next.fields
+                        || old.ticks.iter().zip(next.ticks).any(|(a, b)| b < *a)
+                })
+            }) {
+                self.reset_history();
+            }
+            let previous = previous.filter(|(_, old)| cpu_interval_valid(*old, time));
             let same_members = previous
                 .as_ref()
                 .is_some_and(|(old, _)| old.cores.keys().eq(next.cores.keys()));
@@ -234,7 +270,8 @@ impl View {
             }
             result
         });
-        let mut series = Vec::new();
+        self.observed.rotate_left(1);
+        self.observed[119] = result.is_ok();
         let mut detail = Vec::new();
         let label = match result {
             Ok(value) => {
@@ -257,7 +294,6 @@ impl View {
                         .zip([value.busy, value.user, value.system])
                 {
                     history.append(value);
-                    series.push(history.values());
                 }
                 detail.push(format!("Non-idle: {:.1}%\nUser including nice: {:.1}%\nNice (part of user): {:.1}%\nSystem including reported IRQ/softirq: {:.1}%\nIdle excluding iowait: {:.1}%", value.busy, value.user, value.nice, value.system, value.idle));
                 detail.push(if value.fields >= 5 {
@@ -287,10 +323,24 @@ impl View {
                 )
             }
             Err(error) => {
-                self.reset_history();
+                for history in &mut self.histories {
+                    history.append(0.);
+                }
                 error
             }
         };
+        let series = self
+            .histories
+            .iter()
+            .map(|history| {
+                history
+                    .values()
+                    .into_iter()
+                    .zip(self.observed)
+                    .map(|(value, observed)| if observed { value } else { f64::NAN })
+                    .collect()
+            })
+            .collect();
         use crate::dashboard::Row;
         if readout.top.is_empty() {
             readout.top.push(Row::new("CPU", "n/a"));
@@ -313,7 +363,7 @@ impl View {
         ));
         detail.push("Graph-face CPU total uses core-percent (average × logical CPU count); Average and history use aggregate capacity, 0–100%. Load shows the one-minute system average. Per-core bars include reported steal time as non-idle and show at most 64 CPUs. Missing intervals remain gaps.".into());
         detail.insert(0, label.clone());
-        detail.push(format!("Scope: {}. Graph curves: total non-idle / user including nice / system including reported interrupts; independent percentages, not stacked. Idle includes iowait for the total curve. Guest time already in user/nice is not counted twice. Steal is hypervisor wait, not executed CPU work. Counter regressions (including iowait), CPU inventory changes for the aggregate, failed reads and invalid or delayed intervals clear the affected history.", selected.map(|id| format!("logical CPU {id}")).unwrap_or_else(|| "all reported logical CPUs (100% is aggregate capacity)".into())));
+        detail.push(format!("Scope: {}. Graph curves: total non-idle / user including nice / system including reported interrupts; independent percentages, not stacked. Idle includes iowait for the total curve. Guest time already in user/nice is not counted twice. Steal is hypervisor wait, not executed CPU work. Counter regressions (including iowait), counter layout and scope changes clear the affected history. Failed reads, zero-progress counters and invalid or delayed intervals leave gaps while retaining earlier observations. CPU intervals must increase on the worker's monotonic clock and be at most five minutes; it excludes suspend on Linux. Recovery establishes a fresh baseline. Clearing graphs preserves the collector baseline.", selected.map(|id| format!("logical CPU {id}")).unwrap_or_else(|| "all reported logical CPUs (100% is aggregate capacity)".into())));
         detail.push(overview.description());
         (
             Panel {

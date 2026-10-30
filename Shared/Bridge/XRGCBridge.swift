@@ -7,6 +7,11 @@ import Foundation
 // the matching create function and release it exactly once. No Swift layout escapes.
 @c(xrg_shared_abi_version) public func abiVersion() -> UInt32 { 1 }
 
+/// Additive ABI v1: the same CPU interval boundary on both platforms.
+@c(xrg_cpu_interval_valid) public func cpuIntervalValid(_ previous: Double, _ current: Double) -> Int32 {
+    XRGCPUInterval.isValid(previous: previous, current: current) ? 1 : 0
+}
+
 // Additive weather ABI. Fixed-width scalar arrays, never Swift struct layout.
 @c(xrg_metar_station) public func metarStation(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
     _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
