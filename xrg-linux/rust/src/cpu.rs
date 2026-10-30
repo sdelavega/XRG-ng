@@ -323,6 +323,7 @@ impl View {
                 series,
                 scale: Scale::Percent,
                 temperature_text: None,
+                weather_plot: None,
                 readout,
             },
             valid,

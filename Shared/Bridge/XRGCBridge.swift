@@ -223,3 +223,48 @@ private struct TokenLedgerResponse: Encodable { let delta: XRGTokenAccounting.De
     box.ledger = ledger
     return Int32(data.count)
 }
+
+private struct WeatherHistoryRow: Encodable {
+    let station: String
+    let observed_at: Int64
+    let temperature_c: Double?
+    let dewpoint_c: Double?
+    let humidity: Int?
+    let wind_degrees: Int?
+    let wind_knots: Double?
+    let gust_knots: Double?
+    let visibility_miles: Double?
+    let visibility_qualifier: String
+    let pressure_hpa: Double?
+    let pressure_in: Double?
+    let raw: String
+}
+/// Additive ABI v1: all dated matching observations, deduplicated and oldest first.
+@c(xrg_metar_history_parse) public func metarHistoryParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ station: UnsafePointer<UInt8>?, _ stationLength: UInt32, _ reference: Int64,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32) -> Int32 {
+    guard length <= 2_097_152, stationLength <= 64, (0...253_402_300_799).contains(reference),
+          let bytes, let station, let output,
+          let text = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(length)), encoding: .utf8),
+          let name = String(bytes: UnsafeBufferPointer(start: station, count: Int(stationLength)), encoding: .utf8),
+          let code = XRGWeatherReport.station(name) else { return -1 }
+    let now = Date(timeIntervalSince1970: Double(reference))
+    var rows: [Int64: WeatherHistoryRow] = [:]
+    for report in XRGWeatherReport.reports(in: text, station: code) {
+        guard let date = report.observationDate(relativeTo: now),
+              report.raw.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { continue }
+        let time = Int64(date.timeIntervalSince1970)
+        // The first report for a timestamp wins within one response. Later
+        // successful responses may replace that timestamp with a correction.
+        guard rows[time] == nil else { continue }
+        rows[time] = WeatherHistoryRow(station: code, observed_at: time,
+            temperature_c: report.temperatureC, dewpoint_c: report.dewpointC, humidity: report.humidity,
+            wind_degrees: report.windDirection, wind_knots: report.windKnots, gust_knots: report.gustKnots,
+            visibility_miles: report.visibilityMiles, visibility_qualifier: report.visibilityQualifier,
+            pressure_hpa: report.pressureHPA, pressure_in: report.pressureIn, raw: report.raw)
+    }
+    guard !rows.isEmpty, let data = try? JSONEncoder().encode(rows.keys.sorted().compactMap { rows[$0] }) else { return -1 }
+    guard data.count <= capacity else { return -2 }
+    for (index, byte) in data.enumerated() { output[index] = byte }
+    return Int32(data.count)
+}

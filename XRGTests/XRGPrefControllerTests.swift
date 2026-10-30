@@ -245,6 +245,26 @@ struct XRGPrefControllerTests {
         #expect(f.pref.persistPreferences() && f.defaults.string(forKey: "networkInterface") == "en4")
         f.pref.setUpNetworkPanel(); #expect(popup.indexOfSelectedItem == 0)
     }
+    @Test func weatherHistoryControlIsIdempotentDraftOnlyAndPersistsOnApply() throws {
+        let f = try PreferencesFixture(); defer { f.cleanUp() }
+        let panel = try #require(f.pref.WeatherPrefView), height = panel.frame.height, count = panel.subviews.count
+        let menu = try #require(panel.viewWithTag(1200) as? NSPopUpButton)
+        #expect(menu.selectedItem?.representedObject as? Int == 0)
+        menu.selectItem(at:3)
+        #expect(f.graph.appSettings?.weatherHistoryHours == 0 && f.defaults.integer(forKey:"weatherHistoryHours") == 0)
+        #expect(try f.pref.preferencesSnapshot()["weatherHistoryHours"] as? Int == 24)
+        f.pref.setUpWeatherPanel()
+        #expect(menu.indexOfSelectedItem == 0 && panel.frame.height == height && panel.subviews.count == count)
+        menu.selectItem(at:2)
+        #expect(f.pref.persistPreferences() && f.graph.appSettings?.weatherHistoryHours == 12)
+        #expect(f.defaults.integer(forKey:"weatherHistoryHours") == 12)
+        let restored = XRGSettings(defaults:f.defaults)
+        _ = XRGWindowPreferences.apply(f.defaults.dictionaryRepresentation() as NSDictionary,to:restored)
+        #expect(restored.weatherHistoryHours == 12)
+        var invalid = f.defaults.dictionaryRepresentation(); invalid["weatherHistoryHours"] = 1
+        _ = XRGWindowPreferences.apply(invalid as NSDictionary,to:restored)
+        #expect(restored.weatherHistoryHours == 0)
+    }
     @Test func saveCapturesAllControlFamiliesAndPendingTextEdits() throws {
         let f = try PreferencesFixture(); defer { f.cleanUp() }
         f.pref.windowTitle?.stringValue = "Saved title"; f.pref.ICAOCode?.stringValue = "KJFK"; f.pref.stockSymbols?.stringValue = "AAPL,MSFT"

@@ -424,6 +424,19 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     }
     public func setUpDiskPanel() { bind(diskGraphMode, #selector(XRGGraphWindow.setDiskGraphMode(_:))); diskGraphMode?.selectCell(atRow: settings?.diskGraphMode ?? 0, column: 0) }
     public func setUpWeatherPanel() {
+        if let panel = WeatherPrefView {
+            if panel.viewWithTag(1200) == nil {
+                for child in panel.subviews { child.frame.origin.y += 44 }
+                panel.frame.size.height += 44
+                let label = NSTextField(labelWithString: "History window:"); label.frame = NSRect(x:20,y:12,width:150,height:22); panel.addSubview(label)
+                let menu = NSPopUpButton(frame:NSRect(x:180,y:10,width:240,height:26)); menu.tag = 1200
+                menu.setAccessibilityLabel("Weather history window")
+                for (hours,title) in [(0,"Received response (legacy)"),(6,"Last 6 hours"),(12,"Last 12 hours"),(24,"Last 24 hours")] { menu.addItem(withTitle:title); menu.lastItem?.representedObject=hours }
+                panel.addSubview(menu)
+            }
+            let menu = panel.viewWithTag(1200) as? NSPopUpButton
+            menu?.select(menu?.itemArray.first { ($0.representedObject as? Int) == (settings?.weatherHistoryHours ?? 0) })
+        }
         bind(ICAOCode, #selector(XRGGraphWindow.setICAO(_:))); ICAOCode?.stringValue = settings?.ICAO ?? ""
         weatherStationListLink?.title = "Station Listing"; bind(weatherStationListLink, #selector(openWeatherStationList(_:)), target: self)
         popup(secondaryWeatherGraph, titles: ["None", "Wind Speed", "Relative Humidity", "Visibility", "Dewpoint", "Pressure"], selected: settings?.secondaryWeatherGraph ?? 0, action: #selector(XRGGraphWindow.setSecondaryWeatherGraph(_:)))
@@ -546,6 +559,10 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         if let button = showTotalBandwidthSinceBoot { values["showTotalBandwidthSinceBoot"] = button.state == .on }
         if let button = showTotalBandwidthSinceLoad { values["showTotalBandwidthSinceLoad"] = button.state == .on }
         if let popup = secondaryWeatherGraph, popup.indexOfSelectedItem >= 0 { values["secondaryWeatherGraph"] = popup.indexOfSelectedItem }
+        if let popup = WeatherPrefView?.viewWithTag(1200) as? NSPopUpButton {
+            guard let hours = popup.selectedItem?.representedObject as? Int, [0,6,12,24].contains(hours) else { throw Self.invalidInput }
+            values["weatherHistoryHours"] = hours
+        }
         if let popup = temperatureUnits, popup.indexOfSelectedItem >= 0 { values["temperatureUnits"] = popup.indexOfSelectedItem }
         if let popup = distanceUnits, popup.indexOfSelectedItem >= 0 { values["distanceUnits"] = popup.indexOfSelectedItem }
         if let popup = pressureUnits, popup.indexOfSelectedItem >= 0 { values["pressureUnits"] = popup.indexOfSelectedItem }
@@ -591,6 +608,10 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             let values = try preferencesSnapshot()
             // Validate and archive the complete snapshot before the first persistent write.
             for (key, value) in values { defaults.set(value, forKey: key) }
+            if let hours = values["weatherHistoryHours"] as? Int {
+                settings.weatherHistoryHours = hours
+                graph.weatherView?.needsDisplay = true
+            }
             if let ICAOCode, settings.ICAO != ICAOCode.stringValue { graph.setICAO(ICAOCode) }
             if let stockSymbols, settings.stockSymbols != stockSymbols.stringValue { graph.setStockSymbols(stockSymbols) }
             if let windowTitle { graph.setWindowTitle(windowTitle) }

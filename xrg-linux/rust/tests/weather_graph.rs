@@ -17,6 +17,8 @@ fn update(station: &str, raw: &str) -> Update {
         detail: "Fixture · no network".into(),
         stale: false,
         cooldown_seconds: 0,
+        history: Vec::new(),
+        reference_time: None,
     }
 }
 fn reading() -> Update {
@@ -216,4 +218,71 @@ fn independent_units_change_presentation_without_replacing_history() {
             .iter()
             .any(|r| r.right.render(temperature::Units::Fahrenheit) == "30.00inHg")
     );
+}
+
+fn archive() -> Update {
+    let mut value = update("KSEA", "KSEA 271200Z 21010KT 10SM 20/10 Q1013");
+    value.preferences.history_hours = Some(6);
+    value.reference_time = Some(WALL);
+    value.history = shared::metar_history(b"KSEA 270500Z 30/20 Q1010\nKSEA 270700Z 10/05 Q1011\nKSEA 271100Z 12/06 Q1012\nKSEA 271200Z 21010KT 10SM 20/10 Q1013", "KSEA", WALL).unwrap();
+    value
+}
+#[test]
+fn time_window_uses_utc_positions_gaps_and_scoped_extrema() {
+    let mut value = archive();
+    let mut graph = Graph::default();
+    let panel = graph.panel(Some(&value));
+    let xs = &panel.weather_plot.as_ref().unwrap().positions;
+    assert_eq!(panel.series[0].len(), 4);
+    assert_eq!(panel.series[0][0], 10.);
+    assert!(panel.series[0][1].is_nan());
+    assert!((xs[0] - 50. / 360.).abs() < 1e-9);
+    assert!((xs[3] - 350. / 360.).abs() < 1e-9);
+    assert!((xs[3] - xs[2] - 1. / 6.).abs() < 1e-9);
+    assert!(panel.detail.contains("20.0 °C / 10.0 °C"));
+    value.preferences.history_hours = Some(12);
+    let wider = graph.panel(Some(&value));
+    assert_eq!(wider.series[0][0], 30.);
+    assert!(wider.detail.contains("30.0 °C / 10.0 °C"));
+    graph.clear_graph();
+    assert_eq!(graph.panel(Some(&value)).series[0], vec![20.]);
+}
+#[test]
+fn secondary_axes_are_independent_and_missing_or_bounded_values_stay_gaps() {
+    use xrg_ng_linux::weather::Secondary;
+    let mut value = archive();
+    let mut graph = Graph::default();
+    value.preferences.secondary = Secondary::Pressure;
+    let panel = graph.panel(Some(&value));
+    let primary = panel.plot_bounds(0, 0);
+    let secondary = panel.plot_bounds(1, 0);
+    assert!(primary.1 < 100. && secondary.0 > 1000.);
+    assert_eq!(panel.series[1].last(), Some(&1013.));
+    value.preferences.pressure_units = Some(Units::Us);
+    assert!(graph.panel(Some(&value)).plot_bounds(1, 0).1 < 31.);
+    value.preferences.secondary = Secondary::Humidity;
+    assert_eq!(graph.panel(Some(&value)).plot_bounds(1, 0), (0., 100.));
+    value.preferences.secondary = Secondary::Visibility;
+    value.observation.as_mut().unwrap().visibility_qualifier = "<";
+    let bounded = graph.panel(Some(&value));
+    assert!(bounded.series[1].last().unwrap().is_nan());
+    value.preferences.secondary = Secondary::Wind;
+    value.preferences.wind_units = Some(xrg_ng_linux::weather::WindUnits::Knots);
+    assert_eq!(graph.panel(Some(&value)).series[1].last(), Some(&10.));
+    value.observation.as_mut().unwrap().temperature_c = None;
+    let missing = graph.panel(Some(&value));
+    assert!(missing.series[0].last().unwrap().is_nan());
+    assert_eq!(missing.series[1].last(), Some(&10.));
+}
+#[test]
+fn stale_archive_is_visible_without_a_current_bar_and_station_changes_clear_it() {
+    let mut value = archive();
+    value.stale = true;
+    let mut graph = Graph::default();
+    let panel = graph.panel(Some(&value));
+    assert_eq!(panel.series[0][0], 10.);
+    assert!(panel.series[0].last().unwrap().is_nan());
+    assert_eq!(panel.weather_plot.unwrap().positions.last(), Some(&1.));
+    value.preferences.station = "KJFK".into();
+    assert!(graph.panel(Some(&value)).series.is_empty());
 }

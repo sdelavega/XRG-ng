@@ -99,6 +99,7 @@ impl View {
             series: Vec::new(),
             scale: Scale::Celsius,
             temperature_text: None,
+            weather_plot: None,
             readout: Default::default(),
         };
         let mut report = match report {
@@ -257,7 +258,8 @@ impl View {
         selection: &MetricSelection,
     ) -> (Panel, Vec<SourceOption>) {
         let mut panel = Panel { title: "Fans", label: "No readable fan sensors".into(), series: Vec::new(),
-            detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership. Curve numbers identify graph colors and current-value bars.".into(), scale: Scale::Automatic, temperature_text: None, readout: Default::default() };
+            detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership. Curve numbers identify graph colors and current-value bars.".into(), scale: Scale::Automatic, temperature_text: None,
+            weather_plot: None, readout: Default::default() };
         let report = match report {
             Ok(report) => report,
             Err(error) => {

@@ -46,6 +46,17 @@ struct XRGGraphRendererTests {
     // Bitmap storage is top-to-bottom; graph coordinates are bottom-to-top.
     private func pixelOffset(x: Int, y: Int) -> Int { ((63 - y) * 64 + x) * 4 }
 
+    @Test func observationPositionsPreserveTimeAndRejectInvalidCoordinates() throws {
+        let runs = XRGGraphRenderer.curveRuns([0,-1000,100], upper:100, lower:0, in:rect, flipped:false, positions:[0.1,0.5,0.8])
+        #expect(runs == [[NSPoint(x:20,y:20)],[NSPoint(x:90,y:100)]])
+        for positions: [CGFloat] in [[0.8,0.1],[0,1.1],[0,.nan],[0]] {
+            #expect(XRGGraphRenderer.curveRuns([0,100], upper:100, lower:0, in:rect, flipped:false, positions:positions).isEmpty)
+        }
+        let single = try bitmap {
+            XRGGraphRenderer.drawObservationCurve([50],positions:[0.5],upper:100,lower:0,in:NSRect(x:4,y:4,width:56,height:56),filled:false,color:.blue,style:nil)
+        }
+        #expect(single.contains { $0 != 255 })
+    }
     @Test func chronologicalOrderingNormalizesRawRingIndexes() {
         #expect(XRGGraphRenderer.ordered([30, 40, 10, 20], currentIndex: 1) == [10, 20, 30, 40])
         #expect(XRGGraphRenderer.ordered([30, 40, 10, 20], currentIndex: -3) == [10, 20, 30, 40])

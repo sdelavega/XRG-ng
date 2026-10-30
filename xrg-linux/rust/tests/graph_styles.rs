@@ -58,7 +58,7 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         fs::write(f.path(), &original).unwrap();
         let (mut store, loaded, error) = Store::open(Some(f.path()));
         assert!(error.is_none(), "version {version}: {error:?}");
-        assert_eq!(loaded.version, 23);
+        assert_eq!(loaded.version, 24);
         assert!(loaded.modules.iter().all(|m| m.height.is_none()
             && m.effective_height(loaded.graph_height) == loaded.graph_height));
         assert!(loaded.modules.iter().all(|m| !m.visible

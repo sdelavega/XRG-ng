@@ -105,29 +105,44 @@ pub(super) fn show(
         p.scale.temperature_units(settings.temperature_units)
     });
     if let Some(panel) = panel {
-        let (lower, upper) = panel
-            .scale
-            .bounds_with_minimum(&panel.series, settings.minimum_scale(module));
+        let (lower, upper) = panel.plot_bounds(0, settings.minimum_scale(module));
         let body = Rect::from_min_max(
             face.min,
             pos2(face.right(), face.bottom() - if cores { 18. } else { 0. }),
         );
-        graph::draw(
-            &p,
-            &panel.series,
-            &theme.colors[2..5]
-                .iter()
-                .copied()
-                .map(color)
-                .collect::<Vec<_>>(),
-            Plot {
-                rect: body,
-                lower,
-                upper,
-            },
-            style,
-        );
+        if let Some(meta) = &panel.weather_plot {
+            let colors: Vec<_> = theme.colors[2..5].iter().copied().map(color).collect();
+            let axes: Vec<_> = (0..panel.series.len())
+                .map(|i| panel.plot_bounds(i, 0))
+                .collect();
+            graph::draw_positioned(
+                &p,
+                &panel.series,
+                &colors,
+                &meta.positions,
+                &axes,
+                body,
+                style,
+            );
+        } else {
+            graph::draw(
+                &p,
+                &panel.series,
+                &theme.colors[2..5]
+                    .iter()
+                    .copied()
+                    .map(color)
+                    .collect::<Vec<_>>(),
+                Plot {
+                    rect: body,
+                    lower,
+                    upper,
+                },
+                style,
+            );
+        }
         for i in 0..count {
+            let (lower, upper) = panel.plot_bounds(i, settings.minimum_scale(module));
             let r = Rect::from_min_max(
                 pos2(face.right() + i as f32 * 5., rect.top() + 2.),
                 pos2(face.right() + (i + 1) as f32 * 5. - 1., rect.bottom() - 2.),

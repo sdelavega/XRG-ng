@@ -165,6 +165,7 @@ public final class XRGSettings: NSObject {
     public var antiAliasing: Bool = false
     public var ICAO: String = ""
     public var secondaryWeatherGraph: Int = 1
+    public var weatherHistoryHours: Int = 0
     public var temperatureUnits: Int = 0
     public var distanceUnits: Int = 0
     public var pressureUnits: Int = 0

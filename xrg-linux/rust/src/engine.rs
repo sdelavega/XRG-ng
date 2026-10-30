@@ -22,9 +22,24 @@ pub struct Panel {
     pub scale: Scale,
     pub detail: String,
     pub temperature_text: Option<(crate::temperature::Text, crate::temperature::Text)>,
+    pub weather_plot: Option<crate::weather::ObservationPlot>,
     pub readout: crate::dashboard::Readout,
 }
 impl Panel {
+    pub fn plot_bounds(&self, index: usize, minimum: u64) -> (f64, f64) {
+        if let Some(plot) = &self.weather_plot {
+            if index == 1
+                && let Some(axis) = &plot.secondary
+            {
+                return (axis.lower, axis.upper);
+            }
+            return self.scale.bounds_with_minimum(
+                self.series.first().map_or(&[], std::slice::from_ref),
+                minimum,
+            );
+        }
+        self.scale.bounds_with_minimum(&self.series, minimum)
+    }
     pub fn activity_description(&self, units: crate::temperature::Units) -> String {
         self.activity_description_with_minimum(units, 0)
     }
@@ -34,7 +49,7 @@ impl Panel {
         minimum: u64,
     ) -> String {
         let units = self.scale.temperature_units(units);
-        let (lower, upper) = self.scale.bounds_with_minimum(&self.series, minimum);
+        let (lower, upper) = self.plot_bounds(0, minimum);
         let axis = match self.scale {
             Scale::Percent => "0–100%".into(),
             Scale::SignedWatts => {
@@ -53,6 +68,18 @@ impl Panel {
                     "F"
                 }
             ),
+        };
+        let axis = if let Some(plot) = &self.weather_plot {
+            format!(
+                "{axis}. {}{}",
+                plot.range_label,
+                plot.secondary.as_ref().map_or(String::new(), |a| format!(
+                    "; secondary {} uses its own {:.2}–{:.2} axis",
+                    a.label, a.lower, a.upper
+                ))
+            )
+        } else {
+            axis
         };
         format!(
             "Current-value (‘now’) bars use the graph axis: {axis}. Left to right follows series order. Missing latest readings have no track; measured zero has an empty track. Signed values extend from zero."
@@ -427,6 +454,7 @@ impl Sampler {
             series,
             scale: Scale::Automatic,
             temperature_text: None,
+            weather_plot: None,
             readout: Default::default(),
         }
     }
@@ -643,6 +671,7 @@ impl Sampler {
                 Scale::Automatic
             },
             temperature_text: None,
+            weather_plot: None,
             readout: Default::default(),
         }
         .with_temperature_text(label.into(), Text::join(details, "\n\n"))
@@ -682,6 +711,7 @@ impl Sampler {
                             series,
                             scale: Scale::Percent,
                             temperature_text: None,
+                            weather_plot: None,
                             readout: Default::default(),
                         },
                         vram,
@@ -831,6 +861,7 @@ impl Sampler {
                 series,
                 scale: Scale::Percent,
                 temperature_text: None,
+                weather_plot: None,
                 readout,
             }
             .with_temperature_text(label.into(), detail),

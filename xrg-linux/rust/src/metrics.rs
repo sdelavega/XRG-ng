@@ -214,6 +214,7 @@ impl IoHistory {
                 series,
                 scale: Scale::Automatic,
                 temperature_text: None,
+                weather_plot: None,
                 readout,
                 detail,
             },
@@ -294,6 +295,7 @@ impl Sampler {
                 series: Vec::new(),
                 scale: Scale::Automatic,
                 temperature_text: None,
+                weather_plot: None,
                 readout: Default::default(),
             };
             return Sample {

@@ -109,7 +109,10 @@ public final class XRGGraphRenderer: NSObject {
     }
 
     @nonobjc static func curveRuns(_ values: [CGFloat], upper: CGFloat, lower: CGFloat,
-                                   in rect: NSRect, flipped: Bool) -> [[NSPoint]] {
+                                   in rect: NSRect, flipped: Bool, positions: [CGFloat]? = nil) -> [[NSPoint]] {
+        if let positions {
+            guard positions.count == values.count, positions.allSatisfy({ $0.isFinite && (0...1).contains($0) }), zip(positions, positions.dropFirst()).allSatisfy({ $0 <= $1 }) else { return [] }
+        }
         guard validRect(rect), !values.isEmpty, let (low, high) = limits(upper: upper, lower: lower, tolerance: 0.001) else { return [] }
         var result: [[NSPoint]] = [], run: [NSPoint] = []
         for (index, value) in values.enumerated() {
@@ -117,7 +120,7 @@ public final class XRGGraphRenderer: NSObject {
                 if !run.isEmpty { result.append(run); run = [] }; continue
             }
             let fraction = (min(high, max(low, value)) - low) / (high - low)
-            run.append(NSPoint(x: rect.minX + (CGFloat(index) / CGFloat(max(1, values.count - 1))) * rect.width,
+            run.append(NSPoint(x: rect.minX + (positions?[index] ?? (CGFloat(index) / CGFloat(max(1, values.count - 1)))) * rect.width,
                                y: rect.minY + (flipped ? 1 - fraction : fraction) * rect.height))
         }
         if !run.isEmpty { result.append(run) }
@@ -125,11 +128,11 @@ public final class XRGGraphRenderer: NSObject {
     }
 
     @nonobjc private static func drawCurveValues(_ values: [CGFloat], upper: CGFloat, lower: CGFloat,
-                                                in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?) {
+                                                in rect: NSRect, flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?, positions: [CGFloat]? = nil) {
         guard let style else { draw(values, upper: upper, lower: lower, in: rect, flipped: flipped, filled: filled, color: color); return }
         guard let color, NSGraphicsContext.current != nil,
               let (low, high) = limits(upper: upper, lower: lower, tolerance: 0.001), validRect(rect) else { return }
-        let runs = curveRuns(values, upper: upper, lower: lower, in: rect, flipped: flipped)
+        let runs = curveRuns(values, upper: upper, lower: lower, in: rect, flipped: flipped, positions: positions)
         let zero = (min(high, max(low, 0)) - low) / (high - low)
         let baseline = rect.minY + (flipped ? 1 - zero : zero) * rect.height
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
@@ -137,6 +140,7 @@ public final class XRGGraphRenderer: NSObject {
         var remaining = 100_000
         for run in runs {
             guard let first = run.first, let last = run.last else { continue }
+            if positions != nil && run.count == 1 { NSBezierPath(ovalIn: NSRect(x:first.x-0.9,y:first.y-0.9,width:1.8,height:1.8)).fill(); continue }
             if style == .solid || style == .hollow {
                 let path = NSBezierPath(); path.lineWidth = 1.2
                 if style == .solid { path.move(to: NSPoint(x: first.x, y: baseline)); path.line(to: first) }
@@ -171,6 +175,10 @@ public final class XRGGraphRenderer: NSObject {
         drawCurveValues(dataSet?.orderedValues ?? [], upper: upperBound, lower: lowerBound,
                         in: rect, flipped: flipped, filled: filled, color: color, style: style)
     }
+    @nonobjc static func drawObservationCurve(_ values: [CGFloat], positions: [CGFloat], upper: CGFloat, lower: CGFloat, in rect: NSRect, filled: Bool, color: NSColor, style: XRGCurveStyle?) {
+        drawCurveValues(values, upper: upper, lower: lower, in: rect, flipped: false, filled: filled, color: color, style: filled ? (style ?? .solid) : .hollow, positions: positions)
+    }
+
     @nonobjc static func drawCurveSamples(_ pointer: UnsafePointer<CGFloat>?, count: Int, currentIndex: Int,
                                           upperBound: CGFloat, lowerBound: CGFloat, in rect: NSRect,
                                           flipped: Bool, filled: Bool, color: NSColor?, style: XRGCurveStyle?) {

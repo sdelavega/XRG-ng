@@ -87,6 +87,7 @@ public final class XRGWindowPreferences: NSObject {
             "diskGraphMode": "0",
             "icao": "KMOP",
             "secondaryWeatherGraph": "1",
+            "weatherHistoryHours": "0",
             "stockSymbols": "AAPL",
             "stockGraphTimeFrame": "3",
             "stockShowChange": "YES",
@@ -178,6 +179,8 @@ public final class XRGWindowPreferences: NSObject {
         settings.minimizeUpDown = integer("minimizeUpDown", range: 0...1)
         settings.cpuTemperatureUnits = integer("cpuTemperatureUnits", range: 0...1)
         settings.secondaryWeatherGraph = integer("secondaryWeatherGraph", range: 0...5)
+        let weatherHours = integer("weatherHistoryHours", range: 0...24)
+        settings.weatherHistoryHours = [0,6,12,24].contains(weatherHours) ? weatherHours : 0
         settings.temperatureUnits = integer("temperatureUnits", range: 0...1)
         settings.distanceUnits = integer("distanceUnits", range: 0...1)
         settings.pressureUnits = integer("pressureUnits", range: 0...1)

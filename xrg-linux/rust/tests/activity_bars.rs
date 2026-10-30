@@ -37,7 +37,7 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["version"],
-        23
+        24
     );
     std::fs::remove_dir_all(&root).unwrap();
     assert!(
@@ -135,6 +135,7 @@ fn bar_axis_text_never_calls_rates_or_temperatures_utilization() {
         label: String::new(),
         detail: String::new(),
         temperature_text: None,
+        weather_plot: None,
         readout: Default::default(),
         series: vec![vec![0., 50.]],
         scale: Scale::Percent,

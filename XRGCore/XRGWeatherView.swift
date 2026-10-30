@@ -46,6 +46,9 @@ extension XRGURL: XRGWeatherTransport {}
 @MainActor
 @objc(XRGWeatherView) @objcMembers
 public final class XRGWeatherView: NSView, XRGModuleView {
+    private let now: () -> Date
+    private var requestFailed = false
+    private var reportDates: [String: Date] = [:]
     private let defaults: UserDefaults
     private let standaloneSettings: XRGSettings?
     private let sources: [any XRGWeatherTransport]
@@ -66,21 +69,36 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         return host == nil && !didAwake && standaloneSettings != nil
     }
     public var graphSize: NSSize { bounds.size }
-    @nonobjc var current: XRGWeatherReport? { reports.first }
-    @nonobjc var high: Double? { reports.compactMap(\.temperatureC).max() }
-    @nonobjc var low: Double? { reports.compactMap(\.temperatureC).min() }
+    private var historyHours: Int { let h = settings?.weatherHistoryHours ?? 0; return [6,12,24].contains(h) ? h : 0 }
+    @nonobjc var displayedReports: [XRGWeatherReport] {
+        guard historyHours > 0 else { return reports }
+        let reference = now(), start = reference.addingTimeInterval(-Double(historyHours)*3600)
+        var rows: [Date:XRGWeatherReport] = [:]
+        for report in reports {
+            if let date = reportDates[report.raw] ?? report.observationDate(relativeTo:reference), date >= start, date <= reference, rows[date] == nil { rows[date] = report }
+        }
+        return rows.keys.sorted(by: >).compactMap { rows[$0] }
+    }
+    @nonobjc var current: XRGWeatherReport? { displayedReports.first }
+    @nonobjc var high: Double? { displayedReports.compactMap(\.temperatureC).max() }
+    @nonobjc var low: Double? { displayedReports.compactMap(\.temperatureC).min() }
+    @nonobjc var staleObservation: Bool {
+        guard historyHours > 0 else { return false }
+        let reference = now()
+        return requestFailed || (current.flatMap { reportDates[$0.raw] ?? $0.observationDate(relativeTo:reference) }.map { reference.timeIntervalSince($0)>7200 } ?? true)
+    }
 
     public override init(frame frameRect: NSRect) {
-        defaults = .standard; standaloneSettings = nil; sources = [XRGURL(), XRGURL()]
+        now = Date.init; defaults = .standard; standaloneSettings = nil; sources = [XRGURL(), XRGURL()]
         super.init(frame: frameRect); prepare()
     }
     public required init?(coder: NSCoder) {
-        defaults = .standard; standaloneSettings = nil; sources = [XRGURL(), XRGURL()]
+        now = Date.init; defaults = .standard; standaloneSettings = nil; sources = [XRGURL(), XRGURL()]
         super.init(coder: coder); prepare()
     }
-    @nonobjc init(frame: NSRect, settings: XRGSettings, defaults: UserDefaults, sources: [any XRGWeatherTransport]) {
+    @nonobjc init(frame: NSRect, settings: XRGSettings, defaults: UserDefaults, sources: [any XRGWeatherTransport], now: @escaping () -> Date = Date.init) {
         precondition(sources.count == 2)
-        self.defaults = defaults; standaloneSettings = settings; self.sources = sources
+        self.now = now; self.defaults = defaults; standaloneSettings = settings; self.sources = sources
         super.init(frame: frame); prepare(); setURL(settings.ICAO)
     }
     private func prepare() {
@@ -130,7 +148,7 @@ public final class XRGWeatherView: NSView, XRGModuleView {
     public func setURL(_ text: String?) {
         let station = XRGWeatherReport.station(text ?? "") ?? ""
         guard stationName != station || reports.isEmpty else { return }
-        cancelLoading(); stationName = station; reports = []; retryElapsed = 0
+        cancelLoading(); stationName = station; reports = []; reportDates = [:]; requestFailed = false; retryElapsed = 0
         let endpoints = Self.endpointStrings(station)
         for (index, source) in sources.enumerated() { source.setURLString(endpoints.indices.contains(index) ? endpoints[index] : nil) }
         updateLabels(); needsDisplay = true
@@ -171,7 +189,7 @@ public final class XRGWeatherView: NSView, XRGModuleView {
     public func min30Update(_ timer: Timer?) {
         guard active else { cancelLoading(); return }
         if stationName != (XRGWeatherReport.station(settings?.ICAO ?? "") ?? "") { setURL(settings?.ICAO) }
-        cancelLoading(); reports = []; retryElapsed = 0
+        cancelLoading(); if historyHours == 0 { reports = [] }; retryElapsed = 0
         guard !stationName.isEmpty else { updateLabels(); return }
         gettingData = true
         for source in sources { source.loadURLInBackground() }
@@ -187,15 +205,35 @@ public final class XRGWeatherView: NSView, XRGModuleView {
             let text = source.getData().flatMap { String(data: $0, encoding: .utf8) }
             let candidate = text.map { XRGWeatherReport.reports(in: $0, station: stationName) } ?? []
             if !candidate.isEmpty {
-                reports = candidate; cancelLoading(); retryElapsed = 0; updateLabels(); return
+                if accept(candidate) { cancelLoading(); retryElapsed = 0; updateLabels(); return }
             }
         }
-        if tried.allSatisfy({ $0 }) { cancelLoading() }
+        if tried.allSatisfy({ $0 }) { requestFailed = true; cancelLoading() }
         updateLabels(); needsDisplay = true
+    }
+    private func accept(_ candidate: [XRGWeatherReport]) -> Bool {
+        guard historyHours > 0 else {
+            reports = candidate; reportDates = [:]
+            for row in candidate { reportDates[row.raw] = row.observationDate(relativeTo:now()) }
+            requestFailed = false; return !candidate.isEmpty
+        }
+        let reference = now()
+        var fresh: [Date:XRGWeatherReport] = [:]
+        for row in candidate { if let date = row.observationDate(relativeTo:reference), fresh[date] == nil { fresh[date] = row } }
+        guard let newest = fresh.keys.max() else { return false }
+        let old = reports.compactMap { reportDates[$0.raw] ?? $0.observationDate(relativeTo:reference) }.max()
+        guard old.map({ newest >= $0 }) ?? true else { return false }
+        var merged: [Date:XRGWeatherReport] = [:]
+        for row in reports { if let date = reportDates[row.raw] ?? row.observationDate(relativeTo:reference), date >= reference.addingTimeInterval(-129600) { merged[date] = row } }
+        merged.merge(fresh) { _, new in new }
+        reports = merged.keys.sorted(by: >).prefix(2048).compactMap { merged[$0] }
+        reportDates = Dictionary(uniqueKeysWithValues: reports.compactMap { row in merged.first(where: { $0.value.raw == row.raw }).map { (row.raw, $0.key) } })
+        requestFailed = false; return true
     }
     /// Retained selectors also support direct METAR input without starting a request.
     public func setMETARFromText(_ text: String?) {
-        cancelLoading(); reports = XRGWeatherReport.reports(in: text ?? "", station: stationName)
+        cancelLoading(); let candidate = XRGWeatherReport.reports(in: text ?? "", station: stationName)
+        if !accept(candidate) { requestFailed = true }
         retryElapsed = 0; updateLabels(); needsDisplay = true
     }
     public func setCurrentWeatherDataFromMETAR() { updateLabels(); needsDisplay = true }
@@ -208,20 +246,34 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         let result = max(0, value) / 100 * max(0, bounds.height - XRGGraphLabels.lineHeight(settings))
         return result.isFinite ? result : CGFloat.greatestFiniteMagnitude
     }
-    struct Plot { let values: [CGFloat]; let lower: CGFloat; let upper: CGFloat; let filled: Bool }
+    struct Plot { let values: [CGFloat]; let lower: CGFloat; let upper: CGFloat; let filled: Bool; var positions: [CGFloat]? = nil }
     @nonobjc func plots() -> [Plot] {
-        guard !reports.isEmpty else { return [] }
+        let visible = displayedReports
+        guard !visible.isEmpty else { return [] }
+        var rows: [XRGWeatherReport?] = [], positions: [CGFloat] = []
+        let reference = now(), start = reference.addingTimeInterval(-Double(historyHours)*3600)
+        var previous: Date?
+        for report in visible.reversed() {
+            let date = historyHours > 0 ? (reportDates[report.raw] ?? report.observationDate(relativeTo:reference)) : nil
+            if let date, let previous, date.timeIntervalSince(previous)>7200 {
+                rows.append(nil); positions.append(CGFloat(previous.addingTimeInterval(date.timeIntervalSince(previous)/2).timeIntervalSince(start)/(Double(historyHours)*3600)))
+            }
+            rows.append(report)
+            if let date { positions.append(CGFloat(date.timeIntervalSince(start)/(Double(historyHours)*3600))); previous = date }
+        }
+        if historyHours > 0 && staleObservation { rows.append(nil); positions.append(1) }
         var plots: [Plot] = []
         if let high, let low {
-            plots.append(Plot(values: reports.reversed().map { CGFloat($0.temperatureC ?? -1000) }, lower: low - 10, upper: high + 10, filled: true))
+            plots.append(Plot(values: rows.map { CGFloat($0?.temperatureC ?? -1000) }, lower: low - 10, upper: high + 10, filled: true, positions: historyHours > 0 ? positions : nil))
         }
         let selection = settings?.secondaryWeatherGraph ?? 0
         guard (1...5).contains(selection) else { return plots }
-        let values: [Double?] = reports.reversed().map { report in
+        let values: [Double?] = rows.map { optional in
+            guard let report = optional else { return nil }
             switch selection {
             case 1: return report.windKnots
             case 2: return report.humidity.map(Double.init)
-            case 3: return report.visibilityMiles
+            case 3: return historyHours > 0 && !report.visibilityQualifier.isEmpty ? nil : report.visibilityMiles
             case 4: return report.dewpointC
             default: return report.pressureIn
             }
@@ -234,7 +286,7 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         case 4: lower = minimum - max(1, abs(minimum) * 0.1); upper = maximum + max(1, abs(maximum) * 0.1)
         default: lower = minimum * 0.99; upper = maximum * 1.01
         }
-        plots.append(Plot(values: values.map { CGFloat($0 ?? -1000) }, lower: lower, upper: upper, filled: false))
+        plots.append(Plot(values: values.map { CGFloat($0 ?? -1000) }, lower: lower, upper: upper, filled: false, positions: historyHours > 0 ? positions : nil))
         return plots
     }
     private func temperature(_ celsius: Double?, precise: Bool = false) -> String {
@@ -257,11 +309,12 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         return current?.pressureIn.map { String(format: "%.2fin", $0) } ?? "n/a"
     }
     @nonobjc func fullReading() -> String {
-        guard let current else { return gettingData ? "Fetching Data" : "Invalid Data" }
-        return ["Station: \(stationName)", "Current Temperature: \(temperature(current.temperatureC))",
+        guard let current else { return gettingData ? "Fetching Data" : historyHours > 0 ? "No received observations in last \(historyHours) hours" : "Invalid Data" }
+        let context = historyHours > 0 ? ["History: last \(historyHours) hours of received observations (UTC timestamps)", staleObservation ? "Cached/stale observation; current-value bar suppressed" : "Recent observation", "Missing fields and gaps over two hours are not filled. History may be incomplete."] : []
+        return (context + ["Station: \(stationName)", "Current Temperature: \(temperature(current.temperatureC))",
                 "High/Low: \(temperature(high, precise: true))/\(temperature(low, precise: true))", "Wind: \(windReading)",
                 "Relative Humidity: \(current.humidity.map { "\($0)%" } ?? "n/a")", "Visibility: \(visibilityReading)",
-                "Dewpoint: \(temperature(current.dewpointC))", "Barometric Pressure: \(pressureReading)"].joined(separator: "\n")
+                "Dewpoint: \(temperature(current.dewpointC))", "Barometric Pressure: \(pressureReading)"]).joined(separator: "\n")
     }
     private func fittingTitle(_ candidates: [String], value: String, width: CGFloat) -> String {
         let attributes: [NSAttributedString.Key: Any] = [.font: settings?.graphFont ?? NSFont.systemFont(ofSize: 10)]
@@ -278,9 +331,10 @@ public final class XRGWeatherView: NSView, XRGModuleView {
             labels.layout(leftText: fullReading(), centerText: nil, rightText: nil, in: rect, mini: mini, settings: settings); return
         }
         if mini {
-            labels.layoutColumnText(stationName, rightText: temperature(current.temperatureC), in: rect, mini: true, settings: settings)
+            labels.layoutColumnText(stationName, rightText: staleObservation ? "STALE" : temperature(current.temperatureC), in: rect, mini: true, settings: settings)
             labels.leftLabel.fullAccessibilityText = fullReading(); return
         }
+        if staleObservation { labels.layout(leftText: "STALE\n" + temperature(current.temperatureC), centerText: nil, rightText: nil, in: rect, mini: mini, settings: settings); return }
         let wide = fittingTitle(["Station:", ""], value: stationName, width: rect.width) == "Station:"
         let highLow: String
         if let high, let low {
@@ -304,12 +358,17 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
         updateLabels(); settings.graphColor(.weather, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
-            if let value = current?.temperatureC, let high, let low {
+            if !staleObservation, let value = current?.temperatureC, let high, let low {
                 XRGGraphRenderer.drawGraphBars([NSNumber(value: value)], upperBound: high, lowerBound: low, in: bounds, settings: settings, module: .weather)
             }
         } else {
             context.shouldAntialias = settings.antiAliasing
             for plot in plots() {
+                if let positions = plot.positions {
+                    XRGGraphRenderer.drawObservationCurve(plot.values, positions: positions, upper: plot.upper, lower: plot.lower, in: bounds, filled: plot.filled,
+                        color: plot.filled ? settings.graphColor(.weather, component: 1) : settings.graphColor(.weather, component: 2), style: settings.curveStyle(.weather))
+                    continue
+                }
                 plot.values.withUnsafeBufferPointer { values in
                     XRGGraphRenderer.drawCurveSamples(values.baseAddress, count: values.count, currentIndex: values.count - 1,
                         upperBound: plot.upper, lowerBound: plot.lower, in: bounds, flipped: false, filled: plot.filled,
@@ -321,8 +380,9 @@ public final class XRGWeatherView: NSView, XRGModuleView {
     }
     @nonobjc func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Weather View")
+        let scope = historyHours > 0 ? "Received \(historyHours)-hour" : "Received response"
         let lines = ["Current Conditions for \(stationName)...", "Temperature: \(temperature(current?.temperatureC))",
-                     "Last 24 hour high temperature: \(temperature(high, precise: true))", "Last 24 hour low temperature: \(temperature(low, precise: true))",
+                     "\(scope) high temperature: \(temperature(high, precise: true))", "\(scope) low temperature: \(temperature(low, precise: true))",
                      "Wind: \(windReading)", "Relative Humidity: \(current?.humidity.map { "\($0)%" } ?? "n/a")",
                      "Visibility: \(visibilityReading)", "Dewpoint: \(temperature(current?.dewpointC))", "Barometric Pressure: \(pressureReading)"]
         for line in lines { menu.addItem(NSMenuItem(title: line, action: nil, keyEquivalent: "")) }

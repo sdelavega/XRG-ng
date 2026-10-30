@@ -3,6 +3,15 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_metar_history_parse(
+        bytes: *const u8,
+        length: u32,
+        station: *const u8,
+        station_length: u32,
+        reference: i64,
+        output: *mut u8,
+        capacity: u32,
+    ) -> i32;
     fn xrg_accounting_create() -> *mut c_void;
     fn xrg_accounting_free(handle: *mut c_void);
     fn xrg_accounting_reset(handle: *mut c_void) -> i32;
@@ -509,4 +518,68 @@ impl Drop for TokenLedger {
     fn drop(&mut self) {
         unsafe { xrg_accounting_free(self.handle.as_ptr()) }
     }
+}
+
+/// History is decoded by the same dated Swift parser as the current observation.
+pub fn metar_history(bytes: &[u8], station: &str, reference: i64) -> Option<Vec<Metar>> {
+    let code = metar_station(station)?;
+    let mut output = vec![0u8; 4_194_304];
+    let count = unsafe {
+        xrg_metar_history_parse(
+            bytes.as_ptr(),
+            u32::try_from(bytes.len()).ok()?,
+            code.as_ptr(),
+            4,
+            reference,
+            output.as_mut_ptr(),
+            output.len() as u32,
+        )
+    };
+    if count < 0 {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        station: String,
+        observed_at: i64,
+        temperature_c: Option<f64>,
+        dewpoint_c: Option<f64>,
+        humidity: Option<f64>,
+        wind_degrees: Option<f64>,
+        wind_knots: Option<f64>,
+        gust_knots: Option<f64>,
+        visibility_miles: Option<f64>,
+        visibility_qualifier: String,
+        pressure_hpa: Option<f64>,
+        pressure_in: Option<f64>,
+        raw: String,
+    }
+    let rows: Vec<Row> = serde_json::from_slice(&output[..count as usize]).ok()?;
+    if rows.len() > 2048 {
+        return None;
+    }
+    rows.into_iter()
+        .map(|r| {
+            Some(Metar {
+                station: r.station,
+                observed_at: r.observed_at,
+                temperature_c: r.temperature_c,
+                dewpoint_c: r.dewpoint_c,
+                humidity: r.humidity,
+                wind_degrees: r.wind_degrees,
+                wind_knots: r.wind_knots,
+                gust_knots: r.gust_knots,
+                visibility_miles: r.visibility_miles,
+                visibility_qualifier: match r.visibility_qualifier.as_str() {
+                    "" => "",
+                    "<" => "<",
+                    ">" => ">",
+                    _ => return None,
+                },
+                pressure_hpa: r.pressure_hpa,
+                pressure_in: r.pressure_in,
+                raw: r.raw,
+            })
+        })
+        .collect()
 }

@@ -115,7 +115,7 @@ XRG-ng displays real-time graphs for:
 - **Disk Activity** - Read/write operations per volume
 - **Battery** - Charge level, time remaining, health
 - **Temperature** - CPU, GPU, and system sensors
-- **Weather** - Current conditions and forecast
+- **Weather** - METAR station observations with optional 6/12/24-hour history and a secondary curve
 - **Stock Prices** - Real-time market data
 - **AI Token Usage** - Live token consumption and cost tracking for Claude, Codex, Gemini, Ollama, and Hermes agents
 

@@ -399,6 +399,7 @@ impl Display {
             },
             scale: Scale::Automatic,
             temperature_text: None,
+            weather_plot: None,
             readout,
             detail: detail.join("\n\n"),
         }
@@ -602,6 +603,7 @@ pub fn waiting() -> Panel {
         series: Vec::new(),
         scale: Scale::Automatic,
         temperature_text: None,
+        weather_plot: None,
         readout: Default::default(),
         detail: "AI usage collection runs independently of system collection.".into(),
     }

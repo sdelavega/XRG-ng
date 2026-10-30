@@ -27,6 +27,17 @@ int main(void) {
     assert(fabs(weather[9] - 30) < 0.000001);
     assert(xrg_metar_latest_parse(NULL, 1, station, 4, 1793103000,
         weather, 10, &weather_flags, raw_metar, sizeof(raw_metar)) == -1);
+    uint8_t archive[4096] = {42};
+    assert(xrg_metar_history_parse((const uint8_t *)metar, strlen(metar), station, 4,
+        1793103000, archive, 1) == -2 && archive[0] == 42);
+    assert(xrg_metar_history_parse(NULL, 1, station, 4,
+        1793103000, archive, sizeof(archive)) == -1 && archive[0] == 42);
+    assert(xrg_metar_history_parse((const uint8_t *)metar, strlen(metar), station, 4,
+        -1, archive, sizeof(archive)) == -1 && archive[0] == 42);
+    int32_t archive_count = xrg_metar_history_parse((const uint8_t *)metar, strlen(metar), station, 4,
+        1793103000, archive, sizeof(archive)-1);
+    assert(archive_count > 0); archive[archive_count] = 0;
+    assert(strstr((char *)archive, "\"observed_at\":1793102400") && strstr((char *)archive, "\"temperature_c\":0"));
     void *history = xrg_history_create(3);
     assert(history);
     for (int i = 1; i <= 4; i++) assert(xrg_history_append(history, i) == 0);

@@ -91,6 +91,14 @@ Implemented in this pass:
   system, preserving old profiles. Unit changes reformat cached observations and
   plots without fetching again or clearing station history.
 
+- Both weather panels now offer 6/12/24-hour windows using actual UTC observation
+  spacing and optional wind, humidity, visibility, dewpoint or pressure curves on
+  separate axes. Missing fields, bounded visibility and gaps over two hours stay
+  gaps; stale cached history remains visible with current bars suppressed. H/L is
+  scoped to received temperatures in the selected window. Providers do not promise
+  complete coverage. Existing defaults remain Mac received-response / Linux session.
+  No new network request is made for presentation changes.
+
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
@@ -102,9 +110,10 @@ Remaining monitoring work:
    Mac log scans retain their last complete snapshot through failed scans, while
    database/endpoint failure breaks accounting continuity. Keep cost estimates
    optional and labeled; neither platform's observed counters are billing records.
-3. Weather/battery/Stocks: align history windows, secondary weather curves, unit
-   choices still absent on either side, battery presentation/cadence and multiple
-   battery behavior. Linux now has charge/power modes and independent weather units.
+3. Weather/battery/Stocks: align unit choices still absent on either side, default
+   weather-history behavior/provider coverage, battery presentation/cadence and
+   multiple-battery behavior. Both have explicit weather time windows/secondary
+   curves; Linux now has charge/power modes and independent weather units.
    Port Stocks if retained in the common set.
 4. Desktop behavior: Linux collapse/hover expansion and supported window controls;
    preserve explicit compositor limitations. Align history duration and sampling

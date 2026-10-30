@@ -874,6 +874,48 @@ fn weather(ui: &mut egui::Ui, s: &mut Settings) {
             .labelled_by(label.id);
     });
     ui.horizontal(|ui| {
+        let label = ui.label("History window");
+        egui::ComboBox::from_id_salt("weather-history")
+            .selected_text(
+                s.weather
+                    .history_hours
+                    .map_or("Session (legacy)".into(), |h| format!("Last {h} hours")),
+            )
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut s.weather.history_hours, None, "Session (legacy)");
+                for hours in [6, 12, 24] {
+                    ui.selectable_value(
+                        &mut s.weather.history_hours,
+                        Some(hours),
+                        format!("Last {hours} hours"),
+                    );
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    ui.horizontal(|ui| {
+        use xrg_ng_linux::weather::Secondary::*;
+        let label = ui.label("Secondary curve");
+        egui::ComboBox::from_id_salt("weather-secondary")
+            .selected_text(format!("{:?}", s.weather.secondary))
+            .show_ui(ui, |ui| {
+                for (value, name) in [
+                    (None, "None"),
+                    (Wind, "Wind"),
+                    (Humidity, "Humidity"),
+                    (Visibility, "Visibility (exact reports)"),
+                    (Dewpoint, "Dewpoint"),
+                    (Pressure, "Pressure"),
+                ] {
+                    ui.selectable_value(&mut s.weather.secondary, value, name);
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    ui.label("Time windows use received observations at their actual timestamps; gaps are not filled. Secondary curves have their own vertical scale.");
+    ui.horizontal(|ui| {
         ui.label("Refresh");
         ui.add(
             egui::DragValue::new(&mut s.weather.refresh_minutes)

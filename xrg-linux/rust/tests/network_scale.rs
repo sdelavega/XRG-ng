@@ -95,6 +95,7 @@ fn network_activity_descriptions_use_the_same_axis_floor_without_mutating_sample
         scale: Scale::Automatic,
         detail: "Network fixture".into(),
         temperature_text: None,
+        weather_plot: None,
         readout: Default::default(),
     };
     let description = panel.activity_description_with_minimum(Units::Celsius, 4096);

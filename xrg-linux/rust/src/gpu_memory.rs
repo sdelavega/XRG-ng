@@ -30,6 +30,7 @@ impl View {
             series: Vec::new(),
             scale: Scale::Percent,
             temperature_text: None,
+            weather_plot: None,
             readout: Default::default(),
         };
         let report = match report {

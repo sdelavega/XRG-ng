@@ -29,6 +29,14 @@ int32_t xrg_metar_station(const uint8_t *bytes, uint32_t length, uint8_t *output
 int32_t xrg_metar_latest_parse(const uint8_t *bytes, uint32_t length,
     const uint8_t *station, uint32_t station_length, int64_t reference,
     double *values, uint32_t capacity, uint32_t *flags, uint8_t *raw, uint32_t raw_capacity);
+/* Dated METAR history, matching station and reference-36h..reference+5min.
+ * Input <=2 MiB; <=2048 observations. JSON rows use the Rust Metar field names,
+ * oldest first; first duplicate timestamp wins within a response. Returns JSON
+ * byte count, -1 invalid/no matching reports, -2 short buffer; output untouched
+ * on failure. No parsing or storage handle is retained. */
+int32_t xrg_metar_history_parse(const uint8_t *bytes, uint32_t length,
+    const uint8_t *station, uint32_t station_length, int64_t reference,
+    uint8_t *output, uint32_t capacity);
 void *xrg_history_create(uint32_t capacity);
 void xrg_history_free(void *handle);
 int32_t xrg_history_append(void *handle, double value);

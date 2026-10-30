@@ -72,7 +72,7 @@ import Testing
     let view: XRGWeatherView
     var host: WeatherHost?
     let history = "KSEA 251953Z 21016G24KT 1 1/2SM 20/10 A2992 RMK AO2\nKSEA 251853Z VRB03KT 9999 10/05 Q1013 RMK AO2\nKSEA 251753Z 00000KT 1/2SM 05/00 A3000 RMK AO2"
-    init(show: Bool = true) throws {
+    init(show: Bool = true, now: @escaping () -> Date = Date.init) throws {
         _ = NSApplication.shared
         defaults = try #require(UserDefaults(suiteName: domain)); defaults.set(show, forKey: "showWeatherGraph")
         settings = XRGSettings(defaults: defaults); settings.ICAO = "KSEA"
@@ -81,7 +81,7 @@ import Testing
         settings.graphBGTransparency = 1; settings.graphBGColor = .white
         settings.graphFG1Transparency = 0.25; settings.graphFG1Color = .red
         settings.graphFG2Transparency = 1; settings.graphFG2Color = .blue
-        view = XRGWeatherView(frame: NSRect(x: 0, y: 0, width: 240, height: 180), settings: settings, defaults: defaults, sources: sources)
+        view = XRGWeatherView(frame: NSRect(x: 0, y: 0, width: 240, height: 180), settings: settings, defaults: defaults, sources: sources, now: now)
     }
     func attach() {
         let host = WeatherHost(settings: settings); self.host = host
@@ -111,6 +111,55 @@ struct XRGWeatherViewTests {
         let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: rep)
         return try #require(rep.representation(using: .png, properties: [:]))
+    }
+    @Test func timeWindowsPreserveActualSpacingGapsAndExtremaScope() throws {
+        let wall = Date(timeIntervalSince1970:1793103000) // Oct 27 12:10 UTC
+        let f = try WeatherFixture(now: { wall }); defer { f.cleanUp() }
+        f.settings.weatherHistoryHours = 6; f.settings.secondaryWeatherGraph = 5
+        f.view.setMETARFromText("KSEA 270500Z 30/20 Q1010\nKSEA 270700Z 10/05 Q1011\nKSEA 271100Z 12/06 Q1012\nKSEA 271200Z 20/10 Q1013")
+        #expect(f.view.high == 20 && f.view.low == 10 && !f.view.staleObservation)
+        let plots = f.view.plots(), primary = try #require(plots.first)
+        let positions = try #require(primary.positions)
+        #expect(primary.values == [10,-1000,12,20] && plots.count == 2)
+        #expect(abs(positions[0] - 50.0/360) < 1e-9 && abs(positions[3] - 350.0/360) < 1e-9)
+        #expect(abs(positions[3] - positions[2] - 1.0/6) < 1e-9)
+        #expect(plots[1].lower > 29 && plots[1].upper < 31 && !plots[1].filled)
+        #expect(f.view.makeMenu().items[2].title.contains("Received 6-hour"))
+        f.settings.weatherHistoryHours = 12
+        #expect(f.view.high == 30 && f.view.plots()[0].values.first == 30)
+        #expect(!(try png(f.view)).isEmpty)
+    }
+    @Test func timeWindowMergesCorrectionsRetainsCacheOnFailureAndClearsOnStationChange() throws {
+        let wall = Date(timeIntervalSince1970:1793103000)
+        let f = try WeatherFixture(now: { wall }); defer { f.cleanUp() }
+        f.settings.weatherHistoryHours = 24
+        f.view.setMETARFromText("KSEA 271100Z 10/05 Q1012\nKSEA 271200Z 20/10 Q1013")
+        f.view.setMETARFromText("KSEA 271100Z 11/05 Q1012\nKSEA 271200Z 21/10 Q1013")
+        #expect(f.view.reports.count == 2 && f.view.low == 11 && f.view.current?.temperatureC == 21)
+        f.view.min30Update(nil)
+        #expect(f.view.current?.temperatureC == 21 && f.view.gettingData)
+        f.sources[0].failed = true; f.sources[1].failed = true; f.view.ticker()
+        #expect(f.view.staleObservation && f.view.fullReading().contains("Cached/stale"))
+        #expect(f.view.plots()[0].values.last == -1000 && f.view.plots()[0].positions?.last == 1)
+        f.view.setMETARFromText("KSEA 271100Z 30/20 Q1012")
+        #expect(f.view.staleObservation && f.view.current?.temperatureC == 21)
+        f.view.setMETARFromText("KSEA 271200Z 22/10 Q1013")
+        #expect(!f.view.staleObservation && f.view.high == 22 && f.view.low == 11)
+        f.settings.ICAO = "KJFK"; f.view.setURL("KJFK")
+        #expect(f.view.reports.isEmpty && f.view.plots().isEmpty && f.view.current == nil)
+    }
+    @Test func timeWindowMissingAndQualifiedValuesStayGapsAndExpiredDatesDoNotRevive() throws {
+        var wall = Date(timeIntervalSince1970:1793103000)
+        let f = try WeatherFixture(now: { wall }); defer { f.cleanUp() }
+        f.settings.weatherHistoryHours = 6; f.settings.secondaryWeatherGraph = 3
+        f.view.setMETARFromText("KSEA 271100Z 10/05 10SM\nKSEA 271200Z 00000KT M1/4SM")
+        #expect(f.view.plots()[0].values == [10,-1000])
+        #expect(f.view.plots()[1].values == [10,-1000])
+        #expect(f.view.visibilityReading.contains("<"))
+        wall = wall.addingTimeInterval(3*3600)
+        #expect(f.view.staleObservation && f.view.plots()[0].positions?.last == 1)
+        wall = wall.addingTimeInterval(31*86400-3*3600)
+        #expect(f.view.current == nil && f.view.plots().isEmpty)
     }
     @Test func registrationVisibilityFontSizingAndDetachment() throws {
         let f = try WeatherFixture(show: false); defer { f.cleanUp() }; f.attach()

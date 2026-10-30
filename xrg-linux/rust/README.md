@@ -9,7 +9,7 @@ The compact dashboard retains the macOS layout and the original **Classic**
 palette: 140-pixel graph width, 90-pixel default height, draggable hostname band,
 overlaid readings, thin separators and optional current-value / CPU-core bars.
 All thirteen modules remain available. Supported older settings migrate in memory
-to schema 23; missing battery/weather options preserve charge-percent history and
+to schema 24; missing battery/weather options preserve charge-percent history and
 the saved weather unit system. Existing AI tracking/alert choices are retained;
 those missing from older profiles remain disabled. The next normal preferences
 save writes the new schema. Existing source identities,
@@ -985,5 +985,30 @@ independent overrides for temperature (°C/°F), visibility (km/mi), pressure
 system until overridden. These choices change labels/axes and inspector text,
 without changing Celsius observations or making another network request. Saved
 profiles without overrides keep their prior readings. Missing/stale data and
-visibility qualifiers retain their previous meaning. History-window and secondary
-curve parity remain open; the current graph still retains received observations.
+visibility qualifiers retain their previous meaning.
+
+## Weather history windows and secondary curves
+
+Preferences → Weather adds **Session (legacy)**, **Last 6 hours**, **Last 12 hours**
+and **Last 24 hours**. Existing profiles retain the session default (up to 120
+distinct observations). Time windows include dated reports received from the
+station response and the current session, using actual UTC observation spacing.
+The cache is bounded to 36 hours and 2,048 observations, held in memory only.
+Changing window, curve or units uses the cache without making another request.
+
+The optional secondary curve offers wind, humidity, visibility, dewpoint or
+pressure with its own vertical scale. Temperature remains the primary curve;
+secondary curves use outlines so their fills cannot obscure it. Scales and units
+are included in the graph details. Missing fields split lines, visibility bounds
+such as `<¼ mile` are not plotted as exact measurements, and intervals over two
+hours remain gaps. Stale observations retain the received history with current
+bars suppressed. Corrections replace the same timestamp; regressed responses
+cannot replace the current observation. Graph reset keeps the newest observation
+and prevents older cached rows from repopulating the cleared graph.
+
+H/L covers only received temperatures in the selected window. It is not a
+meteorological daily high/low, a guaranteed complete archive or a forecast.
+Provider coverage may be shorter than the selected window. No location detection,
+forward fill or synthetic observations are added. Station changes clear history.
+The Mac Weather panel offers the same time windows while retaining its received
+response default. Defaults and provider coverage remain platform-specific.

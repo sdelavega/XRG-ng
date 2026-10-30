@@ -6,7 +6,7 @@ use crate::{
     command::BoundedCommand,
     shared::{self, Metar},
 };
-pub use graph::Graph;
+pub use graph::{Graph, ObservationPlot, SecondaryAxis};
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
@@ -45,10 +45,23 @@ impl WindUnits {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Secondary {
+    #[default]
+    None,
+    Wind,
+    Humidity,
+    Visibility,
+    Dewpoint,
+    Pressure,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
     pub enabled: bool,
+    pub history_hours: Option<u32>,
+    pub secondary: Secondary,
     pub station: String,
     pub units: Units,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +78,8 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             enabled: false,
+            history_hours: None,
+            secondary: Secondary::None,
             station: String::new(),
             units: Units::Metric,
             temperature_units: None,
@@ -84,6 +99,12 @@ impl Preferences {
             })
     }
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .history_hours
+            .is_some_and(|h| ![6, 12, 24].contains(&h))
+        {
+            return Err("Weather history must be session, 6, 12 or 24 hours".into());
+        }
         if !(5..=60).contains(&self.refresh_minutes) {
             return Err("Weather refresh interval must be 5–60 minutes".into());
         }
@@ -145,6 +166,8 @@ impl Fetcher for Https {
 pub struct Update {
     pub preferences: Preferences,
     pub observation: Option<Metar>,
+    pub history: Vec<Metar>,
+    pub reference_time: Option<i64>,
     pub summary: String,
     pub detail: String,
     pub stale: bool,
@@ -153,6 +176,7 @@ pub struct Update {
 pub struct Collector {
     preferences: Preferences,
     last: Option<Metar>,
+    history: std::collections::BTreeMap<i64, Metar>,
     last_attempt: Option<f64>,
     next_due: f64,
     last_time: Option<f64>,
@@ -165,6 +189,7 @@ impl Collector {
         Ok(Self {
             preferences,
             last: None,
+            history: Default::default(),
             last_attempt: None,
             next_due: 0.,
             last_time: None,
@@ -179,6 +204,7 @@ impl Collector {
             || self.preferences.enabled != preferences.enabled;
         if changed {
             self.last = None;
+            self.history.clear();
             self.error = None;
             self.next_due = 0.;
             self.refresh_pending = preferences.enabled;
@@ -222,12 +248,29 @@ impl Collector {
                 if bytes.len() > 2_097_152 {
                     return Err("Weather response exceeds 2 MiB".into());
                 }
-                shared::metar_latest(&bytes, &station, wall)
+                shared::metar_history(&bytes, &station, wall)
                     .ok_or("No matching METAR within the 36-hour observation window".into())
             }) {
-                Ok(report) => {
-                    self.last = Some(report);
-                    self.error = None;
+                Ok(history) => {
+                    let report = history.last().expect("Nonempty parsed history").clone();
+                    if self
+                        .last
+                        .as_ref()
+                        .is_some_and(|last| report.observed_at < last.observed_at)
+                    {
+                        self.error=Some("Source returned an older observation; cached current observation retained".into());
+                    } else {
+                        for row in history {
+                            self.history.insert(row.observed_at, row);
+                        }
+                        self.history
+                            .retain(|time, _| *time >= wall.saturating_sub(129600));
+                        while self.history.len() > 2048 {
+                            self.history.pop_first();
+                        }
+                        self.last = Some(report);
+                        self.error = None;
+                    }
                 }
                 Err(error) => self.error = Some(error),
             }
@@ -238,7 +281,7 @@ impl Collector {
         self.update(wall, cooldown.ceil() as u64, None)
     }
     fn update(&self, wall: i64, cooldown: u64, clock_error: Option<&str>) -> Update {
-        let mut update = Update { preferences: self.preferences.clone(), observation: self.last.clone(), summary: "Weather disabled".into(),
+        let mut update = Update { preferences: self.preferences.clone(), observation: self.last.clone(), history:self.history.values().cloned().collect(), reference_time:Some(wall), summary: "Weather disabled".into(),
             detail: "Enable weather and choose an ICAO station. No weather requests are made while disabled.".into(), stale: false, cooldown_seconds: cooldown };
         if !self.preferences.enabled {
             return update;

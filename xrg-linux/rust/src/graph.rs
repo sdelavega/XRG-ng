@@ -24,6 +24,33 @@ impl Plot {
                 * self.rect.height()
     }
     /// Each run keeps its original history positions; gaps never shift samples.
+    pub fn runs_at(self, values: &[f64], positions: &[f64]) -> Vec<Vec<Pos2>> {
+        if !self.valid()
+            || values.len() != positions.len()
+            || positions
+                .iter()
+                .any(|x| !x.is_finite() || !(0.0..=1.0).contains(x))
+            || positions.windows(2).any(|w| w[0] > w[1])
+        {
+            return Vec::new();
+        }
+        let mut runs = Vec::new();
+        let mut run = Vec::new();
+        for (v, x) in values.iter().zip(positions) {
+            if v.is_finite() {
+                run.push(pos2(
+                    self.rect.left() + *x as f32 * self.rect.width(),
+                    self.y(*v),
+                ));
+            } else if !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
+            }
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        runs
+    }
     pub fn runs(self, values: &[f64]) -> Vec<Vec<Pos2>> {
         if !self.valid() {
             return Vec::new();
@@ -163,6 +190,48 @@ pub fn bar(
     }
 }
 
+/// Observation curves have explicit time positions and independent vertical axes.
+pub fn draw_positioned(
+    painter: &Painter,
+    series: &[Vec<f64>],
+    colors: &[Color32],
+    positions: &[f64],
+    bounds: &[(f64, f64)],
+    rect: Rect,
+    style: GraphStyle,
+) {
+    let painter = painter.with_clip_rect(rect);
+    let curves: Vec<_> = series
+        .iter()
+        .zip(colors)
+        .zip(bounds)
+        .map(|((values, color), (lower, upper))| {
+            let plot = Plot {
+                rect,
+                lower: *lower,
+                upper: *upper,
+            };
+            (plot, plot.runs_at(values, positions), *color)
+        })
+        .collect();
+    for (index, (plot, runs, color)) in curves.iter().enumerate() {
+        if index == 0 {
+            for run in runs {
+                fill(&painter, run, plot.y(0.), *color, style);
+            }
+        }
+    }
+    for (_, runs, color) in curves {
+        for run in runs {
+            if run.len() == 1 {
+                painter.circle_filled(run[0], 0.9, color);
+            } else {
+                painter.add(Shape::line(run, Stroke::new(1., color)));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +253,16 @@ mod tests {
                 vec![pos2(100., 0.)]
             ]
         );
+    }
+    #[test]
+    fn timestamp_geometry_preserves_spacing_and_rejects_invalid_positions() {
+        assert_eq!(
+            plot().runs_at(&[0., f64::NAN, 100.], &[0.1, 0.5, 0.8]),
+            vec![vec![pos2(10., 100.)], vec![pos2(80., 0.)]]
+        );
+        for xs in [vec![0.8, 0.1], vec![0., 1.1], vec![0., f64::NAN], vec![0.]] {
+            assert!(plot().runs_at(&[0., 100.], &xs).is_empty());
+        }
     }
     #[test]
     fn clamps_values_and_rejects_invalid_axes() {
