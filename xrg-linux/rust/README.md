@@ -9,7 +9,8 @@ The compact dashboard retains the macOS layout and the original **Classic**
 palette: 140-pixel graph width, 90-pixel default height, draggable hostname band,
 overlaid readings, thin separators and optional current-value / CPU-core bars.
 All thirteen modules remain available. Supported older settings migrate in memory
-to schema 24; missing battery/weather options preserve charge-percent history and
+to schema 25; missing collapse options retain an expanded window with hover
+expansion disabled. Missing battery/weather options preserve charge-percent history and
 the saved weather unit system. Existing AI tracking/alert choices are retained;
 those missing from older profiles remain disabled. The next normal preferences
 save writes the new schema. Existing source identities,
@@ -43,6 +44,27 @@ AccessKit activation; general preference fields and metric-source selectors
 have associated labels. Automated accessibility-tree tests cover these semantics;
 full screen-reader interoperability remains a separate validation task.
 
+## Collapsing the dashboard
+
+Ctrl+M, a double-click on the hostname, or **Collapse graphs** in the application
+menu toggles a compact hostname strip. The **+** button expands the strip.
+The vertical layout becomes a horizontal strip; the horizontal layout becomes a
+vertical strip with a rotated hostname. Collection and accounting
+continue while graphs are collapsed.
+
+Preferences → General offers **Temporarily expand on hover**. After collapsing,
+leave the strip and return to open the graphs temporarily; leaving retracts them.
+An explicit expansion keeps the graphs open. Preferences, inspectors, menus and
+pointer gestures keep temporary expansion open until those interactions finish.
+The manual collapse choice persists; temporary hover expansion does not. Remembered
+window dimensions always describe the expanded window, independently of UI zoom.
+
+The collapse anchor selects top/left or bottom/right. X11 placement uses the window
+coordinates supplied by the desktop. Wayland compositors control surface placement;
+when global coordinates are unavailable, XRG-ng changes size without requesting a
+position. Collapse is unavailable while maximized or fullscreen. Desktop size and
+placement policies can differ; reports from real desktops are welcome.
+
 ## Desktop validation and idle diagnostics
 
 Release CI runs `Tools/desktop-check-linux.py` under Fluxbox/Picom X11 and nested
@@ -54,6 +76,12 @@ application shutdown. X11 also covers minimization. Additional native interactio
 cases use a 125% X11 native-scale override and 125% UI zoom on Wayland. Headless rendering/accessibility checks cover
 100%, 125%, 150% and 200% scale. Saved dimensions are compared with independently
 measured window bounds before a relaunch, so UI zoom cannot silently shrink them.
+
+Debug and release CI also run `Tools/collapse-check-linux.py` on both backends,
+with both layouts and anchors at normal and 125% scale/zoom. It independently
+measures native strip bounds, exercises hover, Preferences, explicit expansion,
+title double-click and the + button, checks sampling progress while collapsed,
+and relaunches from the saved latch without changing expanded dimensions.
 
 Each run uses disposable HOME/XDG directories with AI and weather disabled. It
 records process CPU time as a percentage of one core, RSS/PSS, voluntary thread

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Versioned Linux presentation preferences. Paths are explicit for isolated tests.
 pub mod network_scale;
+mod window_collapse;
 mod window_size;
 mod xtf;
 use crate::{
@@ -21,6 +22,7 @@ use std::{
     },
     thread,
 };
+pub use window_collapse::{CollapseAnchor, WindowCollapse};
 pub use window_size::WindowSize;
 const LIMIT: usize = 128 * 1024;
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -440,6 +442,8 @@ pub struct Settings {
     #[serde(default)]
     pub window_size: Option<WindowSize>,
     #[serde(default)]
+    pub window_collapse: WindowCollapse,
+    #[serde(default)]
     pub network_min_scale: u64,
     #[serde(default)]
     pub activity_bars: ActivityBars,
@@ -470,7 +474,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 24,
+            version: 25,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -492,6 +496,7 @@ impl Default for Settings {
             sampling_interval_ms: crate::sampling::default_interval(),
             window_opacity: default_window_opacity(),
             window_size: None,
+            window_collapse: WindowCollapse::default(),
             network_min_scale: 0,
             activity_bars: ActivityBars {
                 visible: true,
@@ -539,7 +544,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 24 {
+        if self.version != 25 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -710,6 +715,9 @@ impl Settings {
         }
         if result.version == 23 {
             result.version = 24;
+        }
+        if result.version == 24 {
+            result.version = 25;
         }
         result.validate()?;
         Ok(result)

@@ -448,6 +448,40 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
             ui.add(egui::Slider::new(&mut s.window_opacity, 0.1..=1.).show_value(true))
                 .labelled_by(label.id);
             ui.end_row();
+            ui.label("Collapsed window");
+            ui.checkbox(
+                &mut s.window_collapse.collapsed,
+                "Collapse to the hostname strip",
+            ).on_hover_text("Ctrl+M or double-click the hostname toggles collapse. The + button expands the strip. Collection continues while collapsed.");
+            ui.end_row();
+            ui.label("Hover expansion");
+            ui.checkbox(
+                &mut s.window_collapse.expand_on_hover,
+                "Temporarily expand on hover",
+            ).on_hover_text("Leave the collapsed strip, then hover to open it temporarily. Explicit expansion keeps it open. Expanded window dimensions are preserved.");
+            ui.end_row();
+            let label = ui.label("Collapse anchor");
+            egui::ComboBox::from_id_salt("collapse-anchor")
+                .selected_text(match s.window_collapse.anchor {
+                    settings::CollapseAnchor::Start => "Top / left",
+                    settings::CollapseAnchor::End => "Bottom / right",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut s.window_collapse.anchor,
+                        settings::CollapseAnchor::Start,
+                        "Top / left",
+                    );
+                    ui.selectable_value(
+                        &mut s.window_collapse.anchor,
+                        settings::CollapseAnchor::End,
+                        "Bottom / right",
+                    );
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text("Keep this edge fixed where the desktop exposes window coordinates. Wayland compositors control placement.");
+            ui.end_row();
             let label = ui.label("Remember window size");
             let mut remember = s.window_size.is_some();
             if ui

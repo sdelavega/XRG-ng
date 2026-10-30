@@ -77,7 +77,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 25;
+    value.version = 26;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -410,7 +410,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        24
+        25
     );
 }
 #[test]
@@ -493,7 +493,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 24);
+    assert_eq!(migrated.version, 25);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -653,7 +653,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        24
+        25
     );
 }
 
@@ -1066,5 +1066,58 @@ fn xe_policy_invalidates_only_gpu_activity_snapshots() {
     next.xe_pmu = true;
     for module in Module::ALL {
         assert_eq!(old.matches(&next, module), module != Module::Gpu);
+    }
+}
+
+#[test]
+fn version_twenty_four_preserves_expanded_size_and_defaults_to_no_collapse() {
+    use xrg_ng_linux::settings::{CollapseAnchor, WindowCollapse, WindowSize};
+    let f = Fixture::new();
+    let expected = Settings {
+        window_size: Some(WindowSize {
+            width: 360,
+            height: 720,
+        }),
+        ..Default::default()
+    };
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 24.into();
+    wire.as_object_mut().unwrap().remove("window_collapse");
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.window_collapse = WindowCollapse {
+        collapsed: true,
+        expand_on_hover: true,
+        anchor: CollapseAnchor::End,
+    };
+    store.save(&loaded).unwrap();
+    let (_, reopened, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(reopened, loaded);
+    assert_eq!(reopened.window_size, expected.window_size);
+}
+#[test]
+fn invalid_collapse_settings_are_preserved_on_disk() {
+    for bad in [
+        serde_json::json!(null),
+        serde_json::json!(true),
+        serde_json::json!({"collapsed":1}),
+        serde_json::json!({"expand_on_hover":"true"}),
+        serde_json::json!({"anchor":"middle"}),
+        serde_json::json!({"unexpected":false}),
+    ] {
+        let f = Fixture::new();
+        let mut wire = serde_json::to_value(Settings::default()).unwrap();
+        wire["window_collapse"] = bad;
+        let bytes = serde_json::to_vec(&wire).unwrap();
+        fs::write(f.path(), &bytes).unwrap();
+        let (mut store, _, error) = Store::open(Some(f.path()));
+        assert!(error.is_some());
+        assert!(store.save(&Settings::default()).is_err());
+        assert_eq!(fs::read(f.path()).unwrap(), bytes);
     }
 }

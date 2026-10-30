@@ -35,6 +35,8 @@ struct Report {
     last_preferences: bool,
     #[serde(skip)]
     last_details: usize,
+    #[serde(skip)]
+    last_window: Option<(u32, u32, bool, bool, bool)>,
 }
 #[derive(Default)]
 pub(super) struct Diagnostics {
@@ -70,6 +72,7 @@ impl Diagnostics {
                 started: Instant::now(),
                 last_preferences: false,
                 last_details: 0,
+                last_window: None,
             }),
         }
     }
@@ -86,6 +89,7 @@ impl Diagnostics {
         interval: u32,
         preferences: bool,
         details: usize,
+        collapse: (bool, bool),
     ) {
         let Some(r) = &mut self.report else {
             return;
@@ -110,6 +114,24 @@ impl Diagnostics {
             pixels_per_point: ui.ctx().pixels_per_point(),
             zoom_factor: ui.ctx().zoom_factor(),
         };
+        let window = (
+            event.native_width,
+            event.native_height,
+            collapse.0,
+            collapse.1,
+            preferences,
+        );
+        if r.last_window != Some(window) {
+            println!(
+                "XRG_DESKTOP_WINDOW {}",
+                serde_json::json!({
+                    "backend":r.backend,"native_width":event.native_width,"native_height":event.native_height,
+                    "pixels_per_point":event.pixels_per_point,"zoom_factor":event.zoom_factor,
+                    "closed":collapse.0,"latched":collapse.1,"preferences":preferences,"snapshots":r.snapshots
+                })
+            );
+            r.last_window = Some(window);
+        }
         r.ui_passes += 1;
         r.sampling_interval_ms = interval;
         r.max_known_viewports = r

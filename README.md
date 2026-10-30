@@ -317,6 +317,13 @@ graph histories, source selection and sampling settings.
 These inspectors are additions after the published macOS 0.1.0 / Linux 0.2.0
 releases. See [platform parity](PLATFORM_PARITY.md) for remaining differences.
 
+Linux development builds support **Ctrl+M** or a hostname double-click to collapse
+the dashboard to a strip, with optional hover expansion in General preferences.
+The **+** button expands it; explicit expansion keeps it open. Collection continues
+while collapsed, and saved window dimensions retain the expanded size. Both graph
+layouts are supported; Wayland placement remains controlled by the compositor.
+See [Linux window behavior](xrg-linux/rust/README.md#collapsing-the-dashboard).
+
 Linux development builds also provide **Clear graph history** in graph menus and
 Live details, plus **Clear all graph histories** in the application menu. Network
 and Disk display observed session transfers and offer a separate **Reset session

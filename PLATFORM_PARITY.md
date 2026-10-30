@@ -130,6 +130,15 @@ Implemented in this pass:
   cannot cross a reset. Delayed ticks do not create a catch-up sample backlog.
   This is a nominal interval, not a real-time deadline under load.
 
+- Linux now has a persistent manual collapse latch, hostname double-click/Ctrl+M
+  controls, a compact hostname strip in either layout and optional transient hover
+  expansion. Explicit expansion pins the window open; Preferences, inspectors,
+  menus and pointer gestures keep hover expansion open. Sampling continues while
+  collapsed. Expanded dimensions remain separate from transient strip/hover sizes
+  and UI zoom. Top/left and bottom/right anchors use desktop-supplied coordinates;
+  Wayland placement remains compositor-controlled. Maximized/fullscreen windows
+  stay expanded. Existing profiles default to expanded with hover disabled.
+
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
@@ -148,8 +157,8 @@ Remaining monitoring work:
    multiple-battery behavior. Both have explicit weather time windows/secondary
    curves; Linux now has charge/power modes and independent weather units.
    Port Stocks if retained in the common set.
-4. Desktop behavior: Linux collapse/hover expansion and supported window controls;
-   preserve explicit compositor limitations. Align history duration and sampling
+4. Desktop behavior: align other supported window controls and preserve explicit
+   compositor limitations. Linux now supports collapse/hover expansion. Align history duration and sampling
    controls without equating different OS memory or NPU measurements.
 
 Each pass needs UI, persistence, cancellation, invalid/unavailable-data and fixture

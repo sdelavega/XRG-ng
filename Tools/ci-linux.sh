@@ -45,11 +45,27 @@ XRG_SMOKE_IMAGE="$output/egui-smoke.png" XRG_SMOKE_PREFS_IMAGE="$output/preferen
 # cancelled drafts and legacy import through the production async UI path.
 XRG_SMOKE_FILE_PICKER=1 XRG_SMOKE_FILE_PICKER_IMAGE="$output/file-picker.png" XRG_SMOKE_FILE_REPLACE_IMAGE="$output/file-replace.png" LIBGL_ALWAYS_SOFTWARE=1 dbus-run-session -- xvfb-run -a --server-args="-screen 0 1280x1400x24" \
     cargo run "${cargo_options[@]}" -- --smoke-test
+# Collapse state, hover, native strip dimensions and restart persistence on both
+# backends, including scaled/zoomed windows. AI/weather remain disabled.
+cargo build "${cargo_options[@]}" --example desktop_preferences
+desktop_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+for backend in x11 wayland; do
+    for scale in normal scaled; do
+        scale_options=()
+        if [[ "$scale" == scaled ]]; then
+            scale_options=(--zoom 1.25)
+            if [[ "$backend" == x11 ]]; then scale_options=(--native-scale 1.25); fi
+        fi
+        dbus-run-session -- xvfb-run -a --server-args="-screen 0 1600x1200x24" \
+            python3 Tools/collapse-check-linux.py \
+            --binary "$desktop_target/$configuration/xrg-ng-linux" \
+            --fixture "$desktop_target/$configuration/examples/desktop_preferences" \
+            --backend "$backend" "${scale_options[@]}" --output "$output/collapse-$backend-$scale"
+    done
+done
 # Release desktop validation uses actual managed X11 and nested Wayland windows.
 # Results are software-renderer costs, not hardware/power measurements.
 if [[ "$configuration" == release ]]; then
-    cargo build "${cargo_options[@]}" --example desktop_preferences
-    desktop_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
     for backend in x11 wayland; do
         dbus-run-session -- xvfb-run -a --server-args="-screen 0 1600x1200x24" \
             python3 Tools/desktop-check-linux.py \

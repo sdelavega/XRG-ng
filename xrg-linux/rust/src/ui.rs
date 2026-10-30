@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Native egui shell. Workers publish copied data; painting never collects it.
+mod collapse;
 mod compositor;
 mod dashboard;
 mod diagnostics;
@@ -25,6 +26,7 @@ use xrg_ng_linux::{
 
 struct App {
     settings: Settings,
+    collapse: collapse::State,
     theme: Theme,
     hostname: String,
     snapshot: Option<Snapshot>,
@@ -79,12 +81,7 @@ impl App {
                 .any(|(a, b)| a.id != b.id || a.visible != b.visible || a.height != b.height);
         self.settings = settings;
         self.theme = theme;
-        if resize {
-            ctx.send_viewport_cmd_to(
-                ViewportId::ROOT,
-                ViewportCommand::InnerSize(viewport_window_size(&self.settings, ctx.zoom_factor())),
-            );
-        }
+        self.sync_collapse(ctx, resize);
         self.persist();
         ctx.request_repaint();
         Ok(())
@@ -112,7 +109,7 @@ impl App {
         }
     }
     fn capture_size(&mut self, ctx: &egui::Context) {
-        if self.settings.window_size.is_none() {
+        if self.settings.window_size.is_none() || !self.collapse.can_capture() {
             return;
         }
         let zoom = ctx.zoom_factor();
@@ -124,24 +121,141 @@ impl App {
             self.persist();
         }
     }
+    fn sync_collapse(&mut self, ctx: &egui::Context, resize: bool) {
+        let zoom = ctx.zoom_factor();
+        let popup_open = egui::Popup::is_any_open(ctx);
+        let input = ctx.input(|i| collapse::Input {
+            native: i.viewport_rect().size() * zoom,
+            outer: i
+                .viewport()
+                .outer_rect
+                .map(|r| r.min)
+                .or_else(|| i.viewport().inner_rect.map(|r| r.min)),
+            zoom,
+            time: i.time,
+            inside: i
+                .pointer
+                .hover_pos()
+                .is_some_and(|p| i.viewport_rect().contains(p)),
+            blocked: i.pointer.any_down()
+                || popup_open
+                || self.preferences.is_some()
+                || !self.details.is_empty()
+                || self.show_processes
+                || self.show_sensors
+                || self.show_ai
+                || self.show_weather
+                || self.show_about,
+            maximized: i.viewport().maximized == Some(true)
+                || i.viewport().fullscreen == Some(true),
+        });
+        if let Some(geometry) = self.collapse.update(
+            self.settings.window_collapse,
+            self.settings.layout,
+            input,
+            viewport_window_size(&self.settings, zoom) * zoom,
+            resize,
+        ) {
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(geometry.minimum));
+            if let Some(size) = geometry.size {
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
+            }
+            ctx.send_viewport_cmd(ViewportCommand::Resizable(geometry.resizable));
+            if let Some(position) = geometry.position {
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(position));
+            }
+            ctx.request_repaint();
+        }
+        if let Some(delay) = self.collapse.repaint_after(input.time) {
+            ctx.request_repaint_after(delay);
+        }
+    }
+    fn toggle_collapse(&mut self, ctx: &egui::Context) {
+        if !self.settings.window_collapse.collapsed {
+            if ctx.input(|i| {
+                i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true)
+            }) {
+                return;
+            }
+            self.capture_size(ctx);
+        }
+        let mut settings = self.settings.clone();
+        settings.window_collapse.collapsed = !settings.window_collapse.collapsed;
+        if let Err(error) = self.apply(settings, ctx) {
+            self.error = Some(error);
+        }
+    }
     fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        let side = self.collapse.closed() && self.settings.layout == Layout::Horizontal;
+        let draw = |ui: &mut egui::Ui| {
             let reserve = 22.;
             let hostname = &self.hostname;
-            let heading = ui.add_sized(
-                [(ui.available_width() - reserve).max(20.), 18.],
-                egui::Label::new(
-                    egui::RichText::new(hostname)
-                        .size(11.)
-                        .color(dashboard::color(self.theme.colors[6])),
+            let sense = egui::Sense::click_and_drag().difference(egui::Sense::FOCUSABLE);
+            let heading = if side {
+                let (rect, response) = ui.allocate_exact_size(
+                    vec2(20., (ui.available_height() - reserve).max(20.)),
+                    sense,
+                );
+                let color = dashboard::color(self.theme.colors[6]);
+                let galley = ui.painter().layout_no_wrap(
+                    hostname.clone(),
+                    egui::FontId::proportional(11.),
+                    color,
+                );
+                let pos = egui::pos2(
+                    rect.center().x - galley.size().y / 2.,
+                    rect.center().y + galley.size().x / 2.,
+                );
+                ui.painter().with_clip_rect(rect).add(
+                    egui::epaint::TextShape::new(pos, galley, color)
+                        .with_angle(-std::f32::consts::FRAC_PI_2),
+                );
+                response
+            } else {
+                ui.add_sized(
+                    [(ui.available_width() - reserve).max(20.), 18.],
+                    egui::Label::new(
+                        egui::RichText::new(hostname)
+                            .size(11.)
+                            .color(dashboard::color(self.theme.colors[6])),
+                    )
+                    .truncate()
+                    .sense(sense),
                 )
-                .truncate()
-                .sense(egui::Sense::drag().difference(egui::Sense::FOCUSABLE)),
-            );
+            };
+            heading.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, hostname));
+            let toggle = heading.double_clicked();
             if heading.drag_started() {
                 ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
             }
+            if toggle {
+                self.toggle_collapse(ui.ctx());
+            }
+            if self.collapse.closed() {
+                let expand=ui.button("+").on_hover_text("Expand graphs (Ctrl+M). Ctrl+, opens Preferences. Double-click the title to expand.");
+                expand.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, "Expand graphs")
+                });
+                if expand.clicked() {
+                    self.toggle_collapse(ui.ctx());
+                }
+                return;
+            }
             let menu = ui.menu_button("…", |ui| {
+                let label = if self.settings.window_collapse.collapsed {
+                    "Keep graphs expanded (Ctrl+M)"
+                } else {
+                    "Collapse graphs (Ctrl+M)"
+                };
+                let allowed = self.settings.window_collapse.collapsed
+                    || ui.input(|i| {
+                        i.viewport().maximized != Some(true)
+                            && i.viewport().fullscreen != Some(true)
+                    });
+                if ui.add_enabled(allowed, egui::Button::new(label)).clicked() {
+                    self.toggle_collapse(ui.ctx());
+                    ui.close();
+                }
                 if ui.button("Preferences…").clicked() {
                     self.capture_size(ui.ctx());
                     self.preferences();
@@ -204,7 +318,12 @@ impl App {
             menu.response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::Role::Button, true, "Application menu")
             });
-        });
+        };
+        if side {
+            ui.vertical_centered(draw);
+        } else {
+            ui.horizontal(draw);
+        }
     }
     fn strip(&mut self, ui: &mut egui::Ui) {
         let settings = self.settings.clone();
@@ -372,14 +491,22 @@ impl eframe::App for App {
             self.preferences();
         }
 
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::M)) {
+            self.toggle_collapse(&ctx);
+        }
+        self.sync_collapse(&ctx, false);
         egui::Frame::new()
             .fill(dashboard::opaque(self.theme.colors[0]))
             .inner_margin(4)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(2., 2.);
                 self.toolbar(ui);
-                self.strip(ui);
-                if let Some(error) = &self.error {
+                if !self.collapse.closed() {
+                    self.strip(ui);
+                }
+                if !self.collapse.closed()
+                    && let Some(error) = &self.error
+                {
                     ui.colored_label(Color32::LIGHT_RED, error);
                 }
             });
@@ -387,7 +514,9 @@ impl eframe::App for App {
         if let Some(error) = self.compositor.lock().unwrap().error.as_ref() {
             self.error = Some(format!("Window opacity unavailable: {error}"));
         }
-        resize_edges(ui);
+        if !self.settings.window_collapse.collapsed {
+            resize_edges(ui);
+        }
         preferences::show(self, &ctx);
         inspectors::show(self, &ctx);
         self.diagnostics.observe(
@@ -396,6 +525,10 @@ impl eframe::App for App {
             self.settings.sampling_interval_ms,
             self.preferences.is_some(),
             self.details.len(),
+            (
+                self.collapse.closed(),
+                self.settings.window_collapse.collapsed,
+            ),
         );
         if let Some(mut smoke) = self.smoke.take() {
             smoke.tick(self, &ctx);
@@ -535,6 +668,7 @@ pub fn run(smoke_mode: bool) -> bool {
             });
             Ok(Box::new(App {
                 settings,
+                collapse: collapse::State::default(),
                 theme,
                 hostname: hostname(),
                 snapshot: None,
