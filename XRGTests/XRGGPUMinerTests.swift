@@ -21,6 +21,12 @@ private final class GPUReadGate: @unchecked Sendable {
     func release(_ count: Int = 1) { for _ in 0..<count { gate.signal() } }
 }
 
+@MainActor private final class GPUWakeController: NSObject, XRGGraphWindowController {
+    func showPrefs(withPanel panel: String) {}
+    func openSensorWindow(_ sender: Any?) {}
+    func refreshGraphPalette() {}
+}
+
 @Suite @MainActor
 struct XRGGPUMinerTests {
     private func eventually(_ predicate: () -> Bool) async -> Bool {
@@ -129,6 +135,55 @@ struct XRGGPUMinerTests {
         #expect(newReads == 1 && window.vramView?.readings.isEmpty == true)
         window.graphUpdate(nil)
         #expect(newReads == 2 && window.vramView?.readings.first?.id == "new")
+    }
+
+    @Test(arguments: [true, false])
+    func workspaceWakeRejectsOldReadsAndRestoresOnlyVisibleConsumers(willSleep: Bool) async throws {
+        _ = NSApplication.shared
+        let domain = "XRG.gpu-worker.\(UUID().uuidString)", gate = GPUReadGate(), center = NotificationCenter()
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { gate.release(10); defaults.removePersistentDomain(forName: domain) }
+        defaults.set(true, forKey: "showGPUGraph"); defaults.set(true, forKey: "showVRAMGraph")
+        defaults.set(false, forKey: "showFansGraph"); defaults.set(false, forKey: "checkForUpdates")
+        let window = XRGGraphWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), defaults: defaults, center: center, runtimeEnabled: true)
+        let controller = GPUWakeController(); window.controller = controller
+        window.startRuntimeIfNeeded(); window.startRuntimeIfNeeded()
+        defer { window.cleanupBeforeExiting(); window.close() }
+        let miner = XRGGPUMiner(asyncSource: { gate.read() }, completionClock: { gate.time })
+        let view = XRGGPUView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: miner, settings: window.appSettings, defaults: defaults)
+        window.contentView?.addSubview(view); view.awakeFromNib(); window.initializeHardwareViews()
+        let manager = try #require(window.moduleManager)
+        try #require(await eventually { gate.reads == 1 }); gate.release()
+        try #require(await eventually { miner.completionRevision == 1 })
+        let history = try #require(miner.timedHistory(sourceID: "ioreg-id:1"))
+        window.graphUpdate(nil); try #require(await eventually { gate.reads == 2 })
+        center.post(name: willSleep ? NSWorkspace.willSleepNotification : NSWorkspace.didWakeNotification, object: nil)
+        manager.setModule("GPU", isDisplayed: false)
+        // VRAM remains visible; a sleep gate must win over this visibility change.
+        for _ in 0..<100 { window.graphUpdate(nil) }
+        gate.release(); try #require(await eventually { !miner.isCollecting })
+        #expect(gate.reads == 2 && miner.completionRevision == 1 && history.observationCount == 1 && !miner.countersAvailable)
+        if willSleep { center.post(name: NSWorkspace.didWakeNotification, object: nil) }
+        #expect(window.systemJustWokeUp())
+        gate.configure(time: 124); window.graphUpdate(nil)
+        try #require(await eventually { gate.reads == 3 }); gate.release()
+        try #require(await eventually { miner.completionRevision == 2 })
+        #expect(history.observationCount == 2 && miner.countersAvailable && window.vramView?.readings.count == 1)
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        manager.setModule("VRAM", isDisplayed: false)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        for _ in 0..<100 { window.graphUpdate(nil) }
+        #expect(gate.reads == 3 && !miner.isCollecting)
+        gate.configure(time: 125); manager.setModule("VRAM", isDisplayed: true)
+        try #require(await eventually { gate.reads == 4 }); gate.release()
+        try #require(await eventually { miner.completionRevision == 3 })
+        #expect(history.observationCount == 3)
+        window.cleanupBeforeExiting(); window.setSystemJustWokeUp(false)
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        window.graphUpdate(nil)
+        #expect(gate.reads == 4 && !window.systemJustWokeUp())
+        withExtendedLifetime(controller) {}
     }
 
     private func card(_ perf: [String: Any], id: UInt64 = 1,

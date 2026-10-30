@@ -17,7 +17,7 @@ Actual system sleep/resume remains unverified.
 | Collapsed window | Displayed modules keep collection; geometry changes do not stop timers | Worker keeps collection | Preserve collapse/hover behavior |
 | Hidden graph | CPU/Memory/Network/Disk normal sampling and elapsed-gated Battery polling continue hidden; other modules keep existing eligibility and AI remains separate | System sampler builds the system panels independently of UI visibility | Core collection aligned; audit optional hardware separately, preserving opt-in policy |
 | AI | Separate nominal five-second cadence; visibility/tracking eligibility and suspend/cancellation paths | Separate controlled worker and provider/accounting preferences | Preserve cancellation, stale-publication and accounting-baseline contracts |
-| System wake | Workspace notification sets a wake flag; CPU already uses a continuous clock; Battery now also uses one | System cadence uses Instant; no dedicated wake message in the inspected system timer | Audit per-collector rebase/freshness rather than assuming a wake flag handles every source |
+| System wake | Workspace sleep/wake notifications suppress GPU eligibility during sleep and invalidate old GPU publication on wake (including missed sleep); CPU/Battery use continuous clocks and the legacy wake flag remains | System cadence uses Instant; no dedicated wake message in the inspected system timer | Synthetic notification/blocked-reader coverage; audit other sources and real wake clocks separately |
 | Global system pause | No all-collectors Pause/Resume gate in the inspected graph scheduler | Timer messages are Wake/Stop, with no global Pause state | Specify accounting, histories, pending operations and counter rebaseline behavior before adding a control |
 
 Process SIGSTOP/SIGCONT actions and AI lifecycle controls are distinct from pausing
@@ -168,6 +168,31 @@ one); environmental/device membership was not controlled. No known temperature
 channels were reported. No physical Intel, release-build, macOS 26 runtime or
 real-menu responsiveness claim follows from these local profiles.
 
+## GPU sleep/wake lifecycle
+
+The native window subscribes to workspace will-sleep and did-wake notifications.
+Sleep suppresses GPU eligibility even if a panel is toggled while sleeping. Wake
+invalidates pre-wake work even when no sleep event was observed, preserves the
+legacy wake flag, then restores eligibility from GPU/VRAM visibility. No immediate
+read or catch-up queue is manufactured: the next eligible callback requests fresh
+work after any old in-flight request has drained. Histories remain intact.
+Shutdown/deinit remove both observers and shutdown leaves collection inactive.
+
+Private-center synthetic tests exercise both notification paths with a blocked
+reader, visibility edits during sleep, GPU-hidden/VRAM-visible recovery, both-hidden
+wake suppression, re-show and post-shutdown notification isolation. These do not
+put the user's computer to sleep and do not validate actual OS/driver wake timing.
+
+Counter policy remains source-specific. CPU's shared interval predicate requires
+strictly increasing finite monotonic observations no more than 300 seconds apart;
+Mac/Linux CPU paths use that predicate. Native Network/Disk tracking separates
+rates, session totals and identity evidence; valid counter deltas remain counted,
+while failed/invalid-time intervals retain totals and mark partial coverage.
+There is no blanket wake reset of these trackers: that could discard legitimate
+observed transfers. Their sleep-clock behavior and platform-level wake recovery
+still need a joint audit. AI keeps its existing independent accounting lifecycle.
+This pass does not add global Pause/Resume or change Linux/Shared code.
+
 ## Next work
 
 1. Compare the worker profile with the baseline, then measure real interaction,
@@ -175,7 +200,7 @@ real-menu responsiveness claim follows from these local profiles.
    additional synchronous collectors using measured cost and lifecycle contracts.
 2. Audit remaining optional-source visibility policies; specify any explicit
    Pause/Resume control, separating display freeze from stopping accounting.
-3. Audit wake/long-gap handling and interval-edit phase behavior for counter-based
+3. Audit remaining wake/long-gap handling and interval-edit phase behavior for counter-based
    sources, with source-specific rebaselines and preserved transfer/accounting totals.
 
 Evidence paths: XRGCore/XRGGraphWindow.swift (`timer`, `initTimers`, wake handling),

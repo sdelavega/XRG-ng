@@ -78,6 +78,8 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     private let currentVersion: String
     private var runtimeStarted = false
     private var wakeObserver: (any NSObjectProtocol)?
+    private var sleepObserver: (any NSObjectProtocol)?
+    private var graphicsSleeping = false
     private var woke = false
     public var borderWidth: Int32 = 4 { didSet { if borderWidth < 0 { borderWidth = 0 } } }
     public var minimized = false
@@ -153,7 +155,10 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         guard runtimeEnabled, !runtimeStarted, controller != nil else { return }
         runtimeStarted = true
         wakeObserver = wakeCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.woke = true }
+            MainActor.assumeIsolated { self?.systemDidWake(Notification(name: NSWorkspace.didWakeNotification)) }
+        }
+        sleepObserver = wakeCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.systemWillSleep(Notification(name: NSWorkspace.willSleepNotification)) }
         }
         if appSettings?.checkForUpdates == true { checkServerForUpdates() }
     }
@@ -161,6 +166,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         for timer in [min30Timer, min5Timer, graphTimer, fastTimer, aiTimer] { timer?.invalidate() }
         xrgCheckURL?.cancelLoading()
         if let wakeObserver { wakeCenter.removeObserver(wakeObserver) }
+        if let sleepObserver { wakeCenter.removeObserver(sleepObserver) }
     }
     public static func getDefaultPrefs() -> NSMutableDictionary { XRGWindowPreferences.defaultPreferences() }
     public func setupSettingsFromDictionary(_ dictionary: NSDictionary) {
@@ -175,7 +181,19 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     public func systemJustWokeUp() -> Bool { woke }
     public func setSystemJustWokeUp(_ value: Bool) { woke = value }
-    public func systemDidWake(_ notification: Notification) { woke = true }
+    public func systemWillSleep(_ notification: Notification) {
+        graphicsSleeping = true
+        moduleVisibilityChanged()
+    }
+    public func systemDidWake(_ notification: Notification) {
+        woke = true
+        // Invalidate even if the sleep notification was missed. A read begun
+        // before wake cannot repopulate current values or either history.
+        gpuView?.setCollectionActive(false)
+        gpuView?.invalidatePendingGraphics()
+        graphicsSleeping = false
+        moduleVisibilityChanged()
+    }
 
     public func checkServerForUpdates() {
         xrgCheckURL?.cancelLoading()
@@ -257,7 +275,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         moduleManager?.windowChanged(to: frame.size)
     }
     public func moduleVisibilityChanged() {
-        let active = gpuView?.module?.isDisplayed == true || vramView?.module?.isDisplayed == true
+        let active = !graphicsSleeping && (gpuView?.module?.isDisplayed == true || vramView?.module?.isDisplayed == true)
         gpuView?.setCollectionActive(active)
     }
     public func graphicsSnapshotDidComplete() {
@@ -441,7 +459,8 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         weatherView?.cancelLoading()
         aiTokenView?.suspendCollection()
         if let wakeObserver { wakeCenter.removeObserver(wakeObserver) }
-        wakeObserver = nil; runtimeStarted = false
+        if let sleepObserver { wakeCenter.removeObserver(sleepObserver) }
+        wakeObserver = nil; sleepObserver = nil; runtimeStarted = false
     }
     public override func mouseDown(with event: NSEvent) { backgroundView?.mouseDownAction(event); super.mouseDown(with: event) }
     public override func sendEvent(_ event: NSEvent) {

@@ -702,3 +702,8 @@ clock. Current local measurements and their limits are recorded in
 Live Mac GPU/VRAM snapshot reads run on a shared serial worker. Pending ticks
 coalesce, histories publish on the main thread once per accepted completion, and
 hiding both consumers, reset or detachment rejects stale in-flight results.
+
+Mac workspace sleep/wake events invalidate pending GPU publication and restore
+collection according to GPU/VRAM visibility. Histories and transfer totals are
+preserved; synthetic-notification coverage does not establish real hardware wake
+behavior.

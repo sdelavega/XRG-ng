@@ -2096,3 +2096,37 @@ Cleanup removed both inventoried CI build roots, the focused build cache and
 1,253 empty private test preferences, approximately 4.51 GiB total, with no errors.
 Profile domains were cleared by their runner; archived evidence remains on
 MacStorage. Repository caches, installed apps and ordinary settings were preserved.
+
+### Workspace sleep/wake invalidates old GPU publication
+
+The window now observes will-sleep alongside did-wake. Sleep forces GPU collection
+ineligible, overriding panel visibility edits until wake. Wake invalidates old
+work even if the sleep event was missed, retains the legacy wake flag, and restores
+eligibility only for visible GPU/VRAM consumers. A fresh callback drives the next
+read; no automatic burst or history reset occurs. Shutdown/deinit remove both
+observers. Existing CPU, Battery, I/O and AI accounting/cadence policies are
+unchanged; no blanket transfer-baseline reset or global Pause/Resume was added.
+
+A parameterized blocked-reader regression posts notifications to a private center,
+checking both sleep/wake and missed-sleep paths, visibility during sleep, retained
+history, fresh visible-VRAM recovery, both-hidden suppression, re-show and removed
+shutdown observers. No actual system sleep was initiated. Source review confirms
+the shared CPU 300-second interval boundary and native I/O totals/rate/identity
+separation; actual platform sleep-clock behavior remains unverified.
+
+The initial build correctly rejected crossing the notification payload into a
+main-actor closure under Swift 6 checks. Observer adapters now discard the unused
+payload and construct the known event within isolation; no unchecked concurrency
+annotation or weakened setting was introduced. Final validation uses that source.
+
+Final validation: full `Tools/ci-macos.sh Debug` passed 608 cases with zero failures
+on ARM64 and 608 under Rosetta x86-64, plus universal build, metadata/notices and
+retired-symbol guards, isolated AppKit restore and both packaged original-nib
+launch checks. Evidence and two tested source hashes: `dist/gpu-wake-validation`,
+with the initial isolation build failure separated from the corrected final gate,
+and DerivedData excluded. No new latency benchmark or Linux validation was needed
+for this lifecycle-only change. Physical Intel/macOS 26 runtime and actual
+suspend/resume remain unverified.
+Cleanup removed the two inventoried task build roots and 608 empty private test
+preferences, approximately 2.18 GiB, with no errors. Archived results remain on
+MacStorage; installed apps, ordinary settings and unrelated caches were preserved.
