@@ -5,6 +5,32 @@ import Testing
 
 @Suite @MainActor
 struct XRGAITokenMinerTests {
+    @Test func timestampWindowsUseCompletionTimeAndPreserveRateClockAndSampleBuffers() throws {
+        var wall = 100.0
+        let miner = XRGAITokenMiner(home: "/nonexistent-xrg-window-fixture", clock: { 0 }, historyClock: { wall })
+        miner.setDataSize(3); miner.totalHermesTokens = 100; miner.publish(time: 1, hermesReady: true)
+        wall = 105; miner.totalHermesTokens = 200; miner.publish(time: 3, hermesReady: true)
+        wall = 165; miner.totalHermesTokens = 300; miner.publish(time: 5, hermesReady: true)
+        let original = miner.hermesTokenData().orderedValues
+        miner.costData().setNextValue(7) // Index-only edits have no invented completion timestamp.
+        miner.setHistoryWindow(1)
+        let window = try #require(miner.windowHistories())
+        #expect(window.count == 6 && window[4].numValues == 13)
+        #expect(window[4].orderedValues.first == 50 && window[4].currentValue == 50)
+        #expect(window[4].orderedValues[1..<12].allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        #expect(window[5].currentValue == 0 && miner.costData().currentValue == 7)
+        #expect(miner.hermesTokenData().orderedValues == original && miner.hermesTokenRate() == 50)
+        miner.resizeHistory(1); #expect(miner.windowHistories()?[4].numValues == 13)
+        wall = 50; miner.totalHermesTokens = 400; miner.publish(time: 7, hermesReady: true)
+        #expect(miner.hermesTokenRate() == 50 && miner.totalHermesTokens == 400)
+        let reset = try #require(miner.windowHistories())
+        #expect(reset[4].orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        #expect(reset[4].currentValue == 50)
+        miner.setHistoryWindow(0); #expect(miner.windowHistories() == nil && miner.hermesTokenData().orderedValues == [50])
+        miner.setHistoryWindow(1); miner.reset()
+        #expect(miner.windowHistories()![4].orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+    }
+
     @Test func retentionPreservesProviderAndCostHistoryRateBaselinesAndTotals() {
         let miner = XRGAITokenMiner(home: "/nonexistent-xrg-retention-fixture", clock: { 0 })
         miner.setDataSize(3); miner.totalHermesTokens = 100; miner.publish(time: 1, hermesReady: true)

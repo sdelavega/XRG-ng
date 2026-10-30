@@ -1514,3 +1514,42 @@ and 565 Rust tests. Complete UI/desktop results and the preferences capture are 
 source is unchanged. No settings-schema or application-version bump, new dependency,
 release publication or signing change. Timestamp-based retention, remaining timing
 parity and actual sleep/wake remain separate work.
+
+### AI windows use completion timestamps
+
+Mac AI Time Window and Linux AI preferences now select 1–1,440 minutes (0 retains
+sample-count mode). Shared GPL Swift `XRGTimedHistory` stores actual completion
+timestamps and projects channel data into five-second bins ending at the latest
+completed observation. The latest value in a bin wins; absent bins stay NaN/missing,
+without interpolation or invented timestamps for index-only data. Exact cutoff
+values are retained; older observations expire. A paused graph stays anchored to
+its last observation, rather than implying fresh readings. Existing metric and
+availability conventions remain unchanged.
+
+The buffer retains up to 24 hours / 20,000 observations while either mode is active,
+with bounded compaction. Dense forced refreshes can hit the observation limit before
+24 hours. Equal timestamps replace the prior observation; a backward wall-clock
+change starts a new presentation era. Completion timestamps use Date/SystemTime,
+separate from the existing rate clock. Window edits reuse cached data and preserve
+rate/cost baselines, accounting, alerts, collection deadlines and ongoing scans.
+Legacy sample buffers remain independent, and new profiles retain original defaults.
+Mac selecting a sample preset returns to sample mode; Linux selects zero minutes.
+
+Linux uses the same implementation through additive C ABI functions with owner-thread
+Rust wrappers. Invalid dimensions/timestamps/values and short output buffers are
+checked before mutation/writes; explicit NaN channels remain missing. Shared tests
+cover cutoffs, pauses, dense input, empty/cleared buffers, clock rollback, duplicates
+and projection without mutation. Native/Rust tests cover real clock separation,
+source/reset boundaries, cached window changes, preserved sample buffers and
+preference restoration. Linux schema 31 migrates old profiles read-only until save;
+invalid edits remain transactional.
+
+Validation: universal Mac build, 579 tests on ARM64 and 579 under Rosetta x86_64,
+native/packaged launch checks. Linux ARM64 passed 35 shared Swift tests, extended
+C ABI smoke, strict Clippy and 567 Rust tests. Full desktop/visual results are in
+`dist/ai-time-window-validation`, including a native ten-minute window with an
+injected two-minute gap. The first Linux attempt exposed a Swift test-macro/key-path
+compilation issue; explicit closure predicates preserve the assertions and pass.
+Physical Intel/Linux x86-64, macOS 26 runtime and actual suspend/resume remain
+unverified. Other system graphs still use sample-count retention. No app version,
+signing, pricing, notification or dependency/notice policy changed.

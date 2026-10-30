@@ -409,20 +409,30 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 30 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 31 in memory
 and are written only on an explicit save.
-AI retention is separate: use the Mac **AI History** menu or Linux
-**Preferences → AI → Retained AI samples**. Explicit counts retain newest observations
-and preserve rate baselines and session/daily counters. The original automatic
-choices remain (Mac graph width minus the reserved indicator strip; 120 on Linux).
-At the nominal five-second AI cadence, 300 samples span about 1,495 seconds between
-oldest and newest. Pauses, slow scans and wakeups affect actual coverage; this is
-sample-count retention, not a timestamp-based window. Linux history-only edits
-resize the cached observation without an extra collection, duplicate sample or
-accounting event, and preserve the next collection deadline, matching Mac retention
-edits. An in-flight scan remains valid through a history-only edit. Source changes,
-accounting edits and counter resets retain their refresh behavior. Capacity changes
-do not alter source selection, cost policy, notifications or recorded accounting.
+AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
+Linux **Preferences → AI → Retained AI samples**. Its original automatic choices
+remain: Mac graph width minus the indicator strip, or 120 samples on Linux. At
+five-second cadence, 300 samples have a nominal span of 1,495 seconds.
+
+For actual time coverage, use Mac **AI Time Window** or Linux **AI time window
+(minutes; 0 uses samples)**. Windows support 1–1,440 minutes, ending at the latest
+completed observation. Five-second bins show the latest recorded value in each
+bin; time bins without observations stay gaps. Delayed scans no longer compress
+that elapsed time into adjacent points. A paused or frozen graph remains anchored
+to its last observation until another completes. Rates still use their existing
+interval clock; retention uses completion timestamps. Backward completion timestamps
+start a new graph-history era; rate state and existing calendar/accounting rules
+remain independent.
+
+Up to 24 hours and 20,000 timestamped observations are retained in memory, including
+while sample-count mode is selected. Very dense manual refreshes can reach that
+observation limit before 24 hours. Legacy sample buffers remain separate; index-only
+samples are never assigned invented timestamps. Choosing a Mac sample count returns
+to sample mode; Linux uses a zero-minute window. Retention edits preserve counters,
+alerts, source choices, pricing and the next sampling deadline. An ongoing scan
+remains valid; source/accounting edits and counter resets keep their refresh behavior.
 
 Both builds support sampling targets from 200 ms to 10 seconds. Mac edits retain
 millisecond precision; existing valid Mac preferences outside that range remain

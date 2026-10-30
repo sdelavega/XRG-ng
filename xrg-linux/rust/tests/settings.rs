@@ -13,6 +13,40 @@ use xrg_ng_linux::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 #[test]
+fn ai_time_window_upgrades_without_writes_and_invalid_edits_are_transactional() {
+    let f = Fixture::new();
+    let mut expected = Settings::default();
+    expected.ai.history_samples = 257;
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 30.into();
+    wire["ai"]
+        .as_object_mut()
+        .unwrap()
+        .remove("history_minutes");
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    loaded.ai.history_minutes = 30;
+    store.save(&loaded).unwrap();
+    let saved = fs::read(f.path()).unwrap();
+    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    loaded.ai.history_minutes = 1441;
+    assert!(store.save(&loaded).is_err());
+    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    for invalid in [
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!(true),
+        serde_json::json!("30"),
+    ] {
+        wire["ai"]["history_minutes"] = invalid;
+        assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
+}
+#[test]
 fn ai_retention_migrates_read_only_and_rejects_invalid_capacities_atomically() {
     let f = Fixture::new();
     let mut expected = Settings::default();
@@ -187,7 +221,7 @@ fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactional
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = Store::open(Some(f.path()));
     assert!(error.is_none());
-    assert_eq!(loaded.version, 30);
+    assert_eq!(loaded.version, 31);
     assert_eq!(loaded.metrics.cpu_history_samples, 0);
     assert_eq!(loaded.sampling_interval_ms, 375);
     assert_eq!(fs::read(f.path()).unwrap(), original);
@@ -275,7 +309,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 31;
+    value.version = 32;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -608,7 +642,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        30
+        31
     );
 }
 #[test]
@@ -691,7 +725,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 30);
+    assert_eq!(migrated.version, 31);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -851,7 +885,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        30
+        31
     );
 }
 

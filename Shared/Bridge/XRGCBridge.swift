@@ -309,3 +309,35 @@ private struct WeatherHistoryRow: Encodable {
 @c(xrg_ai_sampling_milliseconds) public func aiSamplingMilliseconds() -> UInt64 {
     XRGAISamplingCadence.milliseconds
 }
+
+@c(xrg_timed_history_settings) public func timedHistorySettings(_ output: UnsafeMutablePointer<UInt32>?, _ capacity: UInt32) -> Int32 {
+    guard let output, capacity >= 4 else { return -1 }
+    for (i, value) in [XRGTimedHistory.maximumMinutes, XRGTimedHistory.binSeconds, XRGTimedHistory.maximumObservations, XRGTimedHistory.maximumChannels].enumerated() { output[i] = UInt32(value) }
+    return 4
+}
+@c(xrg_timed_history_create) public func timedHistoryCreate(_ channels: UInt32) -> UnsafeMutableRawPointer? {
+    guard let history = XRGTimedHistory(channels: Int(channels)) else { return nil }
+    return Unmanaged.passRetained(history).toOpaque()
+}
+@c(xrg_timed_history_free) public func timedHistoryFree(_ handle: UnsafeMutableRawPointer?) {
+    if let handle { Unmanaged<XRGTimedHistory>.fromOpaque(handle).release() }
+}
+@c(xrg_timed_history_clear) public func timedHistoryClear(_ handle: UnsafeMutableRawPointer?) -> Int32 {
+    guard let handle else { return -1 }
+    Unmanaged<XRGTimedHistory>.fromOpaque(handle).takeUnretainedValue().clear(); return 0
+}
+@c(xrg_timed_history_append) public func timedHistoryAppend(_ handle: UnsafeMutableRawPointer?, _ time: Double, _ values: UnsafePointer<Double>?, _ count: UInt32) -> Int32 {
+    guard let handle, let values else { return -1 }
+    let history = Unmanaged<XRGTimedHistory>.fromOpaque(handle).takeUnretainedValue()
+    guard count == history.channels else { return -1 }
+    return history.append(time: time, values: Array(UnsafeBufferPointer(start: values, count: Int(count)))) ? 0 : -1
+}
+@c(xrg_timed_history_copy) public func timedHistoryCopy(_ handle: UnsafeMutableRawPointer?, _ minutes: UInt32, _ output: UnsafeMutablePointer<Double>?, _ capacity: UInt32) -> Int32 {
+    guard let handle, let output, let bins = XRGTimedHistory.binCount(minutes: Int(minutes)) else { return -1 }
+    let history = Unmanaged<XRGTimedHistory>.fromOpaque(handle).takeUnretainedValue()
+    let required = bins * history.channels
+    guard capacity >= required else { return -2 }
+    let values = history.values(minutes: Int(minutes))!
+    for channel in 0..<history.channels { for slot in 0..<bins { output[channel * bins + slot] = values[channel][slot] } }
+    return Int32(required)
+}

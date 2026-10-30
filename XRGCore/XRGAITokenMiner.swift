@@ -78,6 +78,7 @@ enum XRGAIPricing {
 public final class XRGAITokenMiner: NSObject {
     private let home: String
     private let clock: () -> TimeInterval
+    private let historyClock: () -> TimeInterval
     private let claudeScan: XRGScanCache
     private let codexScan: XRGScanCache
     private let geminiScan: XRGScanCache
@@ -93,6 +94,11 @@ public final class XRGAITokenMiner: NSObject {
     private var rates = [UInt32](repeating: 0, count: 5)
     private var histories = (0..<5).map { _ in XRGDataSet() }
     private let costHistory = XRGDataSet()
+    private let timedHistory = XRGTimedHistory(channels: 6)!
+    private var historyMinutes = 0
+    private var projectedRevision: UInt64?
+    private var projectedMinutes = 0
+    private let projectedHistories = (0..<6).map { _ in XRGDataSet() }
     private var costs = [Double](repeating: 0, count: 5)
     private var costRate = 0.0
     private var logSources = [String](repeating: "", count: 3)
@@ -131,13 +137,14 @@ public final class XRGAITokenMiner: NSObject {
     }
     init(home: String, clock: @escaping () -> TimeInterval, otelRequest: XRGURL = XRGURL(timeoutInterval: 2),
          tagsRequest: XRGURL = XRGURL(timeoutInterval: 2), runningRequest: XRGURL = XRGURL(timeoutInterval: 2),
-         scanInterval: TimeInterval = XRGAISamplingCadence.seconds) {
+         scanInterval: TimeInterval = XRGAISamplingCadence.seconds,
+         historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         claudeScan = XRGScanCache(interval: scanInterval)
         codexScan = XRGScanCache(interval: scanInterval)
         geminiScan = XRGScanCache(interval: scanInterval)
         self.otelRequest = otelRequest; self.tagsRequest = tagsRequest; self.runningRequest = runningRequest
         self.home = home
-        self.clock = clock
+        self.clock = clock; self.historyClock = historyClock
         super.init()
         detectBestStrategy()
     }
@@ -176,11 +183,29 @@ public final class XRGAITokenMiner: NSObject {
         }
     }
 
+    @nonobjc func setHistoryWindow(_ minutes: Int) {
+        guard XRGTimedHistory.validMinutes(minutes) else { return }
+        historyMinutes = minutes
+    }
+    @nonobjc func windowHistories() -> [XRGDataSet]? {
+        guard historyMinutes > 0 else { return nil }
+        if projectedRevision != timedHistory.revision || projectedMinutes != historyMinutes {
+            let values = timedHistory.values(minutes: historyMinutes)!
+            for index in projectedHistories.indices {
+                let data = projectedHistories[index]; data.resize(values[index].count)
+                for value in values[index] { data.setNextValue(value.isFinite ? value : Double(XRGGraphRenderer.missingValue)) }
+            }
+            projectedRevision = timedHistory.revision; projectedMinutes = historyMinutes
+        }
+        return projectedHistories
+    }
+
     @objc public func reset() {
         cancelCollection()
         for scan in [claudeScan, codexScan, geminiScan] { scan.reset() }
         for request in [otelRequest, tagsRequest, runningRequest] { request.cancelLoading() }
         for history in histories + [costHistory] { history.reset() }
+        timedHistory.clear()
         tracker.reset()
         rates = Array(repeating: 0, count: 5)
         costs = Array(repeating: 0, count: 5)
@@ -332,6 +357,7 @@ public final class XRGAITokenMiner: NSObject {
         let costsReady = (claudeReady || activeStrategy == .none) && codexReady && geminiReady
         costRate = costsReady ? tracker.sampleCost(totalCostUSD, time: time) : 0
         costHistory.setNextValue(costRate * 1000)
+        timedHistory.append(time: historyClock(), values: rates.map(Double.init) + [costRate * 1000])
     }
 
     private func consumeClaudeLogSnapshot() {

@@ -130,7 +130,7 @@ fn version_nine_preserves_existing_layout_and_palette_until_explicit_save() {
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        30
+        31
     );
 }
 #[test]

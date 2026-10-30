@@ -30,7 +30,7 @@ enum XRGAIViewProvider: Int, CaseIterable {
 }
 struct XRGAIViewProviderData {
     let provider: XRGAIViewProvider
-    let history: XRGDataSet
+    var history: XRGDataSet
     var rate: UInt64
     var total: UInt64
     var cost: Double = 0
@@ -57,6 +57,7 @@ struct XRGAITokenViewSnapshot {
     func resetAccountingBaseline()
     func pauseCollection()
     func setAccountingEnabled(_ enabled: Bool)
+    func setHistoryWindow(_ minutes: Int)
     func resizeHistory(_ count: Int)
     func setDataSize(_ count: Int)
     func getLatestTokenInfo()
@@ -64,6 +65,7 @@ struct XRGAITokenViewSnapshot {
     func viewSnapshot() -> XRGAITokenViewSnapshot
 }
 extension XRGAITokenViewSource {
+    func setHistoryWindow(_ minutes: Int) {}
     func resizeHistory(_ count: Int) {
         guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
         for provider in viewSnapshot().providers {
@@ -74,7 +76,7 @@ extension XRGAITokenViewSource {
 }
 extension XRGAITokenMiner: XRGAITokenViewSource {
     func viewSnapshot() -> XRGAITokenViewSnapshot {
-        XRGAITokenViewSnapshot(providers: [
+        var snapshot = XRGAITokenViewSnapshot(providers: [
             XRGAIViewProviderData(provider: .claude, history: claudeTokenData(), rate: UInt64(claudeTokenRate()), total: totalClaudeTokens, cost: claudeCostUSD(), costBasis: activeStrategy == .JSONL ? "legacy estimate" : activeStrategy == .SQLite ? "source estimate" : "reported"),
             XRGAIViewProviderData(provider: .codex, history: codexTokenData(), rate: UInt64(codexTokenRate()), total: totalCodexTokens, cost: codexCostUSD(), costBasis: "legacy estimate; assumed split", recordedUsage: codexRecordedUsage, recordedModels: codexRecordedModels, recordedSnapshotStale: codexLastScanFailed),
             XRGAIViewProviderData(provider: .gemini, history: geminiTokenData(), rate: UInt64(geminiTokenRate()), total: totalGeminiTokens, cost: geminiCostUSD(), costBasis: "legacy estimate"),
@@ -82,6 +84,10 @@ extension XRGAITokenMiner: XRGAITokenViewSource {
             XRGAIViewProviderData(provider: .hermes, history: hermesTokenData(), rate: UInt64(hermesTokenRate()), total: totalHermesTokens, cost: hermesCostUSD(), costBasis: "source value (actual or estimated)")],
             ollamaAvailable: ollamaAvailable, ollamaStatus: ollamaStatusString(), runningModels: ollamaRunningModels,
             hermesModels: hermesModelTokens, totalCost: totalCostUSD, costPerHour: costPerHour(), projectedDailyCost: projectedDailyCost())
+        if let window = windowHistories() {
+            for index in snapshot.providers.indices { snapshot.providers[index].history = window[index] }
+        }
+        return snapshot
     }
 }
 
@@ -171,6 +177,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)
     }
     public func setGraphSize(_ size: NSSize) {
+        source.setHistoryWindow(historyMinutes)
         let width = size.width.isFinite ? size.width : 23
         setWidth(Int32(min(20_000, max(23, width))))
     }
@@ -454,8 +461,9 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         menu.addItem(.separator())
         menu.addItem(XRGHistoryRetention.menu("AI History", count: retainedSamples, target: self,
             action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(historyWindowMenu())
         item(historyDescription, enabled: false)
-        item("Nominal span only; collection delays affect actual time coverage", enabled: false)
+        item(historyMinutes > 0 ? "Latest value per 5-second bin; missing intervals stay gaps" : "Nominal span only; collection delays affect actual time coverage", enabled: false)
         item("Reset Session Counters", #selector(resetSessionCounters(_:)))
         item("Reset Daily Counters", #selector(resetDailyCounters(_:)))
         item("Open Database Location...", #selector(openDatabaseLocation(_:)))
@@ -463,13 +471,36 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     }
     @nonobjc static let historyKey = "XRGAITokenView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc static let windowKey = "XRGAITokenView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int {
+        let value = defaults.integer(forKey: Self.windowKey)
+        return XRGTimedHistory.validMinutes(value) ? value : 0
+    }
+    private func historyWindowMenu() -> NSMenuItem {
+        let root = NSMenuItem(title: "AI Time Window", action: #selector(emptyEvent(_:)), keyEquivalent: "")
+        root.target = self; let choices = NSMenu(title: root.title)
+        var minutes = XRGTimedHistory.windowPresets
+        if !minutes.contains(historyMinutes) { minutes.append(historyMinutes); minutes.sort() }
+        for value in minutes {
+            let item = NSMenuItem(title: value == 0 ? "Use sample count" : "\(value) minutes", action: #selector(selectHistoryWindow(_:)), keyEquivalent: "")
+            item.tag = value; item.target = self; item.state = value == historyMinutes ? .on : .off; choices.addItem(item)
+        }
+        root.submenu = choices; return root
+    }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, XRGTimedHistory.validMinutes(item.tag) else { return }
+        defaults.set(item.tag, forKey: Self.windowKey)
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
+    }
     @nonobjc var historyDescription: String {
+        if historyMinutes > 0 { return "AI history: \(historyMinutes) minutes ending at latest completed observation" }
         let count = historyWidth ?? 0
         let span = XRGSamplingSettings.nominalSpan(samples: count, interval: XRGAISamplingCadence.seconds) ?? 0
         return String(format: "AI history: %d samples; nominal %.0f seconds at 5 s cadence", count, span)
     }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }

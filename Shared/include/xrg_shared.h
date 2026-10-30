@@ -57,6 +57,18 @@ void xrg_history_free(void *handle);
 int32_t xrg_history_resize(void *handle, uint32_t capacity);
 int32_t xrg_history_append(void *handle, double value);
 int32_t xrg_history_copy(void *handle, double *output, uint32_t capacity);
+/* Timestamp windows, owner-thread confined. Settings: max minutes, bin seconds,
+ * max retained observations, max channels. Window 0 selects caller's sample mode.
+ * Append accepts finite nonnegative time and per-channel nonnegative values/NaN.
+ * Backward clock starts a new era; equal time replaces the last observation.
+ * Copy is channel-major, ending at latest observation, latest value per bin;
+ * missing bins are NaN. -1 invalid, -2 short output (no writes). */
+int32_t xrg_timed_history_settings(uint32_t *output, uint32_t capacity);
+void *xrg_timed_history_create(uint32_t channels);
+void xrg_timed_history_free(void *handle);
+int32_t xrg_timed_history_clear(void *handle);
+int32_t xrg_timed_history_append(void *handle, double time, const double *values, uint32_t count);
+int32_t xrg_timed_history_copy(void *handle, uint32_t minutes, double *output, uint32_t capacity);
 void *xrg_rate_create(void);
 void xrg_rate_free(void *handle);
 uint32_t xrg_rate_sample(void *handle, uint32_t key, uint64_t counter, double time, uint64_t *delta);

@@ -20,6 +20,8 @@ pub struct Preferences {
     pub accounting: super::accounting::Preferences,
     /// Zero preserves the original 120-sample default; independent of accounting.
     pub history_samples: u32,
+    /// Zero uses sample mode; positive values select an observation timestamp window.
+    pub history_minutes: u32,
     pub enabled: [bool; 4],
     pub ollama: bool,
     pub claude_source: ClaudeSource,
@@ -36,6 +38,7 @@ impl Default for Preferences {
         Self {
             accounting: super::accounting::Preferences::default(),
             history_samples: 0,
+            history_minutes: 0,
             enabled: [true; 4],
             ollama: true,
             claude_source: ClaudeSource::Auto,
@@ -65,12 +68,17 @@ impl Preferences {
         let mut b = other.clone();
         a.history_samples = 0;
         b.history_samples = 0;
+        a.history_minutes = 0;
+        b.history_minutes = 0;
         a.accounting = Default::default();
         b.accounting = Default::default();
         a == b
     }
     pub fn validate(&self) -> Result<(), String> {
         self.accounting.validate()?;
+        if self.history_minutes > crate::shared::timed_history_settings()[0] {
+            return Err("AI time window must be 0..1440 minutes".into());
+        }
         if self.history_samples > crate::shared::sampling_settings()[3] {
             return Err("AI history capacity must be 0..20000 samples".into());
         }

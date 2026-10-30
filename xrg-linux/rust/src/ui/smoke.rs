@@ -216,6 +216,10 @@ impl Harness {
                             }
                             Ok("graphs") => editor.tab = 1,
                             Ok("sources") => editor.tab = 2,
+                            Ok("ai-time") => {
+                                editor.tab = 3;
+                                editor.draft.ai.history_minutes = 10;
+                            }
                             _ => (),
                         }
                     }
@@ -295,6 +299,7 @@ impl Harness {
                     let mut next = app.settings.clone();
                     next.sampling_interval_ms = 200;
                     next.ai.history_samples = 1440;
+                    next.ai.history_minutes = 30;
                     next.metrics.cpu_history_samples = 300;
                     next.metrics.history_samples.insert(Module::Memory, 360);
                     next.metrics.history_samples.insert(Module::Network, 480);
@@ -381,11 +386,11 @@ impl Harness {
                         "SENSOR_HISTORY_SMOKE_OK Temperature=1080 Fans=1200 Battery=1320, capacities applied; unavailable inputs remain unavailable"
                     );
                     let (_, saved, error) = Store::open(Some(self.path()));
-                    if saved.ai.history_samples != 1440 {
+                    if saved.ai.history_samples != 1440 || saved.ai.history_minutes != 30 {
                         return Err("AI history preference did not survive save/reopen".into());
                     }
                     println!(
-                        "AI_HISTORY_PREFS_SMOKE_OK 1440 samples persisted; live AI collection remains disabled in desktop smoke"
+                        "AI_HISTORY_PREFS_SMOKE_OK 1440 fallback samples and 30 minute window persisted; live AI collection remains disabled in desktop smoke"
                     );
                     if error.is_some() || saved != app.settings {
                         return Err(format!("Settings reopen mismatch: {error:?}"));

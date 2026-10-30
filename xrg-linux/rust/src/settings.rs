@@ -511,7 +511,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 30,
+            version: 31,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -581,7 +581,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 30 {
+        if self.version != 31 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -770,6 +770,9 @@ impl Settings {
         }
         if result.version == 29 {
             result.version = 30;
+        }
+        if result.version == 30 {
+            result.version = 31;
         }
         result.validate()?;
         Ok(result)

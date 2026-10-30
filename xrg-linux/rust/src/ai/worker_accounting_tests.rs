@@ -181,6 +181,16 @@ fn retention_edits_resize_cached_reports_without_collection_or_accounting() {
                 .contains(&history_description(&prefs))
         );
     }
+    prefs.history_minutes = 1;
+    control.set(prefs.clone()).unwrap();
+    let window = receive(control.revision());
+    assert_eq!(window.panel.series[0].len(), 13);
+    assert!(Arc::ptr_eq(&observed.report, &window.report));
+    assert_eq!(window.accounting.session.total(), 10);
+    assert_eq!(reads.load(Ordering::Relaxed), 2);
+    prefs.history_minutes = 0;
+    control.set(prefs.clone()).unwrap();
+    assert_eq!(receive(control.revision()).panel.series[0].len(), 120);
     // A pending graph reset is acknowledged through the same cache, without polling.
     let generation = worker.clear_graph();
     prefs.history_samples = 257;
@@ -326,14 +336,14 @@ fn late_history_edits_do_not_postpone_the_original_five_second_deadline() {
     // No early collection. A retention edit four seconds into the interval must
     // neither collect immediately nor restart a five-second wait from this edit.
     assert!(observed.recv_timeout(Duration::from_secs(4)).is_err());
-    prefs.history_samples = 300;
+    prefs.history_minutes = 1;
     control.set(prefs).unwrap();
     let end = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(update) = worker.latest.lock().unwrap().take()
             && update.control_revision == control.revision()
         {
-            assert_eq!(update.panel.series[0].len(), 300);
+            assert_eq!(update.panel.series[0].len(), 13);
             break;
         }
         assert!(Instant::now() < end);
@@ -407,4 +417,60 @@ fn coalesced_controls_keep_collection_invalidations_separate_from_history_revisi
     control.reset_daily();
     assert_ne!(control.collection_revision(), session);
     assert_eq!(control.revision(), 8);
+}
+
+#[test]
+fn timestamp_windows_project_real_completion_gaps_without_changing_rate_time_or_sample_history() {
+    let report = |total| Report {
+        providers: [
+            Ok(Reading {
+                continuity: 0,
+                usage: Usage {
+                    total,
+                    ..Default::default()
+                },
+                cost: None,
+                source: "fixture".into(),
+                models: None,
+            }),
+            Err("disabled".into()),
+            Err("disabled".into()),
+            Err("disabled".into()),
+        ],
+        ollama: "disabled".into(),
+        models: Models::default(),
+    };
+    let mut display = Display::default();
+    let mut prefs = Preferences {
+        enabled: [true, false, false, false],
+        history_minutes: 1,
+        ..Default::default()
+    };
+    display.panel_at(report(100), 1., 100., &prefs);
+    display.panel_at(report(200), 3., 105., &prefs);
+    let panel = display.panel_at(report(300), 5., 165., &prefs);
+    assert_eq!(panel.series[0].len(), 13);
+    assert_eq!(panel.series[0][0], 50.);
+    assert_eq!(panel.series[0][12], 50.);
+    assert!(panel.series[0][1..12].iter().all(|v| v.is_nan()));
+    let before = display.history.values();
+    let mut update = Update::new(prefs.clone(), panel, report(300));
+    let observed = update.report.clone();
+    prefs.history_minutes = 2;
+    display.resize_cached(&mut update, prefs.clone(), 1);
+    assert_eq!(update.panel.series[0].len(), 25);
+    assert!(Arc::ptr_eq(&observed, &update.report));
+    assert_eq!(display.history.values(), before);
+    let fresh = display.panel_at(report(400), 7., 50., &prefs);
+    assert_eq!(*fresh.series[0].last().unwrap(), 50.);
+    assert!(fresh.series[0][..24].iter().all(|v| v.is_nan()));
+    prefs.claude_source = ClaudeSource::Database;
+    let changed = display.panel_at(report(500), 9., 55., &prefs);
+    assert_eq!(changed.series[0].len(), 25);
+    assert!(changed.series[0][..24].iter().all(|v| v.is_nan()));
+    assert_eq!(changed.series[0][24], 0.);
+    display.clear_graph();
+    let next = display.panel_at(report(600), 11., 60., &prefs);
+    assert_eq!(next.series[0][24], 50.);
+    assert!(next.series[0][..24].iter().all(|v| v.is_nan()));
 }

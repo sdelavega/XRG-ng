@@ -144,6 +144,33 @@ struct XRGAITokenViewTests {
             #expect(view.historyDescription.contains("1280 seconds"))
         }
     }
+    @Test func timestampWindowMenusRestoreAndSwitchModesWithoutSamplingOrChangingCounters() throws {
+        try withFixture { settings, defaults, observer, _ in
+            var wall = 100.0
+            let miner = XRGAITokenMiner(home: "/nonexistent-xrg-window-view", clock: { 0 }, historyClock: { wall })
+            let view = XRGAITokenView(frame: NSRect(x: 0,y: 0,width: 240,height: 200), source: miner, observer: observer,
+                settings: settings, defaults: defaults, databaseURL: URL(fileURLWithPath: "/nonexistent-xrg-window-view"))
+            miner.totalHermesTokens = 100; miner.publish(time: 1, hermesReady: true)
+            wall = 105; miner.totalHermesTokens = 200; miner.publish(time: 3, hermesReady: true)
+            wall = 165; miner.totalHermesTokens = 300; miner.publish(time: 5, hermesReady: true)
+            miner.usageEventHandler?("Codex", .init(usage: .init(total: 30), models: [:]))
+            let option = NSMenuItem(); option.tag = 1; view.selectHistoryWindow(option)
+            #expect(view.historyMinutes == 1 && view.historyLayers().first?.data.numValues == 13)
+            #expect(view.historyLayers().first?.data.orderedValues.first == 50 && view.historyLayers().first?.data.currentValue == 50)
+            #expect(observer.sessionTotalTokens == 30 && observer.dailyTotalTokens == 30 && !miner.isScanningLogs)
+            view.setFrameSize(NSSize(width: 60, height: 90)); #expect(view.historyLayers().first?.data.numValues == 13)
+            let restored = XRGAITokenView(frame: NSRect(x: 0,y: 0,width: 240,height: 200), source: miner, observer: observer,
+                settings: settings, defaults: defaults, databaseURL: URL(fileURLWithPath: "/nonexistent-xrg-window-view"))
+            #expect(restored.historyMinutes == 1 && restored.historyDescription.contains("latest completed observation"))
+            let choices = try #require(restored.makeMenu().items.first { $0.title == "AI Time Window" }?.submenu)
+            #expect(choices.items.allSatisfy { $0.target === restored })
+            #expect(choices.items.contains { $0.tag == 1 && $0.state == .on })
+            option.tag = 1441; restored.selectHistoryWindow(option); #expect(restored.historyMinutes == 1)
+            option.tag = 300; restored.selectHistory(option)
+            #expect(restored.historyMinutes == 0 && restored.retainedSamples == 300 && miner.hermesTokenData().numValues == 300)
+            #expect(miner.hermesTokenRate() == 50 && observer.sessionTotalTokens == 30 && !miner.isScanningLogs)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, XRGAITokensObserver, AITokenPanelSource) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.aiTokenView.\(UUID().uuidString)"

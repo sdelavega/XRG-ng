@@ -782,17 +782,30 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
 fn ai(ui: &mut egui::Ui, s: &mut Settings) {
     ui.heading("AI monitoring");
     ui.horizontal(|ui| {
-        let label = ui.label("Retained AI samples");
+        let label = ui.label("AI time window (minutes; 0 uses samples)");
         ui.add(
-            egui::DragValue::new(&mut s.ai.history_samples)
-                .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+            egui::DragValue::new(&mut s.ai.history_minutes)
+                .range(0..=xrg_ng_linux::shared::timed_history_settings()[0]),
         )
         .labelled_by(label.id);
+    });
+    ui.small("Time windows end at the latest completed observation. Latest value per five-second bin; unobserved time bins stay gaps. Paused collection freezes the window. Changing the window does not collect again or change counters.");
+    ui.add_enabled_ui(s.ai.history_minutes == 0, |ui| {
+        ui.horizontal(|ui| {
+            let label = ui.label("Retained AI samples");
+            ui.add(
+                egui::DragValue::new(&mut s.ai.history_samples)
+                    .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+            )
+            .labelled_by(label.id);
+        });
     });
     let capacity = s.ai.history_capacity();
     let span =
         (capacity - 1) as f64 * xrg_ng_linux::shared::ai_sampling_milliseconds() as f64 / 1000.;
-    ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Changing retention does not add a collection or delay the next sample."));
+    if s.ai.history_minutes == 0 {
+        ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Changing retention does not add a collection or delay the next sample."));
+    }
     ui.checkbox(
         &mut s.ai.accounting.enabled,
         "Track observed session/daily usage",

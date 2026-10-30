@@ -3,6 +3,22 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_timed_history_settings(output: *mut u32, capacity: u32) -> i32;
+    fn xrg_timed_history_create(channels: u32) -> *mut c_void;
+    fn xrg_timed_history_free(handle: *mut c_void);
+    fn xrg_timed_history_clear(handle: *mut c_void) -> i32;
+    fn xrg_timed_history_append(
+        handle: *mut c_void,
+        time: f64,
+        values: *const f64,
+        count: u32,
+    ) -> i32;
+    fn xrg_timed_history_copy(
+        handle: *mut c_void,
+        minutes: u32,
+        output: *mut f64,
+        capacity: u32,
+    ) -> i32;
     fn xrg_sampling_settings(output: *mut u32, capacity: u32) -> i32;
     fn xrg_history_resize(handle: *mut c_void, capacity: u32) -> i32;
     fn xrg_cpu_interval_valid(previous: f64, current: f64) -> i32;
@@ -240,6 +256,69 @@ impl History {
 impl Drop for History {
     fn drop(&mut self) {
         unsafe { xrg_history_free(self.handle.as_ptr()) }
+    }
+}
+
+pub fn timed_history_settings() -> [u32; 4] {
+    let mut values = [0; 4];
+    assert_eq!(
+        unsafe { xrg_timed_history_settings(values.as_mut_ptr(), 4) },
+        4
+    );
+    values
+}
+pub struct TimedHistory {
+    handle: NonNull<c_void>,
+    channels: u32,
+    _local: PhantomData<Rc<()>>,
+}
+impl TimedHistory {
+    pub fn new(channels: u32) -> Self {
+        Self {
+            handle: NonNull::new(unsafe { xrg_timed_history_create(channels) })
+                .expect("timed history channels"),
+            channels,
+            _local: PhantomData,
+        }
+    }
+    pub fn clear(&mut self) {
+        assert_eq!(unsafe { xrg_timed_history_clear(self.handle.as_ptr()) }, 0);
+    }
+    pub fn append(&mut self, time: f64, values: &[f64]) -> bool {
+        if values.len() != self.channels as usize {
+            return false;
+        }
+        unsafe {
+            xrg_timed_history_append(
+                self.handle.as_ptr(),
+                time,
+                values.as_ptr(),
+                values.len() as u32,
+            ) == 0
+        }
+    }
+    pub fn values(&self, minutes: u32) -> Vec<Vec<f64>> {
+        let settings = timed_history_settings();
+        assert!((1..=settings[0]).contains(&minutes));
+        let bins = minutes * 60 / settings[1] + 1;
+        let mut values = vec![f64::NAN; (bins * self.channels) as usize];
+        assert_eq!(
+            unsafe {
+                xrg_timed_history_copy(
+                    self.handle.as_ptr(),
+                    minutes,
+                    values.as_mut_ptr(),
+                    values.len() as u32,
+                )
+            },
+            values.len() as i32
+        );
+        values.chunks(bins as usize).map(|v| v.to_vec()).collect()
+    }
+}
+impl Drop for TimedHistory {
+    fn drop(&mut self) {
+        unsafe { xrg_timed_history_free(self.handle.as_ptr()) }
     }
 }
 

@@ -288,6 +288,12 @@ struct Counter {
     previous: Option<Reading>,
 }
 fn history_description(preferences: &Preferences) -> String {
+    if preferences.history_minutes > 0 {
+        return format!(
+            "AI history: {} minutes ending at latest completed observation; latest value per 5-second bin. Observation timestamps define the window; missing intervals stay gaps.",
+            preferences.history_minutes
+        );
+    }
     let samples = preferences.history_capacity();
     let span = (samples - 1) as f64 * shared::ai_sampling_milliseconds() as f64 / 1000.;
     format!(
@@ -297,6 +303,7 @@ fn history_description(preferences: &Preferences) -> String {
 pub struct Display {
     counters: [Counter; 4],
     history: History,
+    timed_history: shared::TimedHistory,
     preferences: Option<Preferences>,
 }
 impl Default for Display {
@@ -308,6 +315,7 @@ impl Default for Display {
                 previous: None,
             }),
             history: History::new(120),
+            timed_history: shared::TimedHistory::new(1),
             preferences: None,
         }
     }
@@ -315,6 +323,16 @@ impl Default for Display {
 impl Display {
     pub fn clear_graph(&mut self) {
         self.history.clear();
+        self.timed_history.clear();
+    }
+    fn visible_history(&self, preferences: &Preferences) -> Vec<f64> {
+        if preferences.history_minutes > 0 {
+            self.timed_history
+                .values(preferences.history_minutes)
+                .remove(0)
+        } else {
+            self.history.values()
+        }
     }
     /// Resize the published observation without sampling rates or accounting again.
     fn resize_cached(&mut self, update: &mut Update, preferences: Preferences, revision: u64) {
@@ -322,7 +340,7 @@ impl Display {
         self.history.resize(preferences.history_capacity());
         self.preferences = Some(preferences.clone());
         if !update.panel.series.is_empty() {
-            update.panel.series = vec![self.history.values()];
+            update.panel.series = vec![self.visible_history(&preferences)];
         }
         update.panel.detail = update.panel.detail.replacen(
             &history_description(&update.preferences),
@@ -339,6 +357,15 @@ impl Display {
         self.panel_for(report, time, &Preferences::default())
     }
     pub fn panel_for(&mut self, report: Report, time: f64, preferences: &Preferences) -> Panel {
+        self.panel_at(report, time, time, preferences)
+    }
+    fn panel_at(
+        &mut self,
+        report: Report,
+        time: f64,
+        observed_at: f64,
+        preferences: &Preferences,
+    ) -> Panel {
         if self
             .preferences
             .as_ref()
@@ -429,13 +456,17 @@ impl Display {
                 }
             )
         };
+        self.timed_history.append(
+            observed_at,
+            &[if count > 0 { rate as f64 } else { f64::NAN }],
+        );
         Panel {
             title: "AI tokens",
             label,
             series: if count == 0 {
                 Vec::new()
             } else {
-                vec![self.history.values()]
+                vec![self.visible_history(preferences)]
             },
             scale: Scale::Automatic,
             temperature_text: None,
@@ -481,7 +512,8 @@ impl Control {
         preferences.validate()?;
         let mut state = self.0.lock().unwrap();
         let history_only = state.last_preferences.as_ref().is_some_and(|previous| {
-            previous.history_samples != preferences.history_samples
+            (previous.history_samples != preferences.history_samples
+                || previous.history_minutes != preferences.history_minutes)
                 && previous.same_collection(&preferences)
         });
         state.last_preferences = Some(preferences.clone());
@@ -830,8 +862,16 @@ impl Worker {
                     display.clear_graph();
                     generation = requested;
                 }
-                let mut panel =
-                    display.panel_for(report.clone(), start.elapsed().as_secs_f64(), &preferences);
+                let observed_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|v| v.as_secs_f64())
+                    .unwrap_or(f64::NAN);
+                let mut panel = display.panel_at(
+                    report.clone(),
+                    start.elapsed().as_secs_f64(),
+                    observed_at,
+                    &preferences,
+                );
                 panel.detail.push_str("\n\n");
                 panel
                     .detail

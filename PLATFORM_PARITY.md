@@ -167,8 +167,14 @@ Implemented in development for monitoring tools:
   history-only edits now resize the cached result without collecting, appending a
   duplicate observation or changing counters/alerts. They preserve the existing
   deadline and an in-flight scan; source/accounting edits and counter resets still
-  request collection. Schema 30 upgrades old files without writing until explicit
-  save. Timestamp-based retention and remaining scheduling work are still open.
+  request collection. Schema 31 upgrades old files without writing until explicit
+  save. AI now also offers 1–1,440-minute observation-timestamp windows through Mac
+  AI Time Window / Linux AI preferences, using shared Swift five-second bins. The
+  latest completed observation anchors the window; missing time bins remain gaps.
+  Completion timestamps and rate timing are independent. Backward wall-clock changes
+  start a new presentation era. The 24-hour / 20,000-observation memory bound and
+  separate legacy sample buffers keep mode switching bounded and reversible.
+  Timestamp windows for other system graphs and remaining scheduling work are open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,
@@ -259,7 +265,7 @@ Remaining monitoring work:
    graph modes. Process controls and live details are now present on both platforms;
    account for their different permissions, CPU meanings and user filters.
    Retain the existing integrated Mac fan/VRAM readings.
-2. AI accounting: define timestamp-based history retention and align remaining format-specific
+2. AI accounting: align remaining format-specific
    message identity/deduplication and source continuity details. Both now account with hidden graphs and preserve
    recorded Codex input/output components and conservatively qualified turn models.
    Log inventory/replacement boundaries now rebaseline both platforms; periodic
