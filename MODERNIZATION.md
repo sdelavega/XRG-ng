@@ -1782,3 +1782,34 @@ Both full gates passed on the first run. Inspected native one-minute VRAM/menu
 captures with a 20-second gap and Linux seven-minute VRAM Sources controls.
 Evidence: `dist/vram-time-window-validation`. Physical Intel/Linux x86-64,
 macOS 26 runtime, real suspend/resume and unowned GPUs remain unverified.
+
+
+### Standalone fan windows retain physical-input RPM
+
+Mac Fans Time Window and Linux Sources offer independent 1–60-minute fan windows
+(zero uses sample count), centered bins at the normal sampling target (minimum
+200 ms), latest-observation anchoring and one-hour / 20,000-observation bounds per
+physical input. Valid zero remains a stopped fan, with no PWM-to-RPM inference.
+Source replacement/disappearance and unavailable-input history boundaries remain.
+Mac pinned missing inputs add gaps; automatic removal and Linux unreadable sources
+keep their history-reset policies. Empty Linux selection slots retain curve/color
+positions with missing padding. Current values and sample fallback stay separate.
+
+Mac Fans uses its own time-window preference; VRAM and Temperature’s integrated
+fan curves remain independent. Cached source edits do not create timestamp samples.
+Graph resets clear both history modes while preserving temperature histories and
+session sensor statistics. Linux sampling targets reach the fan projection without
+changing polling policy. Schema 38 migrates files in memory until explicit save;
+invalid bounds/types reject edits atomically. Temperature and Battery windows
+remain follow-up work. No app version, release, dependency or notice change.
+
+Validation: universal Debug build, 592 passing cases each ARM64/Rosetta x86_64,
+isolated native/packaged launches; Linux ARM64 37 shared Swift tests, exact C ABI
+smoke, strict Clippy, 585 Rust tests and 16 X11/nested Wayland desktop cases.
+An initial broad schema-fixture update accidentally changed an unrelated AI total
+assertion from 37 to 38; the original fixture was restored, remaining edits were
+reviewed for schema-only updates and the full Linux gate then passed. No assertions
+or deadlines were weakened. Inspected native fan/menu gap captures and Linux
+Sources controls. Evidence: `dist/fans-time-window-validation`. Physical
+Intel/Linux x86-64, macOS 26 runtime, real suspend/resume and unowned hardware
+remain unverified.

@@ -7,7 +7,7 @@ use crate::{
     hardware::{Fan, Readings, Temperature},
     metrics::SourceOption,
     settings::MetricSelection,
-    shared::History,
+    shared::{History, TimedHistory},
     temperature::Text,
 };
 use std::collections::BTreeMap;
@@ -20,6 +20,8 @@ pub(crate) struct View {
     automatic_fans: [Option<String>; 3],
     temperature_samples: u32,
     fan_samples: u32,
+    fan_timed: BTreeMap<String, TimedHistory>,
+    history_interval: f64,
 }
 impl Default for View {
     fn default() -> Self {
@@ -31,6 +33,8 @@ impl Default for View {
             automatic_fans: Default::default(),
             temperature_samples: 0,
             fan_samples: 0,
+            fan_timed: BTreeMap::new(),
+            history_interval: 1.,
         }
     }
 }
@@ -118,7 +122,15 @@ impl View {
             h.clear();
         }
     }
+    pub fn set_history_interval(&mut self, seconds: f64) {
+        if seconds.is_finite() && seconds >= 0.2 {
+            self.history_interval = seconds;
+        }
+    }
     pub fn clear_fans(&mut self) {
+        for h in self.fan_timed.values_mut() {
+            h.clear();
+        }
         for h in self.fans.values_mut() {
             h.clear();
         }
@@ -293,6 +305,18 @@ impl View {
         report: Result<Readings<Fan>, String>,
         selection: &MetricSelection,
     ) -> (Panel, Vec<SourceOption>) {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.fans_at(report, selection, observed)
+    }
+    fn fans_at(
+        &mut self,
+        report: Result<Readings<Fan>, String>,
+        selection: &MetricSelection,
+        observed: f64,
+    ) -> (Panel, Vec<SourceOption>) {
         let mut panel = Panel { title: "Fans", label: "No readable fan sensors".into(), series: Vec::new(),
             detail: "Read-only hwmon fan RPM. Zero can mean a stopped fan; PWM duty is not RPM. Channel labels come from the driver and do not establish CPU/GPU ownership. Curve numbers identify graph colors and current-value bars.".into(), scale: Scale::Automatic, temperature_text: None,
             weather_plot: None, readout: Default::default() };
@@ -300,6 +324,7 @@ impl View {
             Ok(report) => report,
             Err(error) => {
                 self.fans.clear();
+                self.fan_timed.clear();
                 self.automatic_fans = Default::default();
                 panel.label = "Fan readings unavailable".into();
                 panel.detail.push_str(&format!("\n{error}"));
@@ -354,6 +379,33 @@ impl View {
             .map(|r| r.map(|s| (s.id.as_str(), s.rpm as f64)))
             .collect();
         panel.series = curves(&mut self.fans, &slots, self.fan_samples);
+        self.fan_timed
+            .retain(|id, _| slots.iter().flatten().any(|(key, _)| *key == id));
+        for (id, value) in slots.iter().flatten() {
+            self.fan_timed
+                .entry((*id).into())
+                .or_insert_with(|| TimedHistory::new_limited(1, 60))
+                .append(observed, &[*value]);
+        }
+        let minutes = selection.retained_minutes(crate::settings::Module::Fans);
+        if minutes > 0 && !panel.series.is_empty() {
+            let projected: Vec<_> = slots
+                .iter()
+                .map(|slot| {
+                    slot.map(|(id, _)| {
+                        self.fan_timed[id]
+                            .values_at(minutes, self.history_interval)
+                            .remove(0)
+                    })
+                })
+                .collect();
+            let count = projected.iter().flatten().next().map_or(0, Vec::len);
+            panel.series = projected
+                .into_iter()
+                .map(|v| v.unwrap_or_else(|| vec![f64::NAN; count]))
+                .collect();
+            panel.detail.push_str(&format!("\nFans time window: {minutes} minutes ending at latest completed observation. Unobserved bins remain gaps; RPM is independent of temperature, PWM and session statistics."));
+        }
         let mut labels = Vec::new();
         for (index, (source, reading)) in sources.iter().zip(readings).enumerate() {
             let Some(source) = source else {
@@ -464,6 +516,56 @@ mod dashboard_tests {
             }],
             errors: vec![],
         })
+    }
+    #[test]
+    fn fan_windows_preserve_physical_boundaries_zero_and_temperature_state() {
+        use crate::settings::{MetricSelection, Module};
+        let mut view = super::View::default();
+        let mut selection = MetricSelection::default();
+        selection.history_minutes.insert(Module::Fans, 1);
+        selection.fan = Some("fan".into());
+        selection.fan_extra = [Some("missing".into()), None];
+        view.temperatures(
+            thermal("temperature", -10.),
+            &MetricSelection {
+                temperature: Some("saved".into()),
+                ..Default::default()
+            },
+        );
+        view.fans_at(fan("physical", 1000), &selection, 100.);
+        let p = view.fans_at(fan("physical", 0), &selection, 110.).0;
+        assert_eq!(p.series.len(), 2);
+        assert_eq!(p.series[0].len(), 61);
+        assert_eq!(p.series[0][50], 1000.);
+        assert_eq!(p.series[0][60], 0.);
+        assert!(p.series[0][51..60].iter().all(|v| v.is_nan()));
+        assert!(p.series[1].iter().all(|v| v.is_nan()));
+        view.set_history_samples(300, 600).unwrap();
+        view.set_history_interval(0.2);
+        let p = view.fans_at(fan("physical", 500), &selection, 111.).0;
+        assert_eq!(p.series[0].len(), 301);
+        view.clear_fans();
+        assert!(view.temperatures["temperature"].values().contains(&-10.));
+        let p = view.fans_at(fan("physical", 500), &selection, 112.).0;
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        let p = view.fans_at(fan("replacement", 800), &selection, 113.).0;
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        assert!(
+            view.fans_at(Err("offline".into()), &selection, 114.)
+                .0
+                .series
+                .is_empty()
+        );
+        let p = view.fans_at(fan("replacement", 800), &selection, 115.).0;
+        assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+        selection.history_minutes.remove(&Module::Fans);
+        assert_eq!(
+            view.fans_at(fan("replacement", 800), &selection, 116.)
+                .0
+                .series[0]
+                .len(),
+            600
+        );
     }
     #[test]
     fn sensor_retention_preserves_newest_cold_observations_and_independent_stopped_fans() {

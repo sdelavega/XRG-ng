@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 37 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 38 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -497,7 +497,18 @@ their existing reset boundaries. Automatic disappearance/failure clears historie
 as before; Mac pinned missing sources append gaps. Source-menu edits use cached
 readings and do not invent timestamp observations for newly selected sources.
 Graph reset clears both modes, while current readouts and sample fallback remain
-independent. Mac Fans retains its separate sample-count behavior and settings.
+independent. Mac Fans retains separate settings; its time-window controls are described below.
+
+Standalone Fans supports **Fans Time Window** on Mac and a Linux Sources field:
+1–60 minutes, zero uses saved sample counts, with the same sampling-target grid
+and one-hour / 20,000-observation bound per physical input. Curves retain RPM;
+zero remains a stopped fan, and PWM duty is not converted into RPM. Source
+replacement/disappearance and failure policies remain: Mac pinned missing inputs
+append gaps, while automatic disappearance and Linux unreadable inputs discard
+the affected histories. Graph reset clears both modes and preserves current
+readouts and temperature/session statistics. Mac Fans and VRAM window settings
+are independent. Temperature’s integrated fan curves retain Temperature’s own
+history behavior; Temperature and Battery time windows remain follow-up work.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

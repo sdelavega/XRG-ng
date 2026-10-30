@@ -1214,6 +1214,9 @@ impl Worker {
                 sampler
                     .memory
                     .set_history_interval(timer.interval_seconds());
+                sampler
+                    .sensors
+                    .set_history_interval(timer.interval_seconds());
                 sampler.gpu_history_interval = timer.interval_seconds();
                 sampler
                     .gpu_memory

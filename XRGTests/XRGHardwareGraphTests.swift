@@ -54,8 +54,29 @@ struct XRGHardwareGraphTests {
             #expect(view.percentage && view.curve("a").last==20 && view.curve("a").dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
             option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && view.curve("a").count==300)
             let fans=XRGHardwareGraphView(kind:.fans,frame:NSRect(x:0,y:0,width:200,height:100),settings:settings,defaults:defaults,source:{.success([])})
-            option.tag=5;fans.selectHistoryWindow(option);#expect(fans.historyMinutes==0 && defaults.integer(forKey:XRGHardwareGraphView.windowKey)==0)
+            option.tag=5;fans.selectHistoryWindow(option);#expect(fans.historyMinutes==5 && defaults.integer(forKey:XRGHardwareGraphView.windowKey)==0)
             #expect(!fans.makeMenu().items.contains { $0.title=="VRAM Time Window" })
+        }
+    }
+    @Test func fanWindowsKeepStoppedReadingsAndVRAMSettingsIndependent() throws {
+        try withSettings { defaults, settings in
+            settings.graphRefresh=1;defaults.set(7,forKey:XRGHardwareGraphView.windowKey)
+            var wall=100.0,rpm=1000.0,calls=0,failed=false
+            let view=XRGHardwareGraphView(kind:.fans,frame:NSRect(x:0,y:0,width:200,height:100),settings:settings,defaults:defaults,historyClock:{wall},source:{calls+=1;return failed ? .failure(NSError(domain:"fixture",code:1)) : .success([XRGHardwareReading(id:"fan",name:"Fan",value:rpm)])})
+            view.graphUpdate(nil);wall=110;rpm=0;view.graphUpdate(nil)
+            let before=calls,option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+            #expect(view.curve("fan").count==61 && view.curve("fan")[50]==1000 && view.curve("fan").last==0)
+            #expect(view.curve("fan")[51..<60].allSatisfy { $0==XRGGraphRenderer.missingValue })
+            view.setFrameSize(NSSize(width:1,height:100));#expect(view.curve("fan")[50]==1000 && calls==before)
+            settings.graphRefresh=0.2;#expect(view.curve("fan").count==301)
+            #expect(defaults.integer(forKey:XRGHardwareGraphView.windowKey)==7)
+            let menu=try #require(view.makeMenu().items.first { $0.title=="Fans Time Window" }?.submenu);#expect(menu.items.allSatisfy { $0.target===view })
+            option.tag=61;view.selectHistoryWindow(option);#expect(view.historyMinutes==1)
+            view.clearData(nil);#expect(view.curve("fan").allSatisfy { $0==XRGGraphRenderer.missingValue } && calls==before)
+            wall=111;rpm=500;view.graphUpdate(nil)
+            wall=112;failed=true;view.graphUpdate(nil);#expect(view.curve("fan").isEmpty)
+            wall=113;failed=false;view.graphUpdate(nil);#expect(view.curve("fan").dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && view.curve("fan").count==300 && defaults.integer(forKey:XRGHardwareGraphView.windowKey)==7)
         }
     }
     private func withSettings(_ body: (UserDefaults, XRGSettings) throws -> Void) throws {

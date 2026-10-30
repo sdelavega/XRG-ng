@@ -240,6 +240,7 @@ impl Harness {
                                     .metrics
                                     .history_minutes
                                     .insert(Module::GpuMemory, 7);
+                                editor.draft.metrics.history_minutes.insert(Module::Fans, 8);
                             }
                             Ok("ai-time") => {
                                 editor.tab = 3;
@@ -343,6 +344,7 @@ impl Harness {
                         .history_samples
                         .insert(Module::Temperature, 1080);
                     next.metrics.history_samples.insert(Module::Fans, 1200);
+                    next.metrics.history_minutes.insert(Module::Fans, 8);
                     next.metrics.history_samples.insert(Module::Battery, 1320);
                     next.network_min_scale = 65_536;
                     next.graph_width = 180;
@@ -400,6 +402,7 @@ impl Harness {
                         (Module::Battery, "Battery", 1320),
                     ] {
                         let (minutes, positions) = match module {
+                            Module::Fans => (8, 2401),
                             Module::GpuMemory => (7, 2101),
                             Module::Tpu => (6, 1801),
                             Module::Gpu => (5, 1501),
@@ -430,7 +433,7 @@ impl Harness {
                         "GRAPHICS_HISTORY_SMOKE_OK GPU=5min/1501positions (720 fallback) NPU=6min/1801positions (840 fallback) VRAM=7min/2101positions (960 fallback), capacities applied; unavailable inputs remain unavailable"
                     );
                     println!(
-                        "SENSOR_HISTORY_SMOKE_OK Temperature=1080 Fans=1200 Battery=1320, capacities applied; unavailable inputs remain unavailable"
+                        "SENSOR_HISTORY_SMOKE_OK Temperature=1080 Fans=8min/2401positions (1200 fallback) Battery=1320, capacities applied; unavailable inputs remain unavailable"
                     );
                     let (_, saved, error) = Store::open(Some(self.path()));
                     if saved.ai.history_samples != 1440 || saved.ai.history_minutes != 30 {

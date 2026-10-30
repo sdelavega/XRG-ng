@@ -140,12 +140,12 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
             else { history = History(signature: signature, size: width); histories[reading.id] = history }
             let value = percentage ? reading.value / reading.capacity! * 100 : reading.value
             if appendSample || fresh { history.data.setNextValue(value) }
-            if kind == .vram, let observedAt { history.timed.append(time: observedAt, values: [value]) }
+            if let observedAt { history.timed.append(time: observedAt, values: [value]) }
         }
         if appendSample {
             for id in missing {
                 histories[id]?.data.setNextValue(XRGGraphRenderer.missingValue)
-                if kind == .vram, let observedAt { histories[id]?.timed.append(time: observedAt, values: [.nan]) }
+                if let observedAt { histories[id]?.timed.append(time: observedAt, values: [.nan]) }
             }
         }
         updateLabels(); needsDisplay = true
@@ -228,16 +228,18 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         let sources = NSMenuItem(title: "Choose Sources…", action: #selector(chooseSources(_:)), keyEquivalent: "")
         sources.target = self; menu.addItem(sources); menu.addItem(.separator())
         menu.addItem(XRGHistoryRetention.menu(kind == .vram ? "VRAM History" : "Fans History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
-        if kind == .vram { menu.addItem(XRGSystemTimeWindow.menu("VRAM Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:)))) }
+        menu.addItem(XRGSystemTimeWindow.menu(kind == .vram ? "VRAM Time Window" : "Fans Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         for (title, action) in [("Read-only details…", #selector(showDetails(_:))), ("Reset Graph", #selector(clearData(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
     }
     static let windowKey = "XRGHardwareGraphView.VRAM.HistoryMinutes.v1"
-    var historyMinutes: Int { kind == .vram ? XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) : 0 }
+    static let fanWindowKey = "XRGHardwareGraphView.Fans.HistoryMinutes.v1"
+    private var timeKey: String { kind == .vram ? Self.windowKey : Self.fanWindowKey }
+    var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: timeKey) }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard kind == .vram, XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: timeKey) else { return }
         updateLabels(); needsDisplay = true
     }
     static let historyKey = "XRGHardwareGraphView.VRAM.HistorySamples.v1"
@@ -246,7 +248,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: retentionKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: retentionKey) else { return }
-        if kind == .vram { defaults.set(0, forKey: Self.windowKey) }
+        defaults.set(0, forKey: timeKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     @objc func emptyEvent(_ sender: Any?) {}
