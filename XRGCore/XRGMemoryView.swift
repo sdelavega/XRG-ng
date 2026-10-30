@@ -101,6 +101,8 @@ public final class XRGMemoryView: NSView, XRGModuleView {
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Memory", reference: self, defaults: defaults)
         module.displayOrder = 3
+        // Core history and accounting continue when only presentation is hidden.
+        module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true
         module.doesFastUpdate = false
         module.doesMin5Update = false

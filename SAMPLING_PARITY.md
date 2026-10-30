@@ -1,7 +1,8 @@
 # Sampling and lifecycle parity
 
 Source review: 2026-10-30. Implemented corrections cover Mac Battery elapsed-time
-gating and monitoring timer delivery during AppKit event tracking. Linux comparison
+gating, monitoring timer delivery during AppKit event tracking, and hidden core
+system histories. Linux comparison
 is read-only. Actual system sleep/resume remains unverified.
 
 | Area | macOS | Linux | Follow-up |
@@ -13,7 +14,7 @@ is read-only. Actual system sleep/resume remains unverified.
 | Battery gate | Now measures >10 real continuous-clock seconds after the last completed poll | Battery observes each normal worker sample | Cadence still differs intentionally in this pass; changing the target cannot manufacture elapsed time |
 | Temperature gate | Five-second source gate, separate from faster graph redraws | Sensor observation on the normal worker | Compare freshness and source costs before changing cadence |
 | Collapsed window | Displayed modules keep collection; geometry changes do not stop timers | Worker keeps collection | Preserve collapse/hover behavior |
-| Hidden graph | Module manager normally excludes hidden modules, with always-update exceptions and separate AI eligibility | System sampler builds the system panels independently of UI visibility | Define whether hidden system histories should continue, respecting opt-in hardware policy |
+| Hidden graph | CPU/Memory/Network/Disk normal sampling continues hidden; other modules keep existing eligibility and AI remains separate | System sampler builds the system panels independently of UI visibility | Core collection aligned; audit optional hardware separately, preserving opt-in policy |
 | AI | Separate nominal five-second cadence; visibility/tracking eligibility and suspend/cancellation paths | Separate controlled worker and provider/accounting preferences | Preserve cancellation, stale-publication and accounting-baseline contracts |
 | System wake | Workspace notification sets a wake flag; CPU already uses a continuous clock; Battery now also uses one | System cadence uses Instant; no dedicated wake message in the inspected system timer | Audit per-collector rebase/freshness rather than assuming a wake flag handles every source |
 | Global system pause | No all-collectors Pause/Resume gate in the inspected graph scheduler | Timer messages are Wake/Stop, with no global Pause state | Specify accounting, histories, pending operations and counter rebaseline behavior before adding a control |
@@ -58,12 +59,30 @@ collectors still run on the main actor; a slow collector can delay interaction.
 Mode fixtures use injected sources, so they establish delivery but do not measure
 physical sensor latency or end-to-end responsiveness while a real menu is open.
 
+## Hidden core system graphs
+
+Hiding CPU, Memory, Network or Disk affects presentation and fast mini-graph
+updates; their normal-cadence collections continue through the existing module
+always-update mechanism. This matches Linux core sampling and retains interval
+history, paging deltas and session transfer accounting while the graphs are hidden.
+Re-showing still requests the existing immediate refresh. Detaching a view removes
+its module and stops manager-driven collection. Collapsing the window continues
+collection as before.
+
+This is deliberately scoped to core system sources. GPU/NPU/VRAM, temperature,
+fans, Battery, weather and stock sources keep their current native eligibility;
+those policies still differ from Linux. AI retains its independent visibility,
+tracking, cancellation and accounting rules. No global Pause/Resume control or new
+persisted collection preference is introduced. Hidden native views still update
+cached labels and request redraws through existing callbacks; separating collection
+from presentation work remains an optimization task.
+
 ## Next work
 
 1. Measure native collector latency and interaction under real hardware load;
    isolate expensive collection with cancellation/stale-result guards as needed.
-2. Define hidden-system-graph collection and any explicit Pause/Resume policy;
-   distinguish display freezing from stopping collection/accounting.
+2. Audit remaining optional-source visibility policies; specify any explicit
+   Pause/Resume control, separating display freeze from stopping accounting.
 3. Audit wake/long-gap handling and interval-edit phase behavior for counter-based
    sources, with source-specific rebaselines and preserved transfer/accounting totals.
 

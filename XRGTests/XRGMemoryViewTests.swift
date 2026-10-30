@@ -178,6 +178,26 @@ struct XRGMemoryViewTests {
         return try #require(bitmap.representation(using: .png, properties: [:]))
     }
 
+    @Test func hiddenCoreGraphKeepsPagingIntervalsAndDetachesCleanly() async throws {
+        try await withFixture { settings, defaults in
+            defaults.set(false, forKey: "showMemoryGraph")
+            var reading = sample(), reads = 0, time = 100.0
+            let miner = XRGMemoryMiner(pageSize: 4096, source: { reads += 1; return reading }, historyClock: { time })
+            let view = panel(miner, settings: settings, defaults: defaults), host = MemoryHost(settings: settings)
+            defer { view.removeFromSuperview(); host.close() }
+            host.contentView?.addSubview(view); view.awakeFromNib()
+            let manager = try #require(host.moduleManager), module = try #require(view.module)
+            #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let before = reads, observations = miner.timedHistory.observationCount
+            time = 101; reading.faults += 12; manager.graphUpdate(); manager.fastUpdate()
+            #expect(reads == before + 1 && miner.recentFaults() == 12)
+            time = 102; reading.faults += 7; manager.graphUpdate()
+            #expect(reads == before + 2 && miner.recentFaults() == 7 && miner.timedHistory.observationCount == observations + 2)
+            view.removeFromSuperview(); manager.graphUpdate()
+            #expect(reads == before + 2 && manager.moduleList().isEmpty)
+        }
+    }
+
     @Test func registrationVisibilityAndDetachmentPreserveTheMemoryModule() async throws {
         try await withFixture { settings, defaults in
             defaults.set(false, forKey: "showMemoryGraph")

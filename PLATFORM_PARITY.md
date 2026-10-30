@@ -342,5 +342,7 @@ missing hardware is not a prerequisite for finishing these passes.
 
 The current cadence/lifecycle audit and ordered follow-up work are in
 [SAMPLING_PARITY.md](SAMPLING_PARITY.md). Battery elapsed-time polling and Mac
-monitoring timer delivery during AppKit event tracking are implemented corrections;
-collector latency, global pause and hidden-graph policies remain separate work.
+monitoring timer delivery during AppKit event tracking are implemented corrections.
+Mac CPU/Memory/Network/Disk now retain normal sampling while hidden, matching Linux
+core history and transfer accounting. Optional-source visibility, collector latency
+and global pause policies remain separate work.

@@ -146,6 +146,27 @@ struct XRGDiskViewTests {
         return try #require(bitmap.representation(using: .png, properties: [:]))
     }
 
+    @Test func hiddenCoreGraphKeepsRatesTransfersAndHistoryWithoutFastPolling() throws {
+        try withFixture { settings, defaults, source in
+            defaults.set(false, forKey: "showDiskGraph")
+            let miner = XRGDiskMiner(source: { source.reads += 1; return source.samples }, clock: { source.time }, historyClock: { 100 + source.time })
+            let view = panel(miner, settings, defaults), host = DiskPanelHost(settings: settings)
+            defer { view.removeFromSuperview(); host.close() }
+            host.contentView?.addSubview(view); view.awakeFromNib()
+            let manager = try #require(host.moduleManager), module = try #require(view.module)
+            #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let before = source.reads, observations = miner.timedHistory.observationCount
+            source.advance(1, read: 1600, written: 400); manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 1 && miner.readRate == 600 && miner.totalBytesSinceLoad == 800)
+            source.advance(2, read: 2200, written: 600); manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 2 && miner.readRate == 600 && miner.totalBytesSinceLoad == 1600 && miner.timedHistory.observationCount == observations + 2)
+            source.advance(3, read: 2800, written: 800); manager.setModule("Disk", isDisplayed: true)
+            #expect(module.isDisplayed && miner.readRate == 600 && miner.totalBytesSinceLoad == 2400)
+            view.removeFromSuperview(); let detached = source.reads; manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == detached && manager.moduleList().isEmpty)
+        }
+    }
+
     @Test func registrationVisibilityFontAndDetachment() throws {
         try withFixture { settings, defaults, source in
             defaults.set(false, forKey: "showDiskGraph")

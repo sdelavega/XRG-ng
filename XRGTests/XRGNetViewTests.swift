@@ -159,6 +159,28 @@ struct XRGNetViewTests {
         return try #require(bitmap.representation(using: .png, properties: [:]))
     }
 
+    @Test func hiddenCoreGraphKeepsRatesTransfersAndHistoryWithoutFastPolling() throws {
+        try withFixture { settings, defaults, source in
+            defaults.set(false, forKey: "showNetworkGraph")
+            let miner = XRGNetMiner(source: { source.reads += 1; return source.samples }, clock: { source.time }, historyClock: { 100 + source.time })
+            let view = XRGNetView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: miner, fastMiner: source.miner(), settings: settings, defaults: defaults)
+            let host = NetworkHost(settings: settings)
+            defer { view.removeFromSuperview(); host.close() }
+            host.contentView?.addSubview(view); view.awakeFromNib()
+            let manager = try #require(host.moduleManager), module = try #require(view.module)
+            #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let before = source.reads, observations = miner.timedHistory.observationCount
+            source.advance(1, rx: 1600, tx: 400); manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 1 && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 800)
+            source.advance(2, rx: 2200, tx: 600); manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 2 && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 1600 && miner.timedHistory.observationCount == observations + 2)
+            source.advance(3, rx: 2800, tx: 800); manager.setModule("Network", isDisplayed: true)
+            #expect(module.isDisplayed && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 2400)
+            view.removeFromSuperview(); let detached = source.reads; manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == detached && manager.moduleList().isEmpty)
+        }
+    }
+
     @Test func registrationVisibilityFontAndDetachment() throws {
         try withFixture { settings, defaults, source in
             defaults.set(false, forKey: "showNetworkGraph")

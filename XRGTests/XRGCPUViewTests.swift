@@ -181,6 +181,27 @@ struct XRGCPUViewTests {
         return try #require(bitmap.representation(using: .png, properties: [:]))
     }
 
+    @Test func hiddenCoreGraphKeepsNormalHistoryWithoutFastPollingAndDetachesCleanly() async throws {
+        try await withFixture { settings, defaults, source in
+            defaults.set(false, forKey: "showCPUGraph"); settings.fastCPUUsage = true
+            var time = 0.0
+            let miner = XRGCPUMiner(source: { source.reads += 1; return source.samples }, clock: { time }, historyClock: { 100 + time })
+            let view = panel(miner, settings, defaults), host = CPUHost(settings: settings)
+            defer { view.removeFromSuperview(); host.close() }
+            host.contentView?.addSubview(view); view.awakeFromNib()
+            let manager = try #require(host.moduleManager), module = try #require(view.module)
+            #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let before = source.reads
+            time = 1; source.advance(); manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 1 && miner.currentUsage(forCPU: 0) == 70)
+            time = 2; source.samples = source.samples?.map { XRGCPUTicks(user: $0.user * 2, system: $0.system * 2, idle: $0.idle * 2, nice: $0.nice * 2) }
+            manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 2 && miner.userValues[0].orderedValues.suffix(2).allSatisfy { $0 == 40 })
+            view.removeFromSuperview(); time = 3; manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == before + 2 && manager.moduleList().isEmpty)
+        }
+    }
+
     @Test func registrationVisibilityFontAndDetachment() async throws {
         try await withFixture { settings, defaults, source in
             defaults.set(false, forKey: "showCPUGraph")

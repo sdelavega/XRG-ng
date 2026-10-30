@@ -104,6 +104,8 @@ public final class XRGNetView: NSView, XRGModuleView {
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Network", reference: self, defaults: defaults)
         module.displayOrder = 6
+        // Core history and accounting continue when only presentation is hidden.
+        module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true; module.doesFastUpdate = true
         module.doesMin5Update = false; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showNetworkGraph")

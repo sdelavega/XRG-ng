@@ -1948,3 +1948,29 @@ validation was rerun for this Mac-only change. Physical Intel/macOS 26 runtime,
 real sleep/wake and interaction latency under hardware load remain unverified.
 Cleanup inventoried and removed only this task’s two build roots and 654 empty
 private test preferences: approximately 2.80 GiB reclaimed, with no errors.
+
+### Hidden core graphs retain normal sampling
+
+Mac CPU, Memory, Network and Disk now opt into the existing hidden normal-update
+mechanism. Linux already samples these core panels independently of visibility.
+Hiding a native core graph no longer stops interval history, paging observations
+or session-transfer accounting. Fast mini-graph polling remains visible-only;
+re-show uses the existing immediate refresh and detachment removes collection
+registration. Optional hardware, Battery/weather/stock and AI retain their
+existing eligibility; no global pause control, schema or version change is added.
+Native callbacks still update cached labels while hidden; splitting collector and
+presentation work remains a separate optimization. Linux/Shared code is unchanged.
+
+The CPU hidden-history regression failed against the original production code.
+Four final regressions cover normal read counts with no hidden fast reads, CPU
+history, per-interval paging, Network/Disk transfer continuity through hidden
+intervals and re-show, and detachment stopping manager reads. Full
+`Tools/ci-macos.sh Debug` passed 600 cases with zero failures on ARM64 and 600
+under Rosetta x86-64, plus universal build, metadata/notices and retired-symbol
+guards, isolated AppKit restore and both packaged original-nib/entry-point checks.
+Before/final results, logs and eight tested source hashes are archived in
+`dist/hidden-core-sampling-validation`, excluding DerivedData. Linux was not
+retested for this Mac-only change. Physical Intel/macOS 26 runtime, sleep/wake,
+power impact and latency under hardware load remain unverified.
+Cleanup removed the two inventoried task build roots and 683 empty private test
+preferences, approximately 2.80 GiB, with zero errors.

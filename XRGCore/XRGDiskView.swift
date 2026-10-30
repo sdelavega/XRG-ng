@@ -97,6 +97,8 @@ public final class XRGDiskView: NSView, XRGModuleView {
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Disk", reference: self, defaults: defaults)
         module.displayOrder = 7
+        // Core history and accounting continue when only presentation is hidden.
+        module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true; module.doesFastUpdate = true
         module.doesMin5Update = true; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showDiskGraph")
