@@ -191,6 +191,9 @@ struct XRGCPUViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             let manager = try #require(host.moduleManager), module = try #require(view.module)
             #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let capacity = miner.userValues[0].numValues
+            manager.windowChanged(to: host.frame.size)
+            #expect(view.frame.size == .zero && miner.userValues[0].numValues == capacity)
             let before = source.reads
             time = 1; source.advance(); manager.graphUpdate(); manager.fastUpdate()
             #expect(source.reads == before + 1 && miner.currentUsage(forCPU: 0) == 70)

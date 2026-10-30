@@ -1974,3 +1974,35 @@ retested for this Mac-only change. Physical Intel/macOS 26 runtime, sleep/wake,
 power impact and latency under hardware load remain unverified.
 Cleanup removed the two inventoried task build roots and 683 empty private test
 preferences, approximately 2.80 GiB, with zero errors.
+
+### Hidden layout preserves core/Battery buffers and Battery cadence
+
+The remaining visibility audit found that zero-size hidden layout shrank native
+width-based sample buffers, even after normal core callbacks had been enabled.
+Registered CPU, Memory, Network, Disk and Battery panels now retain their previous
+automatic capacity at zero width, including immediate refresh before re-layout.
+Explicit retention counts and meaningful visible resize behavior are preserved.
+Layout/accessibility still use a hidden zero-size view; no hidden UI is exposed.
+
+Battery now opts into hidden normal callbacks, keeping its >10 continuous-clock
+seconds-after-completion gate, no catch-up bursts, current/status fallback and
+failure-gap behavior. Re-show cannot manufacture a poll. Optional GPU/VRAM shared
+reads, NPU initialization/in-flight work, temperature/fan caches and provider/AI
+controls retain their current rules, documented in SAMPLING_PARITY.md. A hidden
+graph is not a guarantee of zero source I/O. No hardware writes, permissions,
+schema, app version or Linux/Shared source changes were introduced.
+
+The Battery visibility regression fails against the original implementation. A
+second focused run exercises actual zero-size manager layout and reproduces
+capacity loss across all five system panels. Final regressions use that layout
+path and preserve existing history, rate, paging, transfer and detachment checks.
+
+Validation: full `Tools/ci-macos.sh Debug` passed 601 cases with zero failures on
+ARM64 and 601 under Rosetta x86-64, plus universal build, metadata/notices and
+retired-symbol guards, isolated AppKit restore and both packaged original-nib
+launch checks. Before/final results, logs and ten tested native source hashes are
+archived in `dist/hidden-battery-sampling-validation`, excluding DerivedData.
+Linux was source-reviewed, not retested. Physical Intel/macOS 26 runtime, real
+sleep/wake, power impact and hardware-load latency remain unverified.
+Cleanup removed the two inventoried task build roots and 772 empty private test
+preferences, approximately 3.07 GiB reclaimed, with no errors.

@@ -188,6 +188,9 @@ struct XRGMemoryViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             let manager = try #require(host.moduleManager), module = try #require(view.module)
             #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let capacity = miner.faultData().numValues
+            manager.windowChanged(to: host.frame.size)
+            #expect(view.frame.size == .zero && miner.faultData().numValues == capacity)
             let before = reads, observations = miner.timedHistory.observationCount
             time = 101; reading.faults += 12; manager.graphUpdate(); manager.fastUpdate()
             #expect(reads == before + 1 && miner.recentFaults() == 12)

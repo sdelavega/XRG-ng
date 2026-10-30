@@ -169,12 +169,16 @@ struct XRGNetViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             let manager = try #require(host.moduleManager), module = try #require(view.module)
             #expect(!module.isDisplayed && manager.displayList().isEmpty)
+            let capacity = miner.rxValues.numValues
+            manager.windowChanged(to: host.frame.size)
+            #expect(view.frame.size == .zero && miner.rxValues.numValues == capacity)
             let before = source.reads, observations = miner.timedHistory.observationCount
             source.advance(1, rx: 1600, tx: 400); manager.graphUpdate(); manager.fastUpdate()
             #expect(source.reads == before + 1 && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 800)
             source.advance(2, rx: 2200, tx: 600); manager.graphUpdate(); manager.fastUpdate()
             #expect(source.reads == before + 2 && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 1600 && miner.timedHistory.observationCount == observations + 2)
             source.advance(3, rx: 2800, tx: 800); manager.setModule("Network", isDisplayed: true)
+            #expect(miner.rxValues.numValues == capacity)
             #expect(module.isDisplayed && miner.currentRX() == 600 && miner.totalBytesSinceLoad == 2400)
             view.removeFromSuperview(); let detached = source.reads; manager.graphUpdate(); manager.fastUpdate()
             #expect(source.reads == detached && manager.moduleList().isEmpty)

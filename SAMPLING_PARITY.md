@@ -1,9 +1,9 @@
 # Sampling and lifecycle parity
 
 Source review: 2026-10-30. Implemented corrections cover Mac Battery elapsed-time
-gating, monitoring timer delivery during AppKit event tracking, and hidden core
-system histories. Linux comparison
-is read-only. Actual system sleep/resume remains unverified.
+gating, monitoring timer delivery during AppKit event tracking, and collection and
+buffer retention for hidden core/Battery graphs. Linux comparison is read-only.
+Actual system sleep/resume remains unverified.
 
 | Area | macOS | Linux | Follow-up |
 | --- | --- | --- | --- |
@@ -14,7 +14,7 @@ is read-only. Actual system sleep/resume remains unverified.
 | Battery gate | Now measures >10 real continuous-clock seconds after the last completed poll | Battery observes each normal worker sample | Cadence still differs intentionally in this pass; changing the target cannot manufacture elapsed time |
 | Temperature gate | Five-second source gate, separate from faster graph redraws | Sensor observation on the normal worker | Compare freshness and source costs before changing cadence |
 | Collapsed window | Displayed modules keep collection; geometry changes do not stop timers | Worker keeps collection | Preserve collapse/hover behavior |
-| Hidden graph | CPU/Memory/Network/Disk normal sampling continues hidden; other modules keep existing eligibility and AI remains separate | System sampler builds the system panels independently of UI visibility | Core collection aligned; audit optional hardware separately, preserving opt-in policy |
+| Hidden graph | CPU/Memory/Network/Disk normal sampling and elapsed-gated Battery polling continue hidden; other modules keep existing eligibility and AI remains separate | System sampler builds the system panels independently of UI visibility | Core collection aligned; audit optional hardware separately, preserving opt-in policy |
 | AI | Separate nominal five-second cadence; visibility/tracking eligibility and suspend/cancellation paths | Separate controlled worker and provider/accounting preferences | Preserve cancellation, stale-publication and accounting-baseline contracts |
 | System wake | Workspace notification sets a wake flag; CPU already uses a continuous clock; Battery now also uses one | System cadence uses Instant; no dedicated wake message in the inspected system timer | Audit per-collector rebase/freshness rather than assuming a wake flag handles every source |
 | Global system pause | No all-collectors Pause/Resume gate in the inspected graph scheduler | Timer messages are Wake/Stop, with no global Pause state | Specify accounting, histories, pending operations and counter rebaseline behavior before adding a control |
@@ -61,21 +61,42 @@ physical sensor latency or end-to-end responsiveness while a real menu is open.
 
 ## Hidden core system graphs
 
-Hiding CPU, Memory, Network or Disk affects presentation and fast mini-graph
-updates; their normal-cadence collections continue through the existing module
-always-update mechanism. This matches Linux core sampling and retains interval
-history, paging deltas and session transfer accounting while the graphs are hidden.
+Hiding CPU, Memory, Network, Disk or Battery affects presentation and fast mini-graph
+updates; their normal-cadence callbacks continue through the existing module
+always-update mechanism. Battery still reads only after >10 continuous-clock seconds
+since the previous completed poll; visibility and re-show cannot bypass that gate.
+Continuous core collection matches Linux and retains interval history, paging
+deltas and session transfer accounting while the graphs are hidden. Battery
+visibility is aligned; its native polling interval still differs from Linux.
 Re-showing still requests the existing immediate refresh. Detaching a view removes
 its module and stops manager-driven collection. Collapsing the window continues
-collection as before.
+collection as before. Registered core/Battery panels also preserve their last
+width-based sample capacity when hidden layout assigns a zero-size frame, including
+the immediate refresh before re-layout. Explicit retention counts still apply at
+zero width. Meaningful visible widths retain existing resizing behavior. Layout
+and accessibility still hide the view; collection is not a reason to expose it.
 
 This is deliberately scoped to core system sources. GPU/NPU/VRAM, temperature,
-fans, Battery, weather and stock sources keep their current native eligibility;
+fans, weather and stock sources keep their current native eligibility;
 those policies still differ from Linux. AI retains its independent visibility,
 tracking, cancellation and accounting rules. No global Pause/Resume control or new
 persisted collection preference is introduced. Hidden native views still update
 cached labels and request redraws through existing callbacks; separating collection
 from presentation work remains an optimization task.
+
+## Remaining optional-source visibility audit
+
+| Source | Native behavior retained in this pass | Linux comparison / remaining work |
+| --- | --- | --- |
+| GPU / VRAM | GPU normal polling follows module eligibility, but visible VRAM can refresh the shared GPU miner through the same graph-generation token. VRAM retains its own visible-only history callback. | System sampler builds both panels each normal cycle; preserve shared-source deduplication before changing native policy. |
+| NPU | Displayed normal callbacks request a coalesced serial worker. Construction requests an initial reading; hiding does not cancel an already queued read. | System worker samples NPU independently of panel visibility; define cancellation and rebaseline policy before aligning hidden collection. |
+| Temperature / Fans | Temperature batches are five-second gated. Visible Fans uses the shared sensor service's separate fan reader/cache; this does not itself request a temperature batch. | System sampler requests sensor/fan reports each normal cycle. Align optional-source eligibility without broadening access or overriding source selections. |
+| Weather / Stocks | Native views have visibility/window-dependent active guards and suspension/cancellation paths. | Audit provider enablement and publication lifecycle separately from local hardware histories. |
+| AI | Independent timer and tracking/visibility eligibility; accounting and cancellation remain separate. | Keep provider/accounting controls and stale-publication protections. |
+
+Hidden display is not proof of zero hardware I/O: initialization, shared consumers,
+in-flight requests and independent inspector windows can still read a source.
+No hardware-control writes or new permission/opt-in behavior are introduced here.
 
 ## Next work
 
@@ -90,6 +111,9 @@ Evidence paths: XRGCore/XRGGraphWindow.swift (`timer`, `initTimers`, wake handli
 XRGCore/XRGModuleManager.swift (`graphUpdate`, `fastUpdate`),
 XRGCore/XRGBatteryView.swift (`prepare`, `graphUpdate`),
 XRGCore/XRGTemperatureState.swift (`shouldUpdate`),
+XRGCore/XRGGPUView.swift (`memoryReadings`),
+XRGCore/XRGNPUMiner.swift (`XRGNPUWorker`, `getLatestNPUInfo`),
+XRGCore/XRGTemperatureMiner.swift (`fanValues`, `fanGraphReadings`),
 XRGCore/XRGAITokenView.swift (`graphUpdate`, `suspendCollection`),
 xrg-linux/rust/src/sampling.rs (`Schedule`, `Control`, `Timer`),
 xrg-linux/rust/src/engine.rs (`Sampler::sample`, worker loop).

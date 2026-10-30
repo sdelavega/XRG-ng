@@ -135,6 +135,9 @@ public final class XRGCPUView: NSView, XRGModuleView {
         setGraphSize(module.currentSize)
     }
     public func setGraphSize(_ size: NSSize) {
+        // A registered hidden panel has a zero-size frame; retain its last
+        // width-based capacity, including the immediate refresh before re-layout.
+        if retainedSamples == 0, module != nil, size.width <= 0 { return }
         let width = size.width.isFinite ? size.width : 8
         setWidth(Int(min(20_000, max(8, width))))
     }

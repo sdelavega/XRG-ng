@@ -108,6 +108,7 @@ public final class XRGBatteryView: NSView, XRGModuleView {
               registeredManager !== manager else { updateLabels(); return }
         let module = XRGModule(name: "Battery", reference: self, defaults: defaults)
         module.displayOrder = 4
+        module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
         module.isDisplayed = defaults.bool(forKey: "showBatteryGraph")
@@ -119,6 +120,9 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         setGraphSize(module.currentSize)
     }
     public func setGraphSize(_ size: NSSize) {
+        // A registered hidden panel has a zero-size frame; retain its last
+        // width-based capacity, including the immediate refresh before re-layout.
+        if retainedSamples == 0, module != nil, size.width <= 0 { return }
         let width = size.width.isFinite ? size.width : 1
         setWidth(Int(min(20_000, max(1, width))))
     }

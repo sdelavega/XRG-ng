@@ -190,6 +190,40 @@ struct XRGBatteryViewTests {
         return try #require(bitmap.representation(using: .png, properties: [:]))
     }
 
+    @Test func hiddenBatteryKeepsElapsedPollingPowerHistoryAndFailureGaps() throws {
+        try withFixture { settings, defaults in
+            defaults.set(false, forKey: "showBatteryGraph")
+            var elapsed = 0.0, wall = 100.0
+            let source = BatterySource([battery()])
+            let miner = XRGBatteryMiner(source: { source.reads += 1; return source.samples }, historyClock: { wall })
+            let view = XRGBatteryView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), miner: miner, settings: settings, defaults: defaults, samplingClock: { elapsed })
+            let host = BatteryHost(settings: settings)
+            defer { view.removeFromSuperview(); host.close() }
+            host.contentView?.addSubview(view); view.awakeFromNib()
+            let manager = try #require(host.moduleManager), module = try #require(view.module)
+            #expect(!module.isDisplayed && manager.displayList().isEmpty && source.reads == 1)
+            let capacity = miner.numSamples
+            manager.windowChanged(to: host.frame.size)
+            #expect(view.frame.size == .zero && miner.numSamples == capacity)
+            let option = NSMenuItem(); option.tag = 1; view.selectHistoryWindow(option)
+            elapsed = 10; wall = 110; manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == 1)
+            elapsed = 11; wall = 111; source.samples = [battery(amperage: -10000)]; manager.graphUpdate()
+            #expect(source.reads == 2 && view.currentWatts == -120)
+            elapsed = 22; wall = 122; source.samples = [battery(amperage: 2000, plugged: true, charging: true)]; manager.graphUpdate()
+            for _ in 0..<100 { manager.graphUpdate(); manager.fastUpdate() }
+            #expect(source.reads == 3 && miner.timedHistory.observationCount == 3 && view.currentWatts == 24 && view.historyWattScale == 120)
+            manager.setModule("Battery", isDisplayed: true)
+            #expect(module.isDisplayed && source.reads == 3 && miner.timedHistory.observationCount == 3)
+            manager.setModule("Battery", isDisplayed: false)
+            elapsed = 33; wall = 133; source.samples = nil; manager.graphUpdate()
+            #expect(source.reads == 4 && miner.timedHistory.observationCount == 4 && view.currentWatts == 24)
+            #expect(view.historyData()[0].currentValue == XRGGraphRenderer.missingValue)
+            view.removeFromSuperview(); elapsed = 44; manager.graphUpdate(); manager.fastUpdate()
+            #expect(source.reads == 4 && manager.moduleList().isEmpty)
+        }
+    }
+
     @Test func registrationVisibilityFontAndDetachment() throws {
         try withFixture { settings, defaults in
             defaults.set(false, forKey: "showBatteryGraph")

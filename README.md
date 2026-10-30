@@ -683,8 +683,11 @@ and notices attached to their corresponding source revisions.
 - Other contributors retain their source notices and Git attribution.
 
 Mac CPU, Memory, Network and Disk keep normal-cadence histories and transfer
-accounting while their graphs are hidden; fast mini-graph updates remain tied to
-visibility. Optional sources and AI retain their existing collection rules.
+accounting while hidden. Battery also continues its elapsed-time-gated polling.
+Hidden layout keeps these panels’ last width-based sample capacity; fast mini-graph
+updates remain tied to visibility. Optional hardware and AI retain their existing
+collection rules.
+
 Mac monitoring timers continue through AppKit menu/drag tracking and modal panels;
 collectors still execute on the main thread. Sampling and lifecycle differences
 and the remaining plan are tracked in

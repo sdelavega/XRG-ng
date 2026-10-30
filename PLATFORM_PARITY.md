@@ -344,5 +344,7 @@ The current cadence/lifecycle audit and ordered follow-up work are in
 [SAMPLING_PARITY.md](SAMPLING_PARITY.md). Battery elapsed-time polling and Mac
 monitoring timer delivery during AppKit event tracking are implemented corrections.
 Mac CPU/Memory/Network/Disk now retain normal sampling while hidden, matching Linux
-core history and transfer accounting. Optional-source visibility, collector latency
+core history and transfer accounting. Battery now continues elapsed-gated polling
+while hidden. These native panels preserve width-based history capacity across
+zero-size hidden layout. Remaining optional-source visibility, collector latency
 and global pause policies remain separate work.
