@@ -13,6 +13,42 @@ use xrg_ng_linux::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 #[test]
+fn graphics_retention_upgrade_keeps_old_capacities_without_writing_until_save() {
+    let f = Fixture::new();
+    let mut expected = Settings::default();
+    expected.metrics.cpu_history_samples = 257;
+    expected.metrics.history_samples.insert(Module::Memory, 300);
+    expected
+        .metrics
+        .history_samples
+        .insert(Module::Network, 600);
+    expected.metrics.history_samples.insert(Module::Disk, 1800);
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 27.into();
+    let bytes = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &bytes).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), bytes);
+    for (module, count) in [
+        (Module::Gpu, 720),
+        (Module::Tpu, 840),
+        (Module::GpuMemory, 960),
+    ] {
+        loaded.metrics.history_samples.insert(module, count);
+    }
+    store.save(&loaded).unwrap();
+    let saved = fs::read(f.path()).unwrap();
+    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    for module in [Module::Gpu, Module::Tpu, Module::GpuMemory] {
+        let mut bad = loaded.clone();
+        bad.metrics.history_samples.insert(module, 20001);
+        assert!(store.save(&bad).is_err());
+        assert_eq!(fs::read(f.path()).unwrap(), saved);
+    }
+}
+#[test]
 fn system_retention_migrates_without_writes_and_rejects_invalid_maps_atomically() {
     let f = Fixture::new();
     let mut original = Settings::default();
@@ -45,7 +81,7 @@ fn system_retention_migrates_without_writes_and_rejects_invalid_maps_atomically(
     assert!(store.save(&invalid).is_err());
     assert_eq!(fs::read(f.path()).unwrap(), saved);
     invalid = loaded.clone();
-    invalid.metrics.history_samples.insert(Module::Gpu, 300);
+    invalid.metrics.history_samples.insert(Module::Battery, 300);
     assert!(store.save(&invalid).is_err());
     assert_eq!(fs::read(f.path()).unwrap(), saved);
     for value in [
@@ -54,7 +90,7 @@ fn system_retention_migrates_without_writes_and_rejects_invalid_maps_atomically(
         serde_json::json!({"disk": "300"}),
         serde_json::json!({"memory": true}),
         serde_json::json!({"cpu": 300}),
-        serde_json::json!({"gpu": 300}),
+        serde_json::json!({"battery": 300}),
         serde_json::json!(null),
     ] {
         wire["metrics"]["history_samples"] = value;
@@ -75,7 +111,7 @@ fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactional
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = Store::open(Some(f.path()));
     assert!(error.is_none());
-    assert_eq!(loaded.version, 27);
+    assert_eq!(loaded.version, 28);
     assert_eq!(loaded.metrics.cpu_history_samples, 0);
     assert_eq!(loaded.sampling_interval_ms, 375);
     assert_eq!(fs::read(f.path()).unwrap(), original);
@@ -163,7 +199,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 28;
+    value.version = 29;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -496,7 +532,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        27
+        28
     );
 }
 #[test]
@@ -579,7 +615,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 27);
+    assert_eq!(migrated.version, 28);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -739,7 +775,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        27
+        28
     );
 }
 

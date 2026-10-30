@@ -19,6 +19,35 @@ fn report(values: Vec<Gpu>) -> Result<Readings<Gpu>, String> {
     })
 }
 #[test]
+fn retained_capacity_preserves_values_and_survives_pool_driver_and_input_changes() {
+    let mut view = View::default();
+    view.set_history_samples(3).unwrap();
+    view.panel(&report(vec![gpu("a", Some(25), Some(100))]));
+    view.panel(&report(vec![gpu("a", Some(50), Some(100))]));
+    view.set_history_samples(6).unwrap();
+    let p = view.panel(&report(vec![gpu("a", Some(75), Some(100))]));
+    assert_eq!(p.series[0].len(), 6);
+    assert_eq!(&p.series[0][3..], &[25., 50., 75.]);
+    assert!(p.series[0][..2].iter().all(|v| v.is_nan()));
+    assert!(view.set_history_samples(20001).is_err());
+    let mut replacement = gpu("a", Some(25), Some(50));
+    replacement.driver = "replacement".into();
+    let p = view.panel(&report(vec![replacement.clone()]));
+    assert_eq!(p.series[0].len(), 6);
+    assert_eq!(p.series[0][5], 50.);
+    assert!(!p.series[0].contains(&75.));
+    view.clear_graph();
+    let p = view.panel(&report(vec![replacement.clone()]));
+    assert!(p.series[0][..5].iter().all(|v| v.is_nan()));
+    view.panel(&Err("unavailable".into()));
+    assert_eq!(
+        view.panel(&report(vec![replacement.clone()])).series[0].len(),
+        6
+    );
+    view.set_history_samples(0).unwrap();
+    assert_eq!(view.panel(&report(vec![replacement])).series[0].len(), 120);
+}
+#[test]
 fn dedicated_memory_percentages_include_real_empty_zero_without_activity() {
     let mut v = View::default();
     let p = v.panel(&report(vec![

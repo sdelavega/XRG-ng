@@ -97,6 +97,7 @@ public final class XRGGPUMiner: NSObject {
     }
     private let source: () -> [XRGGPUSample]?
     private var histories: [UInt64: History] = [:]
+    private var missingPadding = false
     private var lastGraphTick: UInt64?
     private(set) var memorySnapshot: Result<[XRGHardwareReading], Error> = .success([])
     public private(set) var countersAvailable = false
@@ -121,9 +122,17 @@ public final class XRGGPUMiner: NSObject {
 
     @objc public func setDataSize(_ count: Int) {
         guard count >= 0 else { return }
+        missingPadding = false
         numSamples = count
         for history in histories.values {
             for values in history.all { values.resize(count) }
+        }
+    }
+    @nonobjc func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        missingPadding = true; numSamples = count
+        for history in histories.values {
+            for values in history.all { values.resize(count, fillingWith: XRGGraphRenderer.missingValue) }
         }
     }
 
@@ -150,7 +159,9 @@ public final class XRGGPUMiner: NSObject {
             guard next[sample.id] == nil else { continue }
             let old = histories[sample.id]
             let history = old?.identity == sample.selectionID && old?.vendor == sample.vendor ? old! : History(sample)
-            for values in history.all where values.numValues != numSamples { values.resize(numSamples) }
+            for values in history.all where values.numValues != numSamples {
+                values.resize(numSamples, fillingWith: missingPadding ? XRGGraphRenderer.missingValue : 0)
+            }
             history.total.setNextValue(sample.total.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
             history.free.setNextValue(sample.free.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
             history.wait.setNextValue(sample.wait ?? -1)

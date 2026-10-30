@@ -60,7 +60,8 @@ public final class XRGNPUView: NSView, XRGModuleView {
         host.initTimers(); updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)
     }
     public func setGraphSize(_ size: NSSize) {
-        miner.setDataSize(Int(min(20_000, max(23, size.width.isFinite ? size.width : 23))))
+        let count = retainedSamples > 0 ? retainedSamples : Int(min(20_000, max(23, size.width.isFinite ? size.width : 23)))
+        miner.setDataSize(count)
     }
     public override func setFrameSize(_ size: NSSize) {
         super.setFrameSize(size); setGraphSize(size); updateLabels()
@@ -124,12 +125,23 @@ public final class XRGNPUView: NSView, XRGModuleView {
         updateLabels(); XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .tpu)
     }
     public override func menu(for event: NSEvent) -> NSMenu? {
+        makeMenu()
+    }
+    @nonobjc func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Neural Engine")
         let reading = NSMenuItem(title: fullReading(), action: nil, keyEquivalent: ""); reading.isEnabled = false; menu.addItem(reading)
         menu.addItem(.separator())
+        menu.addItem(XRGHistoryRetention.menu("NPU History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         let preferences = NSMenuItem(title: "Open Graph Preferences…", action: #selector(openPreferences(_:)), keyEquivalent: "")
         preferences.target = self; menu.addItem(preferences); return menu
     }
+    @nonobjc static let historyKey = "XRGNPUView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
+    }
+    public func emptyEvent(_ sender: Any?) {}
     public func openPreferences(_ sender: Any?) { host?.showGeneralPreferences() }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override func mouseDown(with event: NSEvent) { window?.mouseDown(with: event) }

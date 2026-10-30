@@ -12,8 +12,30 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub struct View {
     histories: BTreeMap<String, (String, u64, History)>,
+    history_samples: u32,
 }
 impl View {
+    fn capacity(&self) -> u32 {
+        if self.history_samples == 0 {
+            120
+        } else {
+            self.history_samples
+        }
+    }
+    pub fn set_history_samples(&mut self, count: u32) -> Result<(), String> {
+        if count > crate::shared::sampling_settings()[3] {
+            return Err("VRAM history capacity is out of range".into());
+        }
+        let old = self.capacity();
+        self.history_samples = count;
+        let capacity = self.capacity();
+        if old != capacity {
+            for (_, _, h) in self.histories.values_mut() {
+                h.resize(capacity);
+            }
+        }
+        Ok(())
+    }
     pub fn clear_graph(&mut self) {
         for (_, _, h) in self.histories.values_mut() {
             h.clear();
@@ -69,12 +91,13 @@ impl View {
         for gpu in available.iter().take(3) {
             let used = gpu.memory_used.unwrap();
             let total = gpu.memory_total.unwrap();
+            let capacity = self.capacity();
             let history = self
                 .histories
                 .entry(gpu.id.clone())
-                .or_insert_with(|| (gpu.driver.clone(), total, History::new(120)));
+                .or_insert_with(|| (gpu.driver.clone(), total, History::new(capacity)));
             if history.0 != gpu.driver || history.1 != total {
-                *history = (gpu.driver.clone(), total, History::new(120));
+                *history = (gpu.driver.clone(), total, History::new(capacity));
             }
             let percent = 100. * used as f64 / total as f64;
             history.2.append(percent);

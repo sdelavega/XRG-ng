@@ -342,12 +342,25 @@ impl MetricSelection {
     pub fn retained_samples(&self, module: Module) -> u32 {
         self.history_samples.get(&module).copied().unwrap_or(0)
     }
+    pub fn history_capacity(&self, module: Module) -> u32 {
+        match self.retained_samples(module) {
+            0 => 120,
+            count => count,
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.history_samples.iter().any(|(module, count)| {
-            !matches!(module, Module::Memory | Module::Network | Module::Disk)
-                || *count > shared::sampling_settings()[3]
+            !matches!(
+                module,
+                Module::Memory
+                    | Module::Network
+                    | Module::Disk
+                    | Module::Gpu
+                    | Module::Tpu
+                    | Module::GpuMemory
+            ) || *count > shared::sampling_settings()[3]
         }) {
-            return Err("History capacity must be 0..20000 for Memory, Network or Disk".into());
+            return Err("History capacity must be 0..20000 for a supported system graph".into());
         }
         if self.cpu_history_samples > shared::sampling_settings()[3] {
             return Err("CPU history must be automatic or between 1 and 20000 samples".into());
@@ -495,7 +508,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 27,
+            version: 28,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -565,7 +578,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 27 {
+        if self.version != 28 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -745,6 +758,9 @@ impl Settings {
         }
         if result.version == 26 {
             result.version = 27;
+        }
+        if result.version == 27 {
+            result.version = 28;
         }
         result.validate()?;
         Ok(result)

@@ -22,6 +22,26 @@ import Testing
 }
 
 @Suite(.serialized) @MainActor struct XRGNPUTests {
+    @Test func retentionResizesAllQuantitiesWithoutPollingOrRebasingEnergy() throws {
+        _ = NSApplication.shared
+        let domain = "XRG.npu-history.\(UUID().uuidString)"
+        let prefs = try #require(UserDefaults(suiteName: domain)); defer { prefs.removePersistentDomain(forName: domain) }
+        let settings = XRGSettings(defaults: prefs)
+        var now = 1.0, value = reading(1, 1000), calls = 0
+        let miner = XRGNPUMiner(source: { calls += 1; return value }, clock: { now })
+        let view = XRGNPUView(frame: NSRect(x:0,y:0,width:200,height:90),miner:miner,settings:settings,defaults:prefs)
+        now = 2; value = reading(2,3000); view.graphUpdate(nil)
+        let reads = calls, watts = miner.powerWatts
+        let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+        #expect(calls == reads && miner.powerWatts == watts && watts == 2)
+        #expect([miner.powerDataSet, miner.activityDataSet, miner.trafficDataSet].allSatisfy { $0.numValues == 300 })
+        view.setFrameSize(NSSize(width:60,height:90)); #expect(calls == reads && miner.numSamples == 300)
+        let restored = XRGNPUView(frame:NSRect(x:0,y:0,width:200,height:90),miner:miner,settings:settings,defaults:prefs)
+        #expect(restored.retainedSamples == 300)
+        now = 3; value = reading(3,5000); view.graphUpdate(nil); #expect(miner.powerWatts == 2)
+        option.tag = 20001; restored.selectHistory(option); #expect(miner.numSamples == 300)
+        option.tag = 0; restored.selectHistory(option); #expect(miner.numSamples == 200)
+    }
     private let device = XRGNPUDevice(id: 1,cores: 16,architecture: "fixture",firmwareLoaded: true)
     private func reading(_ time: Double,_ value: Int64?,unit: String = "mJ",id: String = "ane") -> XRGNPUReading {
         XRGNPUReading(time: time,devices: [device],appleSilicon: true,

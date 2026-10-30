@@ -129,8 +129,8 @@ public final class XRGGPUView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int32) {
         guard width >= 0 else { return }
-        let count = min(20_000, Int(width))
-        if miner.numSamples != count { miner.setDataSize(count) }
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, Int(width))
+        if retainedSamples > 0 { miner.resizeHistory(count) } else { miner.setDataSize(count) }
     }
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -343,11 +343,18 @@ public final class XRGGPUView: NSView, XRGModuleView {
             option.state = plotMode == mode ? .on : .off; modes.addItem(option)
         }
         display.submenu = modes; menu.addItem(display)
+        menu.addItem(XRGHistoryRetention.menu("GPU History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(.separator()); menu.addItem(item("GPU Details…", #selector(showDetails(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let historyKey = "XRGGPUView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
+    }
     public func emptyEvent(_ sender: Any?) {}
     public func selectSource(_ sender: NSMenuItem) { try? applyGPUSource(sender.representedObject as? String) }
     public func selectPlotMode(_ sender: NSMenuItem) {

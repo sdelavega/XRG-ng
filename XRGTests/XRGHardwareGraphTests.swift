@@ -6,6 +6,27 @@ import Testing
 
 @Suite(.serialized) @MainActor
 struct XRGHardwareGraphTests {
+    @Test func vramRetentionPreservesCachedReadingsAndDoesNotChangeFanHistory() throws {
+        try withSettings { defaults, settings in
+            var values = [XRGHardwareReading(id:"a",name:"GPU",value:25,capacity:100)], calls = 0, failed = false
+            let view = XRGHardwareGraphView(kind:.vram,frame:NSRect(x:0,y:0,width:120,height:90),settings:settings,defaults:defaults,source:{calls += 1; return failed ? .failure(NSError(domain:"fixture",code:1)) : .success(values)})
+            view.graphUpdate(nil); let reads = calls
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(calls == reads && view.curve("a").count == 300 && view.curve("a").last == 25)
+            #expect(view.curve("a").first == XRGGraphRenderer.missingValue)
+            view.setFrameSize(NSSize(width:60,height:90)); #expect(calls == reads && view.curve("a").count == 300)
+            let fans = XRGHardwareGraphView(kind:.fans,frame:NSRect(x:0,y:0,width:80,height:90),settings:settings,defaults:defaults,source:{.success([XRGHardwareReading(id:"f",name:"Fan",value:1000)])})
+            fans.graphUpdate(nil); fans.selectHistory(option); #expect(fans.retainedSamples == 0 && fans.curve("f").count == 80)
+            failed = true; view.graphUpdate(nil); failed = false
+            values = [XRGHardwareReading(id:"a",name:"Replacement",value:10,capacity:50)]; view.graphUpdate(nil)
+            #expect(view.curve("a").count == 300 && view.curve("a").last == 20)
+            #expect(view.curve("a").dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            let restored = XRGHardwareGraphView(kind:.vram,frame:NSRect(x:0,y:0,width:120,height:90),settings:settings,defaults:defaults,source:{.success(values)})
+            restored.graphUpdate(nil); #expect(restored.retainedSamples == 300 && restored.curve("a").count == 300)
+            option.tag = 20001; restored.selectHistory(option); #expect(restored.retainedSamples == 300)
+            option.tag = 0; restored.selectHistory(option); #expect(restored.curve("a").count == 120)
+        }
+    }
     private func withSettings(_ body: (UserDefaults, XRGSettings) throws -> Void) throws {
         _ = NSApplication.shared
         let name = "XRG.hardware-graphs.\(UUID().uuidString)"

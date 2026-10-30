@@ -89,9 +89,9 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         updateMinSize(); manager.addModule(module); host.initTimers()
     }
     func setGraphSize(_ size: NSSize) {
-        let next = Int(min(20_000, max(1, size.width.isFinite ? size.width : 1)))
+        let next = retainedSamples > 0 ? retainedSamples : Int(min(20_000, max(1, size.width.isFinite ? size.width : 1)))
         guard width != next else { return }; width = next
-        for history in histories.values { history.data.resize(next) }
+        for history in histories.values { history.data.resize(next, fillingWith: retainedSamples > 0 ? XRGGraphRenderer.missingValue : 0) }
     }
     override func setFrameSize(_ size: NSSize) { super.setFrameSize(size); setGraphSize(size); updateLabels() }
     func updateMinSize() {
@@ -213,11 +213,21 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         let menu = NSMenu(title: kind.name)
         let sources = NSMenuItem(title: "Choose Sources…", action: #selector(chooseSources(_:)), keyEquivalent: "")
         sources.target = self; menu.addItem(sources); menu.addItem(.separator())
+        if kind == .vram {
+            menu.addItem(XRGHistoryRetention.menu("VRAM History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        }
         for (title, action) in [("Read-only details…", #selector(showDetails(_:))), ("Reset Graph", #selector(clearData(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
     }
+    static let historyKey = "XRGHardwareGraphView.VRAM.HistorySamples.v1"
+    var retainedSamples: Int { kind == .vram ? XRGHistoryRetention.saved(defaults, key: Self.historyKey) : 0 }
+    @objc func selectHistory(_ sender: Any?) {
+        guard kind == .vram, XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
+    }
+    @objc func emptyEvent(_ sender: Any?) {}
     @objc func chooseSources(_ sender: Any?) {
         guard let window, window.attachedSheet == nil else { return }
         let editor = XRGHardwareSourcesEditor(selection: sourceSelection, readings: readings, suggested: slots, name: kind.name)

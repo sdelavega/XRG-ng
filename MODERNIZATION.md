@@ -1381,3 +1381,31 @@ gaps and the Linux Sources controls were visually inspected using private fixtur
 settings. Evidence is in `dist/system-retention-validation`. Linux temporary
 Debug/test builds omit debug symbols without changing optimization/assertions.
 Physical Intel/Linux x86-64, macOS 26 runtime and actual sleep/wake remain unverified.
+
+### GPU, NPU and VRAM retention
+
+The Mac GPU/NPU/VRAM menus and Linux Sources preferences now offer independent
+sample capacities using the shared limits and original automatic defaults.
+Resizing retains newest values, missing positions and current readouts without
+polling hardware or resetting energy/rate baselines. GPU device/source/driver,
+NPU quantity/client scope and VRAM metadata/pool changes retain their existing
+history boundaries and use the configured size for replacement buffers. Native
+VRAM controls do not affect Fans. No profiling, hardware controls, units, sensor
+support or unavailable readings were changed.
+
+Linux settings v28 reads old profiles without writing, preserving CPU and other
+graph choices; invalid edits remain transactional. The GUI gate applies GPU=720,
+NPU=840 and VRAM=960 independently, while unavailable inputs remain unavailable.
+Deterministic tests cover growing/shrinking, replacement/source/mode transitions,
+clear/recovery, native preference restoration and an uninterrupted NPU energy delta.
+
+Validation: universal Mac build, 570 tests on ARM64 and 570 under Rosetta x86_64,
+native/packaged launch checks; Linux ARM64 passed 31 shared Swift tests, C ABI smoke,
+strict Clippy and 553 Rust tests plus all egui and sixteen X11/nested-Wayland
+collapse checks. All passed without retries. Native graphics/NPU power/VRAM plots,
+menus and Linux Sources controls were visually inspected with private synthetic
+fixtures. Evidence is in `dist/graphics-retention-validation`. Temporary Linux
+Debug/test builds omit debug symbols without changing optimization/assertions.
+Physical Intel/Linux x86-64, macOS 26 runtime, other GPU/NPU hardware and real
+sleep/wake remain unverified. Temperature/Fans and Battery retention remain next;
+AI/Weather cadence and timestamp-based retention remain separate work.

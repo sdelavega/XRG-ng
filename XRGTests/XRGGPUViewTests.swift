@@ -53,6 +53,27 @@ private final class GPUNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGGPUViewTests {
+    @Test func retentionKeepsCachedReadingsAndSurvivesFailureReplacementAndRelaunch() throws {
+        try withFixture { settings, defaults in
+            var values: [XRGGPUSample]? = [sample(utilization: 40)], calls = 0
+            let miner = XRGGPUMiner(source: { calls += 1; return values })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            miner.getLatestGraphicsInfo()
+            let reads = calls, current = miner.utilizationDataSets[0].currentValue
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(calls == reads && miner.numSamples == 300 && miner.utilizationDataSets[0].currentValue == current)
+            #expect(miner.utilizationDataSets[0].orderedValues.first == XRGGraphRenderer.missingValue)
+            view.setFrameSize(NSSize(width: 60, height: 90)); #expect(miner.numSamples == 300 && calls == reads)
+            let restored = panel(miner, settings: settings, defaults: defaults)
+            #expect(restored.retainedSamples == 300 && miner.numSamples == 300)
+            values = nil; miner.getLatestGraphicsInfo(); #expect(miner.numSamples == 300 && !miner.countersAvailable)
+            values = [sample(vendor: "Replacement", utilization: 70)]; miner.getLatestGraphicsInfo()
+            #expect(miner.utilizationDataSets[0].numValues == 300 && miner.utilizationDataSets[0].currentValue == 70)
+            #expect(miner.utilizationDataSets[0].orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            option.tag = 20001; restored.selectHistory(option); #expect(restored.retainedSamples == 300)
+            option.tag = 0; restored.selectHistory(option); #expect(miner.numSamples == 200)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.gpuView.\(UUID().uuidString)"

@@ -116,7 +116,7 @@ Implemented in development for monitoring tools:
   gaps without resetting collector baselines; explicit capacity survives window
   resizing. Nominal spans describe point spacing at the current target, not a
   measured time axis. Shared Swift owns bounds and history resizing, exposed to
-  Rust by additive ABI v1 functions. Linux settings migrate read-only to version 27
+  Rust by additive ABI v1 functions. Linux settings migrate read-only to version 28
   and write the new version only on save. Preferences remain platform-local.
   Both normal sampling controls cover 200 ms–10 s, with millisecond precision;
   valid legacy Mac values outside that range survive opening/saving. Mac restarts
@@ -130,11 +130,22 @@ Implemented in development for monitoring tools:
   Source/failure reset policies remain unchanged and keep the chosen capacity.
   Mac Memory retains paging activity; Linux retains RAM/cache/swap percentages.
   Current RAM/swap bars and accounting remain separate from history settings.
-  The Linux per-module map migrates from v26 without a write; unsupported module
-  keys and invalid capacities reject the entire settings edit. GPU/NPU, VRAM,
-  Temperature/Fans and Battery still need retention controls. AI and Weather have
+  The Linux per-module map migrates old files without a write; unsupported module
+  keys and invalid capacities reject the entire settings edit. Temperature/Fans
+  and Battery still need retention controls. AI and Weather have
   separate cadence/windows; timestamp-based retention remains open. Mac Memory's
   existing Reset Graph still resets its paging baseline; Linux preserves it.
+- GPU, NPU and VRAM now also have independent capacity controls. All cached
+  device histories retain newest samples when resized; future/replacement histories
+  use the configured capacity. GPU activity source/driver changes and NPU quantity
+  or client-scope changes keep their existing reset boundaries. VRAM pool/metadata
+  replacements remain separate histories. Capacity changes do not poll hardware,
+  reset NPU energy/rate baselines, enable profiling or change source selection.
+  Native VRAM settings leave Fans untouched. Linux v28 preserves v27 settings on
+  read and writes new GPU/TPU-category/VRAM map entries only on save. Mac NPU
+  power/activity/traffic and Linux activity/producer rates retain different meanings;
+  missing counters remain unavailable. This does not establish physical GPU/NPU
+  validation on unowned platforms.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

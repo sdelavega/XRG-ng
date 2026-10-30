@@ -197,8 +197,8 @@ struct GpuHistory {
     history: History,
 }
 impl GpuHistory {
-    fn new(source: crate::gpu::ActivitySource, driver: &str) -> Self {
-        let history = History::new(120);
+    fn new(source: crate::gpu::ActivitySource, driver: &str, capacity: u32) -> Self {
+        let history = History::new(capacity);
         Self {
             observed: 0,
             source,
@@ -346,6 +346,18 @@ impl Sampler {
     }
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
+        let gpu_capacity = selection.history_capacity(Module::Gpu);
+        for state in self.gpu_histories.values_mut() {
+            state.history.resize(gpu_capacity);
+            state.observed = state.observed.min(gpu_capacity as usize);
+        }
+        let npu_capacity = selection.history_capacity(Module::Tpu);
+        self.tpu_history.resize(npu_capacity);
+        for history in self.npu_histories.values_mut() {
+            history.resize(npu_capacity);
+        }
+        self.gpu_memory
+            .set_history_samples(selection.retained_samples(Module::GpuMemory))?;
         self.memory
             .set_history_samples(selection.retained_samples(Module::Memory))?;
         if self.metrics.selection().gpu != selection.gpu {
@@ -472,7 +484,7 @@ impl Sampler {
             })
         });
         if activity_mode != self.npu_activity_mode {
-            self.tpu_history = History::new(120);
+            self.tpu_history = History::new(self.metrics.selection().history_capacity(Module::Tpu));
             self.npu_histories.clear();
             self.npu_activity_mode = activity_mode;
         }
@@ -500,13 +512,14 @@ impl Sampler {
                     .map(|d| d.activity_key())
                     .collect();
                 self.npu_histories.retain(|id, _| active_keys.contains(id));
+                let capacity = self.metrics.selection().history_capacity(Module::Tpu);
                 detection_error = !readings.errors.is_empty();
                 for device in readings.values {
                     if let Some(value) = device.activity_percent() {
                         let history = self
                             .npu_histories
                             .entry(device.activity_key())
-                            .or_insert_with(|| History::new(120));
+                            .or_insert_with(|| History::new(capacity));
                         history.append(value);
                         if activity_series.len() < 3 {
                             activity_series.push(history.values());
@@ -876,12 +889,13 @@ impl Sampler {
             self.gpu_histories.remove(&gpu.id);
             return None;
         };
+        let capacity = self.metrics.selection().history_capacity(Module::Gpu);
         let state = self
             .gpu_histories
             .entry(gpu.id.clone())
-            .or_insert_with(|| GpuHistory::new(source, &gpu.driver));
+            .or_insert_with(|| GpuHistory::new(source, &gpu.driver, capacity));
         if state.source != source || state.driver != gpu.driver {
-            *state = GpuHistory::new(source, &gpu.driver);
+            *state = GpuHistory::new(source, &gpu.driver, capacity);
         }
         state.history.append(value);
         let mut values = state.history.values();
@@ -1188,6 +1202,46 @@ mod gpu_activity_tests {
         values.map(|v| v.into_iter().filter(|v| v.is_finite()).collect())
     }
     #[test]
+    fn retained_gpu_capacity_keeps_observations_and_replacement_boundaries() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let mut selection = MetricSelection::default();
+        selection.history_samples.insert(Module::Gpu, 3);
+        sampler.set_selection(selection.clone()).unwrap();
+        let mut gpu = Gpu {
+            id: "adapter".into(),
+            driver: "fixture".into(),
+            utilization: Some(50.),
+            ..Default::default()
+        };
+        assert_eq!(sampler.gpu_curve(&gpu).unwrap().len(), 3);
+        gpu.utilization = Some(25.);
+        sampler.gpu_curve(&gpu);
+        selection.history_samples.insert(Module::Gpu, 6);
+        sampler.set_selection(selection.clone()).unwrap();
+        gpu.utilization = Some(10.);
+        let values = sampler.gpu_curve(&gpu).unwrap();
+        assert_eq!(values.len(), 6);
+        assert!(values[..3].iter().all(|v| v.is_nan()));
+        assert_eq!(&values[3..], &[50., 25., 10.]);
+        gpu.driver = "replacement".into();
+        let values = sampler.gpu_curve(&gpu).unwrap();
+        assert_eq!(values.len(), 6);
+        assert!(values[..5].iter().all(|v| v.is_nan()));
+        sampler.clear_graph(Module::Gpu);
+        let values = sampler.gpu_curve(&gpu).unwrap();
+        assert!(values[..5].iter().all(|v| v.is_nan()));
+        gpu.utilization = None;
+        assert!(sampler.gpu_curve(&gpu).is_none());
+        gpu.utilization = Some(0.);
+        assert_eq!(sampler.gpu_curve(&gpu).unwrap().last(), Some(&0.));
+        selection.history_samples.remove(&Module::Gpu);
+        sampler.set_selection(selection).unwrap();
+        assert_eq!(sampler.gpu_curve(&gpu).unwrap().len(), 120);
+    }
+    #[test]
     fn device_engine_client_and_driver_changes_do_not_mix_history_scopes() {
         let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
             "/no-proc-fixture",
@@ -1369,6 +1423,46 @@ mod npu_client_history_tests {
             }),
             inference: Err("No fixture inference producer".into()),
         }
+    }
+    #[test]
+    fn retained_npu_capacity_survives_source_and_quantity_mode_changes() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let mut selection = MetricSelection::default();
+        selection.history_samples.insert(Module::Tpu, 3);
+        sampler.set_selection(selection.clone()).unwrap();
+        sampler.tpu_panel_from(report("one", Some(50.), None));
+        sampler.tpu_panel_from(report("one", Some(40.), None));
+        selection.history_samples.insert(Module::Tpu, 6);
+        sampler.set_selection(selection.clone()).unwrap();
+        let p = sampler.tpu_panel_from(report("one", Some(30.), None));
+        assert_eq!(p.series[0].len(), 6);
+        assert_eq!(&p.series[0][3..], &[50., 40., 30.]);
+        assert!(p.series[0][..2].iter().all(|v| v.is_nan()));
+        let p = sampler.tpu_panel_from(report("two", Some(20.), None));
+        assert_eq!(p.series[0].len(), 6);
+        assert_eq!(p.series[0][5], 20.);
+        assert!(!p.series[0].contains(&30.));
+        let p = sampler.tpu_panel_from(report("two", None, None));
+        assert!(p.series.is_empty());
+        assert_eq!(sampler.tpu_history.values().len(), 6);
+        let p = sampler.tpu_panel_from(report("two", Some(0.), Some(25.)));
+        assert_eq!(p.series[0].len(), 6);
+        assert_eq!(p.series[0][5], 25.);
+        sampler.clear_graph(Module::Tpu);
+        let p = sampler.tpu_panel_from(report("two", Some(0.), Some(25.)));
+        assert!(p.series[0][..5].iter().all(|v| v.is_nan()));
+        selection.history_samples.remove(&Module::Tpu);
+        sampler.set_selection(selection).unwrap();
+        assert_eq!(
+            sampler
+                .tpu_panel_from(report("two", Some(0.), Some(25.)))
+                .series[0]
+                .len(),
+            120
+        );
     }
     #[test]
     fn client_scope_warmup_and_device_source_changes_never_join_unrelated_histories() {

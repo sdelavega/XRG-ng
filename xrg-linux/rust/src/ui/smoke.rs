@@ -298,6 +298,9 @@ impl Harness {
                     next.metrics.history_samples.insert(Module::Memory, 360);
                     next.metrics.history_samples.insert(Module::Network, 480);
                     next.metrics.history_samples.insert(Module::Disk, 600);
+                    next.metrics.history_samples.insert(Module::Gpu, 720);
+                    next.metrics.history_samples.insert(Module::Tpu, 840);
+                    next.metrics.history_samples.insert(Module::GpuMemory, 960);
                     next.network_min_scale = 65_536;
                     next.graph_width = 180;
                     next.layout = Layout::Horizontal;
@@ -343,6 +346,9 @@ impl Harness {
                         (Module::Memory, "Memory", 360),
                         (Module::Network, "Network", 480),
                         (Module::Disk, "Disk", 600),
+                        (Module::Gpu, "GPU", 720),
+                        (Module::Tpu, "TPU / NPU", 840),
+                        (Module::GpuMemory, "VRAM", 960),
                     ] {
                         if snapshot.selection.retained_samples(module) != count
                             || !snapshot
@@ -358,6 +364,9 @@ impl Harness {
                     }
                     println!(
                         "SYSTEM_HISTORY_SMOKE_OK Memory=360 Network=480 Disk=600, live worker acknowledged"
+                    );
+                    println!(
+                        "GRAPHICS_HISTORY_SMOKE_OK GPU=720 NPU=840 VRAM=960, capacities applied; unavailable inputs remain unavailable"
                     );
                     let (_, saved, error) = Store::open(Some(self.path()));
                     if error.is_some() || saved != app.settings {
