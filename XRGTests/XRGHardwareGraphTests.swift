@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.serialized) @MainActor
 struct XRGHardwareGraphTests {
-    @Test func vramRetentionPreservesCachedReadingsAndDoesNotChangeFanHistory() throws {
+    @Test func vramAndFanRetentionHaveIndependentCapacitiesAndCachedReadings() throws {
         try withSettings { defaults, settings in
             var values = [XRGHardwareReading(id:"a",name:"GPU",value:25,capacity:100)], calls = 0, failed = false
             let view = XRGHardwareGraphView(kind:.vram,frame:NSRect(x:0,y:0,width:120,height:90),settings:settings,defaults:defaults,source:{calls += 1; return failed ? .failure(NSError(domain:"fixture",code:1)) : .success(values)})
@@ -16,7 +16,13 @@ struct XRGHardwareGraphTests {
             #expect(view.curve("a").first == XRGGraphRenderer.missingValue)
             view.setFrameSize(NSSize(width:60,height:90)); #expect(calls == reads && view.curve("a").count == 300)
             let fans = XRGHardwareGraphView(kind:.fans,frame:NSRect(x:0,y:0,width:80,height:90),settings:settings,defaults:defaults,source:{.success([XRGHardwareReading(id:"f",name:"Fan",value:1000)])})
-            fans.graphUpdate(nil); fans.selectHistory(option); #expect(fans.retainedSamples == 0 && fans.curve("f").count == 80)
+            fans.graphUpdate(nil); #expect(fans.retainedSamples == 0 && fans.curve("f").count == 80)
+            option.tag = 600; fans.selectHistory(option)
+            #expect(fans.retainedSamples == 600 && fans.curve("f").count == 600 && fans.curve("f").last == 1000)
+            #expect(fans.curve("f").first == XRGGraphRenderer.missingValue && view.retainedSamples == 300)
+            fans.setFrameSize(NSSize(width: 40, height: 90)); #expect(fans.curve("f").count == 600)
+            let fanMenu = try #require(fans.makeMenu().items.first { $0.title == "Fans History" }?.submenu)
+            #expect(fanMenu.items.allSatisfy { $0.target === fans })
             failed = true; view.graphUpdate(nil); failed = false
             values = [XRGHardwareReading(id:"a",name:"Replacement",value:10,capacity:50)]; view.graphUpdate(nil)
             #expect(view.curve("a").count == 300 && view.curve("a").last == 20)

@@ -1409,3 +1409,35 @@ Debug/test builds omit debug symbols without changing optimization/assertions.
 Physical Intel/Linux x86-64, macOS 26 runtime, other GPU/NPU hardware and real
 sleep/wake remain unverified. Temperature/Fans and Battery retention remain next;
 AI/Weather cadence and timestamp-based retention remain separate work.
+
+### Temperature, Fans and Battery retention
+
+Mac Temperature/Battery menus and the standalone Fans graph now offer sample
+capacities through the shared retention controls; Linux Sources has matching
+independent fields. Width changes retain newest observations, current readings,
+source choices, sensor statistics and polling baselines. The integrated Mac fan
+curves share Temperature's history size; the standalone Fans graph is independent.
+New explicit sensor histories and added positions start missing. Resizing preserves
+existing automatic padding and source/failure/aggregate membership boundaries.
+Temperature bounds exclude the missing marker without discarding signed readings;
+zero RPM remains valid. Native temperature labels now read the fan cache without
+polling hardware. No sensor transport, vendor support or hardware control changed.
+
+Linux Battery resizes its charge and signed-power histories separately, retaining
+newest discharge values and missing power observations. Mac preserves its split
+charging/discharging watt curves and battery status/capacity snapshot. Linux schema
+29 migrates old files in memory, writes only on explicit save, and rejects invalid
+capacities or unsupported keys transactionally. The live GUI gate applies
+Temperature=1080, Fans=1200 and Battery=1320 without inventing unavailable readings.
+
+Validation: universal Mac build, 574 tests on ARM64 and 574 under Rosetta x86_64,
+native/packaged launch checks; Linux ARM64 passed 31 shared Swift tests, C ABI smoke,
+strict Clippy and 558 Rust tests. Final egui and X11/nested-Wayland desktop results,
+native graph/menu captures and Linux Sources captures are archived in
+`dist/sensor-retention-validation`. Initial runs exposed a stale menu-count
+expectation, explicit-history padding and schema migration assertions; these were
+corrected before the final complete gates. Debug/test builds omit debug symbols
+without changing optimization/assertions. Physical Intel/Linux x86-64, macOS 26
+runtime, other sensor/battery hardware and actual sleep/wake remain unverified.
+AI duration, weather provider/default behavior, timestamp-based retention and
+remaining scheduling parity are separate work.

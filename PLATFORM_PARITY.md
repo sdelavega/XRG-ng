@@ -131,8 +131,7 @@ Implemented in development for monitoring tools:
   Mac Memory retains paging activity; Linux retains RAM/cache/swap percentages.
   Current RAM/swap bars and accounting remain separate from history settings.
   The Linux per-module map migrates old files without a write; unsupported module
-  keys and invalid capacities reject the entire settings edit. Temperature/Fans
-  and Battery still need retention controls. AI and Weather have
+  keys and invalid capacities reject the entire settings edit. AI and Weather have
   separate cadence/windows; timestamp-based retention remains open. Mac Memory's
   existing Reset Graph still resets its paging baseline; Linux preserves it.
 - GPU, NPU and VRAM now also have independent capacity controls. All cached
@@ -141,11 +140,21 @@ Implemented in development for monitoring tools:
   or client-scope changes keep their existing reset boundaries. VRAM pool/metadata
   replacements remain separate histories. Capacity changes do not poll hardware,
   reset NPU energy/rate baselines, enable profiling or change source selection.
-  Native VRAM settings leave Fans untouched. Linux v28 preserves v27 settings on
-  read and writes new GPU/TPU-category/VRAM map entries only on save. Mac NPU
+  Native VRAM settings leave Fans untouched. GPU/TPU-category/VRAM map entries
+  migrate without writing until explicit save. Mac NPU
   power/activity/traffic and Linux activity/producer rates retain different meanings;
   missing counters remain unavailable. This does not establish physical GPU/NPU
   validation on unowned platforms.
+- Temperature, Fans and Battery now have independent sample capacities through the
+  same Mac history menus / Linux Sources controls. Resizing preserves newest readings,
+  sensor choices, polling baselines and session statistics. The standalone Mac Fans
+  graph has its own capacity; integrated fan curves share Temperature’s capacity.
+  Newly added positions are missing, cold temperatures stay valid, and zero RPM remains a stopped fan. Native
+  temperature label rendering reads the fan cache without refreshing hardware.
+  Linux charge and signed-power histories remain separate; Mac keeps its split
+  charge/discharge watt curves. Source, failure and aggregate membership boundaries
+  keep their existing policies. Linux schema 29 upgrades older profiles without writing
+  until explicit save. AI/Weather duration and timestamp-based retention remain open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,
@@ -251,7 +260,7 @@ Remaining monitoring work:
    Port Stocks if retained in the common set.
 4. Desktop behavior: align other supported window controls and preserve explicit
    compositor limitations. Linux now supports collapse/hover expansion. Extend CPU
-   retention controls to other graphs and define timestamp-based retention;
+   retention controls to AI and define timestamp-based retention;
    align remaining scheduling behavior without equating different OS memory or NPU measurements.
 
 Each pass needs UI, persistence, cancellation, invalid/unavailable-data and fixture

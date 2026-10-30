@@ -107,9 +107,9 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int) {
         guard width >= 0 else { return }
-        let width = min(20_000, width)
-        guard width != historyWidth else { return }
-        miner.setDataSize(width); historyWidth = width
+        let width = retainedSamples > 0 ? retainedSamples : min(20_000, width)
+        if retainedSamples > 0 { miner.resizeHistory(width) } else { miner.setDataSize(width) }
+        historyWidth = width
     }
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize); setGraphSize(newSize); updateLabels()
@@ -163,12 +163,11 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
             guard let key, let sensor = miner.sensor(forLocation: key) else { return nil }
             return (index, sensor)
         }
-        let fans = miner.fanValues()
+        let fans = miner.cachedFanValues
         let fanKeys = Set(fans.map(\.key))
         let thermal = selected.map(\.1).filter { !fanKeys.contains($0.key) && $0.units != " rpm" && $0.units != "%" && $0.dataSet.numValues > 0 }
-        let minima = thermal.map { $0.dataSet.min }.filter(\.isFinite)
-        let maxima = thermal.map { $0.dataSet.max }.filter(\.isFinite)
-        let low = minima.min() ?? 0, high = maxima.max() ?? 100
+        let observed = thermal.flatMap { observedValues($0) }
+        let low = observed.min() ?? 0, high = observed.max() ?? 100
         let padding = max(20, high - low) * 0.1
         return selected.map { slot, sensor in
             let lower: CGFloat, upper: CGFloat
@@ -207,13 +206,14 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
     }
     @nonobjc func miniValues() -> [NSNumber] {
         guard let primary = rows().first, primary.slot == 0 else { return [] }
-        let fans = miner.fanValues()
+        let fans = miner.cachedFanValues
         var result: [NSNumber] = []
         var seen: Set<String> = [primary.sensor.key]
         if primary.sensor.isEnabled && primary.sensor.currentValue.isFinite {
             var lower = primary.lower, upper = primary.upper
             if !fans.contains(where: { $0.key == primary.sensor.key }) && primary.sensor.units != " rpm" && primary.sensor.units != "%" {
-                lower = min(primary.sensor.dataSet.min, 20); upper = max(primary.sensor.dataSet.max, 90)
+                let values = observedValues(primary.sensor)
+                lower = min(values.min() ?? 20, 20); upper = max(values.max() ?? 90, 90)
             }
             if lower.isFinite && upper.isFinite && upper > lower {
                 let fraction = (CGFloat(primary.sensor.currentValue) - lower) / (upper - lower)
@@ -284,12 +284,23 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
                 menu.addItem(item(sensor.label() + ": " + valueText(sensor), #selector(emptyEvent(_:))))
             }
         }
-        menu.addItem(.separator()); menu.addItem(item("Reset Graph", #selector(clearData(_:))))
+        menu.addItem(.separator())
+        menu.addItem(XRGHistoryRetention.menu("Temperature History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(.separator()); menu.addItem(item("Open XRG-ng Temperature Preferences...", #selector(openTemperaturePreferences(_:))))
         menu.addItem(item("Open Temperature Sensors Window...", #selector(showSensorWindow(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let historyKey = "XRGTemperatureView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
+    }
+    private func observedValues(_ sensor: XRGSensorData) -> [CGFloat] {
+        sensor.dataSet.orderedValues.filter { $0.isFinite && $0 != XRGGraphRenderer.missingValue }
+    }
     public func clearData(_ sender: Any?) {
         miner.reset(); statsManager.clearHistory(forModule: .nameTemperature); updateLabels(); needsDisplay = true
     }

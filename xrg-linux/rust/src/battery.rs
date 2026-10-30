@@ -19,6 +19,7 @@ pub enum Mode {
 pub struct View {
     charge: BTreeMap<String, History>,
     power: BTreeMap<String, VecDeque<f64>>,
+    history_samples: u32,
 }
 fn watts(reading: &Battery) -> Option<f64> {
     let value = reading.watts.filter(|v| v.is_finite() && *v >= 0.)?;
@@ -32,6 +33,35 @@ fn watts(reading: &Battery) -> Option<f64> {
     }
 }
 impl View {
+    fn capacity(&self) -> u32 {
+        if self.history_samples == 0 {
+            120
+        } else {
+            self.history_samples
+        }
+    }
+    pub fn set_history_samples(&mut self, requested: u32) -> Result<(), String> {
+        if requested > crate::shared::sampling_settings()[3] {
+            return Err("Battery history capacity is out of range".into());
+        }
+        let old = self.capacity();
+        self.history_samples = requested;
+        let capacity = self.capacity();
+        if old != capacity {
+            for h in self.charge.values_mut() {
+                h.resize(capacity);
+            }
+            for h in self.power.values_mut() {
+                while h.len() > capacity as usize {
+                    h.pop_front();
+                }
+                while h.len() < capacity as usize {
+                    h.push_front(f64::NAN);
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn clear_graph(&mut self) {
         for h in self.charge.values_mut() {
             h.clear();
@@ -87,16 +117,17 @@ impl View {
         self.power
             .retain(|name, _| visible.iter().any(|v| v.name == *name));
         let mut labels = Vec::new();
+        let capacity = self.capacity();
         for reading in visible {
             let charge = self
                 .charge
                 .entry(reading.name.clone())
-                .or_insert_with(|| History::new(120));
+                .or_insert_with(|| History::new(capacity));
             charge.append(reading.percent);
             let power = self
                 .power
                 .entry(reading.name.clone())
-                .or_insert_with(|| std::iter::repeat_n(f64::NAN, 120).collect());
+                .or_insert_with(|| std::iter::repeat_n(f64::NAN, capacity as usize).collect());
             let value = watts(reading);
             power.pop_front();
             power.push_back(value.unwrap_or(f64::NAN));

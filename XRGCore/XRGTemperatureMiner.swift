@@ -69,6 +69,7 @@ public final class XRGTemperatureMiner: NSObject {
     public func numberOfCPUs() -> Int { ProcessInfo.processInfo.processorCount }
     public func reset() { state.reset() }
     public func setDataSize(_ size: Int) { state.setDataSize(size) }
+    @nonobjc func resizeHistory(_ size: Int) { state.resizeHistory(size) }
     public func allSensorKeys() -> [String] { state.allSensorKeys() }
     @objc(sensorForLocation:)
     public func sensor(forLocation location: String) -> XRGSensorData? { state.sensor(forLocation: location) }
@@ -101,6 +102,8 @@ public final class XRGTemperatureMiner: NSObject {
         let keys = state.locationKeys()
         return includingUnknown ? keys : keys.filter { reader?.isKnownKey($0) == true }
     }
+
+    @nonobjc var cachedFanValues: [XRGFan] { fanCache ?? [] }
 
     public func fanValues() -> [XRGFan] {
         let now = clock()

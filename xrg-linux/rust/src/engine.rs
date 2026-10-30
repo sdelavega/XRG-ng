@@ -346,6 +346,12 @@ impl Sampler {
     }
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
+        self.sensors.set_history_samples(
+            selection.retained_samples(Module::Temperature),
+            selection.retained_samples(Module::Fans),
+        )?;
+        self.battery
+            .set_history_samples(selection.retained_samples(Module::Battery))?;
         let gpu_capacity = selection.history_capacity(Module::Gpu);
         for state in self.gpu_histories.values_mut() {
             state.history.resize(gpu_capacity);

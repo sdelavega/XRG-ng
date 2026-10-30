@@ -55,6 +55,7 @@ public final class XRGSensorData: NSObject {
 public final class XRGTemperatureState: NSObject {
     private var sensors: [String: XRGSensorData] = [:]
     private var count = 0
+    private var missingPadding = false
     private var lastUpdate: TimeInterval?
     private var lastIncludeUnknown: Bool?
     private var orderedKeys: [String] = []
@@ -88,8 +89,8 @@ public final class XRGTemperatureState: NSObject {
             sensor = existing
         } else {
             sensor = XRGSensorData(sensorKey: location)
-            sensor.dataSet.resize(count)
-            sensor.dataSet.setAllValues(value)
+            sensor.dataSet.resize(count, fillingWith: missingPadding ? XRGGraphRenderer.missingValue : 0)
+            if !missingPadding { sensor.dataSet.setAllValues(value) }
             sensors[location] = sensor
         }
         sensor.units = units
@@ -147,8 +148,13 @@ public final class XRGTemperatureState: NSObject {
     public func locationKeys() -> [String] { orderedKeys }
     public func setDataSize(_ size: Int) {
         guard size >= 0 else { return }
-        count = size
+        missingPadding = false; count = size
         for sensor in sensors.values { sensor.dataSet.resize(size) }
+    }
+    @nonobjc func resizeHistory(_ size: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(size) else { return }
+        missingPadding = true; count = size
+        for sensor in sensors.values { sensor.dataSet.resize(size, fillingWith: XRGGraphRenderer.missingValue) }
     }
     public func reset() {
         for sensor in sensors.values { sensor.dataSet.reset() }

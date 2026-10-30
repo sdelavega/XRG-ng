@@ -18,6 +18,8 @@ pub(crate) struct View {
     temperatures: BTreeMap<String, History>,
     fans: BTreeMap<String, History>,
     automatic_fans: [Option<String>; 3],
+    temperature_samples: u32,
+    fan_samples: u32,
 }
 impl Default for View {
     fn default() -> Self {
@@ -27,6 +29,8 @@ impl Default for View {
             temperatures: BTreeMap::new(),
             fans: BTreeMap::new(),
             automatic_fans: Default::default(),
+            temperature_samples: 0,
+            fan_samples: 0,
         }
     }
 }
@@ -40,7 +44,9 @@ fn selected<'a>(primary: &'a str, extra: &'a [Option<String>; 2]) -> Vec<Option<
 fn curves(
     histories: &mut BTreeMap<String, History>,
     slots: &[Option<(&str, f64)>],
+    requested: u32,
 ) -> Vec<Vec<f64>> {
+    let capacity = View::capacity(requested);
     histories.retain(|id, _| slots.iter().flatten().any(|(key, _)| *key == id.as_str()));
     if slots.iter().all(Option::is_none) {
         return Vec::new();
@@ -51,11 +57,11 @@ fn curves(
             Some((id, value)) => {
                 let history = histories
                     .entry((*id).into())
-                    .or_insert_with(|| History::new(120));
+                    .or_insert_with(|| View::fresh_history(requested));
                 history.append(*value);
                 history.values()
             }
-            None => vec![f64::NAN; 120],
+            None => vec![f64::NAN; capacity as usize],
         })
         .collect()
 }
@@ -76,6 +82,36 @@ fn fan_detail(fan: &Fan, prefix: &str) -> String {
     detail
 }
 impl View {
+    fn capacity(requested: u32) -> u32 {
+        if requested == 0 { 120 } else { requested }
+    }
+    fn fresh_history(requested: u32) -> History {
+        let mut history = History::new(Self::capacity(requested));
+        if requested > 0 {
+            history.clear();
+        }
+        history
+    }
+    pub fn set_history_samples(&mut self, temperature: u32, fans: u32) -> Result<(), String> {
+        let maximum = crate::shared::sampling_settings()[3];
+        if temperature > maximum || fans > maximum {
+            return Err("Sensor history capacity is out of range".into());
+        }
+        if Self::capacity(temperature) != Self::capacity(self.temperature_samples) {
+            self.maximum.resize(Self::capacity(temperature));
+            for history in self.temperatures.values_mut() {
+                history.resize(Self::capacity(temperature));
+            }
+        }
+        if Self::capacity(fans) != Self::capacity(self.fan_samples) {
+            for history in self.fans.values_mut() {
+                history.resize(Self::capacity(fans));
+            }
+        }
+        self.temperature_samples = temperature;
+        self.fan_samples = fans;
+        Ok(())
+    }
     pub fn clear_temperatures(&mut self) {
         self.maximum.clear();
         for h in self.temperatures.values_mut() {
@@ -138,7 +174,7 @@ impl View {
                 .iter()
                 .map(|r| r.map(|s| (s.id.as_str(), s.celsius)))
                 .collect();
-            panel.series = curves(&mut self.temperatures, &slots);
+            panel.series = curves(&mut self.temperatures, &slots, self.temperature_samples);
             panel
                 .readout
                 .top
@@ -199,7 +235,7 @@ impl View {
                 let mut members: Vec<_> = report.values.iter().map(|s| s.id.clone()).collect();
                 members.sort();
                 if self.maximum_members.as_ref() != Some(&members) {
-                    self.maximum = History::new(120);
+                    self.maximum = Self::fresh_history(self.temperature_samples);
                     self.maximum_members = Some(members);
                 }
                 let maximum = report
@@ -317,7 +353,7 @@ impl View {
             .iter()
             .map(|r| r.map(|s| (s.id.as_str(), s.rpm as f64)))
             .collect();
-        panel.series = curves(&mut self.fans, &slots);
+        panel.series = curves(&mut self.fans, &slots, self.fan_samples);
         let mut labels = Vec::new();
         for (index, (source, reading)) in sources.iter().zip(readings).enumerate() {
             let Some(source) = source else {
@@ -400,6 +436,98 @@ impl View {
 
 #[cfg(test)]
 mod dashboard_tests {
+
+    fn thermal(
+        id: &str,
+        value: f64,
+    ) -> Result<crate::hardware::Readings<crate::hardware::Temperature>, String> {
+        Ok(crate::hardware::Readings {
+            values: vec![crate::hardware::Temperature {
+                id: id.into(),
+                source_id: "saved".into(),
+                thermal: false,
+                name: "Cold sensor".into(),
+                celsius: value,
+            }],
+            errors: vec![],
+        })
+    }
+    fn fan(id: &str, rpm: u64) -> Result<crate::hardware::Readings<crate::hardware::Fan>, String> {
+        Ok(crate::hardware::Readings {
+            values: vec![crate::hardware::Fan {
+                id: id.into(),
+                source_id: "fan".into(),
+                name: "Fan".into(),
+                rpm,
+                alarm: Some(false),
+                notes: vec![],
+            }],
+            errors: vec![],
+        })
+    }
+    #[test]
+    fn sensor_retention_preserves_newest_cold_observations_and_independent_stopped_fans() {
+        use crate::{sensors::View, settings::MetricSelection};
+        let mut view = View::default();
+        let selection = MetricSelection {
+            temperature: Some("saved".into()),
+            temperature_extra: [Some("missing".into()), None],
+            ..Default::default()
+        };
+        view.temperatures(thermal("physical", -10.), &selection);
+        view.fans(fan("physical-fan", 1000), &selection);
+        view.set_history_samples(300, 600).unwrap();
+        let temp = view.temperatures(thermal("physical", -5.), &selection).0;
+        assert_eq!(
+            temp.series.iter().map(Vec::len).collect::<Vec<_>>(),
+            [300, 300]
+        );
+        assert_eq!(&temp.series[0][298..], [-10., -5.]);
+        assert!(temp.series[0][..179].iter().all(|v| v.is_nan()));
+        // Automatic's pre-existing zero padding is retained; only added positions are missing.
+        assert!(temp.series[0][179..298].iter().all(|v| *v == 0.));
+        assert!(temp.series[1].iter().all(|v| v.is_nan()));
+        let fans = view.fans(fan("physical-fan", 0), &selection).0;
+        assert_eq!(fans.series[0].len(), 600);
+        assert_eq!(&fans.series[0][598..], [1000., 0.]);
+        assert!(view.set_history_samples(1, 20001).is_err());
+        assert_eq!(view.temperatures["physical"].values().len(), 300);
+        view.set_history_samples(1, 2).unwrap();
+        assert_eq!(view.temperatures["physical"].values(), [-5.]);
+        assert_eq!(view.fans["physical-fan"].values(), [1000., 0.]);
+        view.set_history_samples(0, 0).unwrap();
+        assert_eq!(view.temperatures["physical"].values().len(), 120);
+        assert_eq!(view.fans["physical-fan"].values().last(), Some(&0.));
+    }
+    #[test]
+    fn sensor_retention_survives_failures_reincarnation_and_maximum_membership_reset() {
+        use crate::{sensors::View, settings::MetricSelection};
+        let mut view = View::default();
+        let selection = MetricSelection::default();
+        view.set_history_samples(257, 301).unwrap();
+        view.temperatures(thermal("old", 20.), &selection);
+        view.temperatures(thermal("old", 30.), &selection);
+        let fresh = view.temperatures(thermal("new", 40.), &selection).0;
+        assert_eq!(fresh.series[0].len(), 257);
+        assert!(fresh.series[0][..256].iter().all(|v| v.is_nan()));
+        assert_eq!(fresh.series[0][256], 40.);
+        view.temperatures(Err("offline".into()), &selection);
+        let recovered = view.temperatures(thermal("new", -2.), &selection).0;
+        assert_eq!(recovered.series[0].len(), 257);
+        assert!(recovered.series[0][..256].iter().all(|v| v.is_nan()));
+        view.fans(fan("old", 1000), &selection);
+        view.fans(Err("offline".into()), &selection);
+        let recovered = view.fans(fan("new", 0), &selection).0;
+        assert_eq!(recovered.series[0].len(), 301);
+        assert!(recovered.series[0][..300].iter().all(|v| v.is_nan()));
+        assert_eq!(recovered.series[0][300], 0.);
+        view.clear_fans();
+        view.clear_temperatures();
+        assert!(view.maximum.values().iter().all(|v| v.is_nan()));
+        assert!(view.fans["new"].values().iter().all(|v| v.is_nan()));
+        assert_eq!(view.temperature_samples, 257);
+        assert_eq!(view.fan_samples, 301);
+    }
 
     #[test]
     fn temperature_face_identifies_maximum_and_keeps_selected_curve_gaps_and_units() {

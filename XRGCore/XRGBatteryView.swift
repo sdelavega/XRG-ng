@@ -109,8 +109,10 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     }
     public func setWidth(_ width: Int) {
         guard width >= 0 else { return }
-        let count = min(20_000, width)
-        if batteryMiner.numSamples != count { batteryMiner.setDataSize(count) }
+        let count = retainedSamples > 0 ? retainedSamples : min(20_000, width)
+        if batteryMiner.numSamples != count {
+            if retainedSamples > 0 { batteryMiner.resizeHistory(count) } else { batteryMiner.setDataSize(count) }
+        }
     }
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -257,9 +259,17 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         let menu = NSMenu(title: "Battery View")
         let item = NSMenuItem(title: "Open Battery Settings...", action: #selector(openEnergySaverSystemPreferences(_:)), keyEquivalent: "")
         item.target = self; menu.addItem(item)
+        menu.addItem(XRGHistoryRetention.menu("Battery History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let historyKey = "XRGBatteryView.HistorySamples.v1"
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @objc func selectHistory(_ sender: Any?) {
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        setGraphSize(bounds.size); updateLabels(); needsDisplay = true
+    }
+    public func emptyEvent(_ sender: Any?) {}
     public func openEnergySaverSystemPreferences(_ sender: Any?) { _ = openURL(Self.batterySettingsURL) }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override func mouseDown(with event: NSEvent) { window?.mouseDown(with: event) }

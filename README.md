@@ -392,8 +392,8 @@ per logical CPU. Graph width and historical padding no longer affect these readi
 normal/fast baselines, fast-bar smoothing and availability; it does not read hardware.
 Load, uptime and process listings remain system-wide when a core is pinned.
 
-Set CPU, Memory, Network, Disk, GPU, NPU and VRAM retention through each Mac graph's **History**
-submenu or **Preferences → Sources → Retained … samples** on Linux. Explicit capacities
+Set CPU, Memory, Network, Disk, GPU, NPU, VRAM, Temperature, Fans and Battery
+retention through each Mac graph's **History** submenu or **Preferences → Sources → Retained … samples** on Linux. Explicit capacities
 retain the newest samples and survive graph resizing without restarting rate or
 paging measurements or session transfer totals. Automatic keeps the original defaults: graph width on Mac, 120 samples
 on Linux. Linux accepts 1–20,000 samples; Mac offers presets and retains valid
@@ -404,6 +404,14 @@ platform-specific. Source and failure resets keep their existing policies.
 GPU activity, NPU quantities and VRAM use independent capacities. Device
 replacement, activity-source and unit changes keep their existing history
 boundaries; capacity changes never turn unavailable counters into activity.
+Temperature and fan capacities are independent, including their sensor selection and
+session statistics. The standalone Mac Fans graph has its own capacity; fan curves
+inside Temperature share Temperature’s capacity. Battery retains charge and signed
+power separately on Linux;
+Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
+valid cold temperatures and stopped fans remain readings, and retention changes do
+not increase sensor polling cadence. Linux settings migrate to schema 29 in memory
+and are written only on an explicit save.
 Both builds support sampling targets from 200 ms to 10 seconds. Mac edits retain
 millisecond precision; existing valid Mac preferences outside that range remain
 intact when opened/saved. AI collection keeps its separate five-second cadence.

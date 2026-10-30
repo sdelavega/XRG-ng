@@ -358,6 +358,9 @@ impl MetricSelection {
                     | Module::Gpu
                     | Module::Tpu
                     | Module::GpuMemory
+                    | Module::Temperature
+                    | Module::Fans
+                    | Module::Battery
             ) || *count > shared::sampling_settings()[3]
         }) {
             return Err("History capacity must be 0..20000 for a supported system graph".into());
@@ -508,7 +511,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 28,
+            version: 29,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -578,7 +581,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 28 {
+        if self.version != 29 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -761,6 +764,9 @@ impl Settings {
         }
         if result.version == 27 {
             result.version = 28;
+        }
+        if result.version == 28 {
+            result.version = 29;
         }
         result.validate()?;
         Ok(result)

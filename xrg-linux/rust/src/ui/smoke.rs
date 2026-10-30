@@ -301,6 +301,11 @@ impl Harness {
                     next.metrics.history_samples.insert(Module::Gpu, 720);
                     next.metrics.history_samples.insert(Module::Tpu, 840);
                     next.metrics.history_samples.insert(Module::GpuMemory, 960);
+                    next.metrics
+                        .history_samples
+                        .insert(Module::Temperature, 1080);
+                    next.metrics.history_samples.insert(Module::Fans, 1200);
+                    next.metrics.history_samples.insert(Module::Battery, 1320);
                     next.network_min_scale = 65_536;
                     next.graph_width = 180;
                     next.layout = Layout::Horizontal;
@@ -349,6 +354,9 @@ impl Harness {
                         (Module::Gpu, "GPU", 720),
                         (Module::Tpu, "TPU / NPU", 840),
                         (Module::GpuMemory, "VRAM", 960),
+                        (Module::Temperature, "Temperature", 1080),
+                        (Module::Fans, "Fans", 1200),
+                        (Module::Battery, "Battery", 1320),
                     ] {
                         if snapshot.selection.retained_samples(module) != count
                             || !snapshot
@@ -367,6 +375,9 @@ impl Harness {
                     );
                     println!(
                         "GRAPHICS_HISTORY_SMOKE_OK GPU=720 NPU=840 VRAM=960, capacities applied; unavailable inputs remain unavailable"
+                    );
+                    println!(
+                        "SENSOR_HISTORY_SMOKE_OK Temperature=1080 Fans=1200 Battery=1320, capacities applied; unavailable inputs remain unavailable"
                     );
                     let (_, saved, error) = Store::open(Some(self.path()));
                     if error.is_some() || saved != app.settings {

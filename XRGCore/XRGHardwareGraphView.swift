@@ -213,18 +213,18 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         let menu = NSMenu(title: kind.name)
         let sources = NSMenuItem(title: "Choose Sources…", action: #selector(chooseSources(_:)), keyEquivalent: "")
         sources.target = self; menu.addItem(sources); menu.addItem(.separator())
-        if kind == .vram {
-            menu.addItem(XRGHistoryRetention.menu("VRAM History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
-        }
+        menu.addItem(XRGHistoryRetention.menu(kind == .vram ? "VRAM History" : "Fans History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
         for (title, action) in [("Read-only details…", #selector(showDetails(_:))), ("Reset Graph", #selector(clearData(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
     }
     static let historyKey = "XRGHardwareGraphView.VRAM.HistorySamples.v1"
-    var retainedSamples: Int { kind == .vram ? XRGHistoryRetention.saved(defaults, key: Self.historyKey) : 0 }
+    static let fanHistoryKey = "XRGHardwareGraphView.Fans.HistorySamples.v1"
+    private var retentionKey: String { kind == .vram ? Self.historyKey : Self.fanHistoryKey }
+    var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: retentionKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard kind == .vram, XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        guard XRGHistoryRetention.store(sender, defaults: defaults, key: retentionKey) else { return }
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     @objc func emptyEvent(_ sender: Any?) {}

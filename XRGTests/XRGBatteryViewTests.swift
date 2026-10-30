@@ -56,6 +56,44 @@ private final class BatteryNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGBatteryViewTests {
+    @Test func retentionKeepsSignedPowerStatusAndPollingIndependentOfGraphSize() throws {
+        try withFixture { settings, defaults in
+            let source = BatterySource([battery()]), view = panel(source, settings, defaults)
+            let reads = source.reads, label = view.graphLabels.rightLabel.accessibilityValue()
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(source.reads == reads && view.currentWatts == -12 && view.batteryMiner.chargePercent() == 50)
+            #expect(view.batteryMiner.dischargeWatts.numValues == 300)
+            #expect(view.batteryMiner.dischargeWatts.orderedValues.prefix(100).allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(view.graphLabels.rightLabel.accessibilityValue() == label)
+            view.setFrameSize(NSSize(width: 60, height: 90))
+            #expect(view.batteryMiner.numSamples == 300 && source.reads == reads)
+            let restored = panel(source, settings, defaults)
+            #expect(restored.retainedSamples == 300 && restored.currentWatts == -12)
+            option.tag = 20001; restored.selectHistory(option); #expect(restored.retainedSamples == 300)
+            option.tag = 1; restored.selectHistory(option)
+            #expect(restored.batteryMiner.dischargeWatts.orderedValues == [12])
+            source.samples = [battery(amperage: 500, plugged: true, charging: true)]
+            restored.batteryMiner.graphUpdate(nil)
+            #expect(restored.currentWatts == 6 && restored.batteryMiner.chargeWatts.orderedValues == [6])
+            option.tag = 0; restored.selectHistory(option)
+            #expect(restored.batteryMiner.numSamples == 200 && restored.currentWatts == 6)
+            let history = try #require(restored.makeMenu().items.first { $0.title == "Battery History" }?.submenu)
+            #expect(history.items.allSatisfy { $0.target === restored })
+        }
+    }
+    @Test func savedBatteryCapacityStartsWithMissingPaddingAndKeepsTheSnapshotOnFailure() throws {
+        try withFixture { settings, defaults in
+            defaults.set(257, forKey: XRGBatteryView.historyKey)
+            let source = BatterySource([battery(amperage: 0)]), view = panel(source, settings, defaults)
+            #expect(view.batteryMiner.numSamples == 257 && view.currentWatts == 0)
+            #expect(view.batteryMiner.dischargeWatts.orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            source.samples = nil
+            view.batteryMiner.graphUpdate(nil)
+            let reads = source.reads, option = NSMenuItem(); option.tag = 600; view.selectHistory(option)
+            #expect(source.reads == reads && view.batteryMiner.chargePercent() == 50 && view.currentWatts == 0)
+            #expect(view.batteryMiner.numSamples == 600)
+        }
+    }
     private func battery(current: Int = 2000, maximum: Int = 4000, amperage: Int = -1000,
                          minutes: Int = 95, plugged: Bool = false, charging: Bool = false, charged: Bool = false,
                          raw: Bool = true) -> XRGBatteryInfo {

@@ -109,6 +109,12 @@ public final class XRGBatteryMiner: NSObject {
         chargeWatts.setNextValue(charging)
         dischargeWatts.setNextValue(discharging)
     }
+    @nonobjc func resizeHistory(_ count: Int) {
+        guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
+        chargeWatts.resize(count, fillingWith: XRGGraphRenderer.missingValue)
+        dischargeWatts.resize(count, fillingWith: XRGGraphRenderer.missingValue)
+        numSamples = count
+    }
 
     @objc public func reset() { chargeWatts.reset(); dischargeWatts.reset() }
     @objc public func batteryStatus() -> XRGBatteryStatus {

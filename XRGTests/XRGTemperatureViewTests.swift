@@ -73,6 +73,53 @@ private final class TemperaturePanelNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGTemperatureViewTests {
+    @Test func retentionKeepsCachedReadingsThrottleSelectionsAndStatistics() throws {
+        try withFixture { settings, defaults, reader in
+            let miner = reader.miner(), stats = XRGStatsManager()
+            let view = panel(miner, settings, defaults, stats: stats)
+            view.graphUpdate(nil)
+            let sensor = try #require(miner.sensor(forLocation: "cpu"))
+            let reads = reader.requests.count, fanReads = reader.fanRequests
+            stats.observeStat(55, forKey: "retained", inModule: .nameTemperature)
+            reader.time = 2
+            let option = NSMenuItem(); option.tag = 300; view.selectHistory(option)
+            #expect(sensor.dataSet.numValues == 300 && sensor.dataSet.currentValue == 50)
+            #expect(sensor.dataSet.orderedValues.prefix(60).allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(reader.requests.count == reads && reader.fanRequests == fanReads)
+            #expect(settings.tempFG1Location == "cpu" && stats.stat(forKey: "retained", inModule: .nameTemperature)?.last == 55)
+            view.setFrameSize(NSSize(width: 60, height: 90))
+            #expect(sensor.dataSet.numValues == 300)
+            let restored = panel(miner, settings, defaults)
+            #expect(restored.retainedSamples == 300 && sensor.dataSet.numValues == 300)
+            option.tag = 20001; restored.selectHistory(option)
+            #expect(restored.retainedSamples == 300)
+            option.tag = 1; restored.selectHistory(option)
+            #expect(sensor.dataSet.orderedValues == [50])
+            reader.time = 3; reader.smc["cpu"] = 60; restored.graphUpdate(nil)
+            #expect(reader.requests.count == reads && sensor.currentValue == 50)
+            reader.time = 5; restored.graphUpdate(nil)
+            #expect(reader.requests.count == reads + 1 && sensor.dataSet.orderedValues == [60])
+            option.tag = 0; restored.selectHistory(option)
+            #expect(sensor.dataSet.numValues == 240 && sensor.currentValue == 60)
+            let history = try #require(restored.makeMenu().items.first { $0.title == "Temperature History" }?.submenu)
+            #expect(history.items.allSatisfy { $0.target === restored })
+        }
+    }
+    @Test func explicitTemperaturePaddingDoesNotDistortColdReadingsOrBounds() throws {
+        try withFixture { settings, defaults, reader in
+            defaults.set(300, forKey: XRGTemperatureView.historyKey)
+            settings.tempFG2Location = "absent"; settings.tempFG3Location = "absent"
+            let miner = reader.miner(), view = panel(miner, settings, defaults)
+            view.graphUpdate(nil)
+            let sensor = try #require(miner.sensor(forLocation: "cpu"))
+            #expect(sensor.dataSet.orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            sensor.dataSet.setNextValue(-10); sensor.currentValue = -10
+            let row = try #require(view.rows().first)
+            #expect(row.lower == -16 && row.upper == 56 && row.value == "-10.0°C")
+            settings.tempUnits = .f
+            #expect(view.rows().first?.value == "14.0°F" && sensor.dataSet.currentValue == -10)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, PanelTemperatureReader) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.temperatureView.\(UUID().uuidString)"
@@ -371,7 +418,7 @@ struct XRGTemperatureViewTests {
             let menu = view.makeMenu()
             #expect(reader.requests == requests && reader.fanRequests == fans)
             #expect(menu.items.contains { $0.title == "CPU Core: 50.0°C" })
-            #expect(menu.items.count == 10)
+            #expect(menu.items.count == 11)
             for item in menu.items where !item.isSeparatorItem { #expect(item.target === view) }
             stats.observeStat(5, forKey: "reset", inModule: .nameTemperature)
             for title in ["Reset Graph", "Open XRG-ng Temperature Preferences...", "Open Temperature Sensors Window..."] {

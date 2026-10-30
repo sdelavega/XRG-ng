@@ -692,6 +692,9 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
         (settings::Module::Gpu, "GPU"),
         (settings::Module::Tpu, "NPU"),
         (settings::Module::GpuMemory, "VRAM"),
+        (settings::Module::Temperature, "Temperature"),
+        (settings::Module::Fans, "Fans"),
+        (settings::Module::Battery, "Battery"),
     ] {
         let mut count = s.metrics.retained_samples(module);
         ui.horizontal(|ui| {
@@ -708,7 +711,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
             s.metrics.history_samples.insert(module, count);
         }
     }
-    ui.small("System histories: 0 keeps 120 samples. Capacity changes preserve newest observations and collector baselines; source/failure resets keep their existing behavior. Mac Memory history covers paging activity; Linux plots RAM/cache/swap percentages. GPU, NPU and VRAM retain separate units and availability rules.");
+    ui.small("System histories: 0 keeps 120 samples. Capacity changes preserve newest observations and collector baselines; source/failure resets keep their existing behavior. Sensor statistics stay independent. Battery charge and signed power retain separate axes. Collector cadence and delays affect the actual time span.");
     for (label, value, options) in [
         ("Network", &mut s.metrics.network, &inventory.networks),
         ("Disk", &mut s.metrics.disk, &inventory.disks),
