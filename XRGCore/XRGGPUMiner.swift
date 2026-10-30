@@ -89,12 +89,14 @@ public final class XRGGPUMiner: NSObject {
         let identity: String
         let vendor: String
         init(_ sample: XRGGPUSample) { identity = sample.selectionID; vendor = sample.vendor }
+        let timed = XRGTimedHistory(channels: 4, retentionMinutes: XRGTimedHistory.systemMaximumMinutes)!
         let total = XRGDataSet()
         let free = XRGDataSet()
         let wait = XRGDataSet()
         let utilization = XRGDataSet()
         var all: [XRGDataSet] { [total, free, wait, utilization] }
     }
+    private let historyClock: () -> TimeInterval
     private let source: () -> [XRGGPUSample]?
     private var histories: [UInt64: History] = [:]
     private var missingPadding = false
@@ -114,7 +116,8 @@ public final class XRGGPUMiner: NSObject {
     @objc public private(set) var utilizationAvailable: [NSNumber] = []
 
     public override convenience init() { self.init(source: Self.readSnapshot) }
-    init(source: @escaping () -> [XRGGPUSample]?) {
+    init(source: @escaping () -> [XRGGPUSample]?, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
+        self.historyClock = historyClock
         self.source = source
         super.init()
         getLatestGraphicsInfo()
@@ -137,15 +140,20 @@ public final class XRGGPUMiner: NSObject {
     }
 
     @objc public func getLatestGraphicsInfo() {
+        let observedAt: TimeInterval
+
         guard let samples = source(), Set(samples.map(\.id)).count == samples.count,
               Set(samples.map(\.selectionID)).count == samples.count else {
             countersAvailable = false
             memorySnapshot = .failure(NSError(domain: "XRGGPU", code: 1, userInfo: [NSLocalizedDescriptionKey: "GPU readings unavailable or identities ambiguous"]))
+            observedAt = historyClock()
             for history in histories.values {
+                history.timed.append(time: observedAt, values: [.nan, .nan, .nan, .nan])
                 for values in history.all { values.setNextValue(XRGGraphRenderer.missingValue) }
             }
             return
         }
+        observedAt = historyClock()
         countersAvailable = true
         currentSamples = samples.sorted { $0.id < $1.id }
         sourceIDs = currentSamples.map(\.selectionID)
@@ -166,6 +174,7 @@ public final class XRGGPUMiner: NSObject {
             history.free.setNextValue(sample.free.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
             history.wait.setNextValue(sample.wait ?? -1)
             history.utilization.setNextValue(sample.utilization.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
+            history.timed.append(time: observedAt, values: [sample.total ?? .nan, sample.free ?? .nan, sample.wait ?? .nan, sample.utilization ?? .nan])
             next[sample.id] = history
             ordered.append(history)
             vendors.append(sample.vendor)
@@ -182,8 +191,13 @@ public final class XRGGPUMiner: NSObject {
         utilizationAvailable = utilization
     }
 
+    func timedHistory(sourceID: String) -> XRGTimedHistory? {
+        histories.values.first { $0.identity == sourceID }?.timed
+    }
+
     func resetHistory(sourceID: String?) {
         for history in histories.values where sourceID == nil || history.identity == sourceID {
+            history.timed.clear()
             for values in history.all { values.setAllValues(XRGGraphRenderer.missingValue) }
         }
     }

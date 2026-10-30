@@ -191,6 +191,7 @@ pub struct Snapshot {
     pub weather: Option<crate::weather::Update>,
 }
 struct GpuHistory {
+    timed: crate::shared::TimedHistory,
     observed: usize,
     source: crate::gpu::ActivitySource,
     driver: String,
@@ -200,6 +201,10 @@ impl GpuHistory {
     fn new(source: crate::gpu::ActivitySource, driver: &str, capacity: u32) -> Self {
         let history = History::new(capacity);
         Self {
+            timed: crate::shared::TimedHistory::new_limited(
+                1,
+                crate::shared::timed_projection_settings()[0],
+            ),
             observed: 0,
             source,
             driver: driver.into(),
@@ -311,6 +316,7 @@ impl Sampler {
             Module::GpuMemory => self.gpu_memory.clear_graph(),
             Module::Gpu => {
                 for h in self.gpu_histories.values_mut() {
+                    h.timed.clear();
                     h.history.clear();
                     h.observed = 0;
                 }
@@ -893,6 +899,13 @@ impl Sampler {
     }
 
     fn gpu_curve(&mut self, gpu: &crate::gpu::Gpu) -> Option<Vec<f64>> {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.gpu_curve_at(gpu, observed)
+    }
+    fn gpu_curve_at(&mut self, gpu: &crate::gpu::Gpu, observed: f64) -> Option<Vec<f64>> {
         let Some((source, value)) = gpu.activity() else {
             self.gpu_histories.remove(&gpu.id);
             return None;
@@ -905,6 +918,7 @@ impl Sampler {
         if state.source != source || state.driver != gpu.driver {
             *state = GpuHistory::new(source, &gpu.driver, capacity);
         }
+        state.timed.append(observed, &[value]);
         state.history.append(value);
         let mut values = state.history.values();
         state.observed = (state.observed + 1).min(values.len());
@@ -1254,6 +1268,49 @@ mod gpu_activity_tests {
         selection.history_samples.remove(&Module::Gpu);
         sampler.set_selection(selection).unwrap();
         assert_eq!(sampler.gpu_curve(&gpu).unwrap().len(), 120);
+    }
+    #[test]
+    fn gpu_timestamp_recording_is_separate_from_capacity_and_respects_existing_boundaries() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let mut gpu = Gpu {
+            id: "adapter".into(),
+            driver: "fixture".into(),
+            utilization: Some(50.),
+            ..Default::default()
+        };
+        sampler.gpu_curve_at(&gpu, 100.);
+        gpu.utilization = Some(0.);
+        sampler.gpu_curve_at(&gpu, 110.);
+        let raw = sampler.gpu_histories[&gpu.id].timed.values_at(1, 1.);
+        assert_eq!(raw[0][50], 50.);
+        assert_eq!(raw[0][60], 0.);
+        assert!(raw[0][51..60].iter().all(|v| v.is_nan()));
+        let mut selection = MetricSelection::default();
+        selection.history_samples.insert(Module::Gpu, 1);
+        sampler.set_selection(selection).unwrap();
+        assert_eq!(
+            sampler.gpu_histories[&gpu.id].timed.values_at(1, 1.)[0][50],
+            50.
+        );
+        gpu.driver = "replacement".into();
+        sampler.gpu_curve_at(&gpu, 111.);
+        assert!(
+            sampler.gpu_histories[&gpu.id].timed.values_at(1, 1.)[0][..60]
+                .iter()
+                .all(|v| v.is_nan())
+        );
+        sampler.clear_graph(Module::Gpu);
+        assert!(
+            sampler.gpu_histories[&gpu.id].timed.values_at(1, 1.)[0]
+                .iter()
+                .all(|v| v.is_nan())
+        );
+        gpu.utilization = None;
+        assert!(sampler.gpu_curve_at(&gpu, 112.).is_none());
+        assert!(!sampler.gpu_histories.contains_key(&gpu.id));
     }
     #[test]
     fn device_engine_client_and_driver_changes_do_not_mix_history_scopes() {

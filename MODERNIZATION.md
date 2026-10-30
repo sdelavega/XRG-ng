@@ -1679,3 +1679,23 @@ actually left the sample buffer while remaining in time history. Evidence is in
 `dist/memory-time-window-validation`. Physical Intel/Linux x86-64, macOS 26 runtime
 and real suspend/resume remain unverified. GPU/NPU/VRAM and sensor timestamp
 windows remain separate work. No app version, release, signing or notice change.
+
+### GPU timestamp recording groundwork
+
+GPU collectors now record actual completion timestamps independently of sample
+buffers. Mac retains total/free VRAM bytes, CPU-wait values and utilization in a
+four-channel shared Swift history per registry instance/selection identity/vendor.
+Failed polls add missing observations; successful removal/replacement follows the
+existing device-history boundaries. Linux records its selected activity quantity
+per device/source/driver, retaining its existing unavailable-source reset policy.
+Both use the one-hour / 20,000-observation shared bound. Sample-capacity edits do
+not resize timestamp data; graph resets clear both histories and preserve current
+readouts. This is collector groundwork: graph rendering and controls still use
+sample counts. GPU window controls/projection, NPU and standalone VRAM windows
+remain follow-up work; no settings schema, app version or release change.
+
+Validation: universal Debug build, 588 cases each on ARM64 and Rosetta x86_64,
+isolated AppKit and packaged launches; Linux ARM64 37 shared Swift tests, C ABI
+smoke, strict Clippy, 577 Rust tests and all 16 normal/scaled X11/nested Wayland
+collapse/restore cases. Evidence: `dist/gpu-timestamp-recording-validation`.
+Physical Intel/Linux x86-64 and unowned GPU hardware remain unverified.

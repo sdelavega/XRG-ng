@@ -11,6 +11,29 @@ struct XRGGPUMinerTests {
         return XRGGPUSample.parse(id: id, pci: [:], accelerator: accelerator)
     }
 
+    @Test func timestampsKeepGapsAndDeviceIdentitySeparateFromSampleCapacity() throws {
+        var wall = 100.0
+        var samples: [XRGGPUSample]? = [XRGGPUSample(id: 1, vendor: "Apple", total: 100, free: 75, wait: nil, utilization: 50)]
+        let miner = XRGGPUMiner(source: { samples }, historyClock: { wall })
+        wall = 110; samples = [XRGGPUSample(id: 1, vendor: "Apple", total: 100, free: 100, wait: nil, utilization: 0)]
+        miner.getLatestGraphicsInfo()
+        let history = try #require(miner.timedHistory(sourceID: "ioreg-id:1"))
+        let values = try #require(history.values(minutes: 1, interval: 1))
+        #expect(values[3][50] == 50 && values[3][60] == 0)
+        #expect(values[3][51..<60].allSatisfy { $0.isNaN } && values[2].allSatisfy { $0.isNaN })
+        miner.setDataSize(1)
+        #expect(history.values(minutes: 1, interval: 1)?[3][50] == 50)
+        wall = 111; samples = nil; miner.getLatestGraphicsInfo()
+        #expect(history.values(minutes: 1, interval: 1)?[3].last?.isNaN == true)
+        wall = 112; samples = [XRGGPUSample(id: 1, vendor: "AMD", total: 200, free: 150, wait: 10, utilization: 25)]
+        miner.getLatestGraphicsInfo()
+        let replacement = try #require(miner.timedHistory(sourceID: "ioreg-id:1"))
+        #expect(replacement !== history)
+        #expect(replacement.values(minutes: 1, interval: 1)?[3].dropLast().allSatisfy { $0.isNaN } == true)
+        miner.resetHistory(sourceID: "ioreg-id:1")
+        #expect(replacement.observationCount == 0 && miner.currentSamples.first?.utilization == 25)
+    }
+
     @Test func discreteMemoryAndVendor() {
         let sample = card(["vramUsedBytes": 1048576, "hardwareWaitTime": 50],
                           extra: ["VRAM,totalMB": 8, "vendor-id": Data([2, 16, 0, 0])])
