@@ -22,6 +22,7 @@
  */
 
 import AppKit
+import Darwin
 
 @MainActor @objc public protocol XRGBatteryViewHost: NSObjectProtocol {
     var appSettings: XRGSettings? { get }
@@ -40,7 +41,15 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     private weak var host: (any XRGBatteryViewHost)?
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
-    private var statsElapsed: CGFloat = 0
+    @nonobjc private let samplingClock: () -> TimeInterval
+    private var lastBatteryPoll: TimeInterval?
+    @nonobjc private static let timebase: Double = {
+        var info = mach_timebase_info_data_t(); mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom) / 1_000_000_000
+    }()
+    @nonobjc private static func continuousSeconds() -> TimeInterval {
+        Double(mach_continuous_time()) * timebase
+    }
     public private(set) weak var module: XRGModule?
     @nonobjc let graphLabels = XRGGraphLabels()
     @nonobjc private(set) var chargingPhase = 0
@@ -50,6 +59,7 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     public override init(frame frameRect: NSRect) {
         batteryMiner = XRGBatteryMiner()
         defaults = .standard; standaloneSettings = nil
+        samplingClock = Self.continuousSeconds
         openURL = { NSWorkspace.shared.open($0) }
         super.init(frame: frameRect)
         prepare()
@@ -57,14 +67,17 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     public required init?(coder: NSCoder) {
         batteryMiner = XRGBatteryMiner()
         defaults = .standard; standaloneSettings = nil
+        samplingClock = Self.continuousSeconds
         openURL = { NSWorkspace.shared.open($0) }
         super.init(coder: coder)
         prepare()
     }
     @nonobjc init(frame: NSRect, miner: XRGBatteryMiner, settings: XRGSettings?, defaults: UserDefaults,
+                  samplingClock: (() -> TimeInterval)? = nil,
                   openURL: @escaping (URL) -> Bool = { _ in true }) {
         batteryMiner = miner; self.defaults = defaults
         standaloneSettings = settings; self.openURL = openURL
+        self.samplingClock = samplingClock ?? Self.continuousSeconds
         super.init(frame: frame)
         prepare()
     }
@@ -72,6 +85,8 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         for label in [graphLabels.leftLabel, graphLabels.centerLabel, graphLabels.rightLabel] { addSubview(label) }
         setGraphSize(bounds.size)
         batteryMiner.graphUpdate(nil)
+        let completed = samplingClock()
+        lastBatteryPoll = completed.isFinite && completed >= 0 ? completed : nil
         updateLabels()
     }
     public nonisolated override func awakeFromNib() {
@@ -130,13 +145,19 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     public func graphUpdate(_ timer: Timer?) {
         chargingPhase = (chargingPhase + 1) % 4
         let refresh = settings?.graphRefresh ?? 1
-        // Keep the existing ten-second sampling cadence independently of animation ticks.
-        if refresh.isFinite && refresh > 0 { statsElapsed += refresh }
-        if statsElapsed > 10 {
-            statsElapsed = 0
-            let previous = batteryMiner.batteryStatus()
-            batteryMiner.graphUpdate(timer)
-            if previous != batteryMiner.batteryStatus() { chargingPhase = 0 }
+        // Keep the strict ten-second threshold, measuring real elapsed time
+        // including sleep. Repaints and refresh edits cannot manufacture time.
+        let now = samplingClock()
+        if refresh.isFinite && refresh > 0, now.isFinite, now >= 0 {
+            if let lastBatteryPoll, now < lastBatteryPoll {
+                self.lastBatteryPoll = now
+            } else if lastBatteryPoll.map({ now - $0 > 10 }) ?? true {
+                let previous = batteryMiner.batteryStatus()
+                batteryMiner.graphUpdate(timer)
+                let completed = samplingClock()
+                lastBatteryPoll = completed.isFinite && completed >= now ? completed : now
+                if previous != batteryMiner.batteryStatus() { chargingPhase = 0 }
+            }
         }
         updateLabels(); needsDisplay = true
     }

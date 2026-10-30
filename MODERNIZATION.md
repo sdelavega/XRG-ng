@@ -1889,3 +1889,34 @@ then reran the full gate. Inspected native five-minute power/gap/menu and Linux
 Sources captures. Evidence: `dist/battery-time-window-validation`. Physical
 Intel/Linux x86-64, macOS 26 runtime, real suspend/resume and unowned battery
 hardware remain unverified.
+
+
+### Battery cadence measures continuous elapsed time
+
+A cross-platform sampling/lifecycle audit found Mac Battery polling was driven by
+callback count times configured refresh duration, while Linux scheduling uses real
+elapsed time. Mac now gates battery reads on >10 continuous-clock seconds after
+the last poll completed. The clock includes sleep; the next delivered callback
+after a long gap can refresh once. Repeated callbacks, refresh edits and slow reads
+do not create catch-up bursts. Invalid graph intervals/clocks suppress polling;
+backward clocks rebase without a fresh read. Animation, current/history scaling,
+charge/status, source/reset policies and completion wall timestamps stay separate.
+
+Native rendering fixtures inject ideal callback clocks; an independent regression
+holds time fixed across hundreds of callbacks and refresh edits, tests the exact
+threshold, long gaps, invalid/backward clocks and slow-read completion cooldown.
+`SAMPLING_PARITY.md` records source-grounded differences in run-loop event tracking,
+hidden graph eligibility, interval-edit phases, AI lifecycle and wake handling.
+There is no global system Pause/Resume gate in the inspected schedulers; this pass
+does not add one. Next work starts with collection during menu/drag tracking and
+then defines hidden/pause policies and per-source wake/rebaseline behavior.
+Linux/Shared sources, settings schema and app versions are unchanged.
+
+Validation: full `Tools/ci-macos.sh Debug` passed 595 cases with zero failures on
+ARM64 and 595 under Rosetta x86-64, plus universal build, metadata/notices, isolated
+AppKit restore and packaged original-nib/entry-point checks. Evidence and tested
+source hashes: `dist/battery-elapsed-cadence-validation`. Linux was source-reviewed
+only in this pass; no Linux/Shared code changed. Clock jumps were simulated; real
+suspend/resume remains unverified. Exact task build scratch and empty private test
+preferences were inventoried after validation and removed; archived logs exclude
+DerivedData.

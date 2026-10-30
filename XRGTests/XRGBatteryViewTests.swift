@@ -96,18 +96,18 @@ struct XRGBatteryViewTests {
     }
     @Test func batteryWindowsKeepPowerPeaksCurrentBarsAndPollingCadenceIndependent() throws {
         try withFixture { settings, defaults in
-            settings.graphRefresh=5;var wall=100.0
+            settings.graphRefresh=5;var wall=100.0,elapsed=0.0
             let source=BatterySource([battery(amperage:-10000)])
             let miner=XRGBatteryMiner(source:{source.reads+=1;return source.samples},historyClock:{wall})
-            let view=XRGBatteryView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,settings:settings,defaults:defaults)
+            let view=XRGBatteryView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,settings:settings,defaults:defaults,samplingClock:{elapsed})
             wall=110;source.samples=[battery()];miner.graphUpdate(nil)
             let before=source.reads,option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
             #expect(view.historyData()[1].numValues==13 && view.historyData()[1].orderedValues[10]==120 && view.historyData()[1].currentValue==12)
             #expect(view.historyData()[1].orderedValues[11]==XRGGraphRenderer.missingValue)
             view.setFrameSize(NSSize(width:1,height:100));#expect(view.historyWattScale==120 && view.wattScale==30 && view.currentWatts == -12 && source.reads==before)
             let count=miner.timedHistory.observationCount
-            wall=115;view.graphUpdate(nil);wall=120;view.graphUpdate(nil);#expect(source.reads==before && miner.timedHistory.observationCount==count)
-            wall=125;source.samples=[battery(amperage:2000,plugged:true,charging:true)];view.graphUpdate(nil)
+            wall=115;elapsed=5;view.graphUpdate(nil);wall=120;elapsed=10;view.graphUpdate(nil);#expect(source.reads==before && miner.timedHistory.observationCount==count)
+            wall=125;elapsed=15;source.samples=[battery(amperage:2000,plugged:true,charging:true)];view.graphUpdate(nil)
             #expect(source.reads==before+1 && miner.timedHistory.observationCount==count+1 && view.currentWatts==24)
             settings.graphRefresh=0.2;#expect(view.historyData()[0].numValues==301 && view.historyWattScale==120)
             let menu=try #require(view.makeMenu().items.first { $0.title=="Battery Time Window" }?.submenu);#expect(menu.items.allSatisfy { $0.target===view })
@@ -118,6 +118,32 @@ struct XRGBatteryViewTests {
             wall=129;source.samples=[battery(),battery()];miner.graphUpdate(nil);#expect(view.historyData()[1].currentValue==24 && view.historyData()[1].orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
             miner.reset();#expect(view.historyData()[1].orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue } && view.currentWatts == 0 && miner.chargePercent()==50 && miner.batteries.count==2)
             option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && miner.numSamples==300)
+        }
+    }
+    @Test func elapsedPollingIgnoresRedrawCountAndRefreshEditsAndBacksOffAfterSlowReads() throws {
+        try withFixture { settings, defaults in
+            var now=0.0, wall=100.0, reads=0, delay=false
+            let sample=battery()
+            let miner=XRGBatteryMiner(source:{reads+=1;if delay {now+=30};return [sample]},historyClock:{wall})
+            let view=XRGBatteryView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,settings:settings,defaults:defaults,samplingClock:{now})
+            #expect(reads==1 && miner.timedHistory.observationCount==1)
+            for _ in 0..<100 {view.graphUpdate(nil)}
+            settings.graphRefresh=10;for _ in 0..<100 {view.graphUpdate(nil)}
+            #expect(reads==1 && miner.timedHistory.observationCount==1)
+            now=10;view.graphUpdate(nil);#expect(reads==1)
+            now=10.001;wall=111;view.graphUpdate(nil);#expect(reads==2)
+            now=600;wall=700;view.graphUpdate(nil);for _ in 0..<100 {view.graphUpdate(nil)}
+            #expect(reads==3 && miner.timedHistory.observationCount==3)
+            for invalid in [Double.nan,Double.infinity,-1] {now=invalid;view.graphUpdate(nil)}
+            #expect(reads==3 && view.currentWatts == -12)
+            now=100;view.graphUpdate(nil);now=110;view.graphUpdate(nil);#expect(reads==3)
+            now=111;view.graphUpdate(nil);#expect(reads==4)
+            settings.graphRefresh=0;now=1000;view.graphUpdate(nil);#expect(reads==4)
+            settings.graphRefresh=1;view.graphUpdate(nil);#expect(reads==5)
+            now=2000;delay=true;view.graphUpdate(nil);#expect(reads==6 && now==2030)
+            delay=false;for _ in 0..<100 {view.graphUpdate(nil)};#expect(reads==6)
+            now=2040;view.graphUpdate(nil);#expect(reads==6)
+            now=2040.001;view.graphUpdate(nil);#expect(reads==7)
         }
     }
     private func battery(current: Int = 2000, maximum: Int = 4000, amperage: Int = -1000,
@@ -148,7 +174,14 @@ struct XRGBatteryViewTests {
     }
     private func panel(_ source: BatterySource, _ settings: XRGSettings, _ defaults: UserDefaults,
                        width: CGFloat = 200, height: CGFloat = 100) -> XRGBatteryView {
-        XRGBatteryView(frame: NSRect(x: 0, y: 0, width: width, height: height), miner: source.miner(), settings: settings, defaults: defaults)
+        // Existing rendering fixtures simulate ideally spaced callback times.
+        // The elapsed-time regression below supplies a clock independent of ticks.
+        var elapsed = 0.0
+        return XRGBatteryView(frame: NSRect(x: 0, y: 0, width: width, height: height), miner: source.miner(), settings: settings, defaults: defaults, samplingClock: {
+            let step = Double(settings.graphRefresh)
+            if step.isFinite && step > 0 { elapsed += step }
+            return elapsed
+        })
     }
     private func png(_ view: XRGBatteryView) throws -> Data {
         view.needsDisplay = true

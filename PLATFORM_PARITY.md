@@ -219,7 +219,10 @@ Implemented in development for monitoring tools:
   retains physical sensor/maximum membership boundaries and valid cold values.
   Window edits preserve statistics; graph resets keep their platform-specific
   existing statistics behavior. Battery now offers 1–60-minute windows. Mac
-  preserves aggregate split-watt curves, refresh gate and current-bar scaling;
+  preserves aggregate split-watt curves and current-bar scaling. Its Battery gate
+  now uses >10 continuous-clock seconds since the previous poll completed, so
+  repeated redraws/interval edits cannot invent time and slow reads/long gaps do
+  not cause catch-up bursts;
   observed count/no-battery changes clear time history, with same-count replacement
   undetectable in this aggregate source. Linux preserves per-name percent/signed-W
   quantities and source boundaries. Current/fallback behavior stays independent.
@@ -336,3 +339,7 @@ Each pass needs UI, persistence, cancellation, invalid/unavailable-data and fixt
 coverage on both platforms. Compare metric meaning and supported interactions,
 not just the number of panels. Physical hardware validation remains best effort;
 missing hardware is not a prerequisite for finishing these passes.
+
+The current cadence/lifecycle audit and ordered follow-up work are in
+[SAMPLING_PARITY.md](SAMPLING_PARITY.md). Battery elapsed-time polling is the first
+implemented correction; global pause and hidden-graph policies remain separate work.

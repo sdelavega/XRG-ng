@@ -532,8 +532,9 @@ from time projection. Battery time windows are described below.
 Battery supports **Battery Time Window** on Mac and a Linux Sources field:
 1–60 minutes, zero uses sample counts, with the same sampling-target grid and
 one-hour / 20,000-observation bound. Mac keeps its aggregate charging/discharging
-watt curves and existing refresh gate (collection after more than ten accumulated
-configured seconds). Animation ticks do not append observations. Graph scaling
+watt curves and elapsed-time refresh gate (collection after more than ten continuous-clock
+seconds since the previous poll completed). Repeated animation ticks and refresh-target edits do not manufacture elapsed time;
+long gaps produce at most one fresh collection. Graph scaling
 uses retained time-window peaks while current-value bars keep their original
 sample-based scaling. Failed Mac reads keep legacy current/sample values and add
 missing time observations; no-battery and observed battery-count changes begin
@@ -680,3 +681,6 @@ and notices attached to their corresponding source revisions.
 - **Marc Shade — 2025–2026:** fork maintenance, AI token monitoring, and Linux port.
 - **Stephen de la Vega — 2026–present:** XRG-ng maintenance and Swift migration.
 - Other contributors retain their source notices and Git attribution.
+
+Sampling and lifecycle differences and the remaining plan are tracked in
+[SAMPLING_PARITY.md](SAMPLING_PARITY.md).
