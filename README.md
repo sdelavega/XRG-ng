@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 39 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 40 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -508,7 +508,7 @@ append gaps, while automatic disappearance and Linux unreadable inputs discard
 the affected histories. Graph reset clears both modes and preserves current
 readouts and temperature/session statistics. Mac Fans and VRAM window settings
 are independent. Temperature’s integrated fan curves retain Temperature’s own
-history behavior; Temperature windows are described below; Battery windows remain follow-up work.
+history behavior; Temperature windows are described below; Battery windows are described below.
 
 Temperature supports **Temperature Time Window** on Mac and a Linux Sources
 field: 1–60 minutes, zero uses sample counts, with the same sampling-target grid
@@ -527,7 +527,25 @@ rules remain, and cold/zero readings stay values where accepted by the collector
 Window/resize edits preserve session statistics and collector state. Mac Reset
 Graph retains its existing Temperature-statistics reset; Linux graph reset keeps
 sensor statistics independent. Current readings and mini bars remain separate
-from time projection. Battery time windows remain follow-up work.
+from time projection. Battery time windows are described below.
+
+Battery supports **Battery Time Window** on Mac and a Linux Sources field:
+1–60 minutes, zero uses sample counts, with the same sampling-target grid and
+one-hour / 20,000-observation bound. Mac keeps its aggregate charging/discharging
+watt curves and existing refresh gate (collection after more than ten accumulated
+configured seconds). Animation ticks do not append observations. Graph scaling
+uses retained time-window peaks while current-value bars keep their original
+sample-based scaling. Failed Mac reads keep legacy current/sample values and add
+missing time observations; no-battery and observed battery-count changes begin
+fresh time history. Mac does not expose a stable per-battery identity here, so a
+replacement with the same count cannot be distinguished by this aggregate history.
+Its existing miner reset zeros cached watts and retains charge/status metadata.
+Linux retains percentage and signed watts separately per reported battery name;
+charging is positive, discharging negative, unknown direction/power stays missing,
+and measured zero remains valid. Display mode changes do not reinterpret old
+percentages as watts. Missing reports add time gaps while valid disappearance/name
+changes retain existing source boundaries. Graph resets clear both modes. Window
+edits preserve collector behavior, current readings and saved sample fallback.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

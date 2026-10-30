@@ -367,6 +367,8 @@ impl Sampler {
             selection.retained_samples(Module::Fans),
         )?;
         self.battery
+            .set_time_window(selection.retained_minutes(Module::Battery))?;
+        self.battery
             .set_history_samples(selection.retained_samples(Module::Battery))?;
         let gpu_capacity = selection.history_capacity(Module::Gpu);
         for state in self.gpu_histories.values_mut() {
@@ -1216,6 +1218,9 @@ impl Worker {
                     .set_history_interval(timer.interval_seconds());
                 sampler
                     .sensors
+                    .set_history_interval(timer.interval_seconds());
+                sampler
+                    .battery
                     .set_history_interval(timer.interval_seconds());
                 sampler.gpu_history_interval = timer.interval_seconds();
                 sampler

@@ -720,6 +720,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
                 | settings::Module::GpuMemory
                 | settings::Module::Fans
                 | settings::Module::Temperature
+                | settings::Module::Battery
         ) {
             ui.horizontal(|ui| {
                 let label = ui.label(format!("{title} time window (minutes; 0 uses samples)"));
@@ -752,6 +753,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
             s.metrics.history_samples.insert(module, count);
         }
     }
+    ui.small("Battery windows retain charge percentage and signed watts independently by battery name; changing display mode does not relabel history. Missing direction/power remains unavailable.");
     ui.small("Temperature windows retain Celsius by physical sensor, or the automatic maximum with membership boundaries. Units affect display; polling and session statistics remain independent.");
     ui.small("Fans windows retain RPM by physical input. Source replacement/failure boundaries and session statistics remain independent; zero RPM stays a stopped fan.");
     ui.small("VRAM windows retain driver-reported pool percentages. Pool capacity, driver, replacement and unavailable-source boundaries retain their existing resets; readable-client allocations do not become VRAM capacity.");

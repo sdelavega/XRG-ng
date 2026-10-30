@@ -1856,3 +1856,36 @@ assertions or deadlines; reran full gates. Inspected final native five-second
 cadence/gap/menu and Linux Sources captures. Evidence:
 `dist/temperature-time-window-validation`. Physical Intel/Linux x86-64,
 macOS 26 runtime, real suspend/resume and unowned sensors remain unverified.
+
+
+### Battery windows keep charge and power quantities independent
+
+Mac Battery Time Window and Linux Sources support 1–60 minutes (zero uses samples),
+centered sampling-target bins (minimum 200 ms), latest completed poll anchoring and
+one-hour / 20,000-observation bounds. Mac retains aggregate charging/discharging
+watt magnitudes with its existing >10 accumulated configured-second collection
+gate; animation ticks do not append observations. Time-window peaks determine
+history scale while current bars retain their prior sample-based scale. Failed
+reads append missing time observations without altering legacy samples/current
+readings. No battery and observed count changes clear time history; same-count
+replacement cannot be detected without a stable per-battery identity. Existing
+miner reset still zeros cached watts and retains charge/status metadata.
+
+Linux retains charge percentage and signed watts together per battery name, using
+the explicit signed shared history. Mode changes select the corresponding channel,
+never relabeling percentage as watts. Unknown direction/power remains missing;
+measured zero remains valid. Failed/partial-empty reports add gaps, valid no-battery
+and disappearance/name changes preserve existing boundaries, and graph reset clears
+both modes. Sampling targets reach projection without changing collector policy.
+Schema 40 migration is read-only until explicit save; invalid edits reject
+atomically. No app version, release, dependency or notice policy change.
+
+Validation: final universal Debug gate passed 594 cases each ARM64/Rosetta x86_64
+and native/packaged launches. Linux ARM64 passed 38 shared Swift tests, exact C ABI
+smoke, strict Clippy, 590 Rust tests and all 16 X11/nested Wayland cases on its first
+run. The initial native fixture assumed watts survived miner reset; corrected it
+to retain the established zero-watt/reset and preserved-charge metadata contract,
+then reran the full gate. Inspected native five-minute power/gap/menu and Linux
+Sources captures. Evidence: `dist/battery-time-window-validation`. Physical
+Intel/Linux x86-64, macOS 26 runtime, real suspend/resume and unowned battery
+hardware remain unverified.

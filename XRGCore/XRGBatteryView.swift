@@ -153,6 +153,14 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         let maximum = max(batteryMiner.chargeWatts.max, batteryMiner.dischargeWatts.max)
         return maximum.isFinite ? max(30, maximum) : 30
     }
+    @nonobjc private let timeProjection = XRGTimeWindowProjection(channels: 2)
+    @nonobjc func historyData() -> [XRGDataSet] {
+        timeProjection.values(from: batteryMiner.timedHistory, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1)) ?? [batteryMiner.chargeWatts, batteryMiner.dischargeWatts]
+    }
+    @nonobjc var historyWattScale: CGFloat {
+        let maximum = historyData().map(\.max).max() ?? 0
+        return maximum.isFinite ? max(30, maximum) : 30
+    }
     struct Readings { let left: String; let center: String?; let right: String }
     @nonobjc func readings() -> Readings {
         let status = batteryMiner.batteryStatus()
@@ -248,9 +256,10 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         settings.borderColor.set()
         for border in bars.borders { border.fill(using: .copy) }
         if bars.history.height > 0 {
-            XRGGraphRenderer.drawCurve(batteryMiner.chargeWatts, upperBound: wattScale, lowerBound: 0,
+            let data = historyData(), scale = historyWattScale
+            XRGGraphRenderer.drawCurve(data[0], upperBound: scale, lowerBound: 0,
                 in: bars.history, flipped: false, filled: true, color: settings.graphColor(.battery, component: 1), style: settings.curveStyle(.battery))
-            XRGGraphRenderer.drawCurve(batteryMiner.dischargeWatts, upperBound: wattScale, lowerBound: 0,
+            XRGGraphRenderer.drawCurve(data[1], upperBound: scale, lowerBound: 0,
                 in: bars.history, flipped: true, filled: true, color: settings.graphColor(.battery, component: 2), style: settings.curveStyle(.battery))
         }
         XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .battery)
@@ -260,13 +269,21 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         let item = NSMenuItem(title: "Open Battery Settings...", action: #selector(openEnergySaverSystemPreferences(_:)), keyEquivalent: "")
         item.target = self; menu.addItem(item)
         menu.addItem(XRGHistoryRetention.menu("Battery History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("Battery Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let windowKey = "XRGBatteryView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
+    }
     @nonobjc static let historyKey = "XRGBatteryView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}

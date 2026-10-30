@@ -4,7 +4,7 @@
 use crate::{
     engine::{Panel, Scale},
     hardware::{Battery, Readings},
-    shared::History,
+    shared::{History, TimedHistory},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -20,6 +20,9 @@ pub struct View {
     charge: BTreeMap<String, History>,
     power: BTreeMap<String, VecDeque<f64>>,
     history_samples: u32,
+    timed: BTreeMap<String, TimedHistory>,
+    minutes: u32,
+    interval: Option<f64>,
 }
 fn watts(reading: &Battery) -> Option<f64> {
     let value = reading.watts.filter(|v| v.is_finite() && *v >= 0.)?;
@@ -33,6 +36,18 @@ fn watts(reading: &Battery) -> Option<f64> {
     }
 }
 impl View {
+    pub fn set_time_window(&mut self, minutes: u32) -> Result<(), String> {
+        if minutes > crate::shared::timed_projection_settings()[0] {
+            return Err("Battery window must be 0..60 minutes".into());
+        }
+        self.minutes = minutes;
+        Ok(())
+    }
+    pub fn set_history_interval(&mut self, seconds: f64) {
+        if seconds.is_finite() && seconds >= 0.2 {
+            self.interval = Some(seconds);
+        }
+    }
     fn capacity(&self) -> u32 {
         if self.history_samples == 0 {
             120
@@ -63,6 +78,9 @@ impl View {
         Ok(())
     }
     pub fn clear_graph(&mut self) {
+        for history in self.timed.values_mut() {
+            history.clear();
+        }
         for h in self.charge.values_mut() {
             h.clear();
         }
@@ -71,6 +89,18 @@ impl View {
         }
     }
     pub fn panel(&mut self, report: Result<Readings<Battery>, String>, mode: Mode) -> Panel {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.panel_at(report, mode, observed)
+    }
+    pub fn panel_at(
+        &mut self,
+        report: Result<Readings<Battery>, String>,
+        mode: Mode,
+        observed: f64,
+    ) -> Panel {
         let mut panel = Panel {
             title: "Battery",
             label: "Battery unavailable".into(),
@@ -88,6 +118,9 @@ impl View {
         let report = match report {
             Ok(r) => r,
             Err(error) => {
+                for h in self.timed.values_mut() {
+                    h.append(observed, &[f64::NAN; 2]);
+                }
                 for h in self.power.values_mut() {
                     h.pop_front();
                     h.push_back(f64::NAN);
@@ -98,11 +131,15 @@ impl View {
         };
         if report.values.is_empty() {
             if report.errors.is_empty() {
+                self.timed.clear();
                 self.charge.clear();
                 self.power.clear();
                 panel.label = "No system battery".into();
                 panel.detail = "No present system battery detected".into();
             } else {
+                for h in self.timed.values_mut() {
+                    h.append(observed, &[f64::NAN; 2]);
+                }
                 for h in self.power.values_mut() {
                     h.pop_front();
                     h.push_back(f64::NAN);
@@ -115,6 +152,8 @@ impl View {
         self.charge
             .retain(|name, _| visible.iter().any(|v| v.name == *name));
         self.power
+            .retain(|name, _| visible.iter().any(|v| v.name == *name));
+        self.timed
             .retain(|name, _| visible.iter().any(|v| v.name == *name));
         let mut labels = Vec::new();
         let capacity = self.capacity();
@@ -131,7 +170,16 @@ impl View {
             let value = watts(reading);
             power.pop_front();
             power.push_back(value.unwrap_or(f64::NAN));
-            panel.series.push(if mode == Mode::Power {
+            let timed = self
+                .timed
+                .entry(reading.name.clone())
+                .or_insert_with(|| TimedHistory::new_signed_limited(2, 60));
+            timed.append(observed, &[reading.percent, value.unwrap_or(f64::NAN)]);
+            panel.series.push(if self.minutes > 0 {
+                timed
+                    .values_at(self.minutes, self.interval.unwrap_or(1.))
+                    .remove(if mode == Mode::Power { 1 } else { 0 })
+            } else if mode == Mode::Power {
                 power.iter().copied().collect()
             } else {
                 charge.values()

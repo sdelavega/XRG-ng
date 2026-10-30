@@ -136,7 +136,7 @@ fn mode_is_persistent_and_queued_percentage_plots_do_not_match_power_selection()
         .unwrap()
         .remove("battery_mode");
     let migrated = Settings::parse(&serde_json::to_vec(&wire).unwrap()).unwrap();
-    assert_eq!(migrated.version, 39);
+    assert_eq!(migrated.version, 40);
     assert_eq!(migrated.metrics.battery_mode, Mode::Charge);
     wire["metrics"]["battery_mode"] = "invented".into();
     assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
@@ -216,4 +216,97 @@ fn battery_retention_survives_missing_reports_disappearance_and_clear() {
     assert_eq!(charge.series[0].len(), 301);
     assert_eq!(charge.series[0][300], 81.);
     assert!(charge.series[0][..300].iter().all(|v| v.is_nan()));
+}
+
+#[test]
+fn battery_windows_keep_signed_power_charge_and_presence_boundaries_separate() {
+    let mut view = View::default();
+    view.set_history_samples(6).unwrap();
+    view.set_time_window(1).unwrap();
+    view.panel_at(
+        report(vec![reading("BAT0", "Charging", Some(10.), 50.)]),
+        Mode::Power,
+        100.,
+    );
+    let p = view.panel_at(
+        report(vec![reading("BAT0", "Discharging", Some(7.), 40.)]),
+        Mode::Power,
+        110.,
+    );
+    assert_eq!(p.series[0].len(), 61);
+    assert_eq!(p.series[0][50], 10.);
+    assert_eq!(p.series[0][60], -7.);
+    assert!(p.series[0][51..60].iter().all(|v| v.is_nan()));
+    assert_eq!(p.scale, Scale::SignedWatts);
+    let p = view.panel_at(
+        report(vec![reading("BAT0", "Discharging", Some(7.), 40.)]),
+        Mode::Charge,
+        111.,
+    );
+    assert_eq!(p.series[0][49], 50.);
+    assert_eq!(p.series[0][60], 40.);
+    assert_eq!(p.scale, Scale::Percent);
+    let p = view.panel_at(
+        report(vec![reading("BAT0", "Unknown", Some(0.), 30.)]),
+        Mode::Power,
+        112.,
+    );
+    assert_eq!(p.series[0][60], 0.);
+    let p = view.panel_at(
+        report(vec![reading("BAT0", "Unknown", Some(5.), 20.)]),
+        Mode::Power,
+        113.,
+    );
+    assert!(p.series[0][60].is_nan());
+    assert!(
+        view.panel_at(Err("offline".into()), Mode::Power, 114.)
+            .series
+            .is_empty()
+    );
+    let p = view.panel_at(
+        report(vec![reading("BAT0", "Discharging", Some(5.), 20.)]),
+        Mode::Power,
+        115.,
+    );
+    assert!(p.series[0][59].is_nan());
+    assert_eq!(p.series[0][45], 10.);
+    assert!(
+        view.panel_at(report(vec![]), Mode::Power, 116.)
+            .series
+            .is_empty()
+    );
+    let p = view.panel_at(
+        report(vec![reading("BAT0", "Discharging", Some(5.), 20.)]),
+        Mode::Power,
+        117.,
+    );
+    assert!(p.series[0][..60].iter().all(|v| v.is_nan()));
+    view.set_history_interval(0.2);
+    let p = view.panel_at(
+        report(vec![reading("BAT1", "Charging", Some(5.), 60.)]),
+        Mode::Power,
+        118.,
+    );
+    assert_eq!(p.series[0].len(), 301);
+    assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+    view.clear_graph();
+    let p = view.panel_at(
+        report(vec![reading("BAT1", "Charging", Some(0.), 60.)]),
+        Mode::Power,
+        119.,
+    );
+    assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+    assert_eq!(p.series[0][300], 0.);
+    assert!(view.set_time_window(61).is_err());
+    view.set_time_window(0).unwrap();
+    assert_eq!(
+        view.panel_at(
+            report(vec![reading("BAT1", "Charging", Some(5.), 60.)]),
+            Mode::Power,
+            120.
+        )
+        .series[0]
+            .len(),
+        6
+    );
 }

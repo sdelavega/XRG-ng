@@ -94,6 +94,32 @@ struct XRGBatteryViewTests {
             #expect(view.batteryMiner.numSamples == 600)
         }
     }
+    @Test func batteryWindowsKeepPowerPeaksCurrentBarsAndPollingCadenceIndependent() throws {
+        try withFixture { settings, defaults in
+            settings.graphRefresh=5;var wall=100.0
+            let source=BatterySource([battery(amperage:-10000)])
+            let miner=XRGBatteryMiner(source:{source.reads+=1;return source.samples},historyClock:{wall})
+            let view=XRGBatteryView(frame:NSRect(x:0,y:0,width:200,height:100),miner:miner,settings:settings,defaults:defaults)
+            wall=110;source.samples=[battery()];miner.graphUpdate(nil)
+            let before=source.reads,option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+            #expect(view.historyData()[1].numValues==13 && view.historyData()[1].orderedValues[10]==120 && view.historyData()[1].currentValue==12)
+            #expect(view.historyData()[1].orderedValues[11]==XRGGraphRenderer.missingValue)
+            view.setFrameSize(NSSize(width:1,height:100));#expect(view.historyWattScale==120 && view.wattScale==30 && view.currentWatts == -12 && source.reads==before)
+            let count=miner.timedHistory.observationCount
+            wall=115;view.graphUpdate(nil);wall=120;view.graphUpdate(nil);#expect(source.reads==before && miner.timedHistory.observationCount==count)
+            wall=125;source.samples=[battery(amperage:2000,plugged:true,charging:true)];view.graphUpdate(nil)
+            #expect(source.reads==before+1 && miner.timedHistory.observationCount==count+1 && view.currentWatts==24)
+            settings.graphRefresh=0.2;#expect(view.historyData()[0].numValues==301 && view.historyWattScale==120)
+            let menu=try #require(view.makeMenu().items.first { $0.title=="Battery Time Window" }?.submenu);#expect(menu.items.allSatisfy { $0.target===view })
+            option.tag=61;view.selectHistoryWindow(option);#expect(view.historyMinutes==1)
+            wall=126;source.samples=nil;miner.graphUpdate(nil);#expect(view.historyData()[0].currentValue==XRGGraphRenderer.missingValue && view.currentWatts==24)
+            wall=127;source.samples=[];miner.graphUpdate(nil);#expect(miner.batteryStatus() == .noBattery && view.historyData()[0].orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue })
+            wall=128;source.samples=[battery()];miner.graphUpdate(nil);#expect(view.historyData()[1].orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            wall=129;source.samples=[battery(),battery()];miner.graphUpdate(nil);#expect(view.historyData()[1].currentValue==24 && view.historyData()[1].orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            miner.reset();#expect(view.historyData()[1].orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue } && view.currentWatts == 0 && miner.chargePercent()==50 && miner.batteries.count==2)
+            option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && miner.numSamples==300)
+        }
+    }
     private func battery(current: Int = 2000, maximum: Int = 4000, amperage: Int = -1000,
                          minutes: Int = 95, plugged: Bool = false, charging: Bool = false, charged: Bool = false,
                          raw: Bool = true) -> XRGBatteryInfo {

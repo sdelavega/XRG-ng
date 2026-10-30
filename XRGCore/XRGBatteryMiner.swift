@@ -74,6 +74,8 @@ public final class XRGBatteryInfo: NSObject {
 @MainActor
 @objc(XRGBatteryMiner)
 public final class XRGBatteryMiner: NSObject {
+    private let historyClock: () -> TimeInterval
+    let timedHistory = XRGTimedHistory(channels: 2, retentionMinutes: 60)!
     private let source: () -> [XRGBatteryInfo]?
     private var hasSample = false
     @objc public private(set) var batteries: [XRGBatteryInfo] = []
@@ -82,7 +84,8 @@ public final class XRGBatteryMiner: NSObject {
     @objc public private(set) var numSamples = 0
 
     public override convenience init() { self.init(source: Self.readBatteries) }
-    public init(source: @escaping () -> [XRGBatteryInfo]?) {
+    public init(source: @escaping () -> [XRGBatteryInfo]?, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
+        self.historyClock = historyClock
         self.source = source
         super.init()
     }
@@ -95,7 +98,10 @@ public final class XRGBatteryMiner: NSObject {
     }
 
     @objc public func graphUpdate(_ timer: Timer?) {
-        guard let sample = source() else { return }
+        guard let sample = source() else {
+            timedHistory.append(time: historyClock(), values: [.nan, .nan]); return
+        }
+        if sample.count != batteries.count { timedHistory.clear() }
         batteries = sample
         hasSample = true
         var charging: CGFloat = 0
@@ -108,6 +114,8 @@ public final class XRGBatteryMiner: NSObject {
         }
         chargeWatts.setNextValue(charging)
         dischargeWatts.setNextValue(discharging)
+        if sample.isEmpty { timedHistory.clear() }
+        else { timedHistory.append(time: historyClock(), values: [charging.isFinite ? Double(charging) : .nan, discharging.isFinite ? Double(discharging) : .nan]) }
     }
     @nonobjc func resizeHistory(_ count: Int) {
         guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
@@ -116,7 +124,7 @@ public final class XRGBatteryMiner: NSObject {
         numSamples = count
     }
 
-    @objc public func reset() { chargeWatts.reset(); dischargeWatts.reset() }
+    @objc public func reset() { chargeWatts.reset(); dischargeWatts.reset(); timedHistory.clear() }
     @objc public func batteryStatus() -> XRGBatteryStatus {
         guard hasSample else { return .unknown }
         guard let battery = batteries.first else { return .noBattery }

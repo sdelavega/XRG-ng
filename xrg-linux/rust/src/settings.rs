@@ -383,6 +383,7 @@ impl MetricSelection {
                     | Module::GpuMemory
                     | Module::Fans
                     | Module::Temperature
+                    | Module::Battery
             ) || *count > shared::timed_projection_settings()[0]
         }) {
             return Err("Time windows must be 0..60 minutes for supported system graphs".into());
@@ -536,7 +537,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 39,
+            version: 40,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -606,7 +607,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 39 {
+        if self.version != 40 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -822,6 +823,9 @@ impl Settings {
         }
         if result.version == 38 {
             result.version = 39;
+        }
+        if result.version == 39 {
+            result.version = 40;
         }
         result.validate()?;
         Ok(result)

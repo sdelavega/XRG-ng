@@ -13,6 +13,35 @@ use xrg_ng_linux::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 #[test]
+fn battery_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
+    let f = Fixture::new();
+    let expected = Settings::default();
+    let mut wire = serde_json::to_value(&expected).unwrap();
+    wire["version"] = 39.into();
+    let old = serde_json::to_vec(&wire).unwrap();
+    fs::write(f.path(), &old).unwrap();
+    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    assert!(error.is_none());
+    assert_eq!(loaded, expected);
+    assert_eq!(fs::read(f.path()).unwrap(), old);
+    loaded.metrics.history_minutes.insert(Module::Battery, 10);
+    store.save(&loaded).unwrap();
+    let saved = fs::read(f.path()).unwrap();
+    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    loaded.metrics.history_minutes.insert(Module::Battery, 61);
+    assert!(store.save(&loaded).is_err());
+    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    for bad in [
+        serde_json::json!(-1),
+        serde_json::json!(true),
+        serde_json::json!(1.5),
+        serde_json::json!("10"),
+    ] {
+        wire["metrics"]["history_minutes"] = serde_json::json!({"battery":bad});
+        assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+    }
+}
+#[test]
 fn temperature_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
     let f = Fixture::new();
     let expected = Settings::default();
@@ -497,7 +526,7 @@ fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactional
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = Store::open(Some(f.path()));
     assert!(error.is_none());
-    assert_eq!(loaded.version, 39);
+    assert_eq!(loaded.version, 40);
     assert_eq!(loaded.metrics.cpu_history_samples, 0);
     assert_eq!(loaded.sampling_interval_ms, 375);
     assert_eq!(fs::read(f.path()).unwrap(), original);
@@ -585,7 +614,7 @@ fn settings_require_supported_versions_bounds_and_exact_module_identity_set() {
     value.modules.pop();
     assert!(value.validate().is_err());
     value = Settings::default();
-    value.version = 40;
+    value.version = 41;
     assert!(value.validate().is_err());
     value = Settings::default();
     for height in [0, 63, 241, u32::MAX] {
@@ -918,7 +947,7 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        39
+        40
     );
 }
 #[test]
@@ -1001,7 +1030,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.uid = Some(1000);
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
-    assert_eq!(migrated.version, 39);
+    assert_eq!(migrated.version, 40);
     assert_eq!(migrated.modules.len(), 13);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
@@ -1161,7 +1190,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     store.save(&loaded).unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        39
+        40
     );
 }
 
