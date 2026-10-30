@@ -51,7 +51,10 @@ import Testing
         func scan(_ total:UInt64) async throws {
             for _ in 0..<300 {
                 _ = miner.fetchFromCodexCLI()
-                if miner.totalCodexTokens == total { return }
+                if miner.totalCodexTokens == total {
+                    for _ in 0..<300 where miner.isScanningLogs { try await Task.sleep(for:.milliseconds(5)) }
+                    #expect(!miner.isScanningLogs); return
+                }
                 try await Task.sleep(for:.milliseconds(5))
             }
             Issue.record("Codex fixture scan did not complete")
@@ -78,6 +81,63 @@ import Testing
         for _ in 0..<20 { _ = miner.fetchFromCodexCLI(); try await Task.sleep(for:.milliseconds(5)) }
         miner.publish(time:5,hermesReady:false)
         #expect(observer.sessionTotalTokens == 0 && observer.dailyTotalTokens == 40)
+    }
+
+    @Test func codexInventoryChangesAndFailuresNeverBecomeObservedUsageOrRateSpikes() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("xrg-log-continuity-"+UUID().uuidString)
+        let domain="XRG.logContinuity."+UUID().uuidString
+        let prefs=try #require(UserDefaults(suiteName:domain))
+        defer { try? FileManager.default.removeItem(at:root); prefs.removePersistentDomain(forName:domain) }
+        prefs.set(true,forKey:"aiTokensTrackingEnabled")
+        let observer=XRGAITokensObserver(defaults:prefs,center:NotificationCenter(),calendar:.current,now:Date.init)
+        let miner=XRGAITokenMiner(home:root.path,clock:{0},scanInterval:0)
+        defer { miner.reset() };miner.setAccountingEnabled(true)
+        miner.usageEventHandler={observer.recordUsage($1,provider:$0)}
+        let a=root.appendingPathComponent(".codex/sessions/2026/10/30/rollout-a.jsonl")
+        let b=a.deletingLastPathComponent().appendingPathComponent("rollout-b.jsonl")
+        try FileManager.default.createDirectory(at:a.deletingLastPathComponent(),withIntermediateDirectories:true)
+        func record(_ total:Int)->String { "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"total_tokens\":\(total)}}}}\n" }
+        func append(_ line:String,to path:URL) throws {
+            let handle=try FileHandle(forWritingTo:path);defer{try? handle.close()};try handle.seekToEnd();try handle.write(contentsOf:Data(line.utf8))
+        }
+        func drain() async throws {
+            for _ in 0..<300 where miner.isScanningLogs { try await Task.sleep(for:.milliseconds(5)) }
+            #expect(!miner.isScanningLogs)
+        }
+        func scan(_ total:UInt64) async throws {
+            for _ in 0..<300 {
+                _ = miner.fetchFromCodexCLI(); _ = miner.fetchFromGeminiCLI()
+                if miner.totalCodexTokens == total && !miner.codexLastScanFailed { try await drain();return }
+                try await Task.sleep(for:.milliseconds(5))
+            }
+            Issue.record("Expected complete Codex scan did not publish")
+        }
+        try Data(record(100).utf8).write(to:a);try await scan(100)
+        // Explicitly consume the completed empty Gemini sweep before measuring
+        // mixed cost, independent of detached-task scheduling order.
+        _ = miner.fetchFromGeminiCLI();try await drain()
+        miner.publish(time:1,hermesReady:false)
+        try append(record(110),to:a);try await scan(110);miner.publish(time:2,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 10 && miner.codexTokenRate() == 10 && miner.costPerHour() > 0)
+        try Data(record(10000).utf8).write(to:b);try await scan(10110);miner.publish(time:3,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 10 && miner.codexTokenRate() == 0 && miner.costPerHour() == 0)
+        try append(record(120),to:a);try await scan(10120);miner.publish(time:4,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 20 && miner.codexTokenRate() == 10)
+        try FileManager.default.removeItem(at:b);try await scan(120);miner.publish(time:5,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 20 && miner.codexTokenRate() == 0)
+        try Data(record(5000).utf8).write(to:a,options:.atomic);try await scan(5000);miner.publish(time:6,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 20 && miner.codexTokenRate() == 0)
+        try append(record(5010),to:a);try await scan(5010);miner.publish(time:7,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 30 && miner.codexTokenRate() == 10)
+        // Publish an I/O/size failure, then recover the same file with higher history.
+        try Data(repeating:120,count:8*1024*1024+1).write(to:a)
+        _ = miner.fetchFromCodexCLI();try await drain()
+        _ = miner.fetchFromCodexCLI();try await drain()
+        miner.publish(time:8,hermesReady:false)
+        #expect(miner.codexLastScanFailed && observer.sessionTotalTokens == 30 && miner.codexTokenRate() == 0)
+        #expect(miner.codexRecordedUsage?.total == 5010)
+        try Data(record(9000).utf8).write(to:a);try await scan(9000);miner.publish(time:9,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 30 && miner.codexTokenRate() == 0)
     }
 
     @Test func endpointPollingWaitsPreserveUsageContinuity() async throws {
@@ -168,7 +228,10 @@ import Testing
         func scan(expected: UInt64) async throws {
             for attempt in 0..<300 {
                 _ = miner.fetchFromJSONLTranscripts(); _ = miner.fetchFromCodexCLI(); _ = miner.fetchFromGeminiCLI()
-                if attempt > 2 && miner.totalClaudeTokens == expected && miner.totalGeminiTokens == expected + 5 && miner.totalCodexTokens == expected + 70 { return }
+                if attempt > 2 && miner.totalClaudeTokens == expected && miner.totalGeminiTokens == expected + 5 && miner.totalCodexTokens == expected + 70 {
+                    for _ in 0..<300 where miner.isScanningLogs { try await Task.sleep(for:.milliseconds(5)) }
+                    #expect(!miner.isScanningLogs); return
+                }
                 try await Task.sleep(for: .milliseconds(5))
             }
             Issue.record("Complete fixture scans did not publish")

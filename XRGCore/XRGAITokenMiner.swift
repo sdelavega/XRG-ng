@@ -92,6 +92,10 @@ public final class XRGAITokenMiner: NSObject {
     private let costHistory = XRGDataSet()
     private var costs = [Double](repeating: 0, count: 5)
     private var costRate = 0.0
+    private var logSources = [String](repeating: "", count: 3)
+    private var rateSources = [String](repeating: "", count: 5)
+    private var codexHasSnapshot = false
+    private var geminiModels: [String: UInt64] = [:]
     private var claudeReady = false
     private var codexReady = false
     private var geminiReady = false
@@ -132,6 +136,7 @@ public final class XRGAITokenMiner: NSObject {
         super.init()
         detectBestStrategy()
     }
+    var isScanningLogs: Bool { claudeScan.isScanning || codexScan.isScanning || geminiScan.isScanning }
     private func path(_ suffix: String) -> String { (home as NSString).appendingPathComponent(suffix) }
 
     @objc public func detectBestStrategy() {
@@ -176,7 +181,8 @@ public final class XRGAITokenMiner: NSObject {
         models = []; ollamaRunningModels = []; ollamaAvailable = false
         lastOllamaPoll = nil
         accounting = XRGTokenAccounting(); claudeUsage = nil; hermesUsage = nil; claudeModels = [:]
-        codexUsage = nil; codexModels = [:]
+        codexUsage = nil; codexModels = [:]; codexHasSnapshot = false
+        geminiModels = [:]; logSources = Array(repeating: "", count: 3); rateSources = Array(repeating: "", count: 5)
     }
 
     func resetAccountingBaseline() {
@@ -184,7 +190,7 @@ public final class XRGAITokenMiner: NSObject {
         // A scan started before a reset/enable transition must not later appear
         // as post-reset activity. Fresh complete sweeps establish the baseline.
         for scan in [claudeScan, codexScan, geminiScan] { scan.reset() }
-        claudeReady = false; codexReady = false; geminiReady = false
+        claudeReady = false; codexReady = false; geminiReady = false; codexHasSnapshot = false
     }
     func pauseCollection() {
         resetAccountingBaseline()
@@ -214,23 +220,34 @@ public final class XRGAITokenMiner: NSObject {
     func publish(time: TimeInterval, hermesReady: Bool) {
         let totals = [totalClaudeTokens, totalCodexTokens, totalGeminiTokens, totalOllamaTokens, totalHermesTokens]
         let ready = [claudeReady, codexReady, geminiReady, true, hermesReady]
+        let sources = [activeStrategy == .JSONL ? "claude-log:" + logSources[0] : "claude-\(activeStrategy.rawValue)",
+                       "codex-log:" + logSources[1], "gemini-log:" + logSources[2], "ollama", "hermes"]
+        let geminiChanged = rateSources[2] != sources[2]
+        if rateSources != sources { tracker.resetCost() }
         for index in 0..<5 {
+            let waitingForEndpoint = index == 0 && activeStrategy == .OTel && claudeUsage != nil
+            if rateSources[index] != sources[index] || (!ready[index] && !waitingForEndpoint) {
+                tracker.reset(key: "provider\(index)")
+            }
+            rateSources[index] = sources[index]
             rates[index] = ready[index] ? tracker.sample(counter: totals[index], key: "provider\(index)", time: time).rate : 0
             histories[index].setNextValue(Double(rates[index]))
+        }
+        if geminiChanged || !geminiReady {
+            tracker.reset(key: "geminiInput"); tracker.reset(key: "geminiOutput")
         }
         if geminiReady {
             let input = tracker.sample(counter: geminiInput, key: "geminiInput", time: time).delta
             let output = tracker.sample(counter: geminiOutput, key: "geminiOutput", time: time).delta
             if input > 0 || output > 0 { geminiEventHandler?(input, output) }
         }
-        let gemini = geminiScan.completedSnapshot
         // Waiting for the next HTTP response is not a failed observation.
         let claudeAccountingReady = activeStrategy == .OTel ? claudeUsage != nil : claudeReady
         let samples: [(String, String, XRGTokenUsage?, [String: UInt64])] = [
-            ("Claude", "claude-\(activeStrategy.rawValue)", claudeAccountingReady ? claudeUsage : nil, claudeModels),
-            ("Codex", "codex-jsonl", codexReady ? XRGTokenUsage(input: codexUsage?.input ?? 0,
+            ("Claude", sources[0], claudeAccountingReady ? claudeUsage : nil, claudeModels),
+            ("Codex", sources[1], codexReady ? XRGTokenUsage(input: codexUsage?.input ?? 0,
                  output: codexUsage?.output ?? 0, total: totalCodexTokens) : nil, codexModels),
-            ("Gemini", "gemini-json", geminiReady ? XRGTokenUsage(input: geminiInput, output: geminiOutput, total: totalGeminiTokens) : nil, gemini?.modelTotals ?? [:]),
+            ("Gemini", sources[2], geminiReady ? XRGTokenUsage(input: geminiInput, output: geminiOutput, total: totalGeminiTokens) : nil, geminiModels),
             ("Hermes", "hermes-sqlite", hermesReady ? hermesUsage : nil,
              hermesModelTokens.mapValues {
                 let (sum, overflow) = ($0["input"]?.uint64Value ?? 0).addingReportingOverflow($0["output"]?.uint64Value ?? 0)
@@ -249,8 +266,11 @@ public final class XRGAITokenMiner: NSObject {
     }
 
     @objc public func fetchFromJSONLTranscripts() -> Bool {
-        claudeReady = claudeScan.completedSnapshot != nil
-        if let sample = claudeScan.completedSnapshot {
+        let observation = claudeScan.completedObservation
+        claudeReady = observation.map { !$0.failed } ?? false
+        if let observation {
+            logSources[0] = observation.source
+            let sample = observation.totals
             totalClaudeTokens = sample.tokens
             claudeUsage = XRGTokenUsage(input: sample.input, output: sample.output, total: sample.tokens)
             claudeModels = sample.modelTotals
@@ -263,9 +283,12 @@ public final class XRGAITokenMiner: NSObject {
         claudeScan.refresh(root: path(".claude/projects"), layout: 0) { XRGAIPricing.parse($0, gemini: false) }
     }
     @objc public func fetchFromCodexCLI() -> Bool {
-        let snapshot = codexScan.completedSnapshot
-        codexReady = snapshot != nil
-        if let sample = snapshot {
+        let observation = codexScan.completedObservation
+        codexHasSnapshot = observation != nil
+        codexReady = observation.map { !$0.failed } ?? false
+        if let observation {
+            logSources[1] = observation.source
+            let sample = observation.totals
             totalCodexTokens = sample.tokens
             codexUsage = XRGTokenUsage(input: sample.input, output: sample.output, total: sample.tokens)
             codexModels = sample.modelTotals
@@ -274,8 +297,8 @@ public final class XRGAITokenMiner: NSObject {
         return true
     }
     var codexLastScanFailed: Bool { codexScan.lastScanFailed }
-    var codexRecordedUsage: XRGTokenUsage? { codexReady ? codexUsage : nil }
-    var codexRecordedModels: [String: UInt64] { codexReady ? codexModels : [:] }
+    var codexRecordedUsage: XRGTokenUsage? { codexHasSnapshot ? codexUsage : nil }
+    var codexRecordedModels: [String: UInt64] { codexHasSnapshot ? codexModels : [:] }
     @objc public func updateCodexCacheInBackground() {
         codexScan.refreshChecked(root: path(".codex/sessions"), layout: 1) {
             let snapshot = try XRGCodexLogParser.snapshot(atPath: $0)
@@ -284,8 +307,12 @@ public final class XRGAITokenMiner: NSObject {
         }
     }
     @objc public func fetchFromGeminiCLI() -> Bool {
-        geminiReady = geminiScan.completedSnapshot != nil
-        if let sample = geminiScan.completedSnapshot {
+        let observation = geminiScan.completedObservation
+        geminiReady = observation.map { !$0.failed } ?? false
+        if let observation {
+            logSources[2] = observation.source
+            let sample = observation.totals
+            geminiModels = sample.modelTotals
             totalGeminiTokens = sample.tokens
             geminiInput = sample.input; geminiOutput = sample.output
             costs[2] = sample.cost

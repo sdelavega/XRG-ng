@@ -81,6 +81,7 @@ pub fn snapshot(path: &Path, hermes: bool) -> Result<Reading, String> {
         }
     }
     Ok(Reading {
+        continuity: 0,
         usage,
         cost: cost_known.then_some(cost),
         source: if hermes {

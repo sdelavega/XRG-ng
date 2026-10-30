@@ -73,6 +73,7 @@ struct Entry {
     checkpoint: Option<Checkpoint>,
 }
 pub struct Scan {
+    pub continuity: u64,
     pub usage: Usage,
     pub models: Option<Vec<ModelUsage>>,
 }
@@ -81,6 +82,8 @@ pub struct LogScan {
     layout: Layout,
     cache: BTreeMap<PathBuf, Entry>,
     pending: Option<(PathBuf, stream::Job)>,
+    published: Option<BTreeMap<PathBuf, shared::LogFileState>>,
+    continuity: u64,
 }
 impl LogScan {
     pub fn new(root: PathBuf, layout: Layout) -> Self {
@@ -89,6 +92,8 @@ impl LogScan {
             layout,
             cache: BTreeMap::new(),
             pending: None,
+            published: None,
+            continuity: 0,
         }
     }
     pub fn scan(&mut self) -> Result<Usage, String> {
@@ -216,9 +221,26 @@ impl LogScan {
         // Claude IDs are global, so copied/subagent transcripts cannot count the
         // same assistant message twice. Newest file snapshot wins deterministically.
         let mut identified = BTreeMap::new();
-        for entry in self.cache.values() {
+        let mut inventory = BTreeMap::new();
+        for (path, entry) in &self.cache {
             check(deadline)?;
             total = add(total, entry.parsed.anonymous)?;
+            let file_tokens = entry.parsed.identified.values().try_fold(
+                entry.parsed.anonymous.total,
+                |sum, row| {
+                    sum.checked_add(row.usage.total)
+                        .ok_or("File token total overflow")
+                },
+            )?;
+            inventory.insert(
+                path.clone(),
+                shared::LogFileState {
+                    device: entry.stamp.device,
+                    inode: entry.stamp.inode,
+                    bytes: entry.stamp.size,
+                    tokens: file_tokens,
+                },
+            );
             codex_models.merge(&entry.parsed.codex.rows)?;
             for row in entry.parsed.anonymous_models.rows() {
                 models.add(row.clone())?;
@@ -242,7 +264,22 @@ impl LogScan {
                 models.add(row.clone())?;
             }
         }
+        // Compare with the last complete published inventory, never a draft
+        // cache modified during a pending or failed sweep.
+        if let Some(old) = &self.published
+            && (old.len() != inventory.len()
+                || inventory.iter().any(|(path, state)| {
+                    old.get(path).is_none_or(|prior| !state.continues(*prior))
+                }))
+        {
+            self.continuity = self
+                .continuity
+                .checked_add(1)
+                .ok_or("Log continuity exhausted")?;
+        }
+        self.published = Some(inventory);
         Ok(Scan {
+            continuity: self.continuity,
             usage: total,
             models: if matches!(self.layout, Layout::Codex) {
                 codex_models.finish()

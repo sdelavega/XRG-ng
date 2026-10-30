@@ -1057,3 +1057,58 @@ fn codex_components_replace_cumulative_snapshots_without_adding_subfields() {
         }
     );
 }
+
+#[test]
+fn complete_inventory_boundaries_include_import_remove_replace_truncate_and_masked_rollbacks() {
+    let f = ScanFixture::new();
+    f.put("rollout-a.jsonl", codex(10));
+    let mut scan = f.scanner();
+    let first = finish(&mut scan, IO_BUDGET);
+    f.put("rollout-a.jsonl", codex(20));
+    let ordinary = finish(&mut scan, IO_BUDGET);
+    assert_eq!(ordinary.continuity, first.continuity);
+    f.put("rollout-b.jsonl", codex(10000));
+    let imported = finish(&mut scan, IO_BUDGET);
+    assert_ne!(imported.continuity, ordinary.continuity);
+    assert_eq!(finish(&mut scan, IO_BUDGET).continuity, imported.continuity);
+    f.put("rollout-a.jsonl", codex(10));
+    f.put("rollout-b.jsonl", codex(20000));
+    let rollback = finish(&mut scan, IO_BUDGET);
+    assert!(rollback.usage.total > imported.usage.total);
+    assert_ne!(rollback.continuity, imported.continuity);
+    fs::remove_file(f.0.join("rollout-b.jsonl")).unwrap();
+    let removed = finish(&mut scan, IO_BUDGET);
+    assert_ne!(removed.continuity, rollback.continuity);
+    f.put("replacement", codex(10000));
+    fs::rename(f.0.join("replacement"), f.0.join("rollout-a.jsonl")).unwrap();
+    let replaced = finish(&mut scan, IO_BUDGET);
+    assert_ne!(replaced.continuity, removed.continuity);
+    // Reduce bytes while increasing the cumulative count in the same inode.
+    f.put(
+        "rollout-a.jsonl",
+        format!("{}\n{}", codex(20000), "ignored\n".repeat(100)),
+    );
+    let padded = finish(&mut scan, IO_BUDGET);
+    f.put("rollout-a.jsonl", codex(30000));
+    let truncated = finish(&mut scan, IO_BUDGET);
+    assert_ne!(truncated.continuity, padded.continuity);
+}
+
+#[test]
+fn unfinished_and_failed_sweeps_cannot_commit_a_draft_continuity_inventory() {
+    let f = ScanFixture::new();
+    f.put("rollout-a.jsonl", codex(10));
+    let mut scan = f.scanner();
+    let first = finish(&mut scan, IO_BUDGET);
+    f.put(
+        "rollout-b.jsonl",
+        format!("{}\n{}", codex(10000), "ignored\n".repeat(1000)),
+    );
+    assert!(scan.scan_with_budget(10, deadline()).is_err());
+    assert_eq!(scan.continuity, first.continuity);
+    assert_eq!(scan.published.as_ref().unwrap().len(), 1);
+    let result = finish(&mut scan, 4096);
+    assert_ne!(result.continuity, first.continuity);
+    assert_eq!(result.usage.total, 10010);
+    assert_eq!(finish(&mut scan, 0).continuity, result.continuity);
+}

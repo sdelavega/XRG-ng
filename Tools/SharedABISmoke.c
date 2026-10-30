@@ -46,6 +46,11 @@ int main(void) {
     assert(codex_input == 99 && codex_output == 99 && codex_total == 99);
     assert(xrg_codex_usage_parse((const uint8_t *)codex, strlen(codex), &codex_input, &codex_output, &codex_total) == 0);
     assert(codex_input == 6 && codex_output == 4 && codex_total == 12);
+    assert(xrg_log_file_continues(1,2,100,10,1,2,200,20) == 1);
+    assert(xrg_log_file_continues(1,2,100,10,1,3,200,20) == 0);
+    assert(xrg_log_file_continues(1,2,100,10,3,2,200,20) == 0);
+    assert(xrg_log_file_continues(1,2,100,10,1,2,50,20) == 0);
+    assert(xrg_log_file_continues(1,2,100,10,1,2,200,5) == 0);
     void *history = xrg_history_create(3);
     assert(history);
     for (int i = 1; i <= 4; i++) assert(xrg_history_append(history, i) == 0);

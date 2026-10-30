@@ -53,6 +53,10 @@ public final class XRGRateTracker: NSObject {
         lock.withLock { counters = [:]; costSample = nil }
     }
 
+    /// Rebaseline one source without disturbing independent providers.
+    public func reset(key: String) { lock.withLock { _ = counters.removeValue(forKey: key) } }
+    public func resetCost() { lock.withLock { costSample = nil } }
+
     #if canImport(ObjectiveC)
     @objc(sampleCounter:key:time:)
     #endif

@@ -51,11 +51,18 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         let modified: Date
         let size: UInt64
         let inode: UInt64
+        let device: UInt64
     }
     private struct Entry: Sendable {
         let stamp: Stamp
         let totals: XRGScanTotals
     }
+    struct Observation: Sendable {
+        let totals: XRGScanTotals
+        let source: String
+        let failed: Bool
+    }
+    private var continuity = UUID()
     private let lock = NSLock()
     private let interval: TimeInterval
     private var entries: [String: Entry] = [:]
@@ -77,6 +84,9 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
 
     @objc public var snapshot: XRGScanTotals { lock.withLock { value } }
     @objc public var completedSnapshot: XRGScanTotals? { lock.withLock { published ? value : nil } }
+    var completedObservation: Observation? {
+        lock.withLock { published ? Observation(totals: value, source: continuity.uuidString, failed: failed) : nil }
+    }
     @nonobjc public var lastScanFailed: Bool { lock.withLock { failed } }
     @objc public var hasSnapshot: Bool { lock.withLock { published } }
     @objc public var isScanning: Bool { lock.withLock { task != nil } }
@@ -84,7 +94,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     @objc public func reset() { lock.withLock { clear() } }
 
     private func clear() {
-        generation = UUID()
+        generation = UUID(); continuity = UUID()
         task?.cancel()
         task = nil
         lastStart = nil
@@ -126,12 +136,23 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private func finish(id: UUID, result: ([String: Entry], XRGScanTotals)?) {
         lock.withLock {
             guard generation == id else { return }
-            failed = result == nil
             if let result {
+                func inventory(_ rows: [String: Entry]) -> [String: XRGLogFileState] {
+                    rows.mapValues { XRGLogFileState(device: $0.stamp.device, inode: $0.stamp.inode,
+                        bytes: $0.stamp.size, tokens: $0.totals.tokens) }
+                }
+                if published && !XRGLogFileState.inventoryContinues(inventory(entries), inventory(result.0)) {
+                    continuity = UUID()
+                }
                 published = true
                 entries = result.0
                 value = result.1
+            } else if !failed {
+                // A failed sweep breaks accounting continuity even if the next
+                // success completes before the UI consumes the failed status.
+                continuity = UUID()
             }
+            failed = result == nil
             task = nil
         }
     }
@@ -141,8 +162,9 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         guard attributes[.type] as? FileAttributeType == .typeRegular,
               let date = attributes[.modificationDate] as? Date,
               let size = attributes[.size] as? NSNumber,
-              let inode = attributes[.systemFileNumber] as? NSNumber else { throw CocoaError(.fileReadUnknown) }
-        return Stamp(modified: date, size: size.uint64Value, inode: inode.uint64Value)
+              let inode = attributes[.systemFileNumber] as? NSNumber,
+              let device = attributes[.systemNumber] as? NSNumber else { throw CocoaError(.fileReadUnknown) }
+        return Stamp(modified: date, size: size.uint64Value, inode: inode.uint64Value, device: device.uint64Value)
     }
 
     private static func files(root: String, layout: Int) throws -> [String] {
@@ -208,8 +230,8 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 let after = try stamp(path)
                 // Retry concurrently changing files on the next scan; do not
                 // cache a partially read sample under a newer modification date.
-                if before == after { next[path] = Entry(stamp: after, totals: totals) }
-                else { next[path] = previous[path] }
+                guard before == after else { throw CocoaError(.fileReadUnknown) }
+                next[path] = Entry(stamp: after, totals: totals)
             }
         }
         var tokens: UInt64 = 0

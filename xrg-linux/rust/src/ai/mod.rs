@@ -24,10 +24,16 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub struct Reading {
+    pub continuity: u64,
     pub usage: Usage,
     pub cost: Option<f64>,
     pub source: String,
     pub models: Option<Vec<ModelUsage>>,
+}
+impl Reading {
+    fn accounting_source(&self) -> String {
+        format!("{}:{}:{}", self.source.len(), self.source, self.continuity)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Report {
@@ -188,6 +194,7 @@ impl Collector {
                 let (total, cost) =
                     shared::metrics_sample(&filtered).ok_or("No valid Claude token samples")?;
                 Ok(Reading {
+                    continuity: 0,
                     usage: Usage {
                         total,
                         ..Usage::default()
@@ -250,6 +257,7 @@ impl Collector {
     }
     fn logs(&mut self, index: usize, source: &str) -> Result<Reading, String> {
         self.scans[index].scan_details().map(|scan| Reading {
+            continuity: scan.continuity,
             usage: scan.usage,
             models: scan.models,
             cost: None,
@@ -276,7 +284,7 @@ fn model_summary(names: &[String]) -> String {
 
 struct Counter {
     rates: Rates,
-    source: String,
+    source: Option<(String, u64)>,
     previous: Option<Reading>,
 }
 pub struct Display {
@@ -289,7 +297,7 @@ impl Default for Display {
         Self {
             counters: std::array::from_fn(|_| Counter {
                 rates: Rates::new(),
-                source: String::new(),
+                source: None,
                 previous: None,
             }),
             history: History::new(120),
@@ -335,9 +343,10 @@ impl Display {
             match reading {
                 Ok(reading) => {
                     count += 1;
-                    if counter.source != reading.source {
+                    let source = (reading.source.clone(), reading.continuity);
+                    if counter.source.as_ref() != Some(&source) {
                         counter.rates = Rates::new();
-                        counter.source = reading.source.clone();
+                        counter.source = Some(source);
                     }
                     let (_, current) = counter.rates.sample(0, reading.usage.total, time);
                     readout

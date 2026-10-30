@@ -1022,3 +1022,29 @@ Provider coverage may be shorter than the selected window. No location detection
 forward fill or synthetic observations are added. Station changes clear history.
 The Mac Weather panel offers the same time windows while retaining its received
 response default. Defaults and provider coverage remain platform-specific.
+
+
+## Log source continuity
+
+AI log totals describe the currently retained files. Observed session/daily counters
+and graph rates additionally track the last **complete inventory**. Adding or
+removing a matching file, renaming it, replacing its device/inode, shortening it or
+reducing its per-file token total establishes a fresh provider baseline. A decrease
+in one file is detected even if another file grows enough to hide it in the sum.
+The Mac miner follows the same policy through a shared Swift file-state predicate.
+
+Ordinary nonshrinking updates of known files with nondecreasing totals continue
+counting. Imported history and replacement files do not become newly observed
+usage, rates, model aggregates, alerts or mixed-cost-rate spikes. Existing observed
+counters and plotted history remain intact. A failed or unfinished sweep does not
+commit a new inventory. Errors break accounting continuity, and the first complete
+recovery sample becomes a baseline; Mac can retain cached numeric data for display.
+
+This intentionally favors avoiding inflated usage over capturing every token during
+ambiguous transitions. A live new log's first snapshot and concurrent activity in
+other files may therefore be excluded. It is not an exact per-request or billing
+ledger. Metadata alone cannot identify a same-inode, nonshrinking rewrite with a
+nondecreasing counter; unobserved changes between polls and duplicate transcripts
+can also remain ambiguous, with format-specific deduplication differing by platform. Provider sampling
+cadence and those deeper format-specific cases remain future work. No settings
+migration or tracking-default change is required.

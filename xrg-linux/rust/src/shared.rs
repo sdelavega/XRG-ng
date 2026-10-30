@@ -3,6 +3,16 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_log_file_continues(
+        old_device: u64,
+        old_inode: u64,
+        old_bytes: u64,
+        old_tokens: u64,
+        device: u64,
+        inode: u64,
+        bytes: u64,
+        tokens: u64,
+    ) -> i32;
     fn xrg_metar_history_parse(
         bytes: *const u8,
         length: u32,
@@ -604,4 +614,58 @@ pub fn metar_history(bytes: &[u8], station: &str, reference: i64) -> Option<Vec<
             })
         })
         .collect()
+}
+
+/// File state observed in a complete sweep; matching semantics live in Swift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct LogFileState {
+    pub device: u64,
+    pub inode: u64,
+    pub bytes: u64,
+    pub tokens: u64,
+}
+impl LogFileState {
+    pub fn continues(self, old: Self) -> bool {
+        unsafe {
+            xrg_log_file_continues(
+                old.device,
+                old.inode,
+                old.bytes,
+                old.tokens,
+                self.device,
+                self.inode,
+                self.bytes,
+                self.tokens,
+            ) == 1
+        }
+    }
+}
+
+#[cfg(test)]
+mod log_continuity_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    #[test]
+    fn common_inventory_corpus_uses_shared_swift_file_policy() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            previous: BTreeMap<String, LogFileState>,
+            next: BTreeMap<String, LogFileState>,
+            continues: bool,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../../Shared/Tests/Fixtures/log-continuity-cases.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let continuing = case.previous.len() == case.next.len()
+                && case.next.iter().all(|(path, state)| {
+                    case.previous
+                        .get(path)
+                        .is_some_and(|old| state.continues(*old))
+                });
+            assert_eq!(continuing, case.continues, "{}", case.name);
+        }
+    }
 }

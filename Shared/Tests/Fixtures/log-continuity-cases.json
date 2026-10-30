@@ -1,0 +1,304 @@
+[
+  {
+    "name": "empty",
+    "previous": {},
+    "next": {},
+    "continues": true
+  },
+  {
+    "name": "unchanged",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "continues": true
+  },
+  {
+    "name": "append",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 200,
+        "tokens": 20
+      }
+    },
+    "continues": true
+  },
+  {
+    "name": "same_size_counter_update",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 12
+      }
+    },
+    "continues": true
+  },
+  {
+    "name": "add_archive",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      },
+      "b": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 100,
+        "tokens": 10000
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "remove_log",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      },
+      "b": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "rename",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "b": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "inode_replaced",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 100,
+        "tokens": 100
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "device_replaced",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 3,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 100
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "truncated_but_larger_counter",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 50,
+        "tokens": 100
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "per_file_reset_masked_by_aggregate_growth",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 100
+      },
+      "b": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 5
+      },
+      "b": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 100,
+        "tokens": 1000
+      }
+    },
+    "continues": false
+  },
+  {
+    "name": "ordinary_multi_file_growth",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 10
+      },
+      "b": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 100,
+        "tokens": 10
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 200,
+        "tokens": 20
+      },
+      "b": {
+        "device": 1,
+        "inode": 3,
+        "bytes": 200,
+        "tokens": 20
+      }
+    },
+    "continues": true
+  },
+  {
+    "name": "zero_is_known",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 0,
+        "tokens": 0
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 100,
+        "tokens": 20
+      }
+    },
+    "continues": true
+  },
+  {
+    "name": "exact_uint64_bounds",
+    "previous": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 18446744073709551614,
+        "tokens": 18446744073709551614
+      }
+    },
+    "next": {
+      "a": {
+        "device": 1,
+        "inode": 2,
+        "bytes": 18446744073709551615,
+        "tokens": 18446744073709551615
+      }
+    },
+    "continues": true
+  }
+]

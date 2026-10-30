@@ -51,6 +51,57 @@ struct XRGScanStateTests {
         try Data(value.utf8).write(to: url)
     }
 
+    @Test(arguments: [0,1,2])
+    func completeInventoriesRebaselineDiscoveryReplacementTruncationAndMaskedRollback(_ layout:Int) async throws {
+        let root=try directory();defer { try? FileManager.default.removeItem(at:root) }
+        let names=[("p/a.jsonl","p/b.jsonl"),("2026/10/30/rollout-a.jsonl","2026/10/30/rollout-b.jsonl"),("h/chats/session-a.json","h/chats/session-b.json")][layout]
+        let a=root.appendingPathComponent(names.0),b=root.appendingPathComponent(names.1)
+        let scan=XRGScanCache(interval:0),probe=ParseProbe()
+        func sweep() async throws -> XRGScanCache.Observation {
+            scan.refreshChecked(root:root.path,layout:layout,parse:probe.read)
+            try #require(await waitForScan(scan))
+            let observation=try #require(scan.completedObservation)
+            #expect(!observation.failed)
+            return observation
+        }
+        try write("00010",to:a);let initial=try await sweep()
+        try write("00020",to:a);let ordinary=try await sweep()
+        #expect(ordinary.source == initial.source && ordinary.totals.tokens == 20)
+        try write("10000",to:b);let imported=try await sweep()
+        #expect(imported.source != ordinary.source && imported.totals.tokens == 10020)
+        #expect(try await sweep().source == imported.source)
+        // A per-file decrease must be caught even when another file masks it.
+        try write("00005",to:a);try write("20000",to:b)
+        let rollback=try await sweep()
+        #expect(rollback.source != imported.source && rollback.totals.tokens > imported.totals.tokens)
+        try FileManager.default.removeItem(at:b);let removed=try await sweep()
+        #expect(removed.source != rollback.source)
+        try Data("00099".utf8).write(to:a,options:.atomic);let replaced=try await sweep()
+        #expect(replaced.source != removed.source)
+        // Same inode, shorter bytes but a larger counter is still a boundary.
+        try write("100",to:a);let truncated=try await sweep()
+        #expect(truncated.source != replaced.source && truncated.totals.tokens == 100)
+    }
+    @Test func failedSweepCannotHideABoundaryOrPublishADraftInventory() async throws {
+        let root=try directory();defer { try? FileManager.default.removeItem(at:root) }
+        let a=root.appendingPathComponent("p/a.jsonl"),b=root.appendingPathComponent("p/b.jsonl")
+        try write("10",to:a)
+        let scan=XRGScanCache(interval:0),probe=ParseProbe()
+        scan.refreshChecked(root:root.path,layout:0,parse:probe.read);try #require(await waitForScan(scan))
+        let original=try #require(scan.completedObservation)
+        try write("10000",to:b)
+        scan.refreshChecked(root:root.path,layout:0) { path in
+            if path.hasSuffix("b.jsonl") { throw CocoaError(.fileReadNoPermission) }
+            return probe.read(path)
+        }
+        try #require(await waitForScan(scan))
+        let failed=try #require(scan.completedObservation)
+        #expect(failed.failed && failed.totals.tokens == 10 && failed.source != original.source)
+        scan.refreshChecked(root:root.path,layout:0,parse:probe.read);try #require(await waitForScan(scan))
+        let recovered=try #require(scan.completedObservation)
+        #expect(!recovered.failed && recovered.totals.tokens == 10010 && recovered.source != original.source)
+    }
+
     @Test(arguments: [0, 1, 2])
     func cacheUpdatesDeletionAndLayout(_ layout: Int) async throws {
         let root = try directory()

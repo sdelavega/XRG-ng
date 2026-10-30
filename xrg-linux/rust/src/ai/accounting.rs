@@ -426,7 +426,7 @@ impl Accountant {
             let reading = self.preferences.enabled[index]
                 .then(|| report.providers[index].as_ref().ok())
                 .flatten();
-            let source = reading.map(|r| r.source.as_str()).unwrap_or("");
+            let source = reading.map(|r| r.accounting_source()).unwrap_or_default();
             let model_totals = reading
                 .and_then(|r| r.models.as_ref())
                 .map(|rows| {
@@ -440,7 +440,7 @@ impl Accountant {
                 .unwrap_or_default();
             let result = self
                 .ledger
-                .sample(name, source, reading.map(|r| r.usage), &model_totals);
+                .sample(name, &source, reading.map(|r| r.usage), &model_totals);
             let delta = match result {
                 Ok(Some(d)) => d,
                 Ok(None) => continue,

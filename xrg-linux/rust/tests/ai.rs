@@ -294,6 +294,7 @@ fn report(total: u64, source: &str) -> Report {
     Report {
         providers: [
             Ok(Reading {
+                continuity: 0,
                 usage: Usage {
                     total,
                     ..Usage::default()
@@ -835,4 +836,101 @@ fn clear_ai_plot_preserves_usage_totals_and_rate_baselines() {
     assert!(after.series[0][..119].iter().all(|v| v.is_nan()));
     assert_eq!(after.series[0][119], 50.);
     assert!(after.detail.contains("300 tokens"));
+}
+
+#[test]
+fn rate_rebaselines_same_named_source_when_its_inventory_changes() {
+    let mut display = Display::default();
+    display.panel(report(100, "logs"), 1.);
+    assert!(
+        display
+            .panel(report(110, "logs"), 2.)
+            .label
+            .starts_with("10 tok/s")
+    );
+    let mut imported = report(10000, "logs");
+    imported.providers[0].as_mut().unwrap().continuity = 1;
+    assert!(display.panel(imported, 3.).label.starts_with("0 tok/s"));
+    let mut next = report(10010, "logs");
+    next.providers[0].as_mut().unwrap().continuity = 1;
+    assert!(display.panel(next, 4.).label.starts_with("10 tok/s"));
+}
+
+#[test]
+fn collector_inventory_boundaries_reach_observed_accounting_and_graph_rates() {
+    let f = Fixture::new();
+    f.put("logs/rollout-a.jsonl", codex(100));
+    let preferences = ai::Preferences {
+        enabled: [false, true, false, false],
+        ollama: false,
+        codex_logs: Some(f.0.join("logs")),
+        accounting: ai::accounting::Preferences {
+            enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut collector =
+        Collector::configured(Config { home: f.0.clone() }, preferences.clone()).unwrap();
+    let mut accounting = ai::accounting::Accountant::open(
+        Some(f.0.join("observed.json")),
+        preferences.clone(),
+        "2026-10-29",
+    );
+    let mut display = Display::default();
+    let mut api = Api::default();
+    let first = collector.sample(&mut api);
+    accounting.observe(&first, "2026-10-29");
+    display.panel_for(first, 1., &preferences);
+    f.put(
+        "logs/rollout-a.jsonl",
+        format!("{}\n{}", codex(100), codex(110)),
+    );
+    let growth = collector.sample(&mut api);
+    accounting.observe(&growth, "2026-10-29");
+    assert!(
+        display
+            .panel_for(growth, 2., &preferences)
+            .label
+            .starts_with("10 tok/s")
+    );
+    assert_eq!(accounting.snapshot().session.total(), 10);
+    f.put("logs/rollout-b.jsonl", codex(10000));
+    let imported = collector.sample(&mut api);
+    accounting.observe(&imported, "2026-10-29");
+    assert!(
+        display
+            .panel_for(imported, 3., &preferences)
+            .label
+            .starts_with("0 tok/s")
+    );
+    assert_eq!(accounting.snapshot().session.total(), 10);
+    fs::remove_file(f.0.join("logs/rollout-b.jsonl")).unwrap();
+    let removed = collector.sample(&mut api);
+    accounting.observe(&removed, "2026-10-29");
+    display.panel_for(removed, 4., &preferences);
+    f.put("replacement", codex(5000));
+    fs::rename(f.0.join("replacement"), f.0.join("logs/rollout-a.jsonl")).unwrap();
+    let replaced = collector.sample(&mut api);
+    accounting.observe(&replaced, "2026-10-29");
+    assert!(
+        display
+            .panel_for(replaced, 5., &preferences)
+            .label
+            .starts_with("0 tok/s")
+    );
+    assert_eq!(accounting.snapshot().session.total(), 10);
+    f.put(
+        "logs/rollout-a.jsonl",
+        format!("{}\n{}", codex(5000), codex(5010)),
+    );
+    let current = collector.sample(&mut api);
+    accounting.observe(&current, "2026-10-29");
+    assert!(
+        display
+            .panel_for(current, 6., &preferences)
+            .label
+            .starts_with("10 tok/s")
+    );
+    assert_eq!(accounting.snapshot().session.total(), 20);
 }

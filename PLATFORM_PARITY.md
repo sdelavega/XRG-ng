@@ -107,6 +107,17 @@ Implemented in this pass:
   or size failures; resets still invalidate pre-reset scans. Files are limited to
   64 MiB with 8 MiB records and 255 named models; excess metadata never adds tokens.
 
+- Log accounting and rates now rebaseline on complete-inventory additions/removals,
+  renames, device/inode replacements, shorter files and per-file counter rollbacks,
+  even when other files hide the rollback in the aggregate. Both use a shared Swift
+  file-state predicate and the same fixture corpus. Ordinary nonshrinking updates
+  to known files with nondecreasing totals retain continuity. Cached numeric totals,
+  graphs and observed counters survive a boundary; imported history cannot cause a
+  usage/rate/cost spike. Mac failed or concurrently changing sweeps retain the last
+  complete cached data and break accounting continuity; recovery establishes a fresh
+  baseline, matching Linux's existing error/recovery rule. Draft sweeps never commit
+  an inventory identity. These conservative transitions can undercount real activity.
+
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
@@ -115,10 +126,10 @@ Remaining monitoring work:
 2. AI accounting: align source continuity/model attribution and Mac/Linux observed
    windows and sampling cadence. Both now account with hidden graphs and preserve
    recorded Codex input/output components and conservatively qualified turn models.
-   Per-file discovery/replacement continuity still needs alignment; Ollama inventory
-   is not token accounting.
-   Mac log scans retain their last complete snapshot through failed scans, while
-   database/endpoint failure breaks accounting continuity. Keep cost estimates
+   Log inventory/replacement boundaries now rebaseline both platforms; source cadence
+   and semantic rewrite detection still differ. Ollama inventory is not token accounting.
+   Mac log scans retain cached data for display through failed scans while breaking
+   accounting continuity; database/endpoint failure also breaks continuity. Keep cost estimates
    optional and labeled; neither platform's observed counters are billing records.
 3. Weather/battery/Stocks: align unit choices still absent on either side, default
    weather-history behavior/provider coverage, battery presentation/cadence and

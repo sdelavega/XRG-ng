@@ -57,6 +57,7 @@ fn report(total: u64, input: u64, output: u64, model: Option<&str>) -> ai::Repor
     };
     let mut providers = std::array::from_fn(|_| Err("disabled".into()));
     providers[0] = Ok(ai::Reading {
+        continuity: 0,
         usage,
         cost: None,
         source: "fixture".into(),
@@ -342,4 +343,25 @@ fn temporary_state_failure_does_not_consume_an_unsent_alert() {
     assert_eq!(a.observe(&report(20, 0, 0, None), DAY), Some(200.));
     assert!(a.snapshot().persistence_error.is_none());
     assert_eq!(a.observe(&report(30, 0, 0, None), DAY), None);
+}
+
+#[test]
+fn inventory_revision_rebaselines_both_model_and_component_accounting() {
+    let f = Fixture::new();
+    let mut accountant = f.open(preferences());
+    accountant.observe(&report(100, 60, 40, Some("old")), DAY);
+    accountant.observe(&report(110, 66, 44, Some("old")), DAY);
+    assert_eq!(accountant.snapshot().session.total(), 10);
+    let mut imported = report(10000, 6000, 4000, Some("archive"));
+    imported.providers[0].as_mut().unwrap().continuity = 1;
+    accountant.observe(&imported, DAY);
+    assert_eq!(accountant.snapshot().session.total(), 10);
+    let mut current = report(10010, 6006, 4004, Some("archive"));
+    current.providers[0].as_mut().unwrap().continuity = 1;
+    accountant.observe(&current, DAY);
+    let snapshot = accountant.snapshot();
+    assert_eq!(snapshot.session.total(), 20);
+    assert_eq!(snapshot.session.input, 12);
+    assert_eq!(snapshot.session.output, 8);
+    assert_eq!(snapshot.models.get("archive"), Some(&10));
 }

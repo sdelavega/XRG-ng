@@ -278,3 +278,11 @@ private struct WeatherHistoryRow: Encodable {
     for (index, byte) in data.enumerated() { output[index] = byte }
     return Int32(data.count)
 }
+
+/// Additive ABI v1: a complete per-file observation may continue an old baseline.
+@c(xrg_log_file_continues) public func logFileContinues(
+    _ oldDevice: UInt64, _ oldInode: UInt64, _ oldBytes: UInt64, _ oldTokens: UInt64,
+    _ device: UInt64, _ inode: UInt64, _ bytes: UInt64, _ tokens: UInt64) -> Int32 {
+    XRGLogFileState(device: device, inode: inode, bytes: bytes, tokens: tokens)
+        .continues(XRGLogFileState(device: oldDevice, inode: oldInode, bytes: oldBytes, tokens: oldTokens)) ? 1 : 0
+}
