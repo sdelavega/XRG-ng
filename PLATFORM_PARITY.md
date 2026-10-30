@@ -76,6 +76,20 @@ Implemented in development for monitoring tools:
   driver/topology changes may require reselection. Fan choices use sensor keys.
   Source IDs remain platform-local. Linux also supports explicit fan/GPU selection;
   Mac integrated GPU/Temperature readings remain separate from these optional plots.
+- Mac CPU/GPU now have persistent graph-menu source selection with aggregate/all
+  defaults. CPU pins use zero-based logical slots; GPU pins prefer IOService
+  locations, falling back to registry IDs. Missing pins stay unavailable. Cached
+  per-source histories survive switches; source/mode changes never read hardware.
+  GPU has a utilization-only option alongside the existing memory/activity view;
+  unsupported percentages do not fall back to memory or wait-time measurements.
+  Read-only scrollable details explain scope, source identity and units. GPU reset
+  clears only selected GPU histories and preserves readouts/optional VRAM settings;
+  failed GPU reads append gaps and mark current values unavailable. Replacement
+  GPU instances/metadata start new histories. CPU failed reads retain history and
+  show unavailable; its next successful interval spans the tick gap. Remaining CPU
+  differences: Mac Average is historical (including padding), Linux instantaneous;
+  Mac CPU reset still rebases sampling, Linux history reset preserves baselines;
+  Mac stacks system/user/nice, Linux plots independent non-idle/user/system curves.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

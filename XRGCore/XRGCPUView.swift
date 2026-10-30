@@ -43,6 +43,9 @@ public final class XRGCPUView: NSView, XRGModuleView {
     private weak var host: (any XRGCPUViewHost)?
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
+    @nonobjc static let sourceKey = "XRGCPUView.Source.v1"
+    @nonobjc private(set) var selectedCPU: Int?
+    private var sourceWarning: String?
     public private(set) weak var module: XRGModule?
     @nonobjc let graphLabels = XRGGraphLabels()
     @nonobjc static let activityMonitorURL = URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")
@@ -70,6 +73,10 @@ public final class XRGCPUView: NSView, XRGModuleView {
         prepare()
     }
     private func prepare() {
+        do {
+            let saved = try XRGMonitorSource.load(defaults, key: Self.sourceKey)
+            try saved.validateCPU(); selectedCPU = saved.source.flatMap(Int.init)
+        } catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
         for label in [graphLabels.leftLabel, graphLabels.centerLabel, graphLabels.rightLabel] { addSubview(label) }
         setGraphSize(bounds.size)
         updateLabels()
@@ -150,21 +157,28 @@ public final class XRGCPUView: NSView, XRGModuleView {
         let total = data.reduce(CGFloat(0)) { $0 + $1.currentValue }
         return total.isFinite ? min(100, max(0, total)) : 0
     }
+    @nonobjc private var selectedIndices: [Int] {
+        if let selectedCPU { return (0..<miner.numberOfCPUs).contains(selectedCPU) ? [selectedCPU] : [] }
+        return Array(0..<miner.numberOfCPUs)
+    }
+    @nonobjc var sourceAvailable: Bool { miner.countersAvailable && !selectedIndices.isEmpty }
     @nonobjc var totalUsage: CGFloat {
-        (0..<miner.numberOfCPUs).reduce(0) { $0 + currentUsage(forCPU: $1) }
+        selectedIndices.reduce(0) { $0 + currentUsage(forCPU: $1) }
     }
     @nonobjc var averageUsage: CGFloat {
-        guard miner.numberOfCPUs > 0 else { return 0 }
+        guard !selectedIndices.isEmpty else { return 0 }
         var result: CGFloat = 0
-        for index in 0..<miner.numberOfCPUs {
+        for index in selectedIndices {
             let value = miner.dataForCPU(index)?.reduce(CGFloat(0)) { $0 + $1.average } ?? 0
             result += value.isFinite ? min(100, max(0, value)) : 0
         }
-        return result / CGFloat(miner.numberOfCPUs)
+        return result / CGFloat(selectedIndices.count)
     }
     @nonobjc func sortedCoreUsage() -> [CGFloat] {
-        let values = settings?.fastCPUUsage == true ? miner.fastValues.map { CGFloat($0.doubleValue) }
-            : (0..<miner.numberOfCPUs).map { currentUsage(forCPU: $0) }
+        guard settings?.fastCPUUsage == true ? miner.fastCountersAvailable : miner.countersAvailable else { return [] }
+        let values = selectedIndices.map { index in
+            settings?.fastCPUUsage == true ? CGFloat(miner.fastValues[index].doubleValue) : currentUsage(forCPU: index)
+        }
         return values.map { $0.isFinite ? min(100, max(0, $0)) : 0 }.sorted(by: >)
     }
     @nonobjc static func uptimeText(days: Int, hours: Int, minutes: Int) -> String {
@@ -175,11 +189,11 @@ public final class XRGCPUView: NSView, XRGModuleView {
     }
     @nonobjc func readings() -> (left: String, right: String) {
         let width = XRGGraphLabels.paddedTextRect(for: bounds).width
-        var left = "CPU", right = String(format: "%.0f%%", totalUsage)
+        var left = selectedCPU.map { "CPU \($0)" } ?? "CPU", right = sourceAvailable ? String(format: "%.0f%%", totalUsage) : "n/a"
         if settings?.cpuShowAverageUsage == true {
             let wide = textWidth(miner.numberOfCPUs == 2 ? "99.9% Average 99.9%" : "Average: 99.9%") + textOffset
             left += width >= wide ? "\nAverage:" : "\nAvg:"
-            right += String(format: "\n%.1f%%", averageUsage)
+            right += sourceAvailable ? String(format: "\n%.1f%%", averageUsage) : "\nn/a"
         }
         if settings?.showLoadAverage == true {
             left += "\nLoad:"; right += "\n" + Self.loadText(miner.currentLoadAverage)
@@ -191,6 +205,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
         return (left, right)
     }
     private func updateLabels() {
+        toolTip = detailText
         let text = readings()
         graphLabels.layoutColumnText(text.left, rightText: text.right,
             in: XRGGraphLabels.paddedTextRect(for: bounds), mini: shouldDrawMiniGraph(), settings: settings)
@@ -212,7 +227,8 @@ public final class XRGCPUView: NSView, XRGModuleView {
         }
     }
     @nonobjc func historyLayers() -> [XRGDataSet] {
-        guard let data = miner.combinedData(), data.count == 3,
+        guard !selectedIndices.isEmpty,
+              let data = selectedCPU.flatMap({ miner.dataForCPU($0) }) ?? (selectedCPU == nil ? miner.combinedData() : nil), data.count == 3,
               let total = XRGDataSet(contentsOfOtherDataSet: data[0]) else { return [] }
         total.addOtherDataSetValues(data[1]); total.addOtherDataSetValues(data[2])
         guard settings?.separateCPUColor == true,
@@ -257,6 +273,20 @@ public final class XRGCPUView: NSView, XRGModuleView {
             menu.addItem(item(String(format: "%.1f%% - %@ (id %ld)", cpu, command, pid), #selector(emptyEvent(_:))))
         }
         menu.addItem(.separator())
+        let sources = item("CPU Source", #selector(emptyEvent(_:)))
+        let submenu = NSMenu(title: "CPU Source")
+        let all = item("All Logical CPUs", #selector(selectSource(_:))); all.tag = -1
+        all.state = selectedCPU == nil ? .on : .off; submenu.addItem(all)
+        for index in 0..<miner.numberOfCPUs {
+            let option = item("Logical CPU \(index)", #selector(selectSource(_:))); option.tag = index
+            option.state = selectedCPU == index ? .on : .off; submenu.addItem(option)
+        }
+        if let selectedCPU, !selectedIndices.contains(selectedCPU) {
+            let missing = item("Logical CPU \(selectedCPU) (unavailable)", #selector(selectSource(_:)))
+            missing.tag = selectedCPU; missing.state = .on; submenu.addItem(missing)
+        }
+        sources.submenu = submenu; menu.addItem(sources)
+        menu.addItem(item("CPU Details…", #selector(showDetails(_:))))
         menu.addItem(item("Processes…", #selector(openProcesses(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         menu.addItem(.separator())
@@ -269,6 +299,25 @@ public final class XRGCPUView: NSView, XRGModuleView {
     public func openProcesses(_ sender: Any?) {
         if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .cpu) }
         processInspector?.present()
+    }
+    @nonobjc var detailText: String {
+        let scope = selectedCPU.map { "logical CPU \($0)" } ?? "all \(miner.numberOfCPUs) logical CPUs"
+        return [sourceWarning, "Scope: \(scope). \(sourceAvailable ? "Counters available." : "Selected CPU counters unavailable; no replacement is chosen.")",
+                "CPU total is core-percent: each logical CPU contributes up to 100%. The aggregate history is normalized to 0–100%; a selected CPU uses its own 0–100% history. System, user and nice retain the existing stacked presentation.",
+                "Average is the mean of the retained history (including initial/cleared zero padding), not the instantaneous average used by Linux. Load and uptime remain system-wide; load is not CPU percent. Process listings remain system-wide.",
+                "Selection switches among already collected per-CPU histories without another hardware read. Missing indices stay pinned. Indices are kernel logical-CPU slots and may refer to different hardware after reboot or topology changes. Fast bars are sorted by usage within the selected scope; they are not persistent physical-core labels.",
+                "Reset Graph retains the source choice and uses the existing CPU reset/rebaseline behavior. Failed reads retain the last history; the next successful reading spans the elapsed CPU tick interval."].compactMap { $0 }.joined(separator: "\n\n")
+    }
+    @nonobjc func applyCPUSource(_ index: Int?) throws {
+        let next = XRGMonitorSource(source: index.map(String.init)); try next.validateCPU()
+        defaults.set(try next.encoded(), forKey: Self.sourceKey)
+        selectedCPU = index; sourceWarning = nil
+        updateLabels(); needsDisplay = true
+    }
+    public func selectSource(_ sender: NSMenuItem) { try? applyCPUSource(sender.tag == -1 ? nil : sender.tag) }
+    public func showDetails(_ sender: Any?) {
+        guard let window else { return }
+        XRGMonitorDetails.present(title: "CPU Details", text: detailText, in: window)
     }
     public func emptyEvent(_ sender: Any?) {}
     public func clearData(_ sender: Any?) { miner.reset(); updateLabels(); needsDisplay = true }

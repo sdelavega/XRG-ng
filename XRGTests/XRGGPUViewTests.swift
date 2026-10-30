@@ -193,7 +193,7 @@ struct XRGGPUViewTests {
         }
     }
 
-    @Test func resizingBoundsHistoryAndFailedPollsPreserveLastSnapshot() throws {
+    @Test func resizingBoundsHistoryAndFailedPollsShowUnavailable() throws {
         try withFixture { settings, defaults in
             var samples: [XRGGPUSample]? = [sample(utilization: 30)]
             let miner = XRGGPUMiner(source: { samples })
@@ -208,8 +208,90 @@ struct XRGGPUViewTests {
             #expect(miner.numSamples == 23)
             #expect(view.cardLabels[0].leftLabel.frame.size == .zero)
             samples = nil; view.graphUpdate(nil)
-            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "2M")
-            #expect(miner.utilizationDataSets[0].currentValue == 30)
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "n/a")
+            #expect(miner.utilizationDataSets[0].currentValue == XRGGraphRenderer.missingValue)
+        }
+    }
+
+    @Test func selectedGPUPersistsByLocationAndMissingPinsNeverChooseAnotherCard() throws {
+        try withFixture { settings, defaults in
+            var card = sample(2, vendor: "AMD", utilization: 40); card.sourceID = "IOService:/fixtureGPU"
+            var samples = [sample(), card], reads = 0
+            let miner = XRGGPUMiner(source: { reads += 1; return samples })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            let count = reads, history = miner.utilizationDataSets[1]
+            try view.applyGPUSource(card.selectionID)
+            #expect(reads == count && view.cardLabels.count == 1)
+            #expect(view.cardLabels[0].leftLabel.accessibilityValue() == "GPU 2\nAMD")
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "2.00M / 8.00M\n40%")
+            #expect(miner.utilizationDataSets[1] === history)
+            let restored = panel(miner, settings: settings, defaults: defaults)
+            #expect(restored.selectedSource == card.selectionID)
+            samples = [sample()]; view.graphUpdate(nil)
+            #expect(view.selectedSource == card.selectionID)
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "Selected GPU unavailable")
+            #expect(view.makeMenu().items[0].submenu?.items.last?.state == .on)
+            var replaced = sample(3, vendor: "AMD", utilization: 70); replaced.sourceID = card.sourceID
+            samples = [sample(), replaced]; view.graphUpdate(nil)
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue()?.contains("70%") == true)
+            #expect(miner.utilizationDataSets[1] !== history)
+        }
+    }
+
+    @Test func utilizationModeUsesReportedPercentAndNeverWaitOrMemoryAsUtilization() throws {
+        try withFixture { settings, defaults in
+            let miner = XRGGPUMiner(source: { [sample(utilization: 50), sample(2, utilization: 0)] })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            view.applyPlotMode(.utilization)
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "50%")
+            view.setFrameSize(NSSize(width: 200, height: 10))
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "25%")
+            try view.applyGPUSource("ioreg-id:2")
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "0%")
+            let restored = panel(miner, settings: settings, defaults: defaults)
+            #expect(restored.plotMode == .utilization && restored.selectedSource == "ioreg-id:2")
+            let unsupported = panel(XRGGPUMiner(source: { [sample(2, utilization: nil, wait: 1000)] }), settings: settings, defaults: defaults)
+            #expect(unsupported.cardLabels[0].rightLabel.accessibilityValue() == "n/a")
+            #expect(unsupported.detailText.contains("never substitutes"))
+        }
+    }
+
+    @Test func resetOnlySelectedGPUHistoryAndKeepReadoutsAndVRAMSnapshot() throws {
+        try withFixture { settings, defaults in
+            let miner = XRGGPUMiner(source: { [sample(utilization: 50), sample(2, utilization: 40)] })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            miner.getLatestGraphicsInfo()
+            try view.applyGPUSource("ioreg-id:2")
+            let other = miner.utilizationDataSets[0].orderedValues
+            let reading = view.cardLabels[0].rightLabel.accessibilityValue()
+            view.clearData(nil)
+            #expect(miner.utilizationDataSets[1].orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(miner.utilizationDataSets[0].orderedValues == other)
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == reading)
+            #expect(try miner.memorySnapshot.get().isEmpty)
+            view.applyPlotMode(.utilization)
+            #expect(view.cardLabels[0].rightLabel.accessibilityValue() == "40%")
+        }
+    }
+
+    @Test func invalidGPUPreferencesStayUntouchedAndMenusUseCachedInventory() throws {
+        try withFixture { settings, defaults in
+            let bad = Data("{\"version\":2}".utf8)
+            defaults.set(bad, forKey: XRGGPUView.sourceKey); defaults.set("future", forKey: XRGGPUView.modeKey)
+            defaults.set("CPU sentinel", forKey: XRGCPUView.sourceKey)
+            var reads = 0
+            let view = panel(XRGGPUMiner(source: { reads += 1; return [sample()] }), settings: settings, defaults: defaults)
+            #expect(view.selectedSource == nil && view.plotMode == .memoryAndActivity)
+            #expect(view.detailText.contains("invalid") && defaults.data(forKey: XRGGPUView.sourceKey) == bad)
+            let count = reads, menu = view.makeMenu()
+            let option = try #require(menu.items[0].submenu?.items[1])
+            #expect(NSApp.sendAction(try #require(option.action), to: option.target, from: option))
+            #expect(view.selectedSource == "ioreg-id:1" && reads == count)
+            #expect(defaults.string(forKey: XRGGPUView.modeKey) == "future")
+            #expect(defaults.string(forKey: XRGCPUView.sourceKey) == "CPU sentinel")
+            let mode = try #require(menu.items[1].submenu?.items[1])
+            #expect(NSApp.sendAction(try #require(mode.action), to: mode.target, from: mode))
+            #expect(view.plotMode == .utilization && reads == count)
         }
     }
 

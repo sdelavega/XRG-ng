@@ -40,6 +40,12 @@ public final class XRGGPUView: NSView, XRGModuleView {
     private weak var host: (any XRGGPUViewHost)?
     private weak var registeredManager: XRGModuleManager?
     private var didAwake = false
+    @nonobjc static let sourceKey = "XRGGPUView.Source.v1"
+    @nonobjc static let modeKey = "XRGGPUView.PlotMode.v1"
+    @nonobjc private(set) var selectedSource: String?
+    @nonobjc private(set) var plotMode = XRGGPUPlotMode.memoryAndActivity
+    private var sourceWarning: String?
+    private var modeWarning: String?
     public private(set) weak var module: XRGModule?
     @nonobjc private(set) var cardLabels: [XRGGraphLabels] = []
 
@@ -67,6 +73,12 @@ public final class XRGGPUView: NSView, XRGModuleView {
         prepare()
     }
     private func prepare() {
+        do { selectedSource = try XRGMonitorSource.load(defaults, key: Self.sourceKey).source }
+        catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
+        if let raw = defaults.object(forKey: Self.modeKey) {
+            if let name = raw as? String, let mode = XRGGPUPlotMode(rawValue: name) { plotMode = mode }
+            else { modeWarning = "Saved GPU plot mode is invalid. Using Memory + Activity without changing the saved value." }
+        }
         ensureLabelCount(1)
         setGraphSize(bounds.size)
         updateLabels()
@@ -146,6 +158,7 @@ public final class XRGGPUView: NSView, XRGModuleView {
     public func min30Update(_ timer: Timer?) {}
 
     private struct Card {
+        let sample: XRGGPUSample
         let total: XRGDataSet
         let free: XRGDataSet
         let wait: XRGDataSet
@@ -154,18 +167,19 @@ public final class XRGGPUView: NSView, XRGModuleView {
         let hasMemory: Bool
         let hasUtilization: Bool
         var validMemory: Bool {
-            hasMemory && total.currentValue.isFinite && total.currentValue > 0
-                && free.currentValue.isFinite && free.currentValue >= 0 && free.currentValue <= total.currentValue
+            guard hasMemory, let total = sample.total, let free = sample.free else { return false }
+            return total.isFinite && total > 0 && free.isFinite && free >= 0 && free <= total
         }
-        var used: CGFloat { validMemory ? total.currentValue - free.currentValue : 0 }
+        var used: CGFloat { validMemory ? CGFloat(sample.total! - sample.free!) : 0 }
+        var capacity: CGFloat { validMemory ? CGFloat(sample.total!) : 0 }
     }
     @nonobjc private func cards() -> [Card] {
         let count = miner.totalVRAMDataSets.count
         guard [miner.freeVRAMDataSets.count, miner.cpuWaitDataSets.count, miner.utilizationDataSets.count,
-               miner.vendorNames.count, miner.memoryAvailable.count, miner.utilizationAvailable.count]
+               miner.vendorNames.count, miner.memoryAvailable.count, miner.utilizationAvailable.count, miner.currentSamples.count]
             .allSatisfy({ $0 == count }) else { return [] }
-        return (0..<count).map { index in
-            Card(total: miner.totalVRAMDataSets[index], free: miner.freeVRAMDataSets[index],
+        return (0..<count).filter { selectedSource == nil || miner.currentSamples[$0].selectionID == selectedSource }.map { index in
+            Card(sample: miner.currentSamples[index], total: miner.totalVRAMDataSets[index], free: miner.freeVRAMDataSets[index],
                  wait: miner.cpuWaitDataSets[index], utilization: miner.utilizationDataSets[index],
                  vendor: miner.vendorNames[index], hasMemory: miner.memoryAvailable[index].boolValue,
                  hasUtilization: miner.utilizationAvailable[index].boolValue)
@@ -183,13 +197,20 @@ public final class XRGGPUView: NSView, XRGModuleView {
     }
     @nonobjc private func usageText(_ card: Card) -> String {
         if card.hasUtilization {
-            let value = card.utilization.currentValue
+            let value = CGFloat(card.sample.utilization ?? .nan)
             return value.isFinite ? String(format: "%.0f%%", min(100, max(0, value)).rounded(.towardZero)) : "n/a"
         }
-        return Self.waitText(card.wait.currentValue)
+        return Self.waitText(CGFloat(card.sample.wait ?? -1))
     }
     @nonobjc private func miniValues(_ cards: [Card]) -> ([NSNumber], String) {
-        let values = cards.map { NSNumber(value: $0.validMemory ? Double($0.used / $0.total.currentValue * 100) : 0) }
+        guard miner.countersAvailable else { return ([], "n/a") }
+        if plotMode == .utilization {
+            let valid = !cards.isEmpty && cards.allSatisfy { $0.hasUtilization && ($0.sample.utilization?.isFinite == true) }
+            let values = cards.map { NSNumber(value: $0.sample.utilization ?? 0) }
+            let mean = cards.reduce(0.0) { $0 + ($1.sample.utilization ?? 0) } / Double(max(1, cards.count))
+            return (values, valid ? String(format: "%.0f%%", mean) : "n/a")
+        }
+        let values = cards.map { NSNumber(value: $0.validMemory ? Double($0.used / $0.capacity * 100) : 0) }
         let usedMB = cards.reduce(0.0) { $0 + Double($1.used) / 1_048_576 }
         let available = !cards.isEmpty && cards.allSatisfy(\.validMemory) && usedMB.isFinite
         return (values, available ? String(format: "%.0fM", usedMB) : "n/a")
@@ -213,26 +234,29 @@ public final class XRGGPUView: NSView, XRGModuleView {
         return NSRect(x: bounds.minX, y: bounds.minY + CGFloat(count - index - 1) * height,
                       width: max(0, bounds.width), height: max(0, height - 1))
     }
-    private func updateLabels() { layoutLabels(cards()) }
+    private func updateLabels() { toolTip = detailText; layoutLabels(cards()) }
     @nonobjc private func layoutLabels(_ cards: [Card]) {
         let mini = shouldDrawMiniGraph()
         ensureLabelCount(mini || cards.isEmpty ? 1 : cards.count)
         if cards.isEmpty || mini {
-            cardLabels[0].layout(leftText: "GPU", centerText: nil, rightText: miniValues(cards).1,
+            cardLabels[0].layout(leftText: "GPU", centerText: nil, rightText: cards.isEmpty && selectedSource != nil ? "Selected GPU unavailable" : miniValues(cards).1,
                                  in: paddedTextRect(), mini: mini, settings: settings)
             return
         }
         for (index, card) in cards.enumerated() {
             let rect = cards.count == 1 ? bounds : band(at: index, count: cards.count)
             let textRect = XRGGraphLabels.paddedTextRect(for: rect)
-            let title = cards.count == 1 ? "GPU" : "GPU \(index + 1)"
+            let title: String
+            if let selectedSource, let ordinal = miner.sourceIDs.firstIndex(of: selectedSource) { title = "GPU \(ordinal + 1)" }
+            else { title = cards.count == 1 ? "GPU" : "GPU \(index + 1)" }
             var memory = "n/a"
-            if card.validMemory {
+            if card.validMemory && miner.countersAvailable {
                 memory = XRGCommon.formattedString(forBytes: Double(card.used))
-                if textRect.width >= 110 { memory += " / " + XRGCommon.formattedString(forBytes: Double(card.total.currentValue)) }
+                if textRect.width >= 110 { memory += " / " + XRGCommon.formattedString(forBytes: Double(card.capacity)) }
             }
+            let reading = !miner.countersAvailable ? "n/a" : plotMode == .utilization ? (card.hasUtilization ? usageText(card) : "n/a") : "\(memory)\n\(usageText(card))"
             cardLabels[index].layout(leftText: "\(title)\n\(card.vendor)", centerText: nil,
-                rightText: "\(memory)\n\(usageText(card))", in: textRect,
+                rightText: reading, in: textRect,
                 mini: XRGGraphLabels.shouldDrawMiniGraph(in: rect, settings: settings), settings: settings)
         }
     }
@@ -251,20 +275,89 @@ public final class XRGGPUView: NSView, XRGModuleView {
             context.shouldAntialias = settings.antiAliasing
             for (index, card) in cards.enumerated() {
                 let rect = band(at: index, count: cards.count)
-                if card.validMemory, let used = XRGDataSet(contentsOfOtherDataSet: card.total) {
-                    used.subtractOtherDataSetValues(card.free)
+                if plotMode == .memoryAndActivity, card.validMemory {
+                    let used = XRGDataSet()
+                    let values = zip(card.total.orderedValues, card.free.orderedValues).map { total, free in
+                        total == XRGGraphRenderer.missingValue || free == XRGGraphRenderer.missingValue ? XRGGraphRenderer.missingValue : total - free
+                    }
+                    used.resize(values.count)
+                    for value in values { used.setNextValue(value) }
                     if used.max > 0 {
-                        XRGGraphRenderer.drawCurve(used, upperBound: card.total.max, lowerBound: 0, in: rect,
+                        XRGGraphRenderer.drawCurve(used, upperBound: max(card.capacity, card.total.max), lowerBound: 0, in: rect,
                             flipped: false, filled: true, color: settings.graphColor(.gpu, component: 1), style: settings.curveStyle(.gpu))
                     }
                 }
-                let data = card.hasUtilization ? card.utilization : card.wait
-                XRGGraphRenderer.drawCurve(data, upperBound: card.hasUtilization ? 100 : max(data.max, 100),
+                // Utilization-only never substitutes CPU wait (nanoseconds) for a
+                // percentage. Unsupported percentage samples are explicit gaps.
+                let utilization = plotMode == .utilization || card.hasUtilization
+                let data = utilization ? card.utilization : card.wait
+                XRGGraphRenderer.drawCurve(data, upperBound: utilization ? 100 : max(data.max, 100),
                     lowerBound: 0, in: rect, flipped: false, filled: false, color: settings.graphColor(.gpu, component: 2), style: settings.curveStyle(.gpu))
             }
         }
         layoutLabels(cards)
         XRGGraphRenderer.drawGraphEffect(in: bounds, settings: settings, module: .gpu)
+    }
+
+    @nonobjc var detailText: String {
+        let selected = cards()
+        let available = miner.countersAvailable && !selected.isEmpty
+        return [sourceWarning, modeWarning,
+                "Scope: \(selectedSource ?? "all discovered GPUs"). \(available ? "Counters available." : "Selected GPU counters unavailable; no replacement is chosen.")",
+                "Plot: \(plotMode.title). Utilization Only uses reported device utilization, 0–100%, and never substitutes memory allocation or CPU wait for busy percent. Compact utilization shows one bar per selected adapter and the unweighted mean of available adapters only when every selected value is present. This is not combined GPU capacity.",
+                "Memory + Activity retains the existing memory fill and utilization line, with CPU hardware wait in nanoseconds only when utilization is unsupported. Memory pools/allocation counters are driver-reported and are not a measurement of GPU compute activity. Optional VRAM graph choices remain independent.",
+                "Source selection uses an opaque IOService location when available, otherwise a registry-entry ID (which can change after reboot). Selection preserves per-device history. A replacement registry instance starts a new history even at the same location. Unavailable pins remain saved. Invalid saved preferences remain unchanged until explicitly replaced.",
+                "Reset Graph clears only the selected GPU histories while preserving the latest readout. Selection, display-mode changes, details and reset do not read hardware. Failed polls append gaps and show n/a; recovery retains per-device history. Availability depends on the driver and hardware."].compactMap { $0 }.joined(separator: "\n\n")
+    }
+    @nonobjc func applyGPUSource(_ id: String?) throws {
+        let next = XRGMonitorSource(source: id)
+        defaults.set(try next.encoded(), forKey: Self.sourceKey)
+        selectedSource = id; sourceWarning = nil; updateLabels(); needsDisplay = true
+    }
+    @nonobjc func applyPlotMode(_ mode: XRGGPUPlotMode) {
+        defaults.set(mode.rawValue, forKey: Self.modeKey)
+        plotMode = mode; modeWarning = nil; updateLabels(); needsDisplay = true
+    }
+    @nonobjc func makeMenu() -> NSMenu {
+        let menu = NSMenu(title: "GPU View")
+        func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self; return item
+        }
+        let sources = item("GPU Source", #selector(emptyEvent(_:)))
+        let submenu = NSMenu(title: "GPU Source")
+        let all = item("All Discovered GPUs", #selector(selectSource(_:))); all.state = selectedSource == nil ? .on : .off; submenu.addItem(all)
+        for (index, sample) in miner.currentSamples.enumerated() {
+            let option = item("GPU \(index + 1) · \(sample.vendor.isEmpty ? "Unknown vendor" : sample.vendor)", #selector(selectSource(_:)))
+            option.representedObject = sample.selectionID; option.toolTip = sample.selectionID
+            option.state = selectedSource == sample.selectionID ? .on : .off; submenu.addItem(option)
+        }
+        if let selectedSource, !miner.sourceIDs.contains(selectedSource) {
+            let missing = item("Selected GPU (unavailable)", #selector(selectSource(_:)))
+            missing.representedObject = selectedSource; missing.toolTip = selectedSource; missing.state = .on; submenu.addItem(missing)
+        }
+        sources.submenu = submenu; menu.addItem(sources)
+        let display = item("GPU Plot", #selector(emptyEvent(_:))); let modes = NSMenu(title: "GPU Plot")
+        for mode in XRGGPUPlotMode.allCases {
+            let option = item(mode.title, #selector(selectPlotMode(_:))); option.representedObject = mode.rawValue
+            option.state = plotMode == mode ? .on : .off; modes.addItem(option)
+        }
+        display.submenu = modes; menu.addItem(display)
+        menu.addItem(.separator()); menu.addItem(item("GPU Details…", #selector(showDetails(_:))))
+        menu.addItem(item("Reset Graph", #selector(clearData(_:))))
+        return menu
+    }
+    public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    public func emptyEvent(_ sender: Any?) {}
+    public func selectSource(_ sender: NSMenuItem) { try? applyGPUSource(sender.representedObject as? String) }
+    public func selectPlotMode(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String, let mode = XRGGPUPlotMode(rawValue: name) else { return }
+        applyPlotMode(mode)
+    }
+    public func clearData(_ sender: Any?) { miner.resetHistory(sourceID: selectedSource); updateLabels(); needsDisplay = true }
+    public func showDetails(_ sender: Any?) {
+        guard let window else { return }
+        XRGMonitorDetails.present(title: "GPU Details", text: detailText, in: window)
     }
 
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

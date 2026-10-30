@@ -42,6 +42,8 @@ public final class XRGCPUMiner: NSObject {
     private var fastBaseline: [XRGCPUTicks]?
     private var sampleCount = 0
     private var fast: [Int] = []
+    public private(set) var countersAvailable = false
+    public private(set) var fastCountersAvailable = false
     @objc public var loadAverage = true
     @objc public var uptime = false
     @objc public private(set) var uptimeDays = 0
@@ -63,6 +65,7 @@ public final class XRGCPUMiner: NSObject {
             configure(initial.count)
             slowBaseline = initial
             fastBaseline = initial
+            countersAvailable = true; fastCountersAvailable = true
         } else {
             configure(max(1, ProcessInfo.processInfo.processorCount))
         }
@@ -111,7 +114,8 @@ public final class XRGCPUMiner: NSObject {
     }
 
     @objc public func graphUpdate(_ timer: Timer?) {
-        guard let current = source(), !current.isEmpty else { return }
+        guard let current = source(), !current.isEmpty else { countersAvailable = false; return }
+        countersAvailable = true
         configure(current.count)
         let values = usage(current, previous: slowBaseline)
         slowBaseline = current
@@ -128,7 +132,8 @@ public final class XRGCPUMiner: NSObject {
     }
 
     @objc public func fastUpdate(_ timer: Timer?) {
-        guard let current = source(), !current.isEmpty else { return }
+        guard let current = source(), !current.isEmpty else { fastCountersAvailable = false; return }
+        fastCountersAvailable = true
         configure(current.count)
         let values = usage(current, previous: fastBaseline)
         fastBaseline = current

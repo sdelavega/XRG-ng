@@ -92,6 +92,35 @@ struct XRGGPUMinerTests {
         #expect(miner.totalVRAMDataSets.isEmpty)
     }
 
+    @Test func registryLocationSelectionSurvivesInstanceReplacementButNotHistory() {
+        var value = card(["Device Utilization %": 10]); value.sourceID = "IOService:/fixture"
+        var samples: [XRGGPUSample]? = [value]
+        let miner = XRGGPUMiner(source: { samples }); miner.setDataSize(3)
+        let old = miner.utilizationDataSets[0]
+        var replacement = card(["Device Utilization %": 50], id: 2); replacement.sourceID = value.sourceID
+        samples = [replacement]; miner.getLatestGraphicsInfo()
+        #expect(miner.sourceIDs == ["IOService:/fixture"] && miner.utilizationDataSets[0] !== old)
+        #expect(miner.utilizationDataSets[0].orderedValues == [0, 0, 50])
+        var changed = replacement; changed.sourceID = "IOService:/different"
+        let previous = miner.utilizationDataSets[0]
+        samples = [changed]; miner.getLatestGraphicsInfo()
+        #expect(miner.utilizationDataSets[0] !== previous)
+    }
+
+    @Test func ambiguousIDsInvalidateSnapshotAndFailuresAppendGaps() {
+        var samples: [XRGGPUSample]? = [card(["Device Utilization %": 50])]
+        let miner = XRGGPUMiner(source: { samples }); miner.setDataSize(3)
+        let old = miner.utilizationDataSets[0]
+        samples = [card(["Device Utilization %": 20]), card(["Device Utilization %": 90])]
+        miner.getLatestGraphicsInfo()
+        #expect(!miner.countersAvailable && old.currentValue == XRGGraphRenderer.missingValue)
+        var a = card([:], id: 1), b = card([:], id: 2)
+        a.sourceID = "same"; b.sourceID = "same"; samples = [a,b]; miner.getLatestGraphicsInfo()
+        #expect(!miner.countersAvailable && miner.sourceIDs == ["ioreg-id:1"])
+        samples = [card(["Device Utilization %": 0])]; miner.getLatestGraphicsInfo()
+        #expect(miner.countersAvailable && miner.utilizationDataSets[0] === old && old.currentValue == 0)
+    }
+
     @Test func liveRegistryRead() {
         let samples = XRGGPUMiner.readSnapshot()
         #expect(samples != nil)

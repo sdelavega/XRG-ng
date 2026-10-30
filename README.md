@@ -370,6 +370,26 @@ unavailable rate display; recovery rebaselines without importing missed traffic.
 Network identity uses name/index, so reuse of both between observations cannot be
 detected. Disk identity uses IOKit registry entry IDs. Totals remain session-only.
 
+Mac CPU and GPU graph menus now include persistent **CPU Source** / **GPU Source**
+choices. Defaults remain all logical CPUs and all discovered GPUs. Logical CPU
+indices are zero-based kernel slots; GPU choices prefer IOService locations with
+registry IDs as a fallback. Missing pins remain selected and show unavailable
+instead of switching devices. Choices are native preferences, separate from themes
+and from the optional VRAM/Fans selectors. Source changes use each source's cached
+history without reading hardware or disturbing another graph.
+
+The GPU menu also offers **Utilization Only**, which plots reported device busy
+percent and leaves unsupported readings unavailable. **Memory + Activity** preserves
+the existing view. Compact utilization uses one bar per selected GPU and an
+unweighted mean when all selected utilization values are present; it is not a
+combined-capacity measure. GPU **Reset Graph** clears only selected GPU histories
+and preserves the latest readouts. Failed GPU reads append gaps and show `n/a`.
+Read-only **CPU Details…** / **GPU Details…** explain scope and measurement limits.
+Mac CPU's **Average** remains the retained-history mean, unlike Linux's instantaneous
+average; load, uptime and process listings remain system-wide when a core is pinned.
+CPU indices may remap after topology changes/reboot, and GPU registry IDs may change
+on reboot. Actual replacement GPU registry instances start fresh histories.
+
 ## Building
 
 ### macOS

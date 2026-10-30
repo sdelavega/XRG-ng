@@ -274,6 +274,73 @@ struct XRGCPUViewTests {
         }
     }
 
+    @Test func logicalCPUSelectionUsesCachedPerCoreDataAndPersistsIndependently() async throws {
+        try await withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            seed(miner)
+            let before = miner.userValues.map(\.orderedValues), reads = source.reads
+            defaults.set("GPU sentinel", forKey: XRGGPUView.sourceKey)
+            try view.applyCPUSource(1)
+            #expect(view.totalUsage == 30 && view.averageUsage == 30 && view.sortedCoreUsage() == [30])
+            #expect(view.historyLayers().map(\.currentValue) == [30, 30, 10])
+            #expect(view.readings().left == "CPU 1" && view.readings().right == "30%")
+            #expect(source.reads == reads && miner.userValues.map(\.orderedValues) == before)
+            #expect(defaults.string(forKey: XRGGPUView.sourceKey) == "GPU sentinel")
+            let restored = panel(miner, settings, defaults)
+            #expect(restored.selectedCPU == 1 && restored.totalUsage == 30)
+            let submenu = try #require(view.makeMenu().items.first { $0.title == "CPU Source" }?.submenu)
+            let selected = try #require(submenu.items.first { $0.tag == 1 })
+            #expect(selected.state == .on && selected.target === view)
+            let all = try #require(submenu.items.first { $0.tag == -1 })
+            #expect(NSApp.sendAction(try #require(all.action), to: all.target, from: all))
+            #expect(view.selectedCPU == nil && view.totalUsage == 100 && source.reads == reads)
+        }
+    }
+
+    @Test func missingLogicalCPURemainsPinnedWithoutSubstitution() async throws {
+        try await withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            try view.applyCPUSource(1)
+            source.samples = [XRGCPUTicks(user: 40, system: 20, idle: 30, nice: 10)]
+            view.graphUpdate(nil)
+            #expect(view.selectedCPU == 1 && !view.sourceAvailable)
+            #expect(view.readings().right == "n/a" && view.historyLayers().isEmpty && view.sortedCoreUsage().isEmpty)
+            #expect(view.detailText.contains("system-wide") && view.detailText.contains("unavailable"))
+            let missing = view.makeMenu().items.first { $0.title == "CPU Source" }?.submenu?.items.last
+            #expect(missing?.title == "Logical CPU 1 (unavailable)" && missing?.state == .on)
+            source.samples = Array(repeating: XRGCPUTicks(user: 50, system: 20, idle: 30, nice: 10), count: 2)
+            view.graphUpdate(nil)
+            #expect(view.selectedCPU == 1 && view.sourceAvailable)
+        }
+    }
+
+    @Test func invalidCPUSourceBytesSurviveUntilExplicitReplacement() async throws {
+        try await withFixture { settings, defaults, source in
+            let invalid = Data("{\"version\":1,\"source\":\"-1\"}".utf8)
+            defaults.set(invalid, forKey: XRGCPUView.sourceKey)
+            let view = panel(source.miner(), settings, defaults)
+            #expect(view.selectedCPU == nil && view.detailText.contains("invalid"))
+            #expect(defaults.data(forKey: XRGCPUView.sourceKey) == invalid)
+            #expect(throws: (any Error).self) { try view.applyCPUSource(1_048_576) }
+            #expect(defaults.data(forKey: XRGCPUView.sourceKey) == invalid)
+            try view.applyCPUSource(nil)
+            #expect(try XRGMonitorSource.load(defaults, key: XRGCPUView.sourceKey).source == nil)
+            #expect(!view.detailText.contains("Saved source options are invalid"))
+        }
+    }
+
+    @Test func CPUReadFailuresAreExplicitWithoutDiscardingHistory() async throws {
+        try await withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            source.advance(); view.graphUpdate(nil)
+            let history = miner.userValues.map(\.orderedValues)
+            source.samples = nil; view.graphUpdate(nil)
+            #expect(view.readings().right == "n/a" && view.sortedCoreUsage().isEmpty)
+            #expect(miner.userValues.map(\.orderedValues) == history)
+            #expect(view.toolTip?.contains("unavailable") == true)
+        }
+    }
+
     @Test func processMenuKeepsTopTenWideValuesAndExplicitActionTargets() async throws {
         try await withFixture { settings, defaults, source in
             let records = (1...12).map { index in
@@ -289,7 +356,7 @@ struct XRGCPUViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             seed(miner)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 18)
+            #expect(menu.items.count == 20)
             #expect(menu.items[1].title == "1200.0% - Process12 (id 5000000012)")
             #expect(menu.items[10].title.contains("Process3"))
             for item in menu.items where !item.isSeparatorItem { #expect(item.target === view) }
@@ -307,14 +374,14 @@ struct XRGCPUViewTests {
     @Test func processMenuHandlesNoResultsAndTiedCPUUsage() async throws {
         try await withFixture { settings, defaults, source in
             let empty = panel(source.miner(), settings, defaults)
-            #expect(empty.makeMenu().items.count == 8)
+            #expect(empty.makeMenu().items.count == 10)
             let records = XRGProcessMiner.parse("20 8 1 1 - u Second\n20 2 1 1 - u First\n1 3 1 1 - u Last")
             let processes = XRGProcessMiner(source: { records }); await processes.refresh()
             let view = panel(source.miner(), settings, defaults, processMiner: processes)
             let menu = view.makeMenu()
             #expect(menu.items[1].title == "20.0% - First (id 2)")
             #expect(menu.items[2].title == "20.0% - Second (id 8)")
-            #expect(menu.items.count == 11)
+            #expect(menu.items.count == 13)
         }
     }
 

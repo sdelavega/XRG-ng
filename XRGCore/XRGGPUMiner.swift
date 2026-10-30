@@ -32,6 +32,8 @@ struct XRGGPUSample {
     let wait: Double?
     let utilization: Double?
     var memoryReading: XRGHardwareReading? = nil
+    var sourceID: String? = nil
+    var selectionID: String { sourceID ?? "ioreg-id:\(id)" }
 
     static func parse(id: UInt64, pci: [String: Any], accelerator: [String: Any], memorySourceID: String? = nil) -> Self {
         func number(_ value: Any?) -> Double? {
@@ -76,7 +78,7 @@ struct XRGGPUSample {
                     total: memory?.0, free: memory?.1,
                     wait: number(perf["hardwareWaitTime"]),
                     utilization: number(perf["Device Utilization %"]).map { min(100, $0) },
-                    memoryReading: XRGHardwareReading.gpuMemory(id: id, vendor: vendorName, pci: pci, accelerator: accelerator, sourceID: memorySourceID))
+                    memoryReading: XRGHardwareReading.gpuMemory(id: id, vendor: vendorName, pci: pci, accelerator: accelerator, sourceID: memorySourceID), sourceID: memorySourceID)
     }
 }
 
@@ -84,6 +86,9 @@ struct XRGGPUSample {
 @objc(XRGGPUMiner)
 public final class XRGGPUMiner: NSObject {
     private final class History {
+        let identity: String
+        let vendor: String
+        init(_ sample: XRGGPUSample) { identity = sample.selectionID; vendor = sample.vendor }
         let total = XRGDataSet()
         let free = XRGDataSet()
         let wait = XRGDataSet()
@@ -94,6 +99,9 @@ public final class XRGGPUMiner: NSObject {
     private var histories: [UInt64: History] = [:]
     private var lastGraphTick: UInt64?
     private(set) var memorySnapshot: Result<[XRGHardwareReading], Error> = .success([])
+    public private(set) var countersAvailable = false
+    private(set) var currentSamples: [XRGGPUSample] = []
+    public private(set) var sourceIDs: [String] = []
     @objc public private(set) var numSamples = 1
     @objc public var numberOfGPUs: Int { vendorNames.count }
     @objc public private(set) var totalVRAMDataSets: [XRGDataSet] = []
@@ -120,10 +128,18 @@ public final class XRGGPUMiner: NSObject {
     }
 
     @objc public func getLatestGraphicsInfo() {
-        guard let samples = source() else {
-            memorySnapshot = .failure(NSError(domain: "XRGGPU", code: 1, userInfo: [NSLocalizedDescriptionKey: "GPU memory readings unavailable"]))
+        guard let samples = source(), Set(samples.map(\.id)).count == samples.count,
+              Set(samples.map(\.selectionID)).count == samples.count else {
+            countersAvailable = false
+            memorySnapshot = .failure(NSError(domain: "XRGGPU", code: 1, userInfo: [NSLocalizedDescriptionKey: "GPU readings unavailable or identities ambiguous"]))
+            for history in histories.values {
+                for values in history.all { values.setNextValue(XRGGraphRenderer.missingValue) }
+            }
             return
         }
+        countersAvailable = true
+        currentSamples = samples.sorted { $0.id < $1.id }
+        sourceIDs = currentSamples.map(\.selectionID)
         memorySnapshot = .success(samples.sorted { $0.id < $1.id }.compactMap(\.memoryReading))
         var next: [UInt64: History] = [:]
         var ordered: [History] = []
@@ -132,12 +148,13 @@ public final class XRGGPUMiner: NSObject {
         var utilization: [NSNumber] = []
         for sample in samples.sorted(by: { $0.id < $1.id }) {
             guard next[sample.id] == nil else { continue }
-            let history = histories[sample.id] ?? History()
+            let old = histories[sample.id]
+            let history = old?.identity == sample.selectionID && old?.vendor == sample.vendor ? old! : History(sample)
             for values in history.all where values.numValues != numSamples { values.resize(numSamples) }
-            history.total.setNextValue(sample.total ?? 0)
-            history.free.setNextValue(sample.free ?? 0)
+            history.total.setNextValue(sample.total.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
+            history.free.setNextValue(sample.free.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
             history.wait.setNextValue(sample.wait ?? -1)
-            history.utilization.setNextValue(sample.utilization ?? 0)
+            history.utilization.setNextValue(sample.utilization.map { CGFloat($0) } ?? XRGGraphRenderer.missingValue)
             next[sample.id] = history
             ordered.append(history)
             vendors.append(sample.vendor)
@@ -152,6 +169,12 @@ public final class XRGGPUMiner: NSObject {
         vendorNames = vendors
         memoryAvailable = memory
         utilizationAvailable = utilization
+    }
+
+    func resetHistory(sourceID: String?) {
+        for history in histories.values where sourceID == nil || history.identity == sourceID {
+            for values in history.all { values.setAllValues(XRGGraphRenderer.missingValue) }
+        }
     }
 
     func refreshForGraphTick(_ tick: UInt64?) {
