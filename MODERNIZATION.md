@@ -2201,3 +2201,60 @@ Cleanup removed only the two owned remote validation directories and the labeled
 local build container, approximately 2.24 GiB total, with no errors.
 Local package/logs/captures remain on MacStorage; shared Docker images and unrelated
 system files were preserved.
+
+### RK3588 vendor NPU driver alias and live counter check
+
+A physical RK3588 vendor image binds its accelerator as uppercase `RKNPU`.
+Inventory previously survived through the firmware-compatible fallback, but the
+vendor load reader recognized only lowercase `rknpu`. Both exact vendor aliases
+now select Rockchip inventory and the existing uniquely-owned debugfs load path;
+mainline Rocket behavior is unchanged. The original driver identity is retained.
+One integration regression covers uppercase detection without firmware fallback,
+three-core averaging, real zero, suspended masking and mixed-case multi-device
+ambiguity. All 14 focused NPU tests passed.
+
+A private, temporary RKNN Toolkit2 v2.3.2 runtime/model experiment (pinned upstream
+commit `42aa1d426c0a9e0869b6374edba009f7208a1926`) completed 3,950 MobileNet inference
+calls over 8.001 seconds with core 0 selected. Eighty privileged debugfs/runtime
+samples were streamed to local storage: 36 showed nonzero load, core 0 peaked at
+91%, cores 1/2 stayed at zero, and the device returned to suspended. This validates
+that counter under one workload, not patched-app execution or general throughput.
+XRG presents the mean across cores; devfreq's suspended 100% remains excluded.
+Debugfs on this image requires root: the ordinary unprivileged app still reports
+activity unavailable, with no privilege escalation. Vendor SDK/model artifacts
+remain private validation inputs, outside the app and source distribution.
+
+An earlier SSH-disconnected attempt produced no retained remote logs and proves
+neither inference execution nor a kernel failure. During the successful repeat,
+delayed output was incorrectly interpreted as a stall and an authorized reboot
+was requested through an already-open recovery channel. That request channel
+exited 0; SSH subsequently returned and uptime confirmed a fresh boot. No causal
+claim about the workload causing a board failure is made.
+The Raspberry Pi host was untouched throughout this pass.
+
+
+The patched ARM64 debug headless binary and the gate-tested shared Swift library
+were then tested together with the existing private Swift runtime bundle. The
+initial launch lacked SwiftOnoneSupport (release bundles do not need it); the
+missing debug runtime was copied into private scratch and the failure retained.
+The corrected app completed 18 samples while 3,971 inference calls ran over
+8.002 seconds: activity rose from 0% to 30.7%, then became unavailable when the
+accelerator suspended. Both processes exited 0 without further reboot. This is a
+physical collector validation, not a packaged GUI release or benchmark.
+
+Final validation: `Tools/ci-linux.sh debug` exited 0 in the owned ARM64 Linux
+container: 38 shared Swift tests, C ABI smoke, Rust formatting/clippy, 591 Rust
+tests, live headless collection, UI dependency/retirement guards, Classic/Midnight
+and sensor/clipboard smoke, file-picker roundtrip, and four collapse checks across
+X11/Wayland and scaling/zoom. Initial missing container desktop dependencies were
+installed only inside that disposable container; failed gates remain separate.
+Mac sources were unchanged and the macOS gate was not repeated. An unprivileged
+physical headless run completed three samples with NPU activity unavailable as
+expected. Evidence, source/binary hashes and private SDK provenance are retained
+under ignored `dist/rknpu-activity-validation`.
+
+Cleanup removed the exact inactive remote validation directory and the labeled
+owned build container, including about 13.6 GiB of measured build/test/remote
+scratch, without errors. Local evidence remains on MacStorage. No system packages
+or persistent services were installed on either physical board; no shared images,
+installed apps, existing preferences or unrelated files were removed.

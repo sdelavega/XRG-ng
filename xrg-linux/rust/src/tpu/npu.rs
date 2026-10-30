@@ -104,7 +104,7 @@ fn driver_family(name: &str) -> Option<Family> {
         "intel_vpu" | "ivpu" => Some(Family::Intel),
         "amdxdna" => Some(Family::Amd),
         "ane" | "apple-ane" | "ane_t6021" => Some(Family::Apple),
-        "rknpu" | "rocket" => Some(Family::Rockchip),
+        "rknpu" | "RKNPU" | "rocket" => Some(Family::Rockchip),
         "msm_npu" | "qcom-npu" => Some(Family::Qualcomm),
         "qaic" => Some(Family::QualcommCloud),
         "ethosu" | "ethos-n" | "ethosn" => Some(Family::ArmEthos),
@@ -282,7 +282,9 @@ pub(super) fn extend(
     }
     let rockchip: Vec<_> = found
         .values_mut()
-        .filter(|d| d.family == Family::Rockchip && d.driver.as_deref() == Some("rknpu"))
+        .filter(|d| {
+            d.family == Family::Rockchip && matches!(d.driver.as_deref(), Some("rknpu" | "RKNPU"))
+        })
         .collect();
     // This driver exposes a global debugfs load report. With multiple devices
     // its ownership is ambiguous, so never copy the same reading onto each one.

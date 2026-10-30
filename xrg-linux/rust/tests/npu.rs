@@ -360,6 +360,38 @@ fn rockchip_driver_load_parser_validates_cores_percent_and_zero_rendered_as_spac
 }
 
 #[test]
+fn rockchip_vendor_uppercase_driver_uses_load_without_firmware_fallback() {
+    let f = Fixture::new();
+    let path = f.platform("npu", "", Some("RKNPU"));
+    f.put(
+        "kernel/debug/rknpu/load",
+        "NPU load: Core0: 90%, Core1: 0%, Core2: 0%,",
+    );
+    f.put(format!("{path}/power/runtime_status"), "active");
+    let report = tpu::discover(&f.0).unwrap();
+    assert_eq!(report.values.len(), 1);
+    assert_eq!(report.values[0].family, Family::Rockchip);
+    assert_eq!(report.values[0].driver.as_deref(), Some("RKNPU"));
+    assert_eq!(report.values[0].utilization, Some(30.));
+    f.put(format!("{path}/power/runtime_status"), "suspended");
+    assert_eq!(tpu::discover(&f.0).unwrap().values[0].utilization, None);
+    f.put(format!("{path}/power/runtime_status"), "active");
+    f.put(
+        "kernel/debug/rknpu/load",
+        "NPU load: Core0: 0%, Core1: 0%, Core2: 0%,",
+    );
+    assert_eq!(tpu::discover(&f.0).unwrap().values[0].utilization, Some(0.));
+    f.platform("npu2", "", Some("rknpu"));
+    assert!(
+        tpu::discover(&f.0)
+            .unwrap()
+            .values
+            .iter()
+            .all(|d| d.utilization.is_none())
+    );
+}
+
+#[test]
 fn rockchip_global_load_is_not_assigned_to_multiple_devices_or_suspended_hardware() {
     let f = Fixture::new();
     let path = f.platform("npu", "rockchip,rk3588-rknpu\0", Some("rknpu"));

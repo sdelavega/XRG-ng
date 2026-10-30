@@ -128,10 +128,24 @@ preferences; existing apps and settings were preserved.
 Both initial headless probes reported unavailable device-wide GPU utilization/VRAM;
 the Pi's hardware-rendered UI also exposed explicitly labeled client activity.
 Client activity is not whole-device utilization, and working rendering does not
-prove complete GPU telemetry. NPU compute workloads, native package installation,
-full desktop interaction/accessibility, suspend/resume and power use remain
-unverified. These checks expand the best-effort matrix; they do not certify every
+prove complete GPU telemetry. Apart from the RK3588 follow-up below, NPU compute
+workloads remain unverified. Native package installation, full desktop
+interaction/accessibility, suspend/resume and power use also remain unverified. These checks expand the best-effort matrix; they do not certify every
 board image or driver. Feedback on these platforms remains welcome.
+
+A follow-up RK3588 experiment used a temporary vendor RKNN runtime and MobileNet
+model outside the app: 3,950 inference calls completed in eight seconds on core 0.
+Privileged debugfs sampling observed core 0 up to 91%, cores 1/2 at 0%, then idle
+and suspended state. XRG averages the three reported cores (91/0/0 means about
+30.3% overall), rather than displaying the busiest core as whole-device usage.
+The collector now recognizes the vendor's uppercase `RKNPU` driver alias. This
+validates the counter under one workload. A patched debug headless app then
+reported 0% to 30.7% during 3,971 further inferences over eight seconds, followed
+by unavailable activity after suspension. This is not a general throughput benchmark
+or a packaged release/UI test. On this image debugfs requires root, so an
+ordinary unprivileged app still reports activity unavailable. XRG does not elevate
+privileges or bundle the experimental vendor runtime/model. Devfreq load remains
+excluded from NPU activity. Other vendor/runtime combinations remain best effort.
 
 ## Construction
 
@@ -866,7 +880,7 @@ producer-reported inference throughput are distinct quantities.
 | Intel NPU | `intel_vpu`/`ivpu`, accel-class aliases and known NPU PCI IDs | Elapsed delta of `npu_busy_time_us`; optional reported MHz and allocated-memory bytes |
 | AMD Ryzen AI / XDNA | `amdxdna`, accel-class aliases and known AMD NPU PCI IDs | AIE2 readable-client busy-time activity when `drm-engine-npu` is exposed; other devices remain inventory only |
 | Apple Neural Engine | ANE platform compatible/driver; known M-series SoC fallback | Inventory or explicitly unverified SoC capability; no Linux ANE utilization reader |
-| Rockchip RKNN / RKNPU | `rknpu` and mainline `rocket` endpoints; selected known SoC fallback | Vendor `rknpu/load` mean core load when readable and uniquely owned; Rocket inventory only |
+| Rockchip RKNN / RKNPU | Vendor `rknpu`/`RKNPU` and mainline `rocket` endpoints; selected known SoC fallback | Vendor `rknpu/load` mean core load when readable and uniquely owned; Rocket inventory only |
 | Qualcomm Hexagon / HTP | NPU or compute DSP CDSP/NSP platform compatibles, with remoteproc state where exposed; selected known SoC fallback | Inventory; no inference/activity estimate from firmware or DSP state |
 | Qualcomm Cloud AI | `qaic` and known PCI IDs, deduplicated with accel-class aliases | Inventory; activity unavailable |
 | Arm Ethos, including NXP systems exposing Ethos | Recognized Ethos-U/N compatible or driver | Inventory; activity unavailable |
@@ -928,7 +942,7 @@ establish physical AMD hardware accuracy; community feedback is encouraged.
 Discovery reads sysfs only: `/sys/class/accel`, PCI and platform devices, plus
 known machine compatibles. It does not open accelerator device nodes, submit
 ioctls, load firmware, reset hardware or change power/clocks. Rockchip load is read
-only if an active vendor `rknpu` endpoint uniquely owns the report; other debugfs
+only if an active vendor `rknpu`/`RKNPU` endpoint uniquely owns the report; other debugfs
 controls are not read. Scans share a cooperative 100 ms budget, 4,096-entry root
 limits and a 256-record NPU inventory cap. Attributes are limited to 4 KiB;
 malformed/inaccessible optional telemetry preserves inventory with a note.
