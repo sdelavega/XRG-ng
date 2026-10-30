@@ -114,6 +114,25 @@ version/commit, distribution, kernel, CPU architecture, GPU/device model and dri
 plus expected/observed results and relevant diagnostics. Corrections, driver details
 and contributions are welcome. See the [project support policy](../../README.md#hardware-support-and-feedback).
 
+### Physical ARM64 checks (2026-10-30)
+
+A fresh runtime bundle from `0fdf7a3` was tested without installing system packages
+or toolchains on either device. AI providers/weather were disabled in isolated
+preferences; existing apps and settings were preserved.
+
+| Hardware / OS | Observed validation | Limits |
+| --- | --- | --- |
+| Raspberry Pi 5 / 64-bit Debian 13.4, Raspberry Pi kernel 6.12.75 | Live CPU/memory/network/disk samples, four temperature inputs and PWM fan RPM; Xvfb/X11 smoke passed. Native Wayland app smoke exited 0 and its own diagnostics reported V3D 7.1.7.0 rendering. | Headless `labwc` segfaulted during shutdown (exit 139), reproduced separately from the successful app exit. This is not an unqualified compositor/session pass. No TPU/NPU endpoint was present. |
+| Orange Pi 5 Plus (RK3588) / Beryllium OS (Arch-derived), kernel 6.1.75-rkr3 | Live system samples, eight temperature inputs and one NPU endpoint; Xvfb/X11 smoke passed. A separate EGL pbuffer clear/finish probe reported Mali-G610 MC4 (Panfrost), OpenGL ES 3.1 / Mesa 26.0.3. | No native Wayland app session was tested. NPU activity remained unavailable; devfreq reported `100@1000000000Hz` while runtime status was `suspended`, so it is not treated as verified inference utilization. No readable fan RPM. |
+
+Both initial headless probes reported unavailable device-wide GPU utilization/VRAM;
+the Pi's hardware-rendered UI also exposed explicitly labeled client activity.
+Client activity is not whole-device utilization, and working rendering does not
+prove complete GPU telemetry. NPU compute workloads, native package installation,
+full desktop interaction/accessibility, suspend/resume and power use remain
+unverified. These checks expand the best-effort matrix; they do not certify every
+board image or driver. Feedback on these platforms remains welcome.
+
 ## Construction
 
 - **Shared Swift:** the *same source files* compile into macOS's XRGCore target and

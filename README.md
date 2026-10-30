@@ -47,6 +47,12 @@ Bug reports, corrections and contributions help improve support for everyone.
 Physical validation of every listed platform is not a prerequisite for progress
 or releases.
 
+Physical ARM64 coverage now includes Raspberry Pi 5/Debian 13 and Orange Pi 5
+Plus/RK3588 on an Arch-derived system. Live collectors and isolated X11 application
+smokes passed on both; Pi native Wayland rendering passed at the application level
+with a compositor shutdown failure retained. See the
+[dated hardware results and limits](xrg-linux/rust/README.md#physical-arm64-checks-2026-10-30).
+
 ## Apple Neural Engine on macOS
 
 The **NPU** graph sits directly below **GPU** and above **Memory** in vertical

@@ -2165,3 +2165,39 @@ actual suspend/resume, physical Intel/macOS 26 runtime or new latency claim.
 Cleanup removed the two inventoried task build roots and 614 empty private test
 preferences, approximately 3.03 GiB, with no errors. Installed apps, ordinary
 settings, repository caches and unrelated project files were preserved.
+
+### Physical Linux ARM64 validation: Raspberry Pi 5 and RK3588
+
+Built a fresh release-mode ARM64 egui/Swift runtime preview from `0fdf7a3`, copied
+the same checksum-verified archive to two real devices and used private temporary
+XDG preferences with AI/weather disabled. No system packages/toolchains were
+installed on those hosts, no existing app was interrupted and no credentials or
+network addresses were added to source. Local packaging utilities were installed
+only inside the owned disposable build container. Initial offline cache and
+missing-tool failures are retained with final successful build/package evidence.
+
+RPi5/Debian 13.4 (6.12.75 Raspberry Pi kernel) and Orange Pi 5 Plus/Beryllium OS
+(Arch-derived, 6.1.75-rkr3) both passed three live headless samples (CPU's initial
+interval is intentionally pending), runtime linking and Xvfb/X11 UI smoke. Pi
+reported four thermal inputs and PWM fan RPM; RK3588 reported eight thermal inputs
+and one NPU endpoint, with activity unavailable. Both lacked device-wide GPU
+utilization/VRAM in initial headless samples; unavailable inputs were not invented.
+
+The Pi app completed native Wayland smoke with exit 0 and diagnostics identified
+its V3D 7.1.7.0 renderer, valid worker samples, preferences/details and repeated
+draws. Headless labwc teardown crashed with 139 in both session-exit and explicit
+termination variants; that failure is retained, not converted into a compositor
+pass. A separate RK3588 EGL pbuffer clear/finish succeeded on Mali-G610 MC4/Panfrost
+(OpenGL ES 3.1). Pi client-level activity is labeled separately from device usage.
+The readable RK3588 devfreq load was `100@1000000000Hz` while its runtime status
+was `suspended`; it needs semantic validation before being presented as NPU
+utilization. No NPU compute or physical suspend/power test.
+
+Logs, manifests/checksums, disabled-provider settings, desktop report and inspected
+UI captures are retained in `dist/arm-host-validation`. No application source or
+schema changed; no new release was published. The public hardware guide records
+board/OS coverage and limits without private hostnames, addresses or credentials.
+Cleanup removed only the two owned remote validation directories and the labeled
+local build container, approximately 2.24 GiB total, with no errors.
+Local package/logs/captures remain on MacStorage; shared Docker images and unrelated
+system files were preserved.
