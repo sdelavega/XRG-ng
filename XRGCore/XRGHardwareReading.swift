@@ -13,7 +13,8 @@ struct XRGHardwareReading {
     var valid: Bool {
         value.isFinite && value >= 0 && (capacity.map { $0.isFinite && $0 > 0 && value <= $0 } ?? true)
     }
-    static func gpuMemory(id: UInt64, vendor: String, pci: [String: Any], accelerator: [String: Any]) -> Self? {
+    static func gpuMemory(id: UInt64, vendor: String, pci: [String: Any], accelerator: [String: Any], sourceID: String? = nil) -> Self? {
+        let sourceID = sourceID.flatMap { !$0.isEmpty && $0.utf8.count <= 1024 && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) ? $0 : nil } ?? String(id)
         let perf = accelerator["PerformanceStatistics"] as? [String: Any] ?? [:]
         func number(_ raw: Any?) -> Double? {
             guard let n = raw as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
@@ -28,17 +29,17 @@ struct XRGHardwareReading {
             let value = used ?? free.map { total - $0 }
             if let value, value.isFinite, value >= 0, value <= total,
                free.map({ $0 <= total && (used == nil || abs(total - value - $0) <= max(1, total * 0.001)) }) ?? true {
-                return Self(id: String(id), name: name, value: value, capacity: total,
+                return Self(id: sourceID, name: name, value: value, capacity: total,
                             note: "Driver-reported GPU memory pool; this does not establish physical memory topology.")
             }
         }
         // Allocation-only counters remain bytes, with no percentage/capacity.
         if let value = number(perf["In use system memory"]) {
-            return Self(id: String(id), name: name, value: value,
+            return Self(id: sourceID, name: name, value: value,
                         note: "GPU system-memory allocations; shared/unified RAM, not installed VRAM. Capacity unavailable.")
         }
         if let value = used, total == nil {
-            return Self(id: String(id), name: name, value: value,
+            return Self(id: sourceID, name: name, value: value,
                         note: "Driver-reported GPU allocations; capacity unavailable.")
         }
         return nil

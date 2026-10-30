@@ -15,6 +15,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     enum Kind { case vram, fans
         var id: XRGGraphID { self == .vram ? .vram : .fans }
         var name: String { id.name }
+        var sourcesKey: String { self == .vram ? "vramGraphSourcesV1" : "fanGraphSourcesV1" }
     }
     @MainActor private final class History {
         let data = XRGDataSet()
@@ -32,6 +33,12 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     private var awake = false
     private var histories: [String: History] = [:]
     private var slots: [String?] = [nil, nil, nil]
+    private var readError: String?
+    private(set) var sourceSelection = XRGHardwareSources()
+    private(set) var sourceSelectionError: String?
+    private(set) var sourcesEditor: XRGHardwareSourcesEditor?
+    private weak var sourcesHost: NSWindow?
+    private weak var sourcesSheet: NSWindow?
     private var width = 120
     private(set) var readings: [XRGHardwareReading] = []
     private(set) var percentage = false
@@ -45,6 +52,13 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         self.kind = kind; self.source = source; self.defaults = defaults; standaloneSettings = settings
         status = kind == .fans ? "No readable fan RPM" : "GPU memory unavailable"
         super.init(frame: frame)
+        if defaults.object(forKey: kind.sourcesKey) != nil {
+            if let data = defaults.data(forKey: kind.sourcesKey), let decoded = try? XRGHardwareSources(data: data) {
+                sourceSelection = decoded
+            } else {
+                sourceSelectionError = "Saved source choices are invalid. Using automatic sources for this session; Apply valid choices to replace them."
+            }
+        }
         for label in [labels.leftLabel, labels.centerLabel, labels.rightLabel] { addSubview(label) }
         setGraphSize(frame.size); updateLabels()
     }
@@ -52,7 +66,11 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     nonisolated override func awakeFromNib() {
         super.awakeFromNib(); MainActor.assumeIsolated { awake = true; bindToWindow() }
     }
-    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); bindToWindow() }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if sourcesHost != nil && sourcesHost !== window { cancelSources() }
+        bindToWindow()
+    }
     private func bindToWindow() {
         let next = window as? any XRGHardwareViewHost
         if host !== next || registeredManager !== next?.moduleManager {
@@ -87,27 +105,46 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         case .success(let values):
             var ids = Set<String>()
             next = values.filter { $0.valid && ids.insert($0.id).inserted }.sorted { $0.id < $1.id }
-            status = next.isEmpty ? (kind == .fans ? "No readable fan RPM" : "GPU memory unavailable") : ""
-        case .failure(let error): next = []; status = error.localizedDescription
+            readError = nil
+        case .failure(let error): next = []; readError = error.localizedDescription
         }
+        readings = next; project(appendSample: true)
+    }
+    private func project(appendSample: Bool) {
+        let next = readings
         let currentIDs = Set(next.map(\.id))
-        histories = histories.filter { currentIDs.contains($0.key) }
-        for i in slots.indices where slots[i].map({ !currentIDs.contains($0) }) == true { slots[i] = nil }
-        for reading in next where !slots.contains(reading.id) {
-            if let empty = slots.firstIndex(where: { $0 == nil }) { slots[empty] = reading.id }
+        if let fixed = sourceSelection.sources { slots = fixed }
+        else {
+            for i in slots.indices where slots[i].map({ !currentIDs.contains($0) }) == true { slots[i] = nil }
+            for reading in next where !slots.contains(reading.id) {
+                if let empty = slots.firstIndex(where: { $0 == nil }) { slots[empty] = reading.id }
+            }
         }
-        let plotted = next.filter { slots.contains($0.id) }
-        let percent = kind == .vram && !plotted.isEmpty && plotted.allSatisfy { $0.capacity != nil }
+        let selected = Set(slots.compactMap { $0 })
+        histories = histories.filter { selected.contains($0.key) && (sourceSelection.sources != nil || currentIDs.contains($0.key)) }
+        let plotted = next.filter { selected.contains($0.id) }
+        let percent = kind == .vram && (plotted.isEmpty && sourceSelection.sources != nil ? percentage : !plotted.isEmpty && plotted.allSatisfy { $0.capacity != nil })
         if percent != percentage { histories.removeAll(); percentage = percent }
-        readings = next
+        let missing = selected.subtracting(currentIDs)
+        status = readError ?? (!missing.isEmpty ? "Selected sources unavailable" : plotted.isEmpty ? (kind == .fans ? "No readable fan RPM" : "GPU memory unavailable") : "")
         for reading in plotted {
             let signature = "\(reading.name)|\(reading.capacity.map(String.init(describing:)) ?? "none")|\(reading.note)|\(percentage)"
             let history: History
-            if let existing = histories[reading.id], existing.signature == signature { history = existing }
+            let fresh = histories[reading.id]?.signature != signature
+            if let existing = histories[reading.id], !fresh { history = existing }
             else { history = History(signature: signature, size: width); histories[reading.id] = history }
-            history.data.setNextValue(percentage ? reading.value / reading.capacity! * 100 : reading.value)
+            if appendSample || fresh { history.data.setNextValue(percentage ? reading.value / reading.capacity! * 100 : reading.value) }
+        }
+        if appendSample {
+            for id in missing { histories[id]?.data.setNextValue(XRGGraphRenderer.missingValue) }
         }
         updateLabels(); needsDisplay = true
+    }
+    func applySources(_ value: XRGHardwareSources) throws {
+        let data = try value.encoded()
+        defaults.set(data, forKey: kind.sourcesKey)
+        sourceSelection = value; sourceSelectionError = nil
+        project(appendSample: false)
     }
     func fastUpdate(_ timer: Timer?) {}
     func min5Update(_ timer: Timer?) {}
@@ -124,19 +161,24 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         }
         return String(format: "%.0fB", bytes)
     }
-    var heading: String { kind == .fans ? "Fans" : readings.isEmpty ? "VRAM" : percentage ? "VRAM pool" : "GPU allocations" }
+    var heading: String { kind == .fans ? "Fans" : !readings.contains(where: { slots.contains($0.id) }) ? "VRAM" : percentage ? "VRAM pool" : "GPU allocations" }
     var detailText: String {
         let semantics = kind == .fans
             ? "Read-only fan RPM. Zero can mean a stopped fan. Missing sensors are unavailable; no PWM or fan controls are written."
             : "Reported GPU pools/allocations, not inferred installed VRAM or system-RAM capacity. Curves use percent only when every plotted adapter has a valid reported capacity; otherwise all curves use bytes."
         let rows = readings.prefix(64).map { "\($0.name) [\($0.id)]: \(valueText($0))\n\($0.note)" }.joined(separator: "\n")
-        return "\(semantics)\n\(status)\n\(rows)" + (readings.count > 64 ? "\nAdditional readings omitted" : "")
+        let selected = slots.enumerated().compactMap { index, id in id.map {
+            "Curve \(index + 1): \($0)" + (readings.contains(where: { $0.id == id }) ? "" : " · unavailable")
+        } }.joined(separator: "\n")
+        return "\(semantics)\n\(sourceSelection.sources == nil ? "Automatic sources" : "Custom sources")\n\(selected)\n\(sourceSelectionError ?? "")\n\(status)\nAvailable readings:\n\(rows)" + (readings.count > 64 ? "\nAdditional readings omitted" : "")
     }
     private func updateLabels() {
-        let visible = slots.enumerated().compactMap { index, id in readings.first { $0.id == id }.map { (index, $0) } }
+        let selected = slots.enumerated().compactMap { index, id -> (Int, String, XRGHardwareReading?)? in
+            id.map { (index, $0, readings.first { $0.id == id }) }
+        }
         let mini = XRGGraphLabels.shouldDrawMiniGraph(in: bounds, settings: settings)
-        let left = ([heading] + (visible.isEmpty ? [status] : visible.map { "\($0.0 + 1): \($0.1.name)" })).joined(separator: "\n")
-        let values = visible.map { valueText($0.1) }
+        let left = ([heading] + (selected.isEmpty ? [status] : selected.map { "\($0.0 + 1): " + ($0.2?.name ?? "Unavailable: \($0.1)") })).joined(separator: "\n")
+        let values = selected.map { $0.2.map(valueText) ?? "n/a" }
         let right = mini ? (values.isEmpty ? "n/a" : values.joined(separator: "\n")) : ([""] + values).joined(separator: "\n")
         labels.layoutColumnText(left, rightText: right, in: XRGGraphLabels.paddedTextRect(for: bounds),
                                 mini: mini, settings: settings)
@@ -169,10 +211,38 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     func makeMenu() -> NSMenu {
         let menu = NSMenu(title: kind.name)
+        let sources = NSMenuItem(title: "Choose Sources…", action: #selector(chooseSources(_:)), keyEquivalent: "")
+        sources.target = self; menu.addItem(sources); menu.addItem(.separator())
         for (title, action) in [("Read-only details…", #selector(showDetails(_:))), ("Reset Graph", #selector(clearData(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
+    }
+    @objc func chooseSources(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil else { return }
+        let editor = XRGHardwareSourcesEditor(selection: sourceSelection, readings: readings, suggested: slots, name: kind.name)
+        let alert = NSAlert(); alert.messageText = "\(kind.name) Sources"
+        alert.informativeText = "Choose the source for each curve, or keep automatic selection. This changes graph display only; hardware controls are never written."
+        alert.accessoryView = editor.view
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
+        alert.addButton(withTitle: "Apply").keyEquivalent = ""
+        editor.validityChanged = { [weak alert] valid in alert?.buttons.last?.isEnabled = valid }
+        editor.changed(nil); sourcesEditor = editor; sourcesHost = window; sourcesSheet = alert.window
+        NotificationCenter.default.addObserver(self, selector: #selector(sourcesHostWillClose(_:)), name: NSWindow.willCloseNotification, object: window)
+        alert.beginSheetModal(for: window) { [weak self, editor] response in
+            guard let self else { return }
+            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: self.sourcesHost)
+            self.sourcesEditor = nil; self.sourcesSheet = nil; self.sourcesHost = nil
+            if response == .alertSecondButtonReturn {
+                do { try self.applySources(editor.draft) }
+                catch { self.sourceSelectionError = error.localizedDescription; self.updateLabels() }
+            }
+        }
+    }
+    @objc private func sourcesHostWillClose(_ notification: Notification) { cancelSources() }
+    private func cancelSources() {
+        guard let host = sourcesHost, let sheet = sourcesSheet, host.attachedSheet === sheet else { return }
+        host.endSheet(sheet, returnCode: .cancel); sheet.orderOut(nil)
     }
     @objc func clearData(_ sender: Any?) {
         for history in histories.values { history.data.setAllValues(XRGGraphRenderer.missingValue) }

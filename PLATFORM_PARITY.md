@@ -58,8 +58,15 @@ Implemented in development for monitoring tools:
   fan cache. Original GPU/Temperature readings and old presentation profiles remain.
   Allocation-only GPU memory is labeled and plotted in bytes; reported pools use
   percentages when every plotted source has capacity. Linux VRAM currently needs
-  a reported used/total pair. Mac optional sources are automatic (extra readings
-  in details); Linux also supports explicit fan source selection.
+  a reported used/total pair. Mac optional panels now retain automatic selection
+  by default and offer persistent custom curve slots through Choose Sources….
+  Apply/Cancel are separate drafts; None preserves an empty color slot. Missing
+  pinned sources show gaps and never select another device. Unaffected histories
+  survive source changes; metadata and unit changes reset the affected histories.
+  VRAM choices prefer IOService locations, falling back to session registry IDs;
+  driver/topology changes may require reselection. Fan choices use sensor keys.
+  Source IDs remain platform-local. Linux also supports explicit fan/GPU selection;
+  Mac integrated GPU/Temperature readings remain separate from these optional plots.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

@@ -282,9 +282,25 @@ palette files. These controls are not included in the published macOS 0.1.0 app.
 
 On **macOS**, **Preferences → Graphs** also offers optional **VRAM** and **Fans**
 panels, both off by default. Each plots up to three sources with its own colors,
-height and curve style. Right-click for read-only details or **Reset Graph**;
-additional readable sources appear in details. The existing GPU and Temperature
-panels retain their integrated readings.
+height and curve style. Right-click for **Choose Sources…**, read-only details or
+**Reset Graph**. Automatic selection remains the default. Custom choices assign
+reported sources to curves 1/2/3; **None** leaves a color slot empty. Apply saves
+choices for that panel; Cancel or closing the window discards the draft. Source
+selection changes display only and never writes fan or GPU controls. Additional
+readable sources remain in details. The existing GPU and Temperature panels
+retain their integrated readings.
+
+Custom sources stay pinned when unavailable, with explicit labels and gaps instead
+of substituting another device. Compatible returning sources resume after the gap;
+changed source metadata starts a fresh curve, and changing memory axis units clears
+history. Source changes preserve unaffected curves and use cached readings without
+an extra hardware sample. **Reset Graph** keeps saved source choices.
+
+VRAM choices use IOService locations when available. Driver/topology changes can
+require reselection; fallback numeric registry IDs can change after reboot. Fan
+choices use the collector's sensor keys. These platform-local IDs stay out of XTF
+and portable JSON palettes. Invalid saved choices are preserved and use automatic
+selection for the session until valid choices are explicitly applied.
 
 VRAM shows driver-reported GPU memory pools as percentages when all plotted
 adapters report usable capacity. Allocation-only readings, including Apple shared

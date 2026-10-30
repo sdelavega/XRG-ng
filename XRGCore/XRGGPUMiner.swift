@@ -33,7 +33,7 @@ struct XRGGPUSample {
     let utilization: Double?
     var memoryReading: XRGHardwareReading? = nil
 
-    static func parse(id: UInt64, pci: [String: Any], accelerator: [String: Any]) -> Self {
+    static func parse(id: UInt64, pci: [String: Any], accelerator: [String: Any], memorySourceID: String? = nil) -> Self {
         func number(_ value: Any?) -> Double? {
             guard let value = value as? NSNumber,
                   CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
@@ -76,7 +76,7 @@ struct XRGGPUSample {
                     total: memory?.0, free: memory?.1,
                     wait: number(perf["hardwareWaitTime"]),
                     utilization: number(perf["Device Utilization %"]).map { min(100, $0) },
-                    memoryReading: XRGHardwareReading.gpuMemory(id: id, vendor: vendorName, pci: pci, accelerator: accelerator))
+                    memoryReading: XRGHardwareReading.gpuMemory(id: id, vendor: vendorName, pci: pci, accelerator: accelerator, sourceID: memorySourceID))
     }
 }
 
@@ -188,7 +188,10 @@ public final class XRGGPUMiner: NSObject {
                 IOObjectRelease(current)
                 current = parent
             }
-            result.append(XRGGPUSample.parse(id: id, pci: pci, accelerator: accelerator))
+            // Prefer an opaque IOService location for saved VRAM selections. Do
+            // not change the legacy integrated GPU identity or open this as a path.
+            let location = IORegistryEntryCopyPath(service, kIOServicePlane)?.takeRetainedValue() as String?
+            result.append(XRGGPUSample.parse(id: id, pci: pci, accelerator: accelerator, memorySourceID: location))
         }
         return result
     }
