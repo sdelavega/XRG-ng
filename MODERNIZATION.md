@@ -1553,3 +1553,44 @@ compilation issue; explicit closure predicates preserve the assertions and pass.
 Physical Intel/Linux x86-64, macOS 26 runtime and actual suspend/resume remain
 unverified. Other system graphs still use sample-count retention. No app version,
 signing, pricing, notification or dependency/notice policy changed.
+
+### CPU timestamp windows follow the sampling target
+
+Mac CPU Time Window and Linux Sources now support 1–60 minutes (zero uses the
+existing sample-count mode). CPU uses the shared Swift timestamp buffer with a
+one-hour / 20,000-observation bound and three channels. Projection follows the
+current normal CPU sampling target, minimum 200 ms; one minute at 200 ms is 301
+positions. Shared projection also caps output at 20,000 positions for generic
+callers. Centered bins tolerate ordinary scheduling jitter without interpolation,
+while sparse observations and failed/warm-up intervals retain genuine gaps. The
+AI default remains five seconds; its existing ABI and settings remain compatible.
+
+Mac CPU miners emit completed normal observations through weak view callbacks.
+Each view retains only its observed scope, so multiple views remain independent
+without storing hours of data for every logical CPU. New views do not assign
+invented timestamps to old index-only miner data. Source changes, topology changes
+and Reset Graph clear the appropriate timestamp histories. Observer removal follows
+view lifetime. Window/cadence projection edits do not read hardware or change normal/
+fast baselines, current readings or fast-bar smoothing; fast updates do not append
+normal graph observations. Legacy sample buffers retain their existing policies.
+
+Linux receives its active timer period before sampling and passes completion
+SystemTime separately from the monotonic rate clock. Existing system-settings wake
+behavior remains. Scope/reset/failure rules and CPU metric meanings are unchanged.
+Linux schema 32 migrates older profiles read-only until explicit save; invalid
+windows and types reject the entire edit. The GUI gate applies a one-minute window
+at 200 ms and waits for its 301-position worker snapshot as well as the preference
+acknowledgment, retaining the original three-second deadline.
+
+Validation: universal Mac build, 581 cases on ARM64 and 581 under Rosetta x86_64,
+isolated native/packaged launch checks. Linux ARM64 passed 37 shared Swift tests,
+extended C ABI smoke, strict Clippy and 570 Rust tests. New fixtures cover cadence
+changes, jitter, limits/cutoffs, rate-vs-wall-clock separation, missing data, scope/
+topology/reset behavior, observer lifetime and independent views. The first lifetime
+assertion ran before AppKit's autorelease pool drained; the fixture now drains it
+and retains the deallocation assertion. Final builds also correct singular minute
+labels found during visual inspection. Results/captures are in
+`dist/cpu-time-window-validation`. Native captured data includes a 20-second blank
+interval inside one minute. Physical Intel/Linux x86-64, macOS 26 runtime and real
+suspend/resume remain unverified. Memory, Network, Disk and other system timestamp
+windows remain separate work; no app version, release, signing or notice change.

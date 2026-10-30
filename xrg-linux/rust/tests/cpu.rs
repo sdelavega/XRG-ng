@@ -387,3 +387,80 @@ fn compact_cpu_face_keeps_core_identity_gaps_and_average_distinct_from_core_perc
     assert!(failed.readout.cores.is_empty());
     assert_eq!(failed.readout.top[0].right.render(Units::Celsius), "n/a");
 }
+
+#[test]
+fn cpu_time_windows_preserve_rate_clock_and_show_real_gaps_across_cadence_changes() {
+    let mut view = View::default();
+    view.set_time_window(1).unwrap();
+    view.panel_at(records(0, true), &overview(), None, 0., 90.);
+    let first = view
+        .panel_at(records(1, true), &overview(), None, 1., 100.)
+        .0;
+    let second = view
+        .panel_at(records(2, true), &overview(), None, 2., 110.)
+        .0;
+    assert_eq!(second.series[0].len(), 61);
+    assert_eq!(second.series[0][50], first.series[0][60]);
+    assert!(second.series[0][51..60].iter().all(|v| v.is_nan()));
+    let rate = second.series[0][60];
+    assert!(rate > 0.);
+    view.set_history_interval(0.2);
+    let third = view
+        .panel_at(records(3, true), &overview(), None, 3., 110.2)
+        .0;
+    assert_eq!(third.series[0].len(), 301);
+    assert_eq!(third.series[0][300], rate);
+    assert!(view.set_time_window(61).is_err());
+    let rollback = view
+        .panel_at(records(4, true), &overview(), None, 4., 50.)
+        .0;
+    assert_eq!(rollback.series[0][300], rate);
+    assert!(rollback.series[0][..300].iter().all(|v| v.is_nan()));
+    view.clear_graph();
+    let fresh = view
+        .panel_at(records(5, true), &overview(), None, 5., 50.2)
+        .0;
+    assert_eq!(fresh.series[0][300], rate);
+    assert!(fresh.series[0][..300].iter().all(|v| v.is_nan()));
+    view.set_time_window(0).unwrap();
+    let sample = view
+        .panel_at(records(6, true), &overview(), None, 6., 50.4)
+        .0;
+    assert_eq!(sample.series[0].len(), 120);
+    assert_eq!(sample.series[0][119], rate);
+}
+
+#[test]
+fn cpu_window_failures_scope_topology_and_warmup_keep_missing_data_explicit() {
+    let mut view = View::default();
+    view.set_time_window(1).unwrap();
+    let warmup = view
+        .panel_at(records(0, true), &overview(), None, 0., 100.)
+        .0;
+    assert!(warmup.series.iter().flatten().all(|v| v.is_nan()));
+    let good = view
+        .panel_at(records(1, true), &overview(), None, 1., 101.)
+        .0;
+    let rate = good.series[0][60];
+    let failed = view
+        .panel_at(Err("fixture offline".into()), &overview(), None, 2., 110.)
+        .0;
+    assert!(failed.series[0][60].is_nan());
+    assert_eq!(failed.series[0][51], rate);
+    let recovering = view
+        .panel_at(records(2, true), &overview(), None, 3., 111.)
+        .0;
+    assert!(recovering.series[0][60].is_nan());
+    let restored = view
+        .panel_at(records(3, true), &overview(), None, 4., 112.)
+        .0;
+    assert_eq!(restored.series[0][60], rate);
+    let pinned = view
+        .panel_at(records(4, true), &overview(), Some(0), 5., 113.)
+        .0;
+    assert!(pinned.series[0][..60].iter().all(|v| v.is_nan()));
+    let topology = view
+        .panel_at(records(5, false), &overview(), None, 6., 114.)
+        .0;
+    assert!(topology.series[0][..60].iter().all(|v| v.is_nan()));
+}

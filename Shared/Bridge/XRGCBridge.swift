@@ -332,12 +332,29 @@ private struct WeatherHistoryRow: Encodable {
     guard count == history.channels else { return -1 }
     return history.append(time: time, values: Array(UnsafeBufferPointer(start: values, count: Int(count)))) ? 0 : -1
 }
+@c(xrg_timed_history_projection_settings) public func timedHistoryProjectionSettings(_ output: UnsafeMutablePointer<UInt32>?, _ capacity: UInt32) -> Int32 {
+    guard let output, capacity >= 3 else { return -1 }
+    output[0] = UInt32(XRGTimedHistory.systemMaximumMinutes); output[1] = UInt32(XRGTimedHistory.minimumInterval * 1000); output[2] = UInt32(XRGTimedHistory.maximumPositions)
+    return 3
+}
+@c(xrg_timed_history_create_limited) public func timedHistoryCreateLimited(_ channels: UInt32, _ minutes: UInt32) -> UnsafeMutableRawPointer? {
+    guard let history = XRGTimedHistory(channels: Int(channels), retentionMinutes: Int(minutes)) else { return nil }
+    return Unmanaged.passRetained(history).toOpaque()
+}
+@c(xrg_timed_history_bin_count) public func timedHistoryBinCount(_ minutes: UInt32, _ interval: Double) -> Int32 {
+    guard let count = XRGTimedHistory.binCount(minutes: Int(minutes), interval: interval) else { return -1 }
+    return Int32(count)
+}
 @c(xrg_timed_history_copy) public func timedHistoryCopy(_ handle: UnsafeMutableRawPointer?, _ minutes: UInt32, _ output: UnsafeMutablePointer<Double>?, _ capacity: UInt32) -> Int32 {
-    guard let handle, let output, let bins = XRGTimedHistory.binCount(minutes: Int(minutes)) else { return -1 }
+    timedHistoryCopyInterval(handle, minutes, Double(XRGTimedHistory.binSeconds), output, capacity)
+}
+@c(xrg_timed_history_copy_interval) public func timedHistoryCopyInterval(_ handle: UnsafeMutableRawPointer?, _ minutes: UInt32, _ interval: Double, _ output: UnsafeMutablePointer<Double>?, _ capacity: UInt32) -> Int32 {
+    guard let handle, let output, let bins = XRGTimedHistory.binCount(minutes: Int(minutes), interval: interval) else { return -1 }
     let history = Unmanaged<XRGTimedHistory>.fromOpaque(handle).takeUnretainedValue()
+    guard minutes <= history.retentionMinutes else { return -1 }
     let required = bins * history.channels
     guard capacity >= required else { return -2 }
-    let values = history.values(minutes: Int(minutes))!
+    let values = history.values(minutes: Int(minutes), interval: interval)!
     for channel in 0..<history.channels { for slot in 0..<bins { output[channel * bins + slot] = values[channel][slot] } }
     return Int32(required)
 }

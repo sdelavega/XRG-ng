@@ -3,6 +3,16 @@
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc};
 
 unsafe extern "C" {
+    fn xrg_timed_history_projection_settings(output: *mut u32, capacity: u32) -> i32;
+    fn xrg_timed_history_create_limited(channels: u32, minutes: u32) -> *mut c_void;
+    fn xrg_timed_history_bin_count(minutes: u32, interval: f64) -> i32;
+    fn xrg_timed_history_copy_interval(
+        handle: *mut c_void,
+        minutes: u32,
+        interval: f64,
+        output: *mut f64,
+        capacity: u32,
+    ) -> i32;
     fn xrg_timed_history_settings(output: *mut u32, capacity: u32) -> i32;
     fn xrg_timed_history_create(channels: u32) -> *mut c_void;
     fn xrg_timed_history_free(handle: *mut c_void);
@@ -267,6 +277,14 @@ pub fn timed_history_settings() -> [u32; 4] {
     );
     values
 }
+pub fn timed_projection_settings() -> [u32; 3] {
+    let mut values = [0; 3];
+    assert_eq!(
+        unsafe { xrg_timed_history_projection_settings(values.as_mut_ptr(), 3) },
+        3
+    );
+    values
+}
 pub struct TimedHistory {
     handle: NonNull<c_void>,
     channels: u32,
@@ -281,8 +299,34 @@ impl TimedHistory {
             _local: PhantomData,
         }
     }
+    pub fn new_limited(channels: u32, minutes: u32) -> Self {
+        Self {
+            handle: NonNull::new(unsafe { xrg_timed_history_create_limited(channels, minutes) })
+                .expect("timed history limits"),
+            channels,
+            _local: PhantomData,
+        }
+    }
     pub fn clear(&mut self) {
         assert_eq!(unsafe { xrg_timed_history_clear(self.handle.as_ptr()) }, 0);
+    }
+    pub fn values_at(&self, minutes: u32, interval: f64) -> Vec<Vec<f64>> {
+        let bins = unsafe { xrg_timed_history_bin_count(minutes, interval) };
+        assert!(bins > 0);
+        let mut values = vec![f64::NAN; bins as usize * self.channels as usize];
+        assert_eq!(
+            unsafe {
+                xrg_timed_history_copy_interval(
+                    self.handle.as_ptr(),
+                    minutes,
+                    interval,
+                    values.as_mut_ptr(),
+                    values.len() as u32,
+                )
+            },
+            values.len() as i32
+        );
+        values.chunks(bins as usize).map(|v| v.to_vec()).collect()
     }
     pub fn append(&mut self, time: f64, values: &[f64]) -> bool {
         if values.len() != self.channels as usize {

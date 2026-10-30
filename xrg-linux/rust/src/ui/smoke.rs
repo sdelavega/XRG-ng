@@ -175,10 +175,13 @@ impl Harness {
         if self.stage == 5
             && self.wake.is_some_and(|(before, t)| {
                 (sequence <= before
-                    || app
-                        .snapshot
-                        .as_ref()
-                        .is_none_or(|s| s.selection.cpu_history_samples != 300))
+                    || app.snapshot.as_ref().is_none_or(|s| {
+                        s.selection.cpu_history_samples != 300
+                            || s.selection.cpu_history_minutes != 1
+                            || !s.panels.iter().find(|p| p.title == "CPU").is_some_and(|p| {
+                                p.series.len() == 3 && p.series.iter().all(|v| v.len() == 301)
+                            })
+                    }))
                     && t.elapsed() > Duration::from_secs(3)
             })
         {
@@ -216,6 +219,10 @@ impl Harness {
                             }
                             Ok("graphs") => editor.tab = 1,
                             Ok("sources") => editor.tab = 2,
+                            Ok("sources-time") => {
+                                editor.tab = 2;
+                                editor.draft.metrics.cpu_history_minutes = 1;
+                            }
                             Ok("ai-time") => {
                                 editor.tab = 3;
                                 editor.draft.ai.history_minutes = 10;
@@ -301,6 +308,7 @@ impl Harness {
                     next.ai.history_samples = 1440;
                     next.ai.history_minutes = 30;
                     next.metrics.cpu_history_samples = 300;
+                    next.metrics.cpu_history_minutes = 1;
                     next.metrics.history_samples.insert(Module::Memory, 360);
                     next.metrics.history_samples.insert(Module::Network, 480);
                     next.metrics.history_samples.insert(Module::Disk, 600);
@@ -335,14 +343,17 @@ impl Harness {
                 }
                 5 if app.saved_revision == app.revision
                     && self.wake.is_some_and(|(before, _)| sequence > before)
-                    && app
-                        .snapshot
-                        .as_ref()
-                        .is_some_and(|s| s.selection.cpu_history_samples == 300) =>
+                    && app.snapshot.as_ref().is_some_and(|s| {
+                        s.selection.cpu_history_samples == 300
+                            && s.selection.cpu_history_minutes == 1
+                            && s.panels.iter().find(|p| p.title == "CPU").is_some_and(|p| {
+                                p.series.len() == 3 && p.series.iter().all(|v| v.len() == 301)
+                            })
+                    }) =>
                 {
                     if !app.snapshot.as_ref().is_some_and(|s| {
                         s.panels.iter().find(|p| p.title == "CPU").is_some_and(|p| {
-                            p.series.len() == 3 && p.series.iter().all(|v| v.len() == 300)
+                            p.series.len() == 3 && p.series.iter().all(|v| v.len() == 301)
                         })
                     }) {
                         return Err(
@@ -350,7 +361,7 @@ impl Harness {
                         );
                     }
                     println!(
-                        "CPU_HISTORY_SMOKE_OK 300 samples, 200 ms cadence, live worker acknowledged"
+                        "CPU_HISTORY_SMOKE_OK 1 minute, 301 positions at 200 ms, 300 fallback samples, live worker acknowledged"
                     );
                     let snapshot = app.snapshot.as_ref().unwrap();
                     for (module, title, count) in [

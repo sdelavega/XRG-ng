@@ -98,6 +98,18 @@ int main(void) {
     assert(xrg_timed_history_append(timed,5,pair,2)==0);
     assert(xrg_timed_history_copy(timed,1,channels,26)==26 && channels[12]==0 && channels[25]==42 && isnan(channels[0]) && isnan(channels[13]));
     xrg_timed_history_free(timed);
+    uint32_t projection[3]={99,99,99};
+    assert(xrg_timed_history_projection_settings(projection,2)==-1 && projection[0]==99);
+    assert(xrg_timed_history_projection_settings(projection,3)==3 && projection[0]==60 && projection[1]==200 && projection[2]==20000);
+    assert(!xrg_timed_history_create_limited(1,0));
+    assert(xrg_timed_history_bin_count(1,0.2)==301 && xrg_timed_history_bin_count(60,0.2)==18001 && xrg_timed_history_bin_count(1440,0.2)==20000);
+    assert(xrg_timed_history_bin_count(1,0.1)==-1);
+    timed=xrg_timed_history_create_limited(3,60); double cpu_channels[183], cpu_values[3]={0,20,NAN};cpu_channels[0]=99;
+    assert(xrg_timed_history_append(timed,5,cpu_values,3)==0);
+    assert(xrg_timed_history_copy_interval(timed,1,1,cpu_channels,182)==-2 && cpu_channels[0]==99);
+    assert(xrg_timed_history_copy_interval(timed,61,1,cpu_channels,183)==-1 && cpu_channels[0]==99);
+    assert(xrg_timed_history_copy_interval(timed,1,1,cpu_channels,183)==183 && cpu_channels[60]==0 && cpu_channels[121]==20 && isnan(cpu_channels[182]));
+    xrg_timed_history_free(timed);
     void *rate = xrg_rate_create();
     uint64_t delta = 99;
     assert(xrg_rate_sample(rate, 1, 10, 1, &delta) == 0 && delta == 0);

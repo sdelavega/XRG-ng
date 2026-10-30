@@ -47,4 +47,27 @@ struct TimedHistoryTests {
         #expect(history.latestTime == nil && history.observationCount == 0)
         #expect(history.values(minutes: 1)!.allSatisfy { $0.allSatisfy { $0.isNaN } })
     }
+    @Test func systemProjectionFollowsCadenceAndKeepsOriginalTimestamps() throws {
+        #expect(XRGTimedHistory.binCount(minutes:1,interval:1)==61)
+        #expect(XRGTimedHistory.binCount(minutes:1,interval:0.2)==301)
+        #expect(XRGTimedHistory.binCount(minutes:1,interval:0.375)==161)
+        #expect(XRGTimedHistory.binCount(minutes:60,interval:0.2)==18001)
+        #expect(XRGTimedHistory.binCount(minutes:1440,interval:0.2)==20000)
+        #expect(XRGTimedHistory.binCount(minutes:1,interval:0.1)==nil && XRGTimedHistory.binCount(minutes:1,interval:.nan)==nil)
+        let history=try #require(XRGTimedHistory(channels:1,retentionMinutes:60))
+        history.append(time:100,values:[10]);history.append(time:101.001,values:[20]);history.append(time:102,values:[30])
+        let revision=history.revision, values=try #require(history.values(minutes:1,interval:1))[0]
+        #expect(Array(values.suffix(3))==[10,20,30])
+        #expect(history.values(minutes:1,interval:0.2)![0].count==301 && history.revision==revision)
+        #expect(history.values(minutes:61)==nil)
+    }
+    @Test func limitedRetainedAgeAndCenteredBinsKeepRealZeroAndUnavailableDistinct() throws {
+        let history=try #require(XRGTimedHistory(channels:2,retentionMinutes:60))
+        history.append(time:0,values:[0,.nan]);history.append(time:3600,values:[1,2])
+        #expect(history.observationCount==2)
+        #expect(history.values(minutes:60,interval:1)![0].first==0)
+        history.append(time:3601,values:[3,4]);#expect(history.observationCount==2)
+        #expect(XRGTimedHistory(channels:1,retentionMinutes:0)==nil)
+    }
+
 }

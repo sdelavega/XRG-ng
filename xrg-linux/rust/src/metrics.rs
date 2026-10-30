@@ -285,6 +285,7 @@ impl Sampler {
     }
     pub fn set_selection(&mut self, selection: MetricSelection) -> Result<(), String> {
         selection.validate()?;
+        self.cpu.set_time_window(selection.cpu_history_minutes)?;
         self.cpu
             .set_history_samples(selection.cpu_history_samples)?;
         self.network
@@ -302,6 +303,9 @@ impl Sampler {
         }
         self.selection = selection;
         Ok(())
+    }
+    pub(crate) fn set_cpu_history_interval(&mut self, seconds: f64) {
+        self.cpu.set_history_interval(seconds);
     }
     pub fn sample(&mut self, source: &LinuxSources, time: f64) -> Sample {
         if !time.is_finite() || time < 0. {

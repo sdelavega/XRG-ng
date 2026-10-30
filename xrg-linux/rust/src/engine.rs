@@ -1141,6 +1141,9 @@ impl Worker {
                 for module in requests.transfers {
                     sampler.reset_transfers(module);
                 }
+                sampler
+                    .metrics
+                    .set_cpu_history_interval(timer.interval_seconds());
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 *output.lock().unwrap() = Some(sampler.sample());
                 published.notify();

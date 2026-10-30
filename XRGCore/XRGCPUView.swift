@@ -49,6 +49,22 @@ public final class XRGCPUView: NSView, XRGModuleView {
         let value = defaults.integer(forKey: Self.historyKey)
         return XRGSamplingSettings.validCPUHistorySamples(value) ? value : 0
     }
+    @nonobjc static let windowKey = "XRGCPUView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int {
+        let value = defaults.integer(forKey: Self.windowKey)
+        return (0...XRGTimedHistory.systemMaximumMinutes).contains(value) ? value : 0
+    }
+    @nonobjc private let timedHistory = XRGTimedHistory(channels: 3, retentionMinutes: XRGTimedHistory.systemMaximumMinutes)!
+    @nonobjc private var historyObservation: UUID?
+    @nonobjc private var historyTopology: Int?
+    @nonobjc private let timedData = (0..<3).map { _ in XRGDataSet() }
+    @nonobjc private var projectedRevision: UInt64?
+    @nonobjc private var projectedMinutes = 0
+    @nonobjc private var projectedInterval = 0.0
+    @nonobjc private var historyInterval: Double {
+        let value = settings?.graphRefresh ?? 1
+        return value.isFinite && value >= XRGTimedHistory.minimumInterval ? value : XRGTimedHistory.minimumInterval
+    }
     @nonobjc private(set) var selectedCPU: Int?
     private var sourceWarning: String?
     public private(set) weak var module: XRGModule?
@@ -77,11 +93,13 @@ public final class XRGCPUView: NSView, XRGModuleView {
         super.init(frame: frame)
         prepare()
     }
+    isolated deinit { if let historyObservation { miner.removeHistoryObserver(historyObservation) } }
     private func prepare() {
         do {
             let saved = try XRGMonitorSource.load(defaults, key: Self.sourceKey)
             try saved.validateCPU(); selectedCPU = saved.source.flatMap(Int.init)
         } catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
+        historyObservation = miner.observeHistory { [weak self] event in self?.observeHistory(event) }
         for label in [graphLabels.leftLabel, graphLabels.centerLabel, graphLabels.rightLabel] { addSubview(label) }
         setGraphSize(bounds.size)
         updateLabels()
@@ -222,9 +240,40 @@ public final class XRGCPUView: NSView, XRGModuleView {
             NSRect(x: rect.minX + CGFloat(index) * slot, y: rect.minY, width: width, height: height * value / 100)
         }
     }
+    @nonobjc private func observeHistory(_ event: XRGCPUMiner.HistoryEvent) {
+        switch event {
+        case .reset: timedHistory.clear(); historyTopology = nil
+        case let .sample(values, time):
+            if historyTopology != values.count { timedHistory.clear(); historyTopology = values.count }
+            let selected: [(CGFloat, CGFloat, CGFloat)?]
+            if let selectedCPU { selected = values.indices.contains(selectedCPU) ? [values[selectedCPU]] : [nil] }
+            else { selected = values }
+            var components = Array(repeating: Double.nan, count: 3)
+            if !selected.isEmpty && selected.allSatisfy({ $0 != nil }) {
+                let valid = selected.compactMap { $0 }; let count = Double(valid.count)
+                // Native stacked order is system / user / nice.
+                components = [valid.reduce(0) { $0 + Double($1.1) } / count,
+                              valid.reduce(0) { $0 + Double($1.0) } / count,
+                              valid.reduce(0) { $0 + Double($1.2) } / count]
+            }
+            timedHistory.append(time: time, values: components)
+        }
+    }
+    @nonobjc private func windowData() -> [XRGDataSet]? {
+        guard historyMinutes > 0 else { return nil }
+        if projectedRevision != timedHistory.revision || projectedMinutes != historyMinutes || projectedInterval != historyInterval {
+            let values = timedHistory.values(minutes: historyMinutes, interval: historyInterval)!
+            for index in timedData.indices {
+                timedData[index].resize(values[index].count)
+                for value in values[index] { timedData[index].setNextValue(value.isFinite ? value : Double(XRGGraphRenderer.missingValue)) }
+            }
+            projectedRevision = timedHistory.revision; projectedMinutes = historyMinutes; projectedInterval = historyInterval
+        }
+        return timedData
+    }
     @nonobjc func historyLayers() -> [XRGDataSet] {
         guard !selectedIndices.isEmpty,
-              let data = selectedCPU.flatMap({ miner.dataForCPU($0) }) ?? (selectedCPU == nil ? miner.combinedData() : nil), data.count == 3,
+              let data = windowData() ?? selectedCPU.flatMap({ miner.dataForCPU($0) }) ?? (selectedCPU == nil ? miner.combinedData() : nil), data.count == 3,
               let total = XRGCPUMiner.sumHistories(data) else { return [] }
         guard settings?.separateCPUColor == true,
               let systemAndUser = XRGCPUMiner.sumHistories(Array(data.prefix(2))) else { return [total] }
@@ -289,6 +338,14 @@ public final class XRGCPUView: NSView, XRGModuleView {
             option.tag = count; option.state = retainedSamples == count ? .on : .off; choices.addItem(option)
         }
         retention.submenu = choices; menu.addItem(retention)
+        let window = item("CPU Time Window", #selector(emptyEvent(_:))), windows = NSMenu(title: "CPU Time Window")
+        var minutes = [0, 1, 5, 10, 30, 60]
+        if !minutes.contains(historyMinutes) { minutes.append(historyMinutes); minutes.sort() }
+        for value in minutes {
+            let option = item(value == 0 ? "Use sample count" : value == 1 ? "1 minute" : "\(value) minutes", #selector(selectHistoryWindow(_:)))
+            option.tag = value; option.state = historyMinutes == value ? .on : .off; windows.addItem(option)
+        }
+        window.submenu = windows; menu.addItem(window)
         menu.addItem(item("CPU Details…", #selector(showDetails(_:))))
         menu.addItem(item("Processes…", #selector(openProcesses(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
@@ -301,8 +358,12 @@ public final class XRGCPUView: NSView, XRGModuleView {
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @objc func selectHistory(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, XRGSamplingSettings.validCPUHistorySamples(item.tag) else { return }
-        defaults.set(item.tag, forKey: Self.historyKey)
+        defaults.set(item.tag, forKey: Self.historyKey); defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
+    }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, (0...XRGTimedHistory.systemMaximumMinutes).contains(item.tag) else { return }
+        defaults.set(item.tag, forKey: Self.windowKey); updateLabels(); needsDisplay = true
     }
     public func openProcesses(_ sender: Any?) {
         if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .cpu) }
@@ -315,6 +376,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
             .map { String(format: "%.3f seconds", $0) } ?? "unavailable"
         return [sourceWarning, "Scope: \(scope). \(sourceAvailable ? "Counters available." : "Selected CPU counters unavailable; no replacement is chosen.")",
                 "CPU history capacity: \(capacity) samples. Nominal span at the current sampling target: \(nominal). Delays and cadence changes affect the actual span. Explicit capacity survives graph resizing; Automatic follows graph width. Changing capacity retains newest samples and collector baselines.",
+                historyMinutes > 0 ? "CPU time window: \(historyMinutes) \(historyMinutes == 1 ? "minute" : "minutes") ending at the latest completed observation. Projection uses the current sampling target (\(historyInterval) seconds); unobserved time bins remain gaps. Rate timing and sample buffers are independent. Source/topology changes start a fresh time history. Capacity is bounded to one hour / 20,000 observations." : nil,
                 "CPU total is core-percent: each logical CPU contributes up to 100%. The aggregate history is normalized to 0–100%; a selected CPU uses its own 0–100% history. System, user and nice retain the existing stacked presentation.",
                 "Average is the latest interval’s mean across the selected logical CPUs, normalized to 0–100%. Graph width, resizing and clearing history do not affect it. All selected cores must have a measured interval; missing or zero-progress intervals show n/a, not idle. Load and uptime remain system-wide; load is not CPU percent. Process listings remain system-wide.",
                 "Selection switches among already collected per-CPU histories without another hardware read. Missing indices stay pinned. Indices are kernel logical-CPU slots and may refer to different hardware after reboot or topology changes. Fast bars are sorted by usage within the selected scope; they are not persistent physical-core labels.",
@@ -323,6 +385,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
     @nonobjc func applyCPUSource(_ index: Int?) throws {
         let next = XRGMonitorSource(source: index.map(String.init)); try next.validateCPU()
         defaults.set(try next.encoded(), forKey: Self.sourceKey)
+        if selectedCPU != index { timedHistory.clear() }
         selectedCPU = index; sourceWarning = nil
         updateLabels(); needsDisplay = true
     }

@@ -99,6 +99,9 @@ pub(crate) struct Timer {
     receiver: mpsc::Receiver<Message>,
 }
 impl Timer {
+    pub(crate) fn interval_seconds(&self) -> f64 {
+        self.schedule.period.as_secs_f64()
+    }
     pub(crate) fn new(milliseconds: u32) -> Result<Self, String> {
         let (wake, receiver) = mpsc::sync_channel(1);
         Ok(Self {

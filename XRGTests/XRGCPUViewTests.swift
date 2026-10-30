@@ -87,6 +87,64 @@ struct XRGCPUViewTests {
             #expect(restored.detailText.contains("Nominal span") && restored.detailText.contains("actual span"))
         }
     }
+    @Test func cpuTimeWindowsKeepGapsRateBaselinesAndIndependentViewScopes() async throws {
+        try await withFixture { settings, defaults, source in
+            settings.graphRefresh = 1
+            var time = 0.0, wall = 100.0
+            let miner = XRGCPUMiner(source: { source.reads += 1; return source.samples }, clock: { time }, historyClock: { wall })
+            let aggregate = panel(miner, settings, defaults)
+            let option = NSMenuItem(); option.tag = 1
+            weak var released: XRGCPUView?
+            try autoreleasepool {
+            let pinned = panel(miner, settings, defaults); released = pinned
+            try pinned.applyCPUSource(1)
+            aggregate.selectHistoryWindow(option); pinned.selectHistoryWindow(option)
+            source.advance(); time = 1; miner.graphUpdate(nil)
+            wall = 110; time = 2
+            source.samples = [XRGCPUTicks(user:80,system:40,idle:60,nice:20),XRGCPUTicks(user:40,system:20,idle:140,nice:0)]
+            miner.graphUpdate(nil)
+            let reads = source.reads, current = miner.currentUsage(forCPU:0)
+            #expect(aggregate.historyLayers()[0].numValues == 61 && aggregate.historyLayers()[0].currentValue == 50)
+            #expect(pinned.historyLayers()[0].currentValue == 30)
+            #expect(aggregate.historyLayers()[0].orderedValues[51..<60].allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            settings.graphRefresh = 0.2
+            #expect(aggregate.historyLayers()[0].numValues == 301 && source.reads == reads && miner.currentUsage(forCPU:0) == current)
+            aggregate.setFrameSize(NSSize(width:60,height:90)); #expect(aggregate.historyLayers()[0].numValues == 301)
+            try aggregate.applyCPUSource(0)
+            #expect(aggregate.historyLayers()[0].orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(pinned.historyLayers()[0].currentValue == 30 && source.reads == reads)
+            option.tag = 61; aggregate.selectHistoryWindow(option); #expect(aggregate.historyMinutes == 1)
+            let choices = try #require(aggregate.makeMenu().items.first { $0.title == "CPU Time Window" }?.submenu)
+            #expect(choices.items.allSatisfy { $0.target === aggregate })
+            }
+            #expect(released == nil)
+            wall = 120; time = 3; source.samples = nil; miner.graphUpdate(nil)
+            #expect(aggregate.historyLayers()[0].currentValue == XRGGraphRenderer.missingValue)
+            aggregate.clearData(nil)
+            #expect(aggregate.historyLayers()[0].orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            option.tag = 300; aggregate.selectHistory(option)
+            #expect(aggregate.historyMinutes == 0 && aggregate.retainedSamples == 300)
+        }
+    }
+    @Test func cpuTimestampWindowsRestoreAndWallClockRollbackLeavesRateTimingIntact() async throws {
+        try await withFixture { settings, defaults, source in
+            settings.graphRefresh = 1
+            var time = 0.0, wall = 100.0
+            defaults.set(1, forKey:XRGCPUView.windowKey)
+            let miner = XRGCPUMiner(source: { source.reads += 1; return source.samples }, clock:{time},historyClock:{wall})
+            let view = panel(miner,settings,defaults)
+            source.advance();time=1;miner.graphUpdate(nil)
+            let reads=source.reads
+            let restored=panel(miner,settings,defaults)
+            #expect(restored.historyMinutes==1 && source.reads==reads)
+            // A newly registered view never invents timestamps for older index-only samples.
+            #expect(restored.historyLayers()[0].orderedValues.allSatisfy{$0==XRGGraphRenderer.missingValue})
+            wall=50;time=2;source.samples=[XRGCPUTicks(user:80,system:40,idle:60,nice:20),XRGCPUTicks(user:40,system:20,idle:140,nice:0)]
+            miner.graphUpdate(nil)
+            #expect(view.historyLayers()[0].currentValue==50 && miner.currentUsage(forCPU:0)==70)
+            #expect(view.historyLayers()[0].orderedValues.dropLast().allSatisfy{$0==XRGGraphRenderer.missingValue})
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, CPUSource) async throws -> Void) async throws {
         _ = NSApplication.shared
         let domain = "XRG.cpuView.\(UUID().uuidString)"
@@ -460,7 +518,7 @@ struct XRGCPUViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             seed(miner, source)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 21)
+            #expect(menu.items.count == 22)
             #expect(menu.items[1].title == "1200.0% - Process12 (id 5000000012)")
             #expect(menu.items[10].title.contains("Process3"))
             for item in menu.items where !item.isSeparatorItem { #expect(item.target === view) }
@@ -478,14 +536,14 @@ struct XRGCPUViewTests {
     @Test func processMenuHandlesNoResultsAndTiedCPUUsage() async throws {
         try await withFixture { settings, defaults, source in
             let empty = panel(source.miner(), settings, defaults)
-            #expect(empty.makeMenu().items.count == 11)
+            #expect(empty.makeMenu().items.count == 12)
             let records = XRGProcessMiner.parse("20 8 1 1 - u Second\n20 2 1 1 - u First\n1 3 1 1 - u Last")
             let processes = XRGProcessMiner(source: { records }); await processes.refresh()
             let view = panel(source.miner(), settings, defaults, processMiner: processes)
             let menu = view.makeMenu()
             #expect(menu.items[1].title == "20.0% - First (id 2)")
             #expect(menu.items[2].title == "20.0% - Second (id 8)")
-            #expect(menu.items.count == 14)
+            #expect(menu.items.count == 15)
         }
     }
 

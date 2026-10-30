@@ -133,6 +133,9 @@ pub struct View {
     previous: Option<(CpuRecords, f64)>,
     selected: Option<u32>,
     histories: [History; 3],
+    timed: crate::shared::TimedHistory,
+    window_minutes: u32,
+    history_interval: f64,
     // The shared finite-only history ABI stores placeholders for gaps. Keep
     // validity separately so unread intervals and initial padding never plot 0%.
     observed: Vec<bool>,
@@ -144,12 +147,32 @@ impl Default for View {
             previous: None,
             selected: None,
             histories: std::array::from_fn(|_| History::new(120)),
+            timed: crate::shared::TimedHistory::new_limited(
+                3,
+                crate::shared::timed_projection_settings()[0],
+            ),
+            window_minutes: 0,
+            history_interval: 1.,
             observed: vec![false; 120],
             scope: None,
         }
     }
 }
 impl View {
+    pub fn set_time_window(&mut self, minutes: u32) -> Result<(), String> {
+        if minutes > crate::shared::timed_projection_settings()[0] {
+            return Err("CPU time window must be 0..60 minutes".into());
+        }
+        self.window_minutes = minutes;
+        Ok(())
+    }
+    pub fn set_history_interval(&mut self, seconds: f64) {
+        if seconds.is_finite()
+            && seconds >= f64::from(crate::shared::timed_projection_settings()[1]) / 1000.
+        {
+            self.history_interval = seconds;
+        }
+    }
     pub fn set_history_samples(&mut self, requested: u32) -> Result<(), String> {
         if requested > crate::shared::sampling_settings()[3] {
             return Err("CPU history capacity is out of range".into());
@@ -176,6 +199,7 @@ impl View {
             history.clear();
         }
         self.observed.fill(false);
+        self.timed.clear();
     }
     pub fn reset_history(&mut self) {
         self.clear_graph();
@@ -186,12 +210,13 @@ impl View {
         selected: Option<u32>,
         time: f64,
     ) -> (Panel, bool, Vec<u32>) {
-        self.panel(
-            metric_sources::cpus(source),
-            &overview(source.proc_root()),
-            selected,
-            time,
-        )
+        let records = metric_sources::cpus(source);
+        let overview = overview(source.proc_root());
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.panel_at(records, &overview, selected, time, observed)
     }
     pub fn panel(
         &mut self,
@@ -199,6 +224,16 @@ impl View {
         overview: &Overview,
         selected: Option<u32>,
         time: f64,
+    ) -> (Panel, bool, Vec<u32>) {
+        self.panel_at(records, overview, selected, time, time)
+    }
+    pub fn panel_at(
+        &mut self,
+        records: Result<CpuRecords, String>,
+        overview: &Overview,
+        selected: Option<u32>,
+        time: f64,
+        observed_at: f64,
     ) -> (Panel, bool, Vec<u32>) {
         if selected != self.selected {
             self.reset_history();
@@ -294,8 +329,10 @@ impl View {
         self.observed.rotate_left(1);
         *self.observed.last_mut().expect("Nonempty CPU history") = result.is_ok();
         let mut detail = Vec::new();
+        let mut timed_values = [f64::NAN; 3];
         let label = match result {
             Ok(value) => {
+                timed_values = [value.busy, value.user, value.system];
                 use crate::dashboard::Row;
                 readout.top.push(Row::new(
                     "CPU",
@@ -350,18 +387,23 @@ impl View {
                 error
             }
         };
-        let series = self
-            .histories
-            .iter()
-            .map(|history| {
-                history
-                    .values()
-                    .into_iter()
-                    .zip(self.observed.iter().copied())
-                    .map(|(value, observed)| if observed { value } else { f64::NAN })
-                    .collect()
-            })
-            .collect();
+        self.timed.append(observed_at, &timed_values);
+        let series = if self.window_minutes > 0 {
+            self.timed
+                .values_at(self.window_minutes, self.history_interval)
+        } else {
+            self.histories
+                .iter()
+                .map(|history| {
+                    history
+                        .values()
+                        .into_iter()
+                        .zip(self.observed.iter().copied())
+                        .map(|(value, observed)| if observed { value } else { f64::NAN })
+                        .collect()
+                })
+                .collect()
+        };
         use crate::dashboard::Row;
         if readout.top.is_empty() {
             readout.top.push(Row::new("CPU", "n/a"));
@@ -386,6 +428,9 @@ impl View {
         detail.insert(0, label.clone());
         detail.push(format!("Scope: {}. Graph curves: total non-idle / user including nice / system including reported interrupts; independent percentages, not stacked. Idle includes iowait for the total curve. Guest time already in user/nice is not counted twice. Steal is hypervisor wait, not executed CPU work. Counter regressions (including iowait), counter layout and scope changes clear the affected history. Failed reads, zero-progress counters and invalid or delayed intervals leave gaps while retaining earlier observations. CPU intervals must increase on the worker's monotonic clock and be at most five minutes; it excludes suspend on Linux. Recovery establishes a fresh baseline. Clearing graphs preserves the collector baseline.", selected.map(|id| format!("logical CPU {id}")).unwrap_or_else(|| "all reported logical CPUs (100% is aggregate capacity)".into())));
         detail.push(overview.description());
+        if self.window_minutes > 0 {
+            detail.push(format!("CPU time window: {} {} ending at the latest completed observation. Projection target: {} seconds; unobserved bins remain gaps. Rate clocks, sample buffers and baselines are separate. Scope/topology changes start a fresh time history; memory is bounded to one hour / 20,000 observations.", self.window_minutes, if self.window_minutes==1 {"minute"} else {"minutes"}, self.history_interval));
+        }
         detail.push(format!("CPU history capacity: {} samples. Capacity changes preserve newest samples, gaps and collector baselines. Sampling delays and cadence changes affect the actual retained time span.", self.observed.len()));
         (
             Panel {

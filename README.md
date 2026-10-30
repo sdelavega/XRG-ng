@@ -409,8 +409,25 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 31 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 32 in memory
 and are written only on an explicit save.
+CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
+window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
+at the latest completed normal CPU observation. Its grid follows the sampling target
+with a minimum 200 ms spacing; centered bins tolerate ordinary scheduling jitter
+without interpolating values. A one-minute window at 200 ms has 301 positions.
+Gaps, warm-up and unavailable intervals remain missing. Fast bars, current readings
+and rate baselines stay independent.
+
+CPU timestamp memory is bounded to one hour / 20,000 observations per displayed
+scope. Very fast legacy settings or forced refreshes can reach that count early.
+Changing scope or topology starts a fresh timestamp history; existing sample-count
+source policies remain. Mac views retain their own observed scope without inventing
+timestamps for older miner data. Native window actions do not poll CPU counters;
+Linux retains the system worker’s existing settings-wake behavior. Paused graphs
+stay anchored to their last observation, and backward completion timestamps start
+a new presentation era without altering counter baselines.
+
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices
 remain: Mac graph width minus the indicator strip, or 120 samples on Linux. At

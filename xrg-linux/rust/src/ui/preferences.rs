@@ -672,19 +672,32 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
     source(ui, "cpu", "CPU", &mut cpu, &options, "All logical CPUs");
     s.metrics.cpu = cpu.and_then(|s| s.parse().ok());
     ui.horizontal(|ui| {
-        let label = ui.label("Retained CPU samples");
+        let label = ui.label("CPU time window (minutes; 0 uses samples)");
         ui.add(
-            egui::DragValue::new(&mut s.metrics.cpu_history_samples)
-                .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+            egui::DragValue::new(&mut s.metrics.cpu_history_minutes)
+                .range(0..=xrg_ng_linux::shared::timed_projection_settings()[0]),
         )
         .labelled_by(label.id);
+    });
+    ui.small("Time windows end at the latest completed normal CPU observation. Bins follow the sampling target; unobserved intervals stay gaps. Current readings and rate baselines are independent. Changing source starts a fresh time history.");
+    ui.add_enabled_ui(s.metrics.cpu_history_minutes == 0, |ui| {
+        ui.horizontal(|ui| {
+            let label = ui.label("Retained CPU samples");
+            ui.add(
+                egui::DragValue::new(&mut s.metrics.cpu_history_samples)
+                    .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+            )
+            .labelled_by(label.id);
+        });
     });
     let capacity = if s.metrics.cpu_history_samples == 0 {
         120
     } else {
         s.metrics.cpu_history_samples
     };
-    ui.small(format!("0 keeps the 120-sample default. Capacity: {capacity} samples, nominal span {:.3} s at the current target. Delays and cadence changes affect the actual span. Resizing preserves newest observations and collector baselines.", f64::from(capacity.saturating_sub(1)) * f64::from(s.sampling_interval_ms) / 1000.));
+    if s.metrics.cpu_history_minutes == 0 {
+        ui.small(format!("0 keeps the 120-sample default. Capacity: {capacity} samples, nominal span {:.3} s at the current target. Delays and cadence changes affect the actual span. Resizing preserves newest observations and collector baselines.", f64::from(capacity.saturating_sub(1)) * f64::from(s.sampling_interval_ms) / 1000.));
+    }
     for (module, title) in [
         (settings::Module::Memory, "Memory"),
         (settings::Module::Network, "Network"),

@@ -39,6 +39,14 @@ public struct XRGCPUTicks: Sendable {
 public final class XRGCPUMiner: NSObject {
     private let source: () -> [XRGCPUTicks]?
     private let clock: () -> Double
+    private let historyClock: () -> Double
+    enum HistoryEvent { case reset; case sample([(CGFloat, CGFloat, CGFloat)?], Double) }
+    private var historyObservers: [UUID: (HistoryEvent) -> Void] = [:]
+    func observeHistory(_ handler: @escaping (HistoryEvent) -> Void) -> UUID {
+        let token = UUID(); historyObservers[token] = handler; return token
+    }
+    func removeHistoryObserver(_ token: UUID) { historyObservers.removeValue(forKey: token) }
+    private func emitHistory(_ event: HistoryEvent) { for handler in Array(historyObservers.values) { handler(event) } }
     private var slowBaseline: [XRGCPUTicks]?
     private var fastBaseline: [XRGCPUTicks]?
     private var slowTime: Double?
@@ -66,9 +74,10 @@ public final class XRGCPUMiner: NSObject {
     public convenience init(source: @escaping () -> [XRGCPUTicks]?) {
         self.init(source: source, clock: Self.continuousSeconds)
     }
-    public init(source: @escaping () -> [XRGCPUTicks]?, clock: @escaping () -> Double) {
+    public init(source: @escaping () -> [XRGCPUTicks]?, clock: @escaping () -> Double,
+                historyClock: @escaping () -> Double = { Date().timeIntervalSince1970 }) {
         self.source = source
-        self.clock = clock
+        self.clock = clock; self.historyClock = historyClock
         super.init()
         if let initial = source(), !initial.isEmpty {
             configure(initial.count)
@@ -95,6 +104,7 @@ public final class XRGCPUMiner: NSObject {
     private func configure(_ count: Int) {
         guard count != numberOfCPUs else { return }
         numberOfCPUs = count
+        emitHistory(.reset)
         func resized(_ original: [XRGDataSet]) -> [XRGDataSet] {
             var values = Array(original.prefix(count))
             while values.count < count {
@@ -151,6 +161,7 @@ public final class XRGCPUMiner: NSObject {
             countersAvailable = false; slowBaseline = nil; slowTime = nil
             current = Array(repeating: nil, count: numberOfCPUs)
             for data in userValues + systemValues + niceValues { data.setNextValue(XRGGraphRenderer.missingValue) }
+            emitHistory(.sample(Array(repeating: nil, count: numberOfCPUs), historyClock()))
             return
         }
         configure(next.count)
@@ -166,6 +177,7 @@ public final class XRGCPUMiner: NSObject {
             systemValues[index].setNextValue(value?.1 ?? XRGGraphRenderer.missingValue)
             niceValues[index].setNextValue(value?.2 ?? XRGGraphRenderer.missingValue)
         }
+        emitHistory(.sample(values, historyClock()))
     }
 
     @objc public func fastUpdate(_ timer: Timer?) {
@@ -193,6 +205,7 @@ public final class XRGCPUMiner: NSObject {
     /// readings, smoothing and availability. No hardware read occurs here.
     @objc public func reset() {
         for data in userValues + systemValues + niceValues { data.setAllValues(XRGGraphRenderer.missingValue) }
+        emitHistory(.reset)
     }
 
     public func currentUsage(forCPU index: Int) -> CGFloat? {

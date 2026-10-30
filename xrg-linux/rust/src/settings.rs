@@ -315,6 +315,8 @@ pub struct MetricSelection {
     /// Zero retains the historical 120-sample default; explicit counts survive resizing.
     #[serde(skip_serializing_if = "zero_cpu_history")]
     pub cpu_history_samples: u32,
+    #[serde(skip_serializing_if = "zero_cpu_history")]
+    pub cpu_history_minutes: u32,
     /// Graph-local capacities; missing/zero keeps the original 120 samples.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub history_samples: std::collections::BTreeMap<Module, u32>,
@@ -364,6 +366,9 @@ impl MetricSelection {
             ) || *count > shared::sampling_settings()[3]
         }) {
             return Err("History capacity must be 0..20000 for a supported system graph".into());
+        }
+        if self.cpu_history_minutes > shared::timed_projection_settings()[0] {
+            return Err("CPU time window must be 0..60 minutes".into());
         }
         if self.cpu_history_samples > shared::sampling_settings()[3] {
             return Err("CPU history must be automatic or between 1 and 20000 samples".into());
@@ -511,7 +516,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 31,
+            version: 32,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -581,7 +586,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 31 {
+        if self.version != 32 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -773,6 +778,9 @@ impl Settings {
         }
         if result.version == 30 {
             result.version = 31;
+        }
+        if result.version == 31 {
+            result.version = 32;
         }
         result.validate()?;
         Ok(result)
