@@ -116,3 +116,43 @@ fn invalid_totals_are_unavailable_and_three_adapter_limit_is_explicit() {
     let p = v.panel(&report(vec![gpu("0", Some(20), Some(100))]));
     assert!(p.series[0][..119].iter().all(|n| *n == 0.));
 }
+
+#[test]
+fn timestamp_windows_preserve_pool_boundaries_gaps_and_fallback_samples() {
+    let mut view = View::default();
+    view.set_history_samples(3).unwrap();
+    view.panel_at(&report(vec![gpu("a", Some(50), Some(100))]), 100.);
+    view.set_time_window(1).unwrap();
+    let p = view.panel_at(&report(vec![gpu("a", Some(0), Some(100))]), 110.);
+    assert_eq!(p.series[0].len(), 61);
+    assert_eq!(p.series[0][50], 50.);
+    assert_eq!(p.series[0][60], 0.);
+    assert!(p.series[0][51..60].iter().all(|v| v.is_nan()));
+    view.set_history_samples(6).unwrap();
+    view.set_history_interval(0.2);
+    let p = view.panel_at(&report(vec![gpu("a", Some(10), Some(100))]), 111.);
+    assert_eq!(p.series[0].len(), 301);
+    let p = view.panel_at(&report(vec![gpu("a", Some(10), Some(50))]), 112.);
+    assert_eq!(p.series[0][300], 20.);
+    assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+    let mut changed = gpu("a", Some(25), Some(50));
+    changed.driver = "replacement".into();
+    let p = view.panel_at(&report(vec![changed.clone()]), 113.);
+    assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+    view.clear_graph();
+    let p = view.panel_at(&report(vec![changed.clone()]), 114.);
+    assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+    assert!(
+        view.panel_at(&Err("offline".into()), 115.)
+            .series
+            .is_empty()
+    );
+    let p = view.panel_at(&report(vec![changed.clone()]), 116.);
+    assert!(p.series[0][..300].iter().all(|v| v.is_nan()));
+    assert!(view.set_time_window(61).is_err());
+    view.set_time_window(0).unwrap();
+    assert_eq!(
+        view.panel_at(&report(vec![changed]), 117.).series[0].len(),
+        6
+    );
+}

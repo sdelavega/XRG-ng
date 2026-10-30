@@ -379,6 +379,8 @@ impl Sampler {
             history.resize(npu_capacity);
         }
         self.gpu_memory
+            .set_time_window(selection.retained_minutes(Module::GpuMemory))?;
+        self.gpu_memory
             .set_history_samples(selection.retained_samples(Module::GpuMemory))?;
         self.memory
             .set_time_window(selection.retained_minutes(Module::Memory))?;
@@ -1213,6 +1215,9 @@ impl Worker {
                     .memory
                     .set_history_interval(timer.interval_seconds());
                 sampler.gpu_history_interval = timer.interval_seconds();
+                sampler
+                    .gpu_memory
+                    .set_history_interval(timer.interval_seconds());
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 *output.lock().unwrap() = Some(sampler.sample());
                 published.notify();

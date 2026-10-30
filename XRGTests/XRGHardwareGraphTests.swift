@@ -33,6 +33,31 @@ struct XRGHardwareGraphTests {
             option.tag = 0; restored.selectHistory(option); #expect(restored.curve("a").count == 120)
         }
     }
+    @Test func vramTimeWindowsKeepPoolUnitsGapsAndCachedSourceEditsIndependent() throws {
+        try withSettings { defaults, settings in
+            settings.graphRefresh=1
+            var wall=100.0,calls=0
+            var values=[XRGHardwareReading(id:"a",name:"Pool",value:50,capacity:100)]
+            let view=XRGHardwareGraphView(kind:.vram,frame:NSRect(x:0,y:0,width:200,height:100),settings:settings,defaults:defaults,historyClock:{wall},source:{calls+=1;return .success(values)})
+            view.graphUpdate(nil);wall=110;values=[XRGHardwareReading(id:"a",name:"Pool",value:0,capacity:100)];view.graphUpdate(nil)
+            let before=calls,option=NSMenuItem();option.tag=1;view.selectHistoryWindow(option)
+            #expect(view.curve("a").count==61 && view.curve("a")[50]==50 && view.curve("a").last==0)
+            #expect(view.curve("a")[51..<60].allSatisfy { $0==XRGGraphRenderer.missingValue })
+            view.setFrameSize(NSSize(width:1,height:100));#expect(calls==before && view.curve("a")[50]==50)
+            settings.graphRefresh=0.2;#expect(view.curve("a").count==301)
+            let menu=try #require(view.makeMenu().items.first { $0.title=="VRAM Time Window" }?.submenu);#expect(menu.items.allSatisfy { $0.target===view })
+            option.tag=61;view.selectHistoryWindow(option);#expect(view.historyMinutes==1)
+            view.clearData(nil);#expect(view.curve("a").allSatisfy { $0==XRGGraphRenderer.missingValue } && calls==before)
+            wall=111;values=[XRGHardwareReading(id:"a",name:"Allocation",value:25,capacity:nil)];view.graphUpdate(nil)
+            #expect(!view.percentage && view.curve("a").last==25 && view.curve("a").dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            wall=112;values=[XRGHardwareReading(id:"a",name:"Pool",value:10,capacity:50)];view.graphUpdate(nil)
+            #expect(view.percentage && view.curve("a").last==20 && view.curve("a").dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
+            option.tag=300;view.selectHistory(option);#expect(view.historyMinutes==0 && view.curve("a").count==300)
+            let fans=XRGHardwareGraphView(kind:.fans,frame:NSRect(x:0,y:0,width:200,height:100),settings:settings,defaults:defaults,source:{.success([])})
+            option.tag=5;fans.selectHistoryWindow(option);#expect(fans.historyMinutes==0 && defaults.integer(forKey:XRGHardwareGraphView.windowKey)==0)
+            #expect(!fans.makeMenu().items.contains { $0.title=="VRAM Time Window" })
+        }
+    }
     private func withSettings(_ body: (UserDefaults, XRGSettings) throws -> Void) throws {
         _ = NSApplication.shared
         let name = "XRG.hardware-graphs.\(UUID().uuidString)"

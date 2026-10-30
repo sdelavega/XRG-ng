@@ -5,16 +5,30 @@ use crate::{
     engine::{Panel, Scale},
     gpu::Gpu,
     hardware::Readings,
-    shared::History,
+    shared::{History, TimedHistory},
 };
 use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct View {
-    histories: BTreeMap<String, (String, u64, History)>,
+    histories: BTreeMap<String, (String, u64, History, TimedHistory)>,
     history_samples: u32,
+    minutes: u32,
+    interval: Option<f64>,
 }
 impl View {
+    pub fn set_time_window(&mut self, minutes: u32) -> Result<(), String> {
+        if minutes > crate::shared::timed_projection_settings()[0] {
+            return Err("VRAM window must be 0..60 minutes".into());
+        }
+        self.minutes = minutes;
+        Ok(())
+    }
+    pub fn set_history_interval(&mut self, seconds: f64) {
+        if seconds.is_finite() && seconds >= 0.2 {
+            self.interval = Some(seconds);
+        }
+    }
     fn capacity(&self) -> u32 {
         if self.history_samples == 0 {
             120
@@ -30,21 +44,29 @@ impl View {
         self.history_samples = count;
         let capacity = self.capacity();
         if old != capacity {
-            for (_, _, h) in self.histories.values_mut() {
+            for (_, _, h, _) in self.histories.values_mut() {
                 h.resize(capacity);
             }
         }
         Ok(())
     }
     pub fn clear_graph(&mut self) {
-        for (_, _, h) in self.histories.values_mut() {
+        for (_, _, h, timed) in self.histories.values_mut() {
             h.clear();
+            timed.clear();
         }
     }
     pub fn reset(&mut self) {
         self.histories.clear();
     }
     pub fn panel(&mut self, report: &Result<Readings<Gpu>, String>) -> Panel {
+        let observed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_secs_f64())
+            .unwrap_or(f64::NAN);
+        self.panel_at(report, observed)
+    }
+    pub fn panel_at(&mut self, report: &Result<Readings<Gpu>, String>, observed: f64) -> Panel {
         let mut panel = Panel {
             title: "VRAM",
             label: "VRAM counters unavailable".into(),
@@ -92,16 +114,33 @@ impl View {
             let used = gpu.memory_used.unwrap();
             let total = gpu.memory_total.unwrap();
             let capacity = self.capacity();
-            let history = self
-                .histories
-                .entry(gpu.id.clone())
-                .or_insert_with(|| (gpu.driver.clone(), total, History::new(capacity)));
+            let history = self.histories.entry(gpu.id.clone()).or_insert_with(|| {
+                (
+                    gpu.driver.clone(),
+                    total,
+                    History::new(capacity),
+                    TimedHistory::new_limited(1, 60),
+                )
+            });
             if history.0 != gpu.driver || history.1 != total {
-                *history = (gpu.driver.clone(), total, History::new(capacity));
+                *history = (
+                    gpu.driver.clone(),
+                    total,
+                    History::new(capacity),
+                    TimedHistory::new_limited(1, 60),
+                );
             }
             let percent = 100. * used as f64 / total as f64;
             history.2.append(percent);
-            panel.series.push(history.2.values());
+            history.3.append(observed, &[percent]);
+            panel.series.push(if self.minutes > 0 {
+                history
+                    .3
+                    .values_at(self.minutes, self.interval.unwrap_or(1.))
+                    .remove(0)
+            } else {
+                history.2.values()
+            });
             labels.push(format!("{} {percent:.1}%", gpu.label));
         }
         if !labels.is_empty() {

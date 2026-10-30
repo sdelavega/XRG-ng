@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 36 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 37 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -472,7 +472,7 @@ source changes and unavailable-source resets retain their existing boundaries.
 Mac failed polls add gaps and retain prior observations; Linux unavailable activity
 keeps its existing history reset. Changing windows does not poll counters on Mac;
 Linux retains its settings-wake behavior. Sample counts remain saved as fallback.
-Standalone VRAM time-window controls remain separate work.
+Standalone VRAM windows are described below.
 
 NPU also supports **NPU Time Window** on Mac and a Linux Sources field: 1–60
 minutes, zero uses samples, with the same sampling-target grid and one-hour /
@@ -485,7 +485,19 @@ device/client activity percentages separate from unscoped producer inference
 rates, preserving existing mode/source and unavailable-activity boundaries. Graph
 resets clear both Linux history modes. Window edits preserve collector baselines;
 current readings remain independent. Cadence changes do not accelerate the telemetry
-producer. Standalone VRAM windows remain separate work.
+producer. Standalone VRAM windows are described below.
+
+Standalone VRAM supports **VRAM Time Window** on Mac and a Linux Sources field:
+1–60 minutes, zero uses saved sample counts, with the same sampling-target grid
+and one-hour / 20,000-observation bound per pool. Mac retains reported pool
+percentages or allocation bytes under its existing all-plotted-sources unit rule;
+Linux retains driver-reported pool percentages only. Client allocations do not
+become pool capacity. Capacity, driver/metadata, unit and replacement changes keep
+their existing reset boundaries. Automatic disappearance/failure clears histories
+as before; Mac pinned missing sources append gaps. Source-menu edits use cached
+readings and do not invent timestamp observations for newly selected sources.
+Graph reset clears both modes, while current readouts and sample fallback remain
+independent. Mac Fans retains its separate sample-count behavior and settings.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

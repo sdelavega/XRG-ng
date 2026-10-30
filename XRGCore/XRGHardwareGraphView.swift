@@ -19,12 +19,15 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     }
     @MainActor private final class History {
         let data = XRGDataSet()
+        let timed = XRGTimedHistory(channels: 1, retentionMinutes: 60)!
+        let projection = XRGTimeWindowProjection(channels: 1)
         var signature: String
         init(signature: String, size: Int) {
             self.signature = signature; data.resize(size); data.setAllValues(XRGGraphRenderer.missingValue)
         }
     }
     let kind: Kind
+    private let historyClock: () -> TimeInterval
     private let source: () -> Result<[XRGHardwareReading], Error>
     private let defaults: UserDefaults
     private let standaloneSettings: XRGSettings?
@@ -48,7 +51,9 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
 
     init(kind: Kind, frame: NSRect, settings: XRGSettings?, defaults: UserDefaults,
+         historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 },
          source: @escaping () -> Result<[XRGHardwareReading], Error>) {
+        self.historyClock = historyClock
         self.kind = kind; self.source = source; self.defaults = defaults; standaloneSettings = settings
         status = kind == .fans ? "No readable fan RPM" : "GPU memory unavailable"
         super.init(frame: frame)
@@ -108,9 +113,9 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
             readError = nil
         case .failure(let error): next = []; readError = error.localizedDescription
         }
-        readings = next; project(appendSample: true)
+        readings = next; project(appendSample: true, observedAt: historyClock())
     }
-    private func project(appendSample: Bool) {
+    private func project(appendSample: Bool, observedAt: TimeInterval? = nil) {
         let next = readings
         let currentIDs = Set(next.map(\.id))
         if let fixed = sourceSelection.sources { slots = fixed }
@@ -133,10 +138,15 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
             let fresh = histories[reading.id]?.signature != signature
             if let existing = histories[reading.id], !fresh { history = existing }
             else { history = History(signature: signature, size: width); histories[reading.id] = history }
-            if appendSample || fresh { history.data.setNextValue(percentage ? reading.value / reading.capacity! * 100 : reading.value) }
+            let value = percentage ? reading.value / reading.capacity! * 100 : reading.value
+            if appendSample || fresh { history.data.setNextValue(value) }
+            if kind == .vram, let observedAt { history.timed.append(time: observedAt, values: [value]) }
         }
         if appendSample {
-            for id in missing { histories[id]?.data.setNextValue(XRGGraphRenderer.missingValue) }
+            for id in missing {
+                histories[id]?.data.setNextValue(XRGGraphRenderer.missingValue)
+                if kind == .vram, let observedAt { histories[id]?.timed.append(time: observedAt, values: [.nan]) }
+            }
         }
         updateLabels(); needsDisplay = true
     }
@@ -184,25 +194,29 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
                                 mini: mini, settings: settings)
         toolTip = detailText; setAccessibilityLabel(kind.name); setAccessibilityHelp(detailText)
     }
-    func curve(_ id: String) -> [CGFloat] { histories[id]?.data.orderedValues ?? [] }
+    private func historyData(_ id: String) -> XRGDataSet? {
+        guard let history = histories[id] else { return nil }
+        return history.projection.values(from: history.timed, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))?.first ?? history.data
+    }
+    func curve(_ id: String) -> [CGFloat] { historyData(id)?.orderedValues ?? [] }
     override func draw(_ dirtyRect: NSRect) {
         guard !isHidden, let settings, let context = NSGraphicsContext.current, XRGGraphRenderer.validRect(bounds) else { return }
         NSGraphicsContext.saveGraphicsState(); defer { NSGraphicsContext.restoreGraphicsState() }
         context.shouldAntialias = settings.antiAliasing
         settings.graphColor(kind.id, component: 0).set(); bounds.fill(using: .copy)
-        let maxValue = histories.values.flatMap { $0.data.orderedValues }.filter { $0.isFinite && $0 != XRGGraphRenderer.missingValue }.max() ?? 0
+        let maxValue = histories.keys.flatMap { curve($0) }.filter { $0.isFinite && $0 != XRGGraphRenderer.missingValue }.max() ?? 0
         let upper: CGFloat = percentage ? 100 : max(1, min(maxValue, CGFloat.greatestFiniteMagnitude / 1.1) * 1.1)
         let style = settings.curveStyle(kind.id) ?? .solid
         for (index, id) in slots.enumerated() {
-            guard let id, let history = histories[id] else { continue }
-            XRGGraphRenderer.drawCurve(history.data, upperBound: upper, lowerBound: 0, in: bounds,
+            guard let id, let data = historyData(id) else { continue }
+            XRGGraphRenderer.drawCurve(data, upperBound: upper, lowerBound: 0, in: bounds,
                 flipped: false, filled: true, color: settings.graphColor(kind.id, component: index + 1), style: style)
         }
         // Independent series must remain visible over opaque area fills.
         if style == .solid {
             for (index, id) in slots.enumerated() {
-                guard let id, let history = histories[id] else { continue }
-                XRGGraphRenderer.drawCurve(history.data, upperBound: upper, lowerBound: 0, in: bounds,
+                guard let id, let data = historyData(id) else { continue }
+                XRGGraphRenderer.drawCurve(data, upperBound: upper, lowerBound: 0, in: bounds,
                     flipped: false, filled: false, color: settings.graphColor(kind.id, component: index + 1), style: .hollow)
             }
         }
@@ -214,10 +228,17 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         let sources = NSMenuItem(title: "Choose Sources…", action: #selector(chooseSources(_:)), keyEquivalent: "")
         sources.target = self; menu.addItem(sources); menu.addItem(.separator())
         menu.addItem(XRGHistoryRetention.menu(kind == .vram ? "VRAM History" : "Fans History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        if kind == .vram { menu.addItem(XRGSystemTimeWindow.menu("VRAM Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:)))) }
         for (title, action) in [("Read-only details…", #selector(showDetails(_:))), ("Reset Graph", #selector(clearData(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
         }
         return menu
+    }
+    static let windowKey = "XRGHardwareGraphView.VRAM.HistoryMinutes.v1"
+    var historyMinutes: Int { kind == .vram ? XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) : 0 }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard kind == .vram, XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
     }
     static let historyKey = "XRGHardwareGraphView.VRAM.HistorySamples.v1"
     static let fanHistoryKey = "XRGHardwareGraphView.Fans.HistorySamples.v1"
@@ -225,6 +246,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: retentionKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: retentionKey) else { return }
+        if kind == .vram { defaults.set(0, forKey: Self.windowKey) }
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     @objc func emptyEvent(_ sender: Any?) {}
@@ -255,7 +277,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         host.endSheet(sheet, returnCode: .cancel); sheet.orderOut(nil)
     }
     @objc func clearData(_ sender: Any?) {
-        for history in histories.values { history.data.setAllValues(XRGGraphRenderer.missingValue) }
+        for history in histories.values { history.data.setAllValues(XRGGraphRenderer.missingValue); history.timed.clear() }
         needsDisplay = true
     }
     @objc private func showDetails(_ sender: Any?) {

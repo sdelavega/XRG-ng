@@ -1753,3 +1753,32 @@ passed all 16 X11/nested Wayland cases on rerun. Initial failure logs remain.
 Inspected native residency/menu and Linux Sources captures. Evidence:
 `dist/npu-time-window-validation`. Physical Intel/Linux x86-64, macOS 26 runtime,
 real suspend/resume and unowned accelerators remain unverified.
+
+
+### Standalone VRAM windows preserve pool and allocation boundaries
+
+Mac VRAM Time Window and Linux Sources now support 1–60 minutes (zero uses sample
+count), centered sampling-target bins (minimum 200 ms), latest-observation anchors
+and the shared one-hour / 20,000-observation bound per pool. Mac uses its existing
+all-plotted-sources pool-percent/allocation-byte rule; Linux requires a valid
+reported total for a pool percentage. Neither invents installed VRAM capacity
+from readable-client allocations or system RAM. Capacity, metadata/driver, unit
+and replacement boundaries retain their existing resets. Mac automatic source
+loss clears histories; pinned missing sources add gaps. Linux unavailable sources
+retain their reset policy. Current readouts and sample fallback remain independent.
+
+Mac source-menu edits still project cached readings without polling hardware;
+fresh cached selections do not acquire invented timestamps. Window/resize edits
+retain raw observations, while Reset Graph clears both modes. Native byte-axis
+scaling includes peaks still in the projected window. Fans keeps separate settings
+and sample-count behavior. Linux schema 37 migrates profiles in memory until
+explicit save and rejects invalid edits atomically. Sensor windows remain separate
+work; no app version, release, dependency or notice policy changed.
+
+Validation: universal Debug build, 591 passing cases each ARM64/Rosetta x86_64,
+isolated native/packaged launches; Linux ARM64 37 shared Swift tests, exact C ABI
+smoke, strict Clippy, 583 Rust tests and all 16 X11/nested Wayland desktop cases.
+Both full gates passed on the first run. Inspected native one-minute VRAM/menu
+captures with a 20-second gap and Linux seven-minute VRAM Sources controls.
+Evidence: `dist/vram-time-window-validation`. Physical Intel/Linux x86-64,
+macOS 26 runtime, real suspend/resume and unowned GPUs remain unverified.
