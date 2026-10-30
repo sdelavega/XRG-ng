@@ -77,6 +77,13 @@ unsafe extern "C" {
         tokens: *mut u64,
         cost: *mut f64,
     ) -> i32;
+    fn xrg_codex_usage_parse(
+        bytes: *const u8,
+        length: u32,
+        input: *mut u64,
+        output: *mut u64,
+        total: *mut u64,
+    ) -> i32;
     fn xrg_codex_record_parse(bytes: *const u8, length: u32, tokens: *mut u64) -> i32;
 }
 
@@ -261,6 +268,21 @@ pub fn metrics(text: &str) -> Option<(u64, f64)> {
     let length = u32::try_from(text.len()).ok()?;
     (unsafe { xrg_metrics_parse(text.as_ptr(), length, &mut tokens, &mut cost) } == 0)
         .then_some((tokens, cost))
+}
+/// Recorded cumulative components; unknown/inconsistent splits stay unclassified.
+pub fn codex_usage(bytes: &[u8]) -> Option<Usage> {
+    let mut usage = Usage::default();
+    let length = u32::try_from(bytes.len()).ok()?;
+    (unsafe {
+        xrg_codex_usage_parse(
+            bytes.as_ptr(),
+            length,
+            &mut usage.input,
+            &mut usage.output,
+            &mut usage.total,
+        )
+    } == 0)
+        .then_some(usage)
 }
 pub fn codex_record(bytes: &[u8]) -> Option<u64> {
     let mut tokens = 0;

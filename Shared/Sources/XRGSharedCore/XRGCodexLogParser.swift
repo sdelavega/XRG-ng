@@ -67,6 +67,121 @@ public final class XRGCodexLogParser: NSObject {
         return record.payload.info?.totalTokenUsage?.total
     }
 
+    /// Preserve explicit components only when they fit the authoritative total.
+    /// Missing or inconsistent components never manufacture a prompt/output split.
+    public static func usage(inLine data: Data) -> XRGTokenUsage? {
+        guard let record = try? JSONDecoder().decode(Record.self, from: data),
+              record.type == "event_msg", record.payload.type == "token_count",
+              let counts = record.payload.info?.totalTokenUsage, let total = counts.total else { return nil }
+        let usage = XRGTokenUsage(input: counts.inputTokens ?? 0, output: counts.outputTokens ?? 0, total: total)
+        return usage.isValid ? usage : XRGTokenUsage(total: total)
+    }
+
+    public struct Snapshot: Equatable, Sendable {
+        public let usage: XRGTokenUsage
+        public let modelTotals: [String: UInt64]
+    }
+
+    /// Complete bounded file snapshot. I/O/size failures throw so callers can
+    /// retain their last complete snapshot instead of publishing a false zero.
+    public static func snapshot(atPath path: String) throws -> Snapshot {
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        defer { try? handle.close() }
+        var ledger = Attribution(), usage = XRGTokenUsage(total: 0)
+        var line = Data(), bytesRead = 0
+        while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            try Task.checkCancellation()
+            bytesRead += chunk.count
+            guard bytesRead <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            for byte in chunk {
+                if byte == 10 {
+                    if !line.isEmpty {
+                        let sample = self.usage(inLine: line)
+                        ledger.consume(line, usage: sample)
+                        if let sample { usage = sample }
+                    }
+                    line.removeAll(keepingCapacity: true)
+                } else {
+                    guard line.count < 8 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+                    line.append(byte)
+                }
+            }
+        }
+        // A complete final record without LF is valid. A partially written one
+        // cannot change totals or donate a model to the next complete scan.
+        if !line.isEmpty {
+            let sample = self.usage(inLine: line)
+            ledger.consume(line, usage: sample)
+            if let sample { usage = sample }
+        }
+        return Snapshot(usage: usage, modelTotals: ledger.models)
+    }
+
+    private struct Attribution {
+        private struct Metadata: Decodable {
+            let type: String
+            let payload: Payload?
+            struct Payload: Decodable {
+                let type: String?
+                let model: String?
+                let info: Info?
+            }
+            struct Info: Decodable {
+                let lastTokenUsage: Last?
+                let includesReasoning: Bool?
+                enum CodingKeys: String, CodingKey {
+                    case lastTokenUsage = "last_token_usage"
+                    case includesReasoning = "last_usage_includes_reasoning"
+                }
+            }
+            struct Last: Decodable {
+                let totalTokens: UInt64?
+                enum CodingKeys: String, CodingKey { case totalTokens = "total_tokens" }
+            }
+        }
+        private var total: UInt64 = 0
+        private var model: String?
+        private(set) var models: [String: UInt64] = [:]
+        mutating func consume(_ line: Data, usage: XRGTokenUsage?) {
+            let record = try? JSONDecoder().decode(Metadata.self, from: line)
+            if let usage {
+                if usage.total < total {
+                    models = [:]; model = nil
+                } else {
+                    let delta = usage.total - total
+                    // Both true and false identify a real request's usage.
+                    // An absent marker can be a synthetic context-window fill.
+                    if delta > 0, let model, let record,
+                       record.type == "event_msg", record.payload?.type == "token_count",
+                       let info = record.payload?.info, info.includesReasoning != nil,
+                       info.lastTokenUsage?.totalTokens == delta,
+                       models[model] != nil || models.count < 255 {
+                        models[model, default: 0] += delta
+                    }
+                }
+                total = usage.total
+            }
+            guard let record else { model = nil; return }
+            switch record.type {
+            case "turn_context":
+                let candidate = record.payload?.model
+                model = candidate.flatMap {
+                    !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 1024
+                        && $0.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) } ? $0 : nil
+                }
+            case "compacted", "session_meta": model = nil
+            case "event_msg":
+                switch record.payload?.type {
+                case "token_count": if usage == nil { model = nil }
+                case "model_reroute", "context_compacted", "thread_rolled_back", "task_started",
+                     "turn_started", "task_complete", "turn_complete", "turn_aborted", "error", nil: model = nil
+                default: break
+                }
+            default: break
+            }
+        }
+    }
+
     #if canImport(ObjectiveC)
     @objc(totalTokensAtPath:)
     #endif

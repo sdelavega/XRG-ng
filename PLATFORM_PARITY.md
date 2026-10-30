@@ -99,14 +99,24 @@ Implemented in this pass:
   complete coverage. Existing defaults remain Mac received-response / Linux session.
   No new network request is made for presentation changes.
 
+- Mac Codex now supplies recorded input/output components and qualified turn-model
+  partitions to observed session/daily accounting. Its AI context menu separates
+  cumulative log details from observed counters. Both ports use the same Swift
+  component decoder and a common attribution corpus; unknown/synthetic usage stays
+  unclassified. Mac checked Codex scans retain the last complete snapshot on I/O
+  or size failures; resets still invalidate pre-reset scans. Files are limited to
+  64 MiB with 8 MiB records and 255 named models; excess metadata never adds tokens.
+
 Remaining monitoring work:
 
 1. Monitoring tools: Mac process controls and richer live details; align optional
    source selection, counter displays and remaining graph modes.
    Retain the existing integrated Mac fan/VRAM readings.
 2. AI accounting: align source continuity/model attribution and Mac/Linux observed
-   windows and sampling cadence. Both now account with hidden graphs. Mac Codex still
-   lacks model/input-output attribution; Ollama inventory is not token accounting.
+   windows and sampling cadence. Both now account with hidden graphs and preserve
+   recorded Codex input/output components and conservatively qualified turn models.
+   Per-file discovery/replacement continuity still needs alignment; Ollama inventory
+   is not token accounting.
    Mac log scans retain their last complete snapshot through failed scans, while
    database/endpoint failure breaks accounting continuity. Keep cost estimates
    optional and labeled; neither platform's observed counters are billing records.

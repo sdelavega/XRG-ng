@@ -1030,3 +1030,30 @@ fn an_earlier_active_log_does_not_discard_a_later_files_read_progress() {
     }
     panic!("An earlier active log repeatedly discarded the later file's progress");
 }
+
+#[test]
+fn codex_components_replace_cumulative_snapshots_without_adding_subfields() {
+    let bytes=concat!(
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":6,\"output_tokens\":4,\"total_tokens\":10}}}}\n",
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":12,\"cached_input_tokens\":10,\"output_tokens\":8,\"reasoning_output_tokens\":7,\"total_tokens\":20}}}}\n"
+    ).as_bytes();
+    let mut budget = IO_BUDGET;
+    let entry = stream::parse(
+        &mut std::io::Cursor::new(bytes),
+        Layout::Codex,
+        false,
+        stamp(bytes.len()),
+        Instant::now() + Duration::from_secs(3),
+        None,
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(
+        entry.parsed.anonymous,
+        Usage {
+            input: 12,
+            output: 8,
+            total: 20
+        }
+    );
+}

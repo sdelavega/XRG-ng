@@ -38,6 +38,14 @@ int main(void) {
         1793103000, archive, sizeof(archive)-1);
     assert(archive_count > 0); archive[archive_count] = 0;
     assert(strstr((char *)archive, "\"observed_at\":1793102400") && strstr((char *)archive, "\"temperature_c\":0"));
+    uint64_t codex_input = 99, codex_output = 99, codex_total = 99;
+    assert(xrg_codex_usage_parse(NULL, 1, &codex_input, &codex_output, &codex_total) == -1);
+    assert(codex_input == 99 && codex_output == 99 && codex_total == 99);
+    const char *codex = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":6,\"output_tokens\":4,\"total_tokens\":12}}}}";
+    assert(xrg_codex_usage_parse((const uint8_t *)"invalid", 7, &codex_input, &codex_output, &codex_total) == 1);
+    assert(codex_input == 99 && codex_output == 99 && codex_total == 99);
+    assert(xrg_codex_usage_parse((const uint8_t *)codex, strlen(codex), &codex_input, &codex_output, &codex_total) == 0);
+    assert(codex_input == 6 && codex_output == 4 && codex_total == 12);
     void *history = xrg_history_create(3);
     assert(history);
     for (int i = 1; i <= 4; i++) assert(xrg_history_append(history, i) == 0);

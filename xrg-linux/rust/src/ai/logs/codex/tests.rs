@@ -233,3 +233,50 @@ fn cross_session_merge_is_bounded_and_preserves_unknown_and_total() {
         1050
     );
 }
+
+#[test]
+fn shared_attribution_corpus_matches_swift_file_parser_and_component_decoder() {
+    #[derive(serde::Deserialize)]
+    struct Case {
+        name: String,
+        lines: Vec<String>,
+        total: u64,
+        input: u64,
+        output: u64,
+        models: BTreeMap<String, u64>,
+    }
+    let cases: Vec<Case> = serde_json::from_str(include_str!(
+        "../../../../../../Shared/Tests/Fixtures/codex-attribution-cases.json"
+    ))
+    .unwrap();
+    for case in cases {
+        let mut parsed = std::sync::Arc::new(crate::ai::logs::Parsed::default());
+        crate::ai::logs::lines(
+            case.lines.join("\n").as_bytes(),
+            crate::ai::logs::Layout::Codex,
+            &mut parsed,
+            std::time::Instant::now() + std::time::Duration::from_secs(3),
+        )
+        .unwrap();
+        let ledger = &parsed.codex;
+        let usage = parsed.anonymous;
+        assert_eq!(
+            usage,
+            crate::shared::Usage {
+                input: case.input,
+                output: case.output,
+                total: case.total
+            },
+            "{}",
+            case.name
+        );
+        let named: BTreeMap<_, _> = ledger
+            .rows
+            .0
+            .iter()
+            .filter_map(|(model, total)| model.as_ref().map(|m| (m.clone(), *total)))
+            .collect();
+        assert_eq!(named, case.models, "{}", case.name);
+        conserved(ledger, case.total);
+    }
+}

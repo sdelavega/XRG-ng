@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import XRGCore
+@testable import XRGCore
 
 private final class ParseProbe: @unchecked Sendable {
     private let lock = NSLock()
@@ -156,6 +156,39 @@ struct XRGScanStateTests {
         scan.refresh(root: root.path, layout: 0, parse: probe.read)
         #expect(await waitForScan(scan))
         #expect(scan.snapshot.tokens == 10)
+    }
+
+    @Test func checkedParseFailuresRetainCompleteSnapshotsAndRetryTheSameStamp() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at:root) }
+        let file = root.appendingPathComponent("2026/10/30/rollout-fixture.jsonl")
+        try write("10",to:file)
+        let scan = XRGScanCache(interval:0), probe = ParseProbe()
+        scan.refreshChecked(root:root.path,layout:1,parse:probe.read)
+        #expect(await waitForScan(scan))
+        #expect(scan.completedSnapshot?.tokens == 10 && !scan.lastScanFailed)
+        try write("20",to:file)
+        scan.refreshChecked(root:root.path,layout:1) { _ in throw CocoaError(.fileReadTooLarge) }
+        #expect(await waitForScan(scan))
+        #expect(scan.completedSnapshot?.tokens == 10 && scan.lastScanFailed)
+        scan.refreshChecked(root:root.path,layout:1,parse:probe.read)
+        #expect(await waitForScan(scan))
+        #expect(scan.completedSnapshot?.tokens == 20 && probe.count == 2 && !scan.lastScanFailed)
+    }
+
+    @Test func codexAggregateModelLimitRetainsAllProviderTokens() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at:root) }
+        try write("a",to:root.appendingPathComponent("2026/10/30/rollout-a.jsonl"))
+        try write("b",to:root.appendingPathComponent("2026/10/30/rollout-b.jsonl"))
+        let scan = XRGScanCache(interval:0)
+        scan.refreshChecked(root:root.path,layout:1) { path in
+            let prefix = path.hasSuffix("rollout-a.jsonl") ? "a" : "b"
+            let models = Dictionary(uniqueKeysWithValues:(0..<255).map { ("\(prefix)\($0)",UInt64(1)) })
+            return XRGScanTotals(tokens:255,input:0,output:0,cost:0,modelTotals:models)
+        }
+        #expect(await waitForScan(scan))
+        let sample = try #require(scan.completedSnapshot)
+        #expect(sample.tokens == 510 && sample.modelTotals.count == 255)
+        #expect(sample.modelTotals.keys.allSatisfy { $0.hasPrefix("a") })
     }
 
     @Test func aggregateOverflowDoesNotPublishWrappedTotals() async throws {

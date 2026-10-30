@@ -121,6 +121,16 @@ import Foundation
     return 0
 }
 
+/// Explicit cumulative Codex components. Invalid splits become unclassified totals.
+@c(xrg_codex_usage_parse) public func codexUsageParse(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32,
+    _ input: UnsafeMutablePointer<UInt64>?, _ output: UnsafeMutablePointer<UInt64>?,
+    _ total: UnsafeMutablePointer<UInt64>?) -> Int32 {
+    guard length <= 8_388_608, let bytes, let input, let output, let total else { return -1 }
+    guard let usage = XRGCodexLogParser.usage(inLine: Data(bytes: bytes, count: Int(length))) else { return 1 }
+    input.pointee = usage.input; output.pointee = usage.output; total.pointee = usage.total
+    return 0
+}
+
 // Additive ABI v1 entry points. Outputs are untouched on failure.
 // kind: 0 Claude record, 1 Gemini record, 2 Gemini session. Returns identity byte
 // count (zero when absent), -1 invalid/nonmatching input, -2 insufficient capacity.

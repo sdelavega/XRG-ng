@@ -76,6 +76,27 @@ private final class AITokenPanelNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGAITokenViewTests {
+    @Test func codexDetailsKeepCumulativeSplitsAndModelEvidenceSeparateFromObservedCounters() throws {
+        try withFixture { settings,defaults,observer,source in
+            let index = try #require(source.state.providers.firstIndex { $0.provider == .codex })
+            source.state.providers[index].recordedUsage = XRGTokenUsage(input:60,output:30,total:100)
+            source.state.providers[index].recordedModels = ["turn-model":70]
+            let view = panel(settings,defaults,observer,source)
+            let titles = view.makeMenu().items.map(\.title)
+            #expect(titles.contains("Codex Log Snapshot") && titles.contains("Recorded input: 60 tokens"))
+            #expect(titles.contains("Recorded output: 30 tokens") && titles.contains("Unknown split: 10 tokens"))
+            #expect(titles.contains("  turn-model: 70 tokens") && titles.contains("Unattributed model: 30 tokens"))
+            #expect(observer.sessionTotalTokens == 0 && observer.dailyTotalTokens == 0)
+            source.state.providers[index].recordedSnapshotStale = true
+            #expect(view.makeMenu().items.contains { $0.title == "Last Codex scan failed; showing cached snapshot" })
+            #expect(view.fullReading().contains("Recorded turn models (not backend confirmation)"))
+            settings.aiTokensAggregateByModel = false
+            #expect(!view.makeMenu().items.contains { $0.title.contains("turn-model") })
+            #expect(view.makeMenu().items.contains { $0.title == "Recorded input: 60 tokens" })
+            source.state.providers[index].recordedUsage = nil
+            #expect(!view.makeMenu().items.contains { $0.title == "Codex Log Snapshot" })
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults, XRGAITokensObserver, AITokenPanelSource) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.aiTokenView.\(UUID().uuidString)"

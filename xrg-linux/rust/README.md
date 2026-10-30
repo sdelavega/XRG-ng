@@ -760,7 +760,7 @@ The shared Swift record decoders and macOS scan path are unchanged.
 
 ### Codex model evidence
 
-The Linux model breakdown can attribute a cumulative increase to the preceding
+The Linux and Mac model breakdowns can attribute a cumulative increase to the preceding
 valid `turn_context.model` when `last_token_usage.total_tokens` matches that
 increase and `last_usage_includes_reasoning` is a recorded Boolean. Both Boolean
 values qualify. Missing/null markers, initial unseen history, mismatched deltas
@@ -775,15 +775,25 @@ including its distinction between real request usage and context-window fills.
 Older or incomplete logs may have no usable model breakdown. The shared Swift
 decoder still determines cumulative provider totals independently of optional
 model metadata. Named rows plus unattributed usage sum to those totals, including
-sessions with no usable model evidence. No input/output split or price is inferred.
-The inspector labels those details unavailable and the existing model display
-toggle hides the breakdown without changing collection or history.
+sessions with no usable model evidence. The same shared decoder now preserves
+explicit cumulative `input_tokens` and `output_tokens` when they fit the recorded
+total; absent components remain unknown and inconsistent splits become entirely
+unclassified. Cache and reasoning subfields are not added again. No split or price
+is inferred. Linux provider/model details and Mac's **Codex Log Snapshot** menu
+keep cumulative logs separate from observed session/daily counters. Codex model
+rows currently carry totals only; their individual input/output splits and prices
+remain unavailable. The existing model display toggle hides model rows without
+changing collection or history.
 
 At most 255 named groups and one unattributed group are kept per session and per
 provider; additional distinct names fold into unattributed usage. These limits
 do not discard tokens or turn excess Codex model metadata into a provider error.
-Model state shares verified scan checkpoints, so resumable reads, EOF replay,
-rewrites and replacement files cannot retain stale attribution. Fixtures are
+Linux model state shares verified scan checkpoints, so resumable reads, EOF replay,
+rewrites and replacement files cannot retain stale attribution. Mac uses complete
+bounded per-file snapshots in its metadata cache, with I/O/size failures preserving
+the last complete sweep. Reset/enable transitions invalidate pending scans. A
+common fixture corpus checks both attribution implementations and the shared
+component decoder. Fixtures are
 synthetic; tests do not read personal sessions or contact live AI providers.
 
 ## Processes

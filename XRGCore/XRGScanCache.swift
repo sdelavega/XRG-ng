@@ -61,6 +61,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private var entries: [String: Entry] = [:]
     private var value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     private var published = false
+    private var failed = false
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var lastStart: TimeInterval?
@@ -76,6 +77,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
 
     @objc public var snapshot: XRGScanTotals { lock.withLock { value } }
     @objc public var completedSnapshot: XRGScanTotals? { lock.withLock { published ? value : nil } }
+    @nonobjc public var lastScanFailed: Bool { lock.withLock { failed } }
     @objc public var hasSnapshot: Bool { lock.withLock { published } }
     @objc public var isScanning: Bool { lock.withLock { task != nil } }
 
@@ -87,6 +89,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         task = nil
         lastStart = nil
         published = false
+        failed = false
         entries = [:]
         value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     }
@@ -96,6 +99,12 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     @objc(refreshRoot:layout:parse:)
     public func refresh(root: String, layout: Int,
                         parse: @escaping @Sendable (String) -> XRGScanTotals) {
+        refreshChecked(root: root, layout: layout, parse: parse)
+    }
+
+    /// Checked parsers may reject incomplete I/O without replacing a good snapshot.
+    @nonobjc public func refreshChecked(root: String, layout: Int,
+                        parse: @escaping @Sendable (String) throws -> XRGScanTotals) {
         lock.withLock {
             if source != root || sourceLayout != layout {
                 clear()
@@ -117,6 +126,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private func finish(id: UUID, result: ([String: Entry], XRGScanTotals)?) {
         lock.withLock {
             guard generation == id else { return }
+            failed = result == nil
             if let result {
                 published = true
                 entries = result.0
@@ -184,7 +194,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     }
 
     private static func scan(root: String, layout: Int, previous: [String: Entry],
-                             parse: @Sendable (String) -> XRGScanTotals) throws -> ([String: Entry], XRGScanTotals) {
+                             parse: @Sendable (String) throws -> XRGScanTotals) throws -> ([String: Entry], XRGScanTotals) {
         var next: [String: Entry] = [:]
         for path in try files(root: root, layout: layout) {
             try Task.checkCancellation()
@@ -193,7 +203,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 next[path] = old
             } else {
                 guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
-                let totals = parse(path)
+                let totals = try parse(path)
                 try Task.checkCancellation()
                 let after = try stamp(path)
                 // Retry concurrently changing files on the next scan; do not
@@ -215,7 +225,11 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             let newCost = cost + entry.totals.cost
             guard !overflowTokens, !overflowInput, !overflowOutput,
                   entry.totals.cost >= 0, newCost.isFinite else { throw CocoaError(.fileReadCorruptFile) }
-            for (name, count) in entry.totals.modelTotals {
+            for name in entry.totals.modelTotals.keys.sorted() {
+                guard let count = entry.totals.modelTotals[name] else { continue }
+                // Keep a bounded deterministic Codex partition. Excess metadata
+                // remains unclassified; it never changes the provider total.
+                if layout == 1 && models[name] == nil && models.count >= 255 { continue }
                 let (sum, overflow) = (models[name] ?? 0).addingReportingOverflow(count)
                 guard !overflow else { throw CocoaError(.fileReadCorruptFile) }
                 models[name] = sum

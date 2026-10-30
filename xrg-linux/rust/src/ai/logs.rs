@@ -332,14 +332,15 @@ fn lines(
             return Err("JSONL record exceeds 8 MiB".into());
         }
         if matches!(layout, Layout::Codex) {
-            let total = shared::codex_record(line);
+            let usage = shared::codex_usage(line);
+            let total = usage.map(|u| u.total);
             let update = codex::Update::parse(line);
             if total.is_some() || parsed.codex.changes_context(&update) {
                 let entry = Arc::make_mut(parsed);
                 entry.codex.update(update, total)?;
                 // Each event is a cumulative session snapshot, never an increment.
-                if let Some(total) = total {
-                    entry.anonymous.total = total;
+                if let Some(usage) = usage {
+                    entry.anonymous = usage;
                 }
             }
         } else if let Some(details) = shared::provider_details(

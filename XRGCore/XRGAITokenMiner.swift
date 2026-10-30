@@ -99,6 +99,8 @@ public final class XRGAITokenMiner: NSObject {
     private var geminiOutput: UInt64 = 0
     private var accounting = XRGTokenAccounting()
     private var accountingEnabled = false
+    private var codexUsage: XRGTokenUsage?
+    private var codexModels: [String: UInt64] = [:]
     private var claudeUsage: XRGTokenUsage?
     private var hermesUsage: XRGTokenUsage?
     private var claudeModels: [String: UInt64] = [:]
@@ -174,6 +176,7 @@ public final class XRGAITokenMiner: NSObject {
         models = []; ollamaRunningModels = []; ollamaAvailable = false
         lastOllamaPoll = nil
         accounting = XRGTokenAccounting(); claudeUsage = nil; hermesUsage = nil; claudeModels = [:]
+        codexUsage = nil; codexModels = [:]
     }
 
     func resetAccountingBaseline() {
@@ -225,7 +228,8 @@ public final class XRGAITokenMiner: NSObject {
         let claudeAccountingReady = activeStrategy == .OTel ? claudeUsage != nil : claudeReady
         let samples: [(String, String, XRGTokenUsage?, [String: UInt64])] = [
             ("Claude", "claude-\(activeStrategy.rawValue)", claudeAccountingReady ? claudeUsage : nil, claudeModels),
-            ("Codex", "codex-jsonl", codexReady ? XRGTokenUsage(total: totalCodexTokens) : nil, [:]),
+            ("Codex", "codex-jsonl", codexReady ? XRGTokenUsage(input: codexUsage?.input ?? 0,
+                 output: codexUsage?.output ?? 0, total: totalCodexTokens) : nil, codexModels),
             ("Gemini", "gemini-json", geminiReady ? XRGTokenUsage(input: geminiInput, output: geminiOutput, total: totalGeminiTokens) : nil, gemini?.modelTotals ?? [:]),
             ("Hermes", "hermes-sqlite", hermesReady ? hermesUsage : nil,
              hermesModelTokens.mapValues {
@@ -259,14 +263,24 @@ public final class XRGAITokenMiner: NSObject {
         claudeScan.refresh(root: path(".claude/projects"), layout: 0) { XRGAIPricing.parse($0, gemini: false) }
     }
     @objc public func fetchFromCodexCLI() -> Bool {
-        codexReady = codexScan.completedSnapshot != nil
-        if let sample = codexScan.completedSnapshot { totalCodexTokens = sample.tokens }
+        let snapshot = codexScan.completedSnapshot
+        codexReady = snapshot != nil
+        if let sample = snapshot {
+            totalCodexTokens = sample.tokens
+            codexUsage = XRGTokenUsage(input: sample.input, output: sample.output, total: sample.tokens)
+            codexModels = sample.modelTotals
+        }
         updateCodexCacheInBackground()
         return true
     }
+    var codexLastScanFailed: Bool { codexScan.lastScanFailed }
+    var codexRecordedUsage: XRGTokenUsage? { codexReady ? codexUsage : nil }
+    var codexRecordedModels: [String: UInt64] { codexReady ? codexModels : [:] }
     @objc public func updateCodexCacheInBackground() {
-        codexScan.refresh(root: path(".codex/sessions"), layout: 1) {
-            XRGScanTotals(tokens: XRGCodexLogParser.totalTokens(atPath: $0), input: 0, output: 0, cost: 0)
+        codexScan.refreshChecked(root: path(".codex/sessions"), layout: 1) {
+            let snapshot = try XRGCodexLogParser.snapshot(atPath: $0)
+            return XRGScanTotals(tokens: snapshot.usage.total, input: snapshot.usage.input,
+                output: snapshot.usage.output, cost: 0, modelTotals: snapshot.modelTotals)
         }
     }
     @objc public func fetchFromGeminiCLI() -> Bool {

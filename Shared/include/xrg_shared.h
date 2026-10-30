@@ -63,6 +63,12 @@ int32_t xrg_theme_colors(uint32_t index, double *output, uint32_t capacity);
 int32_t xrg_metrics_parse(const uint8_t *bytes, uint32_t length, uint64_t *tokens, double *cost);
 /* Valid sample flags: 1 token, 2 cost; -1 invalid arguments. */
 int32_t xrg_metrics_sample_parse(const uint8_t *bytes, uint32_t length, uint64_t *tokens, double *cost);
+/* Same accepted cumulative records, with explicit input/output components when
+ * consistent with total; otherwise both components are zero. 0 success, 1 ignored,
+ * -1 invalid arguments. Outputs remain untouched on failure. No cache/reasoning
+ * subfields are added again to the recorded input/output/total values. */
+int32_t xrg_codex_usage_parse(const uint8_t *bytes, uint32_t length,
+    uint64_t *input, uint64_t *output, uint64_t *total);
 int32_t xrg_codex_record_parse(const uint8_t *bytes, uint32_t length, uint64_t *tokens);
 /* Usage kind: 0 Claude record, 1 Gemini record, 2 Gemini session.
  * Returns identity UTF-8 byte count (no NUL), -1 invalid/nonmatching input, -2

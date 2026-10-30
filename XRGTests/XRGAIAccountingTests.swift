@@ -28,6 +28,58 @@ import Testing
 @testable import XRGCore
 
 @Suite @MainActor struct XRGAIAccountingTests {
+    @Test func codexRecordedSplitsAndQualifiedModelsFeedObservedCountersWithoutBackfill() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("xrg-codex-accounting-"+UUID().uuidString)
+        let suite = "XRG.codexAccounting."+UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName:suite))
+        defer { try? FileManager.default.removeItem(at:root); defaults.removePersistentDomain(forName:suite) }
+        defaults.set(true,forKey:"aiTokensTrackingEnabled")
+        defaults.set(true,forKey:"aiTokensAggregateByProvider")
+        defaults.set(true,forKey:"aiTokensAggregateByModel")
+        let observer = XRGAITokensObserver(defaults:defaults,center:NotificationCenter(),calendar:.current,now:Date.init)
+        let miner = XRGAITokenMiner(home:root.path,clock:{0},scanInterval:0)
+        defer { miner.reset() }
+        miner.setAccountingEnabled(true)
+        miner.usageEventHandler = { observer.recordUsage($1,provider:$0) }
+        let file = root.appendingPathComponent(".codex/sessions/2026/10/30/rollout-fixture.jsonl")
+        try FileManager.default.createDirectory(at:file.deletingLastPathComponent(),withIntermediateDirectories:true)
+        func context(_ model:String)->String { "{\"type\":\"turn_context\",\"payload\":{\"model\":\"\(model)\"}}\n" }
+        func count(_ total:Int,_ input:Int,_ output:Int,_ last:Int,_ marker:Bool=true)->String {
+            let real = marker ? ",\"last_usage_includes_reasoning\":false" : ""
+            return "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"total_tokens\":\(total),\"input_tokens\":\(input),\"output_tokens\":\(output)},\"last_token_usage\":{\"total_tokens\":\(last)}\(real)}}}\n"
+        }
+        func scan(_ total:UInt64) async throws {
+            for _ in 0..<300 {
+                _ = miner.fetchFromCodexCLI()
+                if miner.totalCodexTokens == total { return }
+                try await Task.sleep(for:.milliseconds(5))
+            }
+            Issue.record("Codex fixture scan did not complete")
+        }
+        var log = context("historical")+count(100,60,40,100)
+        try Data(log.utf8).write(to:file); try await scan(100)
+        miner.publish(time:1,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 0 && observer.dailyByModel.isEmpty)
+        log += context("current")+count(130,80,50,30)
+        try Data(log.utf8).write(to:file); try await scan(130)
+        miner.publish(time:2,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 30 && observer.sessionPromptTokens == 20 && observer.sessionCompletionTokens == 10)
+        #expect(observer.dailyByModel.mapValues(\.uint64Value) == ["current":30])
+        // An unmarked context-window fill must not inherit the active model.
+        log += count(140,87,53,10,false)
+        try Data(log.utf8).write(to:file); try await scan(140)
+        miner.publish(time:3,hermesReady:false)
+        #expect(observer.dailyTotalTokens == 40 && observer.dailyByProvider["Codex"] == 40)
+        #expect(observer.dailyByModel.mapValues(\.uint64Value) == ["current":30])
+        miner.publish(time:4,hermesReady:false)
+        #expect(observer.dailyTotalTokens == 40)
+        observer.resetSession(); miner.resetAccountingBaseline()
+        // Fresh post-reset complete scans establish a baseline, without historical models.
+        for _ in 0..<20 { _ = miner.fetchFromCodexCLI(); try await Task.sleep(for:.milliseconds(5)) }
+        miner.publish(time:5,hermesReady:false)
+        #expect(observer.sessionTotalTokens == 0 && observer.dailyTotalTokens == 40)
+    }
+
     @Test func endpointPollingWaitsPreserveUsageContinuity() async throws {
         actor Endpoint {
             var calls = 0

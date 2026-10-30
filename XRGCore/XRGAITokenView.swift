@@ -35,6 +35,9 @@ struct XRGAIViewProviderData {
     var total: UInt64
     var cost: Double = 0
     var costBasis: String = "source value (may include estimates)"
+    var recordedUsage: XRGTokenUsage? = nil
+    var recordedModels: [String: UInt64] = [:]
+    var recordedSnapshotStale = false
 }
 struct XRGAITokenViewSnapshot {
     var providers: [XRGAIViewProviderData] = []
@@ -62,7 +65,7 @@ extension XRGAITokenMiner: XRGAITokenViewSource {
     func viewSnapshot() -> XRGAITokenViewSnapshot {
         XRGAITokenViewSnapshot(providers: [
             XRGAIViewProviderData(provider: .claude, history: claudeTokenData(), rate: UInt64(claudeTokenRate()), total: totalClaudeTokens, cost: claudeCostUSD(), costBasis: activeStrategy == .JSONL ? "legacy estimate" : activeStrategy == .SQLite ? "source estimate" : "reported"),
-            XRGAIViewProviderData(provider: .codex, history: codexTokenData(), rate: UInt64(codexTokenRate()), total: totalCodexTokens, cost: codexCostUSD(), costBasis: "legacy estimate; assumed split"),
+            XRGAIViewProviderData(provider: .codex, history: codexTokenData(), rate: UInt64(codexTokenRate()), total: totalCodexTokens, cost: codexCostUSD(), costBasis: "legacy estimate; assumed split", recordedUsage: codexRecordedUsage, recordedModels: codexRecordedModels, recordedSnapshotStale: codexLastScanFailed),
             XRGAIViewProviderData(provider: .gemini, history: geminiTokenData(), rate: UInt64(geminiTokenRate()), total: totalGeminiTokens, cost: geminiCostUSD(), costBasis: "legacy estimate"),
             XRGAIViewProviderData(provider: .ollama, history: ollamaTokenData(), rate: UInt64(ollamaTokenRate()), total: totalOllamaTokens),
             XRGAIViewProviderData(provider: .hermes, history: hermesTokenData(), rate: UInt64(hermesTokenRate()), total: totalHermesTokens, cost: hermesCostUSD(), costBasis: "source value (actual or estimated)")],
@@ -205,6 +208,23 @@ public final class XRGAITokenView: NSView, XRGModuleView {
             (name, add(UInt64(counts["input"]?.stringValue ?? "") ?? 0, UInt64(counts["output"]?.stringValue ?? "") ?? 0))
         }.filter { $0.1 > 0 }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }
     }
+    @nonobjc static func codexLogDetails(_ snapshot: XRGAITokenViewSnapshot, models: Bool) -> [String] {
+        guard let codex = snapshot.ordered.first(where: { $0.provider == .codex }),
+              let usage = codex.recordedUsage, usage.isValid else { return [] }
+        var lines = ["Codex Log Snapshot", "Cumulative received logs; separate from observed session/daily counters",
+                     "Recorded input: \(usage.input) tokens", "Recorded output: \(usage.output) tokens",
+                     "Unknown split: \(usage.unclassified) tokens"]
+        if codex.recordedSnapshotStale { lines.insert("Last Codex scan failed; showing cached snapshot", at: 1) }
+        if models {
+            lines.append("Recorded turn models (not backend confirmation)")
+            let attributed = codex.recordedModels.values.reduce(UInt64(0)) { add($0,$1) }
+            for name in codex.recordedModels.keys.sorted() {
+                lines.append("  \(name): \(codex.recordedModels[name] ?? 0) tokens")
+            }
+            lines.append("Unattributed model: \(usage.total - min(usage.total,attributed)) tokens")
+        }
+        return lines
+    }
     @nonobjc func fullReading() -> String { fullReading(source.viewSnapshot()) }
     private func fullReading(_ snapshot: XRGAITokenViewSnapshot) -> String {
         guard let settings else { return "AI Tokens" }
@@ -243,6 +263,9 @@ public final class XRGAITokenView: NSView, XRGModuleView {
                 lines.append("─ By Provider ─")
                 for key in observer.dailyByProvider.keys.sorted() { lines.append(key + ": " + Self.integerCount(observer.dailyByProvider[key]?.uint64Value ?? 0)) }
             }
+        }
+        if settings.aiTokensShowBreakdown {
+            lines += Self.codexLogDetails(snapshot, models: settings.aiTokensAggregateByModel)
         }
         return lines.joined(separator: "\n")
     }
@@ -368,6 +391,11 @@ public final class XRGAITokenView: NSView, XRGModuleView {
                 if snapshot.projectedDailyCost.isFinite { item(String(format: "  Extrapolated 24hr: $%.4f", snapshot.projectedDailyCost)) }
             }
             for provider in providers where provider.cost.isFinite && provider.cost > 0.001 { item(String(format: "  %@: $%.4f (%@)", provider.provider.name, provider.cost, provider.costBasis)) }
+        }
+        let codexLines = Self.codexLogDetails(snapshot, models: settings?.aiTokensAggregateByModel == true)
+        if !codexLines.isEmpty {
+            menu.addItem(.separator())
+            for (index, line) in codexLines.enumerated() { item(line, enabled: index > 1) }
         }
         if snapshot.ollamaAvailable {
             menu.addItem(.separator()); item("Ollama Local Inference", enabled: false); item("  " + snapshot.ollamaStatus)
