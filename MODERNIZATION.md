@@ -1477,3 +1477,40 @@ AI preference captures are archived in `dist/ai-retention-validation`. Debug/tes
 builds omit debug symbols without changing optimization/assertions. Physical
 Intel/Linux x86-64, macOS 26 runtime, actual suspend/resume and unowned hardware
 remain unverified. Compatible dependency notices remain required and unchanged.
+
+### AI retention edits preserve the collection deadline
+
+Linux history-only AI preferences now resize the last published observation on the
+AI worker, without another source read, rate sample, accounting event or alert.
+The worker owns a cached Update independently of UI consumption, reuses the same
+report Arc and preserves cached labels/readouts. Only histories, retention details
+and the acknowledged UI revision change. Missing/unavailable reports stay
+unavailable, and a pending graph reset can be acknowledged through the resized
+cache without polling. Mac's existing retention action already updates only its
+history/presentation; no Mac or shared Swift source changed in this pass.
+
+The UI revision and collection-invalidating revision are now separate. History
+edits still wake the worker to apply presentation, but leave the original monotonic
+sample deadline and an in-flight scan intact. Source/accounting edits, counter
+resets and explicit same-preference refreshes retain their collection behavior.
+Coalesced commands keep collection invalidations even when later history edits
+arrive. In-flight observations survive presentation changes and feed accounting
+once; stale collection revisions remain rejected. Collection retains its shared
+nominal five-second interval, coalescing delays without a catch-up sample backlog.
+This does not establish a real-time deadline or actual suspend/resume behavior.
+
+Regression fixtures verify cached report identity, unchanged rates/readouts and
+session/daily counters, no duplicate reads or budget alerts, unavailable reports,
+pending clear/recovery, coalesced source/accounting/reset revisions and history
+edits during a blocked scan. A timed fixture changes retention four seconds into
+an interval and guards the original phase: no earlier API call during that quiet
+period; the next call is at least five seconds after worker launch and less than
+eight seconds after the first call. That bounded check detects an extra immediate
+poll or a restarted five-second wait without claiming precise timing under load.
+
+Linux ARM64 validation passed 31 shared Swift tests, C ABI smoke, strict Clippy
+and 565 Rust tests. Complete UI/desktop results and the preferences capture are in
+`dist/ai-scheduling-validation`. Mac tests were not repeated because native/shared
+source is unchanged. No settings-schema or application-version bump, new dependency,
+release publication or signing change. Timestamp-based retention, remaining timing
+parity and actual sleep/wake remain separate work.

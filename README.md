@@ -417,9 +417,12 @@ and preserve rate baselines and session/daily counters. The original automatic
 choices remain (Mac graph width minus the reserved indicator strip; 120 on Linux).
 At the nominal five-second AI cadence, 300 samples span about 1,495 seconds between
 oldest and newest. Pauses, slow scans and wakeups affect actual coverage; this is
-sample-count retention, not a timestamp-based window. Linux AI preference edits
-retain their existing behavior of waking collection. Capacity changes do not alter
-source selection, cost policy, notifications or recorded accounting.
+sample-count retention, not a timestamp-based window. Linux history-only edits
+resize the cached observation without an extra collection, duplicate sample or
+accounting event, and preserve the next collection deadline, matching Mac retention
+edits. An in-flight scan remains valid through a history-only edit. Source changes,
+accounting edits and counter resets retain their refresh behavior. Capacity changes
+do not alter source selection, cost policy, notifications or recorded accounting.
 
 Both builds support sampling targets from 200 ms to 10 seconds. Mac edits retain
 millisecond precision; existing valid Mac preferences outside that range remain

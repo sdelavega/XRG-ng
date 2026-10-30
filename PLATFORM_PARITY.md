@@ -164,8 +164,11 @@ Implemented in development for monitoring tools:
   Both describe nominal spans at the shared five-second cadence. Original automatic
   defaults remain (Mac width minus indicator strip, Linux 120); collection delays
   mean equal capacities are not guaranteed equal wall-clock windows. Linux AI
-  preference edits still wake collection. Schema 30 upgrades old files without
-  writing until explicit save. Timestamp-based retention and scheduling remain open.
+  history-only edits now resize the cached result without collecting, appending a
+  duplicate observation or changing counters/alerts. They preserve the existing
+  deadline and an in-flight scan; source/accounting edits and counter resets still
+  request collection. Schema 30 upgrades old files without writing until explicit
+  save. Timestamp-based retention and remaining scheduling work are still open.
 - Mac session/daily AI accounting now consumes observed deltas from Claude,
   Codex, Gemini and Hermes, with explicit unknown input/output splits and available
   log/database model attribution. Initial history is excluded; source changes,

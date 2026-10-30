@@ -287,6 +287,13 @@ struct Counter {
     source: Option<(String, u64)>,
     previous: Option<Reading>,
 }
+fn history_description(preferences: &Preferences) -> String {
+    let samples = preferences.history_capacity();
+    let span = (samples - 1) as f64 * shared::ai_sampling_milliseconds() as f64 / 1000.;
+    format!(
+        "AI history: {samples} samples; nominal {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Capacity changes preserve rate baselines and observed accounting."
+    )
+}
 pub struct Display {
     counters: [Counter; 4],
     history: History,
@@ -309,6 +316,25 @@ impl Display {
     pub fn clear_graph(&mut self) {
         self.history.clear();
     }
+    /// Resize the published observation without sampling rates or accounting again.
+    fn resize_cached(&mut self, update: &mut Update, preferences: Preferences, revision: u64) {
+        debug_assert!(update.preferences.same_collection(&preferences));
+        self.history.resize(preferences.history_capacity());
+        self.preferences = Some(preferences.clone());
+        if !update.panel.series.is_empty() {
+            update.panel.series = vec![self.history.values()];
+        }
+        update.panel.detail = update.panel.detail.replacen(
+            &history_description(&update.preferences),
+            &history_description(&preferences),
+            1,
+        );
+        update.preferences = preferences;
+        update.control_revision = revision;
+        update.detail = report_detail(&update.report, &update.preferences, &update.panel, true);
+        update.summary_detail =
+            report_detail(&update.report, &update.preferences, &update.panel, false);
+    }
     pub fn panel(&mut self, report: Report, time: f64) -> Panel {
         self.panel_for(report, time, &Preferences::default())
     }
@@ -326,9 +352,7 @@ impl Display {
         self.history.resize(preferences.history_capacity());
         self.preferences = Some(preferences.clone());
         let mut detail = vec!["Token totals cover locally retained logs/database rows, not account billing. Graph: observed token-counter change per second, sampled every 5 s; log writes may arrive in bursts. Costs are shown only when recorded by the source.".to_owned()];
-        let samples = preferences.history_capacity();
-        let span = (samples - 1) as f64 * shared::ai_sampling_milliseconds() as f64 / 1000.;
-        detail.push(format!("AI history: {samples} samples; nominal {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Capacity changes preserve rate baselines and observed accounting."));
+        detail.push(history_description(preferences));
         let mut readout = crate::dashboard::Readout::default();
         readout
             .top
@@ -431,14 +455,19 @@ struct ControlState {
     session: bool,
     daily: bool,
     revision: u64,
+    collection_revision: u64,
+    last_preferences: Option<Preferences>,
     wake: Option<mpsc::Sender<Wake>>,
     wake_pending: bool,
 }
 #[derive(Clone, Default)]
 pub struct Control(Arc<Mutex<ControlState>>);
 impl ControlState {
-    fn signal(&mut self) {
+    fn signal(&mut self, collection: bool) {
         self.revision = self.revision.wrapping_add(1);
+        if collection {
+            self.collection_revision = self.collection_revision.wrapping_add(1);
+        }
         if !self.wake_pending {
             if let Some(wake) = &self.wake {
                 let _ = wake.send(Wake::Refresh);
@@ -451,22 +480,30 @@ impl Control {
     pub fn set(&self, preferences: Preferences) -> Result<(), String> {
         preferences.validate()?;
         let mut state = self.0.lock().unwrap();
+        let history_only = state.last_preferences.as_ref().is_some_and(|previous| {
+            previous.history_samples != preferences.history_samples
+                && previous.same_collection(&preferences)
+        });
+        state.last_preferences = Some(preferences.clone());
         state.preferences = Some(preferences);
-        state.signal();
+        state.signal(!history_only);
         Ok(())
     }
     pub fn reset_session(&self) {
         let mut state = self.0.lock().unwrap();
         state.session = true;
-        state.signal();
+        state.signal(true);
     }
     pub fn reset_daily(&self) {
         let mut state = self.0.lock().unwrap();
         state.daily = true;
-        state.signal();
+        state.signal(true);
     }
     pub fn revision(&self) -> u64 {
         self.0.lock().unwrap().revision
+    }
+    fn collection_revision(&self) -> u64 {
+        self.0.lock().unwrap().collection_revision
     }
 }
 #[derive(Clone, Debug)]
@@ -674,7 +711,13 @@ impl Worker {
         let graph_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let graph_updates = graph_generation.clone();
         let (stop, receiver) = mpsc::channel();
-        control.0.lock().unwrap().wake = Some(stop.clone());
+        {
+            let mut state = control.0.lock().unwrap();
+            state.wake = Some(stop.clone());
+            state
+                .last_preferences
+                .get_or_insert_with(|| preferences.clone());
+        }
         let join = thread::spawn(move || {
             let mut collector = Collector::configured(config.clone(), preferences.clone())
                 .expect("Validated AI preferences");
@@ -682,10 +725,17 @@ impl Worker {
             let start = Instant::now();
             let mut generation = 0;
             let mut accountant: Option<accounting::Accountant> = None;
+            let mut cached: Option<Update> = None;
+            let mut last_collection_revision = 0;
+            let mut next = Instant::now();
             loop {
-                let next =
-                    Instant::now() + Duration::from_millis(shared::ai_sampling_milliseconds());
-                let (requested_preferences, session_reset, daily_reset, revision) = {
+                let (
+                    requested_preferences,
+                    session_reset,
+                    daily_reset,
+                    revision,
+                    collection_revision,
+                ) = {
                     let mut state = control.0.lock().unwrap();
                     while let Ok(message) = receiver.try_recv() {
                         if matches!(message, Wake::Stop) {
@@ -698,8 +748,10 @@ impl Worker {
                         std::mem::take(&mut state.session),
                         std::mem::take(&mut state.daily),
                         state.revision,
+                        state.collection_revision,
                     )
                 };
+                let presentation_update = requested_preferences.is_some();
                 if let Some(next) = requested_preferences {
                     if !preferences.same_sources(&next) {
                         collector = Collector::configured(config.clone(), next.clone())
@@ -708,6 +760,31 @@ impl Worker {
                     }
                     preferences = next;
                 }
+                if collection_revision == last_collection_revision
+                    && !session_reset
+                    && !daily_reset
+                    && Instant::now() < next
+                    && let Some(update) = cached.as_mut()
+                {
+                    if presentation_update {
+                        let requested = graph_updates.load(std::sync::atomic::Ordering::Acquire);
+                        if requested != generation {
+                            display.clear_graph();
+                            generation = requested;
+                        }
+                        display.resize_cached(update, preferences.clone(), revision);
+                        update.graph_generation = generation;
+                        if control.revision() == revision {
+                            *output.lock().unwrap() = Some(update.clone());
+                        }
+                    }
+                    // Presentation wakes keep the original sample deadline.
+                    match receiver.recv_timeout(next.saturating_duration_since(Instant::now())) {
+                        Ok(Wake::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        _ => break,
+                    }
+                }
+                next = Instant::now() + Duration::from_millis(shared::ai_sampling_milliseconds());
                 let day = accounting::local_day();
                 if (preferences.accounting.enabled || session_reset || daily_reset)
                     && accountant.is_none()
@@ -726,9 +803,9 @@ impl Worker {
                     }
                 }
                 let report = collector.sample(&mut api);
-                // A reset/settings change arriving during a scan invalidates that
-                // entire observation. The next complete read is a fresh baseline.
-                if control.revision() != revision {
+                // Source/accounting changes and resets invalidate an in-flight scan.
+                // History edits keep that observation and only resize its cached result.
+                if control.collection_revision() != collection_revision {
                     continue;
                 }
                 let mut counters = accounting::Snapshot::default();
@@ -736,7 +813,7 @@ impl Worker {
                     match accounting::local_day() {
                         Ok(day) => {
                             if let Some(percent) = a.observe(&report, &day)
-                                && control.revision() == revision
+                                && control.collection_revision() == collection_revision
                             {
                                 a.set_notification_status(notify(percent));
                             }
@@ -773,6 +850,8 @@ impl Worker {
                 update.graph_generation = generation;
                 update.control_revision = revision;
                 update.accounting = counters;
+                last_collection_revision = collection_revision;
+                cached = Some(update.clone());
                 if control.revision() == revision {
                     *output.lock().unwrap() = Some(update);
                 }

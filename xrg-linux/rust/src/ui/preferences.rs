@@ -792,7 +792,7 @@ fn ai(ui: &mut egui::Ui, s: &mut Settings) {
     let capacity = s.ai.history_capacity();
     let span =
         (capacity - 1) as f64 * xrg_ng_linux::shared::ai_sampling_milliseconds() as f64 / 1000.;
-    ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Preference changes may wake collection."));
+    ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Changing retention does not add a collection or delay the next sample."));
     ui.checkbox(
         &mut s.ai.accounting.enabled,
         "Track observed session/daily usage",

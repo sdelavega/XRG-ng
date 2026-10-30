@@ -57,6 +57,9 @@ impl Preferences {
             self.history_samples
         }
     }
+    pub(crate) fn same_collection(&self, other: &Self) -> bool {
+        self.same_sources(other) && self.accounting == other.accounting
+    }
     pub fn same_sources(&self, other: &Self) -> bool {
         let mut a = self.clone();
         let mut b = other.clone();
