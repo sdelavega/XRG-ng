@@ -52,6 +52,15 @@ Implemented in development for monitoring tools:
 - Linux Network/Disk faces now show observed session transfers, with raw kernel
   totals in details. Transfer reset preserves graphs/rate baselines, source changes
   restart the session, and failed-read gaps/saturation are marked as lower bounds.
+  Mac Network/Disk now share those accounting/reset rules: directional byte totals
+  and raw kernel counters appear in Transfer Details…, with separate Reset Session
+  Transfers actions. Existing compact combined totals remain, with ≥ for incomplete
+  or saturated coverage. Graph reset preserves rates/baselines and totals; a transfer
+  reset excludes the next interval spanning the action. Failed reads append gaps
+  and show unavailable rates; recovery retains counted totals and rebaselines.
+  Membership/identity changes and any counter rollback start a fresh session and
+  plot. Network name/index reuse between observations remains undetectable; disk
+  replacement uses registry IDs. Fast samples do not add to normal session totals.
 - Mac now has optional, default-hidden VRAM and Fans graphs with up to three
   sources, per-graph presentation, read-only details and independent history reset.
   GPU/VRAM share one read per graph tick; Fans reuses the temperature collector's

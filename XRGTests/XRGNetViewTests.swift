@@ -218,21 +218,29 @@ struct XRGNetViewTests {
         }
     }
 
-    @Test func resetClearsBothGraphsAndSmoothingButPreservesSessionTotal() throws {
+    @Test func graphAndTransferResetsAreIndependentAndPreserveRates() throws {
         try withFixture { settings, defaults, source in
             let view = panel(source, settings, defaults, height: 10)
             source.advance(1, rx: 1600, tx: 400); view.graphUpdate(nil); view.fastUpdate(nil)
-            source.samples = nil; source.time = 2; view.graphUpdate(nil)
-            #expect(view.miner.currentRX() == 600)
-            let total = view.miner.totalBytesSinceLoad
+            let fastRx = view.fastRXValue, fastTx = view.fastTXValue
             view.clearData(nil)
             #expect(view.miner.maxBandwidth() == 0 && view.fastMiner.maxBandwidth() == 0)
-            #expect(view.fastRXValue == 0 && view.fastTXValue == 0)
-            #expect(view.miner.totalBytesSinceLoad == total)
-            source.advance(3, rx: 2000, tx: 600); view.graphUpdate(nil); view.fastUpdate(nil)
-            #expect(view.miner.currentRX() == 0 && view.fastRXValue == 0)
-            source.advance(4, rx: 2600, tx: 800); view.graphUpdate(nil); view.fastUpdate(nil)
-            #expect(view.miner.currentRX() == 600 && abs(view.fastRXValue - 120) < 0.0001)
+            #expect(view.fastRXValue == fastRx && view.fastTXValue == fastTx)
+            #expect(view.miner.totalBytesSinceLoad == 800 && view.miner.currentRX() == 600)
+            #expect(view.graphLabels.rightLabel.accessibilityValue() == "800B/s")
+            source.advance(2, rx: 2200, tx: 600); view.graphUpdate(nil); view.fastUpdate(nil)
+            #expect(view.miner.currentRX() == 600 && abs(view.fastRXValue - 216) < 0.0001)
+            let history = view.miner.rxValues.orderedValues
+            view.resetTransfers(nil)
+            #expect(view.miner.totalBytesSinceLoad == 0 && view.miner.rxValues.orderedValues == history)
+            #expect(abs(view.fastRXValue - 216) < 0.0001 && view.miner.currentRX() == 600)
+            source.advance(3, rx: 2800, tx: 800); view.graphUpdate(nil)
+            #expect(view.miner.currentRX() == 600 && view.miner.totalBytesSinceLoad == 0)
+            source.advance(4, rx: 3400, tx: 1000); view.graphUpdate(nil)
+            #expect(view.miner.receivedBytesSinceLoad == 600 && view.miner.sentBytesSinceLoad == 200)
+            source.samples = nil; source.time = 5; view.graphUpdate(nil)
+            #expect(view.graphLabels.rightLabel.accessibilityValue() == "—")
+            #expect(view.toolTip?.contains("Partial coverage") == true)
         }
     }
 
@@ -278,7 +286,7 @@ struct XRGNetViewTests {
             #expect(view.graphScale() == 1)
             source.advance(1, rx: UInt64.max - 1, tx: UInt64.max - 1); view.graphUpdate(nil)
             #expect(view.graphScale().isFinite && view.graphScale() > CGFloat(Int64.max))
-            #expect(view.fullLeftReading() == "Net\n32768.0P/s\n16384.0P\n16384.0P")
+            #expect(view.fullLeftReading() == "Net\n32768.0P/s\n≥16384.0P\n≥16384.0P")
             view.setGraphSize(NSSize(width: CGFloat.greatestFiniteMagnitude, height: 0))
             #expect(view.miner.rxValues.numValues == 20_000 && view.fastMiner.rxValues.numValues == 20_000)
             view.setWidth(-1)

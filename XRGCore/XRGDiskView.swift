@@ -180,11 +180,12 @@ public final class XRGDiskView: NSView, XRGModuleView {
         return String(format: "%.0fB/s", value.rounded(.towardZero))
     }
     @nonobjc func fullLeftReading() -> String {
-        [title(), scaleText(), XRGCommon.formattedString(forBytes: Double(miner.totalBytesSinceLoad))].joined(separator: "\n")
+        [title(), scaleText(), (miner.transfersAreLowerBound ? "≥" : "") + XRGCommon.formattedString(forBytes: Double(miner.totalBytesSinceLoad))].joined(separator: "\n")
     }
-    public func readBytesString() -> String { XRGCommon.formattedString(forBytes: Double(miner.readRate)) + " R" }
-    public func writeBytesString() -> String { XRGCommon.formattedString(forBytes: Double(miner.writeRate)) + " W" }
+    public func readBytesString() -> String { (miner.countersAvailable ? XRGCommon.formattedString(forBytes: Double(miner.readRate)) : "—") + " R" }
+    public func writeBytesString() -> String { (miner.countersAvailable ? XRGCommon.formattedString(forBytes: Double(miner.writeRate)) : "—") + " W" }
     private func updateLabels() {
+        toolTip = miner.transferDetails
         updateMode()
         let mini = shouldDrawMiniGraph()
         let rect = XRGGraphLabels.paddedTextRect(for: bounds)
@@ -193,7 +194,7 @@ public final class XRGDiskView: NSView, XRGModuleView {
         bottomRates.rightLabel.isHidden = mini
         if mini {
             graphLabels.layoutColumnText(title(),
-                rightText: XRGCommon.formattedString(forBytes: Double(miner.totalValues.currentValue)) + "/s",
+                rightText: miner.countersAvailable ? XRGCommon.formattedString(forBytes: Double(miner.readRate + miner.writeRate)) + "/s" : "—",
                 in: rect, mini: true, settings: settings)
             topRates.layoutColumnText(nil, rightText: nil, in: .zero, mini: false, settings: settings)
             bottomRates.layoutColumnText(nil, rightText: nil, in: .zero, mini: false, settings: settings)
@@ -222,6 +223,7 @@ public final class XRGDiskView: NSView, XRGModuleView {
         updateLabels()
         settings.graphColor(.disk, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
+            guard miner.countersAvailable && miner.fastCountersAvailable else { return }
             XRGGraphRenderer.drawGraphBars(miniValues(), upperBound: Double(max(1_048_576, fastScale)), lowerBound: 0, in: bounds, settings: settings, module: .disk)
             return
         }
@@ -245,7 +247,9 @@ public final class XRGDiskView: NSView, XRGModuleView {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self; return item
         }
+        menu.addItem(item("Transfer Details…", #selector(showTransferDetails(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
+        menu.addItem(item("Reset Session Transfers", #selector(resetTransfers(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Open Disk Utility...", #selector(openDiskUtility(_:))))
         menu.addItem(item("Open XRG-ng Disk Preferences...", #selector(openDiskPreferences(_:))))
@@ -255,8 +259,20 @@ public final class XRGDiskView: NSView, XRGModuleView {
     public func openDiskUtility(_ sender: Any?) { _ = openURL(Self.diskUtilityURL) }
     public func openDiskPreferences(_ sender: Any?) { host?.showDiskPreferences() }
     public func clearData(_ sender: Any?) {
-        miner.reset(); fastReadValue = 0; fastWriteValue = 0; fastScale = 1_048_576
+        miner.reset()
         updateLabels(); needsDisplay = true
+    }
+    public func resetTransfers(_ sender: Any?) {
+        miner.resetTransfers()
+        updateLabels(); needsDisplay = true
+    }
+    public func showTransferDetails(_ sender: Any?) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Disk Transfer Details"
+        alert.informativeText = miner.transferDetails
+        alert.addButton(withTitle: "Close")
+        alert.beginSheetModal(for: window)
     }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override func mouseDown(with event: NSEvent) { window?.mouseDown(with: event) }

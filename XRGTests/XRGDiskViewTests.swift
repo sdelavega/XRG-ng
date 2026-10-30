@@ -175,16 +175,33 @@ struct XRGDiskViewTests {
         }
     }
 
-    @Test func resetClearsBothGraphsAndSmoothingButKeepsTheByteTotalAndBaselines() throws {
+    @Test func resetClearsOnlyGraphsAndKeepsRatesByteTotalsAndBaselines() throws {
         try withFixture { settings, defaults, source in
             let miner = source.miner(), view = panel(miner, settings, defaults, height: 10)
             source.advance(1, read: 1600, written: 400); view.graphUpdate(nil); view.fastUpdate(nil)
+            let read = view.fastReadValue, write = view.fastWriteValue, scale = view.fastScale
             view.clearData(nil)
-            #expect(miner.totalValues.max == 0 && view.fastReadValue == 0 && view.fastWriteValue == 0 && view.fastScale == 1_048_576)
+            #expect(miner.totalValues.max == 0 && view.fastReadValue == read && view.fastWriteValue == write && view.fastScale == scale)
             #expect(miner.totalBytesSinceLoad == 800)
             source.advance(2, read: 2200, written: 600); view.graphUpdate(nil); view.fastUpdate(nil)
             #expect(miner.totalValues.currentValue == 800 && miner.totalBytesSinceLoad == 1600)
-            #expect(abs(view.fastReadValue - 120) < 0.0001)
+            #expect(abs(view.fastReadValue - 216) < 0.0001)
+        }
+    }
+
+    @Test func transferResetKeepsPlotAndPartialCoverageIsVisible() throws {
+        try withFixture { settings, defaults, source in
+            let miner = source.miner(), view = panel(miner, settings, defaults)
+            source.advance(1, read: 1600, written: 400); view.graphUpdate(nil)
+            let history = miner.totalValues.orderedValues
+            view.resetTransfers(nil)
+            #expect(miner.totalBytesSinceLoad == 0 && miner.totalValues.orderedValues == history)
+            #expect(view.readBytesString() == "600B R")
+            source.advance(2, read: 2200, written: 600); view.graphUpdate(nil)
+            source.advance(3, read: 2800, written: 800); view.graphUpdate(nil)
+            source.samples = nil; source.time = 4; view.graphUpdate(nil)
+            #expect(view.fullLeftReading().hasSuffix("≥800B") && view.readBytesString() == "— R")
+            #expect(view.toolTip?.contains("Partial coverage") == true)
         }
     }
 
@@ -244,8 +261,8 @@ struct XRGDiskViewTests {
             host.contentView?.addSubview(view); view.awakeFromNib()
             source.advance(1, read: 1600, written: 400); view.graphUpdate(nil)
             let menu = view.makeMenu()
-            #expect(menu.items.count == 4)
-            for item in menu.items where !item.isSeparatorItem {
+            #expect(menu.items.count == 6)
+            for item in menu.items where !item.isSeparatorItem && item.title != "Transfer Details…" {
                 #expect(item.target === view)
                 let action = try #require(item.action)
                 #expect(NSApp.sendAction(action, to: item.target, from: item))

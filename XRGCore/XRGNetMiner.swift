@@ -50,19 +50,39 @@ public final class XRGNetworkInterface: NSObject {
 public final class XRGNetMiner: NSObject {
     private let source: () -> [XRGNetworkSample]?
     private let clock: () -> TimeInterval
-    private var previous: [String: XRGNetworkSample] = [:]
-    private var lastTime: TimeInterval?
+    private var tracker = XRGIOCounterTracker<String>()
+    private var rxRate: CGFloat = 0
+    private var txRate: CGFloat = 0
     @objc public private(set) var interfaceStats: [XRGNetworkInterface] = []
     @objc public var numInterfaces: Int { interfaceStats.count }
     @objc public private(set) var totalBytesSinceBoot: UInt64 = 0
-    @objc public private(set) var totalBytesSinceLoad: UInt64 = 0
+    public private(set) var kernelTotalIsLowerBound = false
+    @objc public var totalBytesSinceLoad: UInt64 { tracker.total }
+    public var receivedBytesSinceLoad: UInt64 { tracker.first }
+    public var sentBytesSinceLoad: UInt64 { tracker.second }
+    public var transfersAreLowerBound: Bool { tracker.lowerBound }
+    public var countersAvailable: Bool { tracker.available }
+    public var transferDetails: String {
+        let interfaces = interfaceStats.filter { selected($0.name) }
+        var received: UInt64 = 0, sent: UInt64 = 0
+        for interface in interfaces {
+            received = XRGIOCounterTracker<String>.sum(received, interface.receivedBytes).value
+            sent = XRGIOCounterTracker<String>.sum(sent, interface.sentBytes).value
+        }
+        // Keep the sheet bounded even on hosts with many virtual interfaces.
+        // Individual raw counters remain available in the graph menu.
+        return "Scope: \(monitorNetworkInterface) (\(interfaces.count) interfaces in last snapshot).\n"
+        + "Kernel counters (normally since boot): Rx \(received) bytes / Tx \(sent) bytes\(kernelTotalIsLowerBound ? " (combined total saturated; lower bound)" : "").\n"
+        + tracker.details(firstLabel: "Rx", secondLabel: "Tx")
+        + "Interface identity uses name and kernel index; reuse of both between observations cannot be detected. Bridged/VPN/stacked interfaces may count traffic more than once."
+    }
     @objc public let rxValues = XRGDataSet()
     @objc public let txValues = XRGDataSet()
     @objc public let totalValues = XRGDataSet()
     @objc public var monitorNetworkInterface = "All" {
         didSet {
             guard oldValue != monitorNetworkInterface else { return }
-            totalBytesSinceLoad = 0
+            rebase()
             reset()
             updateBootTotal()
         }
@@ -85,54 +105,59 @@ public final class XRGNetMiner: NSObject {
     }
     @objc public func reset() {
         for history in [rxValues, txValues, totalValues] { history.reset() }
-        lastTime = nil
     }
+    public func resetTransfers() { tracker.resetTransfers() }
+    public func rebase() { tracker = XRGIOCounterTracker(); rxRate = 0; txRate = 0 }
     @objc public func maxBandwidth() -> CGFloat { totalValues.max }
-    @objc public func currentTX() -> CGFloat { txValues.currentValue }
-    @objc public func currentRX() -> CGFloat { rxValues.currentValue }
+    @objc public func currentTX() -> CGFloat { txRate }
+    @objc public func currentRX() -> CGFloat { rxRate }
     @objc public func networkInterfaces() -> [String] { interfaceStats.map(\.name) }
 
     private func selected(_ name: String) -> Bool {
         monitorNetworkInterface == "All" || monitorNetworkInterface == name
     }
-    private func add(_ a: UInt64, _ b: UInt64) -> UInt64 {
-        let (result, overflow) = a.addingReportingOverflow(b)
-        return overflow ? .max : result
-    }
     private func updateBootTotal() {
-        totalBytesSinceBoot = interfaceStats.filter { selected($0.name) }.reduce(0) {
-            add($0, add($1.receivedBytes, $1.sentBytes))
+        totalBytesSinceBoot = 0; kernelTotalIsLowerBound = false
+        for interface in interfaceStats where selected(interface.name) {
+            let pair = XRGIOCounterTracker<String>.sum(interface.receivedBytes, interface.sentBytes)
+            let total = XRGIOCounterTracker<String>.sum(totalBytesSinceBoot, pair.value)
+            totalBytesSinceBoot = total.value
+            kernelTotalIsLowerBound = kernelTotalIsLowerBound || pair.overflow || total.overflow
         }
     }
 
-    @objc public func getLatestNetInfo() {
-        guard let samples = source() else { return }
-        let now = clock()
-        guard now.isFinite else { return }
-        let elapsed = lastTime.map { now - $0 } ?? 0
-        var received: UInt64 = 0
-        var sent: UInt64 = 0
+    @discardableResult @objc public func getLatestNetInfo() -> Bool {
+        guard let samples = source() else { return failedRead() }
         var next: [String: XRGNetworkSample] = [:]
         for sample in samples where sample.name != "lo0" {
-            guard next[sample.name] == nil else { continue }
+            // Ambiguous identities invalidate the snapshot instead of picking an
+            // arbitrary duplicate and counting a fabricated delta.
+            guard next[sample.name] == nil else { return failedRead() }
             next[sample.name] = sample
-            guard elapsed > 0, selected(sample.name),
-                  let old = previous[sample.name], old.index == sample.index else { continue }
-            // A decreased counter is a new baseline, not a 32-bit rollover.
-            received = add(received, sample.received >= old.received ? sample.received - old.received : 0)
-            sent = add(sent, sample.sent >= old.sent ? sample.sent - old.sent : 0)
         }
-        previous = next
-        lastTime = now
+        let now = clock()
+        guard now.isFinite else { return failedRead() }
+        // Discovery is independent of the pinned selection. A missing selected
+        // interface must not hide newly attached interfaces from preferences.
         interfaceStats = next.values.sorted { $0.name < $1.name }.map(XRGNetworkInterface.init)
         updateBootTotal()
-        totalBytesSinceLoad = add(totalBytesSinceLoad, add(received, sent))
-        let rx = elapsed > 0 ? Double(received) / elapsed : 0
-        let tx = elapsed > 0 ? Double(sent) / elapsed : 0
-        // Protect graph storage from pathological clock intervals.
-        rxValues.setNextValue(rx.isFinite ? rx : 0)
-        txValues.setNextValue(tx.isFinite ? tx : 0)
-        totalValues.setNextValue((rx + tx).isFinite ? rx + tx : 0)
+        let chosen = next.values.filter { selected($0.name) }
+        guard monitorNetworkInterface == "All" || !chosen.isEmpty else { return failedRead() }
+        let counters = Dictionary(uniqueKeysWithValues: chosen.map {
+            ("\($0.name):\($0.index)", XRGIOCounters(first: $0.received, second: $0.sent))
+        })
+        guard let reading = tracker.sample(counters, at: now) else { return failedRead() }
+        if reading.newSession { reset() }
+        rxRate = reading.firstRate; txRate = reading.secondRate
+        rxValues.setNextValue(rxRate); txValues.setNextValue(txRate)
+        totalValues.setNextValue(rxRate + txRate)
+        return true
+    }
+
+    private func failedRead() -> Bool {
+        tracker.fail()
+        for history in [rxValues, txValues, totalValues] { history.setNextValue(XRGGraphRenderer.missingValue) }
+        return false
     }
 
     nonisolated static func readSnapshot() -> [XRGNetworkSample]? {

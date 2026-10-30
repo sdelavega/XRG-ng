@@ -147,6 +147,7 @@ public final class XRGNetView: NSView, XRGModuleView {
     private func updateMode() {
         let mini = shouldDrawMiniGraph()
         if mini && !wasMini {
+            fastMiner.rebase()
             fastMiner.reset()
             fastRXValue = 0; fastTXValue = 0
         }
@@ -162,7 +163,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         updateMode()
         guard shouldDrawMiniGraph() else { return }
         synchronizeSelection()
-        fastMiner.getLatestNetInfo()
+        guard fastMiner.getLatestNetInfo() else { updateLabels(); needsDisplay = true; return }
         fastRXValue = XRGCommon.dampedValue(usingPreviousValue: fastRXValue, currentValue: fastMiner.currentRX())
         fastTXValue = XRGCommon.dampedValue(usingPreviousValue: fastTXValue, currentValue: fastMiner.currentTX())
         updateLabels()
@@ -192,12 +193,13 @@ public final class XRGNetView: NSView, XRGModuleView {
     }
     @nonobjc func fullLeftReading() -> String {
         var lines = [title(), XRGCommon.formattedString(forBytes: Double(graphScale())) + "/s"]
-        if settings?.showTotalBandwidthSinceBoot == true { lines.append(XRGCommon.formattedString(forBytes: Double(miner.totalBytesSinceBoot))) }
-        if settings?.showTotalBandwidthSinceLoad == true { lines.append(XRGCommon.formattedString(forBytes: Double(miner.totalBytesSinceLoad))) }
+        if settings?.showTotalBandwidthSinceBoot == true { lines.append((miner.kernelTotalIsLowerBound ? "≥" : "") + XRGCommon.formattedString(forBytes: Double(miner.totalBytesSinceBoot))) }
+        if settings?.showTotalBandwidthSinceLoad == true { lines.append((miner.transfersAreLowerBound ? "≥" : "") + XRGCommon.formattedString(forBytes: Double(miner.totalBytesSinceLoad))) }
         return lines.joined(separator: "\n")
     }
     private func updateLabels() {
         synchronizeSelection()
+        toolTip = miner.transferDetails
         updateMode()
         let mini = shouldDrawMiniGraph()
         let rect = XRGGraphLabels.paddedTextRect(for: bounds)
@@ -206,7 +208,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         bottomRates.rightLabel.isHidden = mini
         if mini {
             graphLabels.layout(leftText: title(), centerText: nil,
-                rightText: XRGCommon.formattedString(forBytes: Double(miner.totalValues.currentValue)) + "/s",
+                rightText: miner.countersAvailable ? XRGCommon.formattedString(forBytes: Double(miner.currentRX() + miner.currentTX())) + "/s" : "—",
                 in: rect, mini: true, settings: settings)
             topRates.layout(leftText: nil, centerText: nil, rightText: nil, in: .zero, mini: false, settings: settings)
             bottomRates.layout(leftText: nil, centerText: nil, rightText: nil, in: .zero, mini: false, settings: settings)
@@ -219,8 +221,8 @@ public final class XRGNetView: NSView, XRGModuleView {
         graphLabels.layout(leftText: lines.prefix(count).joined(separator: "\n"), centerText: nil,
                            rightText: nil, in: rect, mini: false, settings: settings)
         graphLabels.leftLabel.fullAccessibilityText = complete
-        let rx = XRGCommon.formattedString(forBytes: Double(miner.currentRX())) + " Rx"
-        let tx = XRGCommon.formattedString(forBytes: Double(miner.currentTX())) + " Tx"
+        let rx = (miner.countersAvailable ? XRGCommon.formattedString(forBytes: Double(miner.currentRX())) : "—") + " Rx"
+        let tx = (miner.countersAvailable ? XRGCommon.formattedString(forBytes: Double(miner.currentTX())) : "—") + " Tx"
         let bottomRect = NSRect(x: rect.minX, y: bounds.minY, width: rect.width, height: min(bounds.height, height * (graphMode == 0 ? 2 : 1)))
         bottomRates.layout(leftText: nil, centerText: nil, rightText: graphMode == 0 ? rx + "\n" + tx : graphMode == 1 ? rx : tx,
                            in: bottomRect, mini: false, settings: settings)
@@ -235,6 +237,7 @@ public final class XRGNetView: NSView, XRGModuleView {
         updateLabels()
         settings.graphColor(.network, component: 0).set(); context.cgContext.fill(bounds)
         if shouldDrawMiniGraph() {
+            guard miner.countersAvailable && fastMiner.countersAvailable else { return }
             XRGGraphRenderer.drawGraphBars(miniValues(), upperBound: Double(graphScale(fast: true)), lowerBound: 0, in: bounds, settings: settings, module: .network)
             return
         }
@@ -259,14 +262,16 @@ public final class XRGNetView: NSView, XRGModuleView {
             item.target = self
             return item
         }
-        menu.addItem(item("Network Interface Traffic", #selector(emptyEvent(_:))))
+        menu.addItem(item("Kernel Interface Counters (last snapshot)", #selector(emptyEvent(_:))))
         for interface in miner.interfaceStats {
             let title = String(format: "%@: RX(%1.1fM) TX(%1.1fM)", interface.name,
                                Double(interface.receivedBytes) / 1_048_576, Double(interface.sentBytes) / 1_048_576)
             menu.addItem(item(title, #selector(emptyEvent(_:))))
         }
         menu.addItem(.separator())
+        menu.addItem(item("Transfer Details…", #selector(showTransferDetails(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
+        menu.addItem(item("Reset Session Transfers", #selector(resetTransfers(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Open Network Settings...", #selector(openNetworkSystemPreferences(_:))))
         if utilityURL() != nil { menu.addItem(item("Open Network Utility...", #selector(openNetworkUtility(_:)))) }
@@ -280,8 +285,19 @@ public final class XRGNetView: NSView, XRGModuleView {
     public func openNetworkPreferences(_ sender: Any?) { host?.showNetworkPreferences() }
     public func clearData(_ sender: Any?) {
         miner.reset(); fastMiner.reset()
-        fastRXValue = 0; fastTXValue = 0
         updateLabels(); needsDisplay = true
+    }
+    public func resetTransfers(_ sender: Any?) {
+        miner.resetTransfers()
+        updateLabels(); needsDisplay = true
+    }
+    public func showTransferDetails(_ sender: Any?) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Network Transfer Details"
+        alert.informativeText = miner.transferDetails
+        alert.addButton(withTitle: "Close")
+        alert.beginSheetModal(for: window)
     }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override func mouseDown(with event: NSEvent) { window?.mouseDown(with: event) }

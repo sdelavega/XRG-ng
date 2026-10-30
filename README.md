@@ -358,6 +358,18 @@ transfers** action. Clearing a plot preserves rates and totals; resetting transf
 preserves the plot. Source changes restart transfer sessions, and missed intervals
 are explicitly marked as partial coverage. Raw kernel counters remain in details.
 
+Mac Network/Disk now also offer **Transfer Details…** and **Reset Session
+Transfers** in their graph menus. Details separate Rx/Tx or Read/Write observed
+bytes from kernel counters; the compact faces retain their existing combined
+byte totals and display **≥** for partial or saturated session totals. **Reset
+Graph** preserves current rates, sampling baselines and transfer totals. Transfer
+reset preserves the plot and rates; the next successful sample starts accounting
+so the interval spanning the reset is excluded. Source membership/identity changes
+or a counter restart begin a new session. Failed reads produce graph gaps and an
+unavailable rate display; recovery rebaselines without importing missed traffic.
+Network identity uses name/index, so reuse of both between observations cannot be
+detected. Disk identity uses IOKit registry entry IDs. Totals remain session-only.
+
 ## Building
 
 ### macOS

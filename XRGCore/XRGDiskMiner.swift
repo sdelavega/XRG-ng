@@ -36,12 +36,8 @@ struct XRGDiskSample: Sendable {
 public final class XRGDiskMiner: NSObject {
     private let source: () -> [XRGDiskSample]?
     private let clock: () -> TimeInterval
-    private struct Tracker {
-        var samples: [UInt64: XRGDiskSample] = [:]
-        var time: TimeInterval?
-    }
-    private var normal = Tracker()
-    private var fast = Tracker()
+    private var normal = XRGIOCounterTracker<UInt64>()
+    private var fast = XRGIOCounterTracker<UInt64>()
     public let readValues = XRGDataSet()
     public let writeValues = XRGDataSet()
     public let totalValues = XRGDataSet()
@@ -49,68 +45,79 @@ public final class XRGDiskMiner: NSObject {
     public private(set) var writeRate: CGFloat = 0
     public private(set) var fastReadRate: CGFloat = 0
     public private(set) var fastWriteRate: CGFloat = 0
-    public private(set) var totalBytesSinceLoad: UInt64 = 0
+    public var totalBytesSinceLoad: UInt64 { normal.total }
+    public var readBytesSinceLoad: UInt64 { normal.first }
+    public var writtenBytesSinceLoad: UInt64 { normal.second }
+    public var transfersAreLowerBound: Bool { normal.lowerBound }
+    public var countersAvailable: Bool { normal.available }
+    public var fastCountersAvailable: Bool { fast.available }
+    public var transferDetails: String {
+        "Scope: all IOBlockStorageDriver devices (\(deviceCount) in last snapshot).\nKernel counters (normally since boot): Read \(rawRead) bytes / Write \(rawWritten) bytes\(rawSaturated ? " (saturated lower bounds)" : "").\n"
+        + normal.details(firstLabel: "Read", secondLabel: "Write")
+        + "IOKit registry entry IDs detect device replacement. These are transfers, not disk capacity."
+    }
     public private(set) var deviceCount = 0
+    private var rawRead: UInt64 = 0
+    private var rawWritten: UInt64 = 0
+    private var rawSaturated = false
 
     public override convenience init() { self.init(source: Self.readSamples, clock: { ProcessInfo.processInfo.systemUptime }) }
     init(source: @escaping () -> [XRGDiskSample]?, clock: @escaping () -> TimeInterval) {
         self.source = source; self.clock = clock
         super.init()
-        if let samples = source() {
+        if let counters = snapshot() {
             let time = clock()
-            if time.isFinite {
-                var initial = Tracker()
-                for sample in samples where initial.samples[sample.id] == nil { initial.samples[sample.id] = sample }
-                initial.time = time; normal = initial; fast = initial; deviceCount = initial.samples.count
-            }
+            _ = normal.sample(counters, at: time); _ = fast.sample(counters, at: time)
+            updateRawCounters(counters)
         }
     }
     public func setDataSize(_ count: Int) {
         guard count >= 0 else { return }
         for history in [readValues, writeValues, totalValues] { history.resize(min(count, 20_000)) }
     }
-    private static func add(_ left: UInt64, _ right: UInt64) -> UInt64 {
-        let (result, overflow) = left.addingReportingOverflow(right)
-        return overflow ? .max : result
-    }
-    private struct Delta { let read: UInt64; let written: UInt64; let readRate: CGFloat; let writeRate: CGFloat }
-    private func poll(_ tracker: inout Tracker) -> Delta? {
+    private func snapshot() -> [UInt64: XRGIOCounters]? {
         guard let samples = source() else { return nil }
-        let now = clock()
-        guard now.isFinite else { return nil }
-        let elapsed = tracker.time.map { now - $0 } ?? 0
-        var next: [UInt64: XRGDiskSample] = [:]
-        var read: UInt64 = 0, written: UInt64 = 0
-        for sample in samples where next[sample.id] == nil {
-            next[sample.id] = sample
-            guard elapsed > 0, let previous = tracker.samples[sample.id] else { continue }
-            read = Self.add(read, sample.read >= previous.read ? sample.read - previous.read : 0)
-            written = Self.add(written, sample.written >= previous.written ? sample.written - previous.written : 0)
+        var counters: [UInt64: XRGIOCounters] = [:]
+        for sample in samples {
+            guard counters[sample.id] == nil else { return nil }
+            counters[sample.id] = XRGIOCounters(first: sample.read, second: sample.written)
         }
-        tracker.samples = next; tracker.time = now; deviceCount = next.count
-        let readRate = elapsed > 0 ? Double(read) / elapsed : 0
-        let writeRate = elapsed > 0 ? Double(written) / elapsed : 0
-        return Delta(read: read, written: written, readRate: readRate.isFinite ? CGFloat(readRate) : 0,
-                     writeRate: writeRate.isFinite ? CGFloat(writeRate) : 0)
+        return counters
+    }
+    private func updateRawCounters(_ counters: [UInt64: XRGIOCounters]) {
+        deviceCount = counters.count
+        rawRead = 0; rawWritten = 0; rawSaturated = false
+        for value in counters.values {
+            let a = XRGIOCounterTracker<UInt64>.sum(rawRead, value.first)
+            let b = XRGIOCounterTracker<UInt64>.sum(rawWritten, value.second)
+            rawRead = a.value; rawWritten = b.value
+            rawSaturated = rawSaturated || a.overflow || b.overflow
+        }
     }
     @discardableResult public func update() -> Bool {
-        guard let delta = poll(&normal) else { return false }
-        readRate = delta.readRate; writeRate = delta.writeRate
-        totalBytesSinceLoad = Self.add(totalBytesSinceLoad, Self.add(delta.read, delta.written))
+        guard let counters = snapshot(), let reading = normal.sample(counters, at: clock()) else {
+            normal.fail()
+            for history in [readValues, writeValues, totalValues] { history.setNextValue(XRGGraphRenderer.missingValue) }
+            return false
+        }
+        if reading.newSession { reset() }
+        updateRawCounters(counters)
+        readRate = reading.firstRate; writeRate = reading.secondRate
         readValues.setNextValue(readRate); writeValues.setNextValue(writeRate)
-        let total = readRate + writeRate
-        totalValues.setNextValue(total.isFinite ? total : 0)
+        totalValues.setNextValue(readRate + writeRate)
         return true
     }
     @discardableResult public func updateFast() -> Bool {
-        guard let delta = poll(&fast) else { return false }
-        fastReadRate = delta.readRate; fastWriteRate = delta.writeRate
+        guard let counters = snapshot(), let reading = fast.sample(counters, at: clock()) else {
+            fast.fail(); return false
+        }
+        fastReadRate = reading.firstRate; fastWriteRate = reading.secondRate
         return true
     }
-    public func rebaseFast() { fast = Tracker(); fastReadRate = 0; fastWriteRate = 0 }
+    public func rebaseFast() { fast = XRGIOCounterTracker(); fastReadRate = 0; fastWriteRate = 0 }
+    public func resetTransfers() { normal.resetTransfers() }
     public func reset() {
         for history in [readValues, writeValues, totalValues] { history.reset() }
-        readRate = 0; writeRate = 0; fastReadRate = 0; fastWriteRate = 0
     }
 
     nonisolated static func decodeStatistics(id: UInt64, _ statistics: [String: Any]) -> XRGDiskSample? {

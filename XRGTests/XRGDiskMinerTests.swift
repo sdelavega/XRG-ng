@@ -63,7 +63,7 @@ struct XRGDiskMinerTests {
         #expect(miner.fastReadRate == 400 && miner.fastWriteRate == 200)
     }
 
-    @Test func failedReadsPreserveTheSnapshotAndSuccessfulReadsSpanTheGap() {
+    @Test func failedReadsRetainTotalsAndRecoverWithFreshBaseline() {
         let source = DiskSampleSource(), miner = source.miner()
         miner.setDataSize(3)
         source.advance(1, read: 1600, written: 400); miner.update()
@@ -71,7 +71,8 @@ struct XRGDiskMinerTests {
         #expect(!miner.update() && !miner.updateFast())
         #expect(miner.readRate == 600 && miner.totalValues.max == 800)
         source.advance(3, read: 2200, written: 600); miner.update()
-        #expect(miner.readRate == 300 && miner.writeRate == 100 && miner.totalBytesSinceLoad == 1600)
+        #expect(miner.readRate == 0 && miner.writeRate == 0 && miner.totalBytesSinceLoad == 800)
+        #expect(miner.transfersAreLowerBound && miner.countersAvailable)
     }
 
     @Test func clockRollbackEqualTimesAndNonfiniteClocksDoNotCreateRates() {
@@ -79,34 +80,35 @@ struct XRGDiskMinerTests {
         miner.setDataSize(3)
         source.advance(1, read: 1600, written: 400); miner.update()
         source.advance(1, read: 1700, written: 500); miner.update()
-        #expect(miner.readRate == 0 && miner.writeRate == 0)
+        #expect(!miner.countersAvailable && miner.totalValues.currentValue == XRGGraphRenderer.missingValue)
         source.advance(0, read: 1800, written: 600); miner.update()
         #expect(miner.totalBytesSinceLoad == 800)
         source.advance(.nan, read: 1900, written: 700)
         #expect(!miner.update())
         source.advance(1, read: 2000, written: 800); miner.update()
-        #expect(miner.readRate == 200 && miner.writeRate == 200 && miner.totalBytesSinceLoad == 1200)
+        #expect(miner.readRate == 0 && miner.writeRate == 0 && miner.totalBytesSinceLoad == 800)
+        #expect(miner.transfersAreLowerBound)
     }
 
-    @Test func driveChurnAndCounterResetsRebaseOnlyTheAffectedDeviceOrDirection() {
+    @Test func driveChurnAndCounterRestartsBeginNewSessions() {
         let source = DiskSampleSource()
         source.samples = [XRGDiskSample(id: 1, read: 1000, written: 200), XRGDiskSample(id: 2, read: 5000, written: 1000)]
         let miner = source.miner(); miner.setDataSize(2)
         source.time = 1
         source.samples = [XRGDiskSample(id: 1, read: 1100, written: 250), XRGDiskSample(id: 3, read: 9_000_000, written: 7_000_000)]
         miner.update()
-        #expect(miner.readRate == 100 && miner.writeRate == 50 && miner.totalBytesSinceLoad == 150)
+        #expect(miner.readRate == 0 && miner.writeRate == 0 && miner.totalBytesSinceLoad == 0)
         source.time = 2
         source.samples = [XRGDiskSample(id: 1, read: 5, written: 300), XRGDiskSample(id: 3, read: 9_000_200, written: 7_000_100)]
         miner.update()
-        #expect(miner.readRate == 200 && miner.writeRate == 150 && miner.totalBytesSinceLoad == 500)
+        #expect(miner.readRate == 0 && miner.writeRate == 0 && miner.totalBytesSinceLoad == 0)
         source.time = 3; source.samples = []; miner.update()
         #expect(miner.deviceCount == 0 && miner.readRate == 0 && miner.writeRate == 0)
         source.time = 4; source.samples = [XRGDiskSample(id: 1, read: 10_000, written: 10_000)]; miner.update()
-        #expect(miner.readRate == 0 && miner.totalBytesSinceLoad == 500)
+        #expect(miner.readRate == 0 && miner.totalBytesSinceLoad == 0)
     }
 
-    @Test func duplicateDeviceIDsDoNotDoubleCountAndInitialFailuresDoNotSpike() {
+    @Test func duplicateDeviceIDsInvalidateSnapshotsAndInitialFailuresDoNotSpike() {
         let source = DiskSampleSource(); source.samples = nil
         let miner = source.miner(); miner.setDataSize(2)
         source.advance(1, read: 10_000, written: 5000); miner.update()
@@ -114,7 +116,11 @@ struct XRGDiskMinerTests {
         source.time = 2
         source.samples = [XRGDiskSample(id: 1, read: 10_100, written: 5050), XRGDiskSample(id: 1, read: 99_999, written: 99_999)]
         miner.update()
-        #expect(miner.readRate == 100 && miner.writeRate == 50 && miner.deviceCount == 1)
+        #expect(!miner.countersAvailable && miner.transfersAreLowerBound && miner.deviceCount == 1)
+        source.advance(3, read: 10_200, written: 5100); miner.update()
+        #expect(miner.readRate == 0 && miner.totalBytesSinceLoad == 0)
+        source.advance(4, read: 10_300, written: 5150); miner.update()
+        #expect(miner.readRate == 100 && miner.writeRate == 50 && miner.totalBytesSinceLoad == 150)
     }
 
     @Test func hugeUnsignedCountersSaturateTotalsWithoutNarrowing() {
@@ -139,13 +145,28 @@ struct XRGDiskMinerTests {
         #expect(miner.totalValues.orderedValues == [100])
         let total = miner.totalBytesSinceLoad
         miner.reset()
-        #expect(miner.totalValues.max == 0 && miner.readRate == 0 && miner.fastReadRate == 0 && miner.totalBytesSinceLoad == total)
+        #expect(miner.totalValues.max == 0 && miner.readRate == 50 && miner.fastReadRate == 600 && miner.totalBytesSinceLoad == total)
         source.advance(4, read: 1850, written: 650); miner.update()
         #expect(miner.totalValues.currentValue == 200 && miner.totalBytesSinceLoad == total + 200)
         miner.setDataSize(20_001); miner.setDataSize(-1)
         #expect(miner.readValues.numValues == 20_000)
         miner.setDataSize(0); source.advance(5, read: 1900, written: 700); miner.update()
         #expect(miner.totalValues.numValues == 0 && miner.totalBytesSinceLoad == total + 300)
+    }
+
+    @Test func transferResetPreservesNormalAndFastHistoryAndRateBaselines() {
+        let source = DiskSampleSource(), miner = source.miner()
+        miner.setDataSize(3)
+        source.advance(1, read: 1600, written: 400); miner.update(); miner.updateFast()
+        let history = miner.totalValues.orderedValues
+        miner.resetTransfers()
+        #expect(miner.totalBytesSinceLoad == 0 && miner.totalValues.orderedValues == history)
+        #expect(miner.readRate == 600 && miner.fastReadRate == 600)
+        source.advance(2, read: 2200, written: 600); miner.updateFast(); miner.update()
+        #expect(miner.readRate == 600 && miner.fastReadRate == 600 && miner.totalBytesSinceLoad == 0)
+        source.advance(3, read: 2800, written: 800); miner.updateFast(); miner.update()
+        #expect(miner.readBytesSinceLoad == 600 && miner.writtenBytesSinceLoad == 200)
+        #expect(miner.transferDetails.contains("Read 2800 bytes / Write 800 bytes"))
     }
 
     @Test func decoderRetainsUInt64ValuesAndRejectsIncompleteStatistics() throws {
