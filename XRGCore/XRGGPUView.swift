@@ -157,6 +157,17 @@ public final class XRGGPUView: NSView, XRGModuleView {
     public func min5Update(_ timer: Timer?) {}
     public func min30Update(_ timer: Timer?) {}
 
+    @nonobjc private var timeProjections: [String: (history: XRGTimedHistory, projection: XRGTimeWindowProjection)] = [:]
+    @nonobjc func historyData(at index: Int) -> [XRGDataSet] {
+        let id = miner.currentSamples[index].selectionID
+        if historyMinutes > 0, let raw = miner.timedHistory(sourceID: id) {
+            let previous = timeProjections[id]
+            let cache = previous?.history === raw ? previous!.projection : XRGTimeWindowProjection(channels: 4)
+            timeProjections[id] = (raw, cache)
+            if let data = cache.values(from: raw, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1)) { return data }
+        }
+        return [miner.totalVRAMDataSets[index], miner.freeVRAMDataSets[index], miner.cpuWaitDataSets[index], miner.utilizationDataSets[index]]
+    }
     private struct Card {
         let sample: XRGGPUSample
         let total: XRGDataSet
@@ -178,9 +189,11 @@ public final class XRGGPUView: NSView, XRGModuleView {
         guard [miner.freeVRAMDataSets.count, miner.cpuWaitDataSets.count, miner.utilizationDataSets.count,
                miner.vendorNames.count, miner.memoryAvailable.count, miner.utilizationAvailable.count, miner.currentSamples.count]
             .allSatisfy({ $0 == count }) else { return [] }
+        timeProjections = timeProjections.filter { miner.sourceIDs.contains($0.key) }
         return (0..<count).filter { selectedSource == nil || miner.currentSamples[$0].selectionID == selectedSource }.map { index in
-            Card(sample: miner.currentSamples[index], total: miner.totalVRAMDataSets[index], free: miner.freeVRAMDataSets[index],
-                 wait: miner.cpuWaitDataSets[index], utilization: miner.utilizationDataSets[index],
+            let data = historyData(at: index)
+            return Card(sample: miner.currentSamples[index], total: data[0], free: data[1],
+                 wait: data[2], utilization: data[3],
                  vendor: miner.vendorNames[index], hasMemory: miner.memoryAvailable[index].boolValue,
                  hasUtilization: miner.utilizationAvailable[index].boolValue)
         }
@@ -344,15 +357,23 @@ public final class XRGGPUView: NSView, XRGModuleView {
         }
         display.submenu = modes; menu.addItem(display)
         menu.addItem(XRGHistoryRetention.menu("GPU History", count: retainedSamples, target: self, action: #selector(selectHistory(_:)), rootAction: #selector(emptyEvent(_:))))
+        menu.addItem(XRGSystemTimeWindow.menu("GPU Time Window", minutes: historyMinutes, target: self, action: #selector(selectHistoryWindow(_:)), rootAction: #selector(emptyEvent(_:))))
         menu.addItem(.separator()); menu.addItem(item("GPU Details…", #selector(showDetails(_:))))
         menu.addItem(item("Reset Graph", #selector(clearData(_:))))
         return menu
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
+    @nonobjc static let windowKey = "XRGGPUView.HistoryMinutes.v1"
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @objc func selectHistoryWindow(_ sender: Any?) {
+        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        updateLabels(); needsDisplay = true
+    }
     @nonobjc static let historyKey = "XRGGPUView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
         guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
+        defaults.set(0, forKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}

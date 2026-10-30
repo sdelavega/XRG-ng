@@ -409,7 +409,7 @@ session statistics. The standalone Mac Fans graph has its own capacity; fan curv
 inside Temperature share Temperature’s capacity. Battery retains charge and signed
 power separately on Linux; Mac retains its charging/discharging watt curves. Missing padding stays unavailable,
 valid cold temperatures and stopped fans remain readings, and retention changes do
-not increase sensor polling cadence. Linux settings migrate to schema 34 in memory
+not increase sensor polling cadence. Linux settings migrate to schema 35 in memory
 and are written only on an explicit save.
 CPU also offers **CPU Time Window** on Mac and **Preferences → Sources → CPU time
 window** on Linux. Choose 1–60 minutes, or zero to use sample count. The window ends
@@ -461,6 +461,18 @@ history. Missing optional counters remain gaps, and recovering with the same
 capacity preserves earlier timestamp observations. Backward completion clocks
 start a new graph era independently of paging state. Native window actions do not
 poll memory counters; Linux retains its system-settings wake behavior.
+
+GPU also supports **GPU Time Window** on Mac and a Linux Sources field, with
+1–60-minute windows (zero uses samples), the sampling-target grid and the same
+one-hour / 20,000-observation bound per device. Mac projects its native VRAM,
+CPU-wait and utilization channels; Linux projects each device’s selected activity
+quantity. These quantities retain their existing units and meanings. Current
+readings and mini bars remain independent. Device replacement, driver/activity
+source changes and unavailable-source resets retain their existing boundaries.
+Mac failed polls add gaps and retain prior observations; Linux unavailable activity
+keeps its existing history reset. Changing windows does not poll counters on Mac;
+Linux retains its settings-wake behavior. Sample counts remain saved as fallback.
+Standalone VRAM and NPU time-window controls remain separate work.
 
 AI retention is separate. Sample-count mode uses the Mac **AI History** menu or
 Linux **Preferences → AI → Retained AI samples**. Its original automatic choices

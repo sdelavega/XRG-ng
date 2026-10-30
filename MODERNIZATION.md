@@ -1699,3 +1699,29 @@ isolated AppKit and packaged launches; Linux ARM64 37 shared Swift tests, C ABI
 smoke, strict Clippy, 577 Rust tests and all 16 normal/scaled X11/nested Wayland
 collapse/restore cases. Evidence: `dist/gpu-timestamp-recording-validation`.
 Physical Intel/Linux x86-64 and unowned GPU hardware remain unverified.
+
+### GPU windows project per-device timestamp history
+
+Mac GPU Time Window and Linux Sources now offer 1–60 minutes (zero uses samples)
+with centered sampling-target bins, minimum 200 ms, and latest-observation anchors.
+The existing one-hour / 20,000-observation buffers supply real timestamps; no old
+index-only data is assigned invented times. Mac projects native VRAM/wait/activity
+channels with per-view, per-device caches tied to the actual raw history instance.
+Linux projects each device’s selected activity quantity. Current readouts/mini bars
+and fallback sample buffers remain independent. Mode/window/resize edits preserve
+raw observations. Reset Graph clears both buffers; existing device, driver,
+activity-source and unavailable-source boundaries remain. Mac failures append gaps;
+Linux unavailable activity retains its existing reset. Native actions do not poll
+counters; Linux retains its settings wake. Schema 35 migrates files in memory until
+explicit save and rejects invalid window edits atomically. NPU and standalone
+VRAM windows remain separate work; no app version, release or notice change.
+
+Validation: universal Debug build, 589 passing cases each ARM64/Rosetta x86_64,
+isolated native/packaged launch checks; Linux ARM64 37 shared Swift tests, exact
+C ABI smoke, strict Clippy, 579 Rust tests and 16 X11/nested Wayland desktop cases.
+The new regression caught and retained coverage for a sample-count action that
+failed to leave time mode; the action is fixed and the final full gate passes.
+Native captures show a 20-second missing interval inside a one-minute GPU window
+and the correct menu state; Linux Sources shows the independent GPU window field.
+Evidence: `dist/gpu-time-window-validation`. Physical Intel/Linux x86-64, macOS 26
+runtime and unavailable GPU vendors remain unverified.

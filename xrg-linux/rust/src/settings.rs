@@ -373,12 +373,12 @@ impl MetricSelection {
             return Err("History capacity must be 0..20000 for a supported system graph".into());
         }
         if self.history_minutes.iter().any(|(module, count)| {
-            !matches!(module, Module::Memory | Module::Network | Module::Disk)
-                || *count > shared::timed_projection_settings()[0]
+            !matches!(
+                module,
+                Module::Memory | Module::Network | Module::Disk | Module::Gpu
+            ) || *count > shared::timed_projection_settings()[0]
         }) {
-            return Err(
-                "Time windows must be 0..60 minutes for supported memory/I/O graphs".into(),
-            );
+            return Err("Time windows must be 0..60 minutes for supported system graphs".into());
         }
         if self.cpu_history_minutes > shared::timed_projection_settings()[0] {
             return Err("CPU time window must be 0..60 minutes".into());
@@ -529,7 +529,7 @@ fn default_ai_model_breakdown() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            version: 34,
+            version: 35,
             theme: ThemeChoice::Builtin {
                 name: "Classic".into(),
             },
@@ -599,7 +599,7 @@ impl Settings {
             .expect("Validated module set")
     }
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 34 {
+        if self.version != 35 {
             return Err("Unsupported settings version; the existing file will be kept".into());
         }
         if !(64..=240).contains(&self.graph_height) {
@@ -800,6 +800,9 @@ impl Settings {
         }
         if result.version == 33 {
             result.version = 34;
+        }
+        if result.version == 34 {
+            result.version = 35;
         }
         result.validate()?;
         Ok(result)

@@ -238,6 +238,7 @@ pub struct Sampler {
     gpu: crate::gpu::GpuCollector,
     gpu_memory: crate::gpu_memory::View,
     gpu_histories: BTreeMap<String, GpuHistory>,
+    gpu_history_interval: f64,
     start: Instant,
     sequence: u64,
 }
@@ -295,6 +296,7 @@ impl Sampler {
             npu_histories: BTreeMap::new(),
             npu_activity_mode: false,
             gpu_histories: BTreeMap::new(),
+            gpu_history_interval: 1.,
             gpu_memory: crate::gpu_memory::View::default(),
             metrics: crate::metrics::Sampler::default(),
             memory: crate::memory::View::default(),
@@ -924,6 +926,13 @@ impl Sampler {
         state.observed = (state.observed + 1).min(values.len());
         let missing = values.len() - state.observed;
         values[..missing].fill(f64::NAN);
+        let minutes = self.metrics.selection().retained_minutes(Module::Gpu);
+        if minutes > 0 {
+            values = state
+                .timed
+                .values_at(minutes, self.gpu_history_interval)
+                .remove(0);
+        }
         Some(values)
     }
     fn fan_panel(&mut self) -> Panel {
@@ -1163,6 +1172,7 @@ impl Worker {
                 sampler
                     .memory
                     .set_history_interval(timer.interval_seconds());
+                sampler.gpu_history_interval = timer.interval_seconds();
                 // One latest-value slot bounds memory if drawing is slow or hidden.
                 *output.lock().unwrap() = Some(sampler.sample());
                 published.notify();
@@ -1268,6 +1278,41 @@ mod gpu_activity_tests {
         selection.history_samples.remove(&Module::Gpu);
         sampler.set_selection(selection).unwrap();
         assert_eq!(sampler.gpu_curve(&gpu).unwrap().len(), 120);
+    }
+    #[test]
+    fn gpu_windows_project_actual_time_and_keep_fallback_capacity_and_current_values() {
+        let mut sampler = Sampler::with_sources(LinuxSources::with_roots(
+            "/no-proc-fixture",
+            "/no-sys-fixture",
+        ));
+        let mut gpu = Gpu {
+            id: "adapter".into(),
+            driver: "fixture".into(),
+            utilization: Some(50.),
+            ..Default::default()
+        };
+        sampler.gpu_curve_at(&gpu, 100.);
+        let mut selection = MetricSelection::default();
+        selection.history_minutes.insert(Module::Gpu, 1);
+        selection.history_samples.insert(Module::Gpu, 3);
+        sampler.set_selection(selection.clone()).unwrap();
+        gpu.utilization = Some(0.);
+        let v = sampler.gpu_curve_at(&gpu, 110.).unwrap();
+        assert_eq!(v.len(), 61);
+        assert_eq!(v[50], 50.);
+        assert_eq!(v[60], 0.);
+        assert!(v[51..60].iter().all(|v| v.is_nan()));
+        sampler.gpu_history_interval = 0.2;
+        assert_eq!(sampler.gpu_curve_at(&gpu, 111.).unwrap().len(), 301);
+        gpu.driver = "replacement".into();
+        let v = sampler.gpu_curve_at(&gpu, 112.).unwrap();
+        assert!(v[..300].iter().all(|v| v.is_nan()));
+        sampler.clear_graph(Module::Gpu);
+        let v = sampler.gpu_curve_at(&gpu, 113.).unwrap();
+        assert!(v[..300].iter().all(|v| v.is_nan()));
+        selection.history_minutes.remove(&Module::Gpu);
+        sampler.set_selection(selection).unwrap();
+        assert_eq!(sampler.gpu_curve_at(&gpu, 114.).unwrap().len(), 3);
     }
     #[test]
     fn gpu_timestamp_recording_is_separate_from_capacity_and_respects_existing_boundaries() {

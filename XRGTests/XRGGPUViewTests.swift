@@ -74,6 +74,35 @@ struct XRGGPUViewTests {
             option.tag = 0; restored.selectHistory(option); #expect(miner.numSamples == 200)
         }
     }
+    @Test func gpuTimeWindowsPreserveCurrentReadingsAndProjectGapsWithoutPolling() throws {
+        try withFixture { settings, defaults in
+            settings.graphRefresh = 1
+            var wall = 100.0, calls = 0
+            var values: [XRGGPUSample]? = [sample(utilization: 50)]
+            let miner = XRGGPUMiner(source: { calls += 1; return values }, historyClock: { wall })
+            let view = panel(miner, settings: settings, defaults: defaults)
+            wall = 110; values = [sample(utilization: 0)]; miner.getLatestGraphicsInfo()
+            let before = calls, option = NSMenuItem(); option.tag = 1; view.selectHistoryWindow(option)
+            let data = view.historyData(at: 0)
+            #expect(data[3].numValues == 61 && data[3].currentValue == 0 && data[3].orderedValues[50] == 50)
+            #expect(data[3].orderedValues[51..<60].allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            view.setFrameSize(NSSize(width: 1, height: 200))
+            #expect(view.historyData(at: 0)[3].orderedValues[50] == 50 && calls == before)
+            settings.graphRefresh = 0.2; #expect(view.historyData(at: 0)[3].numValues == 301)
+            let restored = panel(miner, settings: settings, defaults: defaults)
+            #expect(restored.historyMinutes == 1 && calls == before)
+            let menu = try #require(restored.makeMenu().items.first { $0.title == "GPU Time Window" }?.submenu)
+            #expect(menu.items.allSatisfy { $0.target === restored })
+            option.tag = 61; restored.selectHistoryWindow(option); #expect(restored.historyMinutes == 1)
+            wall = 111; values = nil; miner.getLatestGraphicsInfo()
+            #expect(restored.historyData(at: 0)[3].currentValue == XRGGraphRenderer.missingValue)
+            wall = 112; values = [sample(vendor: "Replacement", utilization: 25)]; miner.getLatestGraphicsInfo()
+            #expect(restored.historyData(at: 0)[3].orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            restored.clearData(nil); #expect(restored.historyData(at: 0)[3].orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(miner.currentSamples.first?.utilization == 25)
+            option.tag = 300; restored.selectHistory(option); #expect(restored.historyMinutes == 0 && restored.historyData(at: 0)[3].numValues == 300)
+        }
+    }
     private func withFixture(_ body: (XRGSettings, UserDefaults) throws -> Void) throws {
         _ = NSApplication.shared
         let domain = "XRG.gpuView.\(UUID().uuidString)"
