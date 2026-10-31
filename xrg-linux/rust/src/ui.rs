@@ -872,6 +872,20 @@ mod tests {
         }
     }
     #[test]
+    fn about_window_links_to_sponsors() {
+        use super::inspectors::{SPONSORS_URL, about_content};
+        assert_eq!(SPONSORS_URL, "https://github.com/sponsors/sdelavega");
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut output = ctx.run_ui(egui::RawInput::default(), about_content);
+        let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+        let sponsors = tree.nodes.iter().any(|(_, node)| {
+            node.role() == egui::accesskit::Role::Link && node.label() == Some("Support XRG-ng…")
+        });
+        assert!(sponsors, "the About window must link to GitHub Sponsors");
+        output.textures_delta.clear();
+    }
+    #[test]
     fn automatic_and_saved_sizes_follow_the_same_graph_order() {
         let mut settings = Settings::default();
         settings.modules.iter_mut().for_each(|m| m.visible = false);

@@ -47,6 +47,20 @@ fn window(
     );
     open
 }
+/// The maintainer's GitHub Sponsors page, linked from the About window.
+pub(super) const SPONSORS_URL: &str = "https://github.com/sponsors/sdelavega";
+
+/// The body of the "About XRG-ng" window: version, platform, licence,
+/// the source feedback link and the GitHub Sponsors support link.
+pub(super) fn about_content(ui: &mut egui::Ui) {
+    ui.heading(format!("XRG-ng {}", env!("CARGO_PKG_VERSION")));
+    ui.label("Linux · Rust / shared Swift · egui");
+    ui.label("Copyright © 2002–2024 Mike Piatek-Jimenez\nCopyright © 2025–2026 Marc Shade\nCopyright © 2026 Stephen de la Vega");
+    ui.label("GNU General Public License, version 3 or later.");
+    ui.hyperlink_to("Source and feedback", "https://github.com/sdelavega/XRG-ng");
+    ui.hyperlink_to("Support XRG-ng…", SPONSORS_URL);
+}
+
 fn report_text(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(text).wrap().selectable(true));
 }
@@ -232,13 +246,7 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
         });
     }
     if app.show_about {
-        app.show_about = window(ctx, "about", "About XRG-ng", [480., 280.], |ui| {
-            ui.heading(format!("XRG-ng {}", env!("CARGO_PKG_VERSION")));
-            ui.label("Linux · Rust / shared Swift · egui");
-            ui.label("Copyright © 2002–2024 Mike Piatek-Jimenez\nCopyright © 2025–2026 Marc Shade\nCopyright © 2026 Stephen de la Vega");
-            ui.label("GNU General Public License, version 3 or later.");
-            ui.hyperlink_to("Source and feedback", "https://github.com/sdelavega/XRG-ng");
-        });
+        app.show_about = window(ctx, "about", "About XRG-ng", [480., 280.], about_content);
     }
     if app.show_processes {
         let mut processes = std::mem::take(&mut app.processes);

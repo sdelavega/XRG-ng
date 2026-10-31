@@ -185,6 +185,17 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         if Bundle.main.bundleIdentifier == "com.sdelavega.xrg" {
             updater.controller.startUpdater()
         }
+
+        // 0.2.1: "Support XRG-ng…" links the Help menu to GitHub Sponsors.
+        // A host without any Help menu simply skips the insertion.
+        if let helpMenu = XRGSupportLink.helpMenu() {
+            _ = XRGSupportLink.insert(into: helpMenu, target: self, action: #selector(openSponsors(_:)))
+        }
+    }
+
+    /// Opens the GitHub Sponsors page from the Help menu's "Support XRG-ng…" item.
+    @IBAction func openSponsors(_ sender: Any?) {
+        NSWorkspace.shared.open(XRGSupportLink.url)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -597,6 +597,14 @@ latest time. Fully measured histories retain the existing default rendering.
 CPU indices may remap after topology changes/reboot, and GPU registry IDs may change
 on reboot. Actual replacement GPU registry instances start fresh histories.
 
+## Support
+
+XRG-ng is free software. Donations through
+[GitHub Sponsors](https://github.com/sponsors/sdelavega), also available from
+**Help → Support XRG-ng…** on Mac, help cover the Apple Developer account and
+the test hardware. XRG-ng ships notarized on Mac and is tested on real ARM
+boards. There are no donation prompts at launch.
+
 ## Building
 
 ### macOS
