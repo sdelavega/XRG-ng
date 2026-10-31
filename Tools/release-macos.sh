@@ -70,7 +70,15 @@ assert not (app / 'Contents/Resources/APSL.txt').exists()
 assert not (app / 'Contents/Resources/SMCSensorNames.plist').exists()
 for name in ('LICENSE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md', 'Credits.html'):
     assert (app / 'Contents/Resources' / name).is_file(), name
-print('Verified version, build, bundle, deployment floor, both slices, Developer ID, hardened runtime and minimal entitlements')
+# Sparkle ships inside the app and must be signed with the same Developer ID team.
+sparkle = app / 'Contents/Frameworks/Sparkle.framework'
+assert (sparkle / 'Versions/Current/Sparkle').is_file(), 'Sparkle.framework missing'
+sparkle_signature = subprocess.run(['codesign', '--display', '--verbose=2', str(sparkle)],
+                                   check=True, capture_output=True, text=True).stderr
+sparkle_team = re.search(r'TeamIdentifier=(\S+)', sparkle_signature)
+assert sparkle_team is not None and sparkle_team.group(1) == 'N5PUFD82GV', 'Sparkle.framework team mismatch'
+assert info.get('SUPublicEDKey'), 'SUPublicEDKey missing or empty'
+print('Verified version, build, bundle, deployment floor, both slices, Developer ID, hardened runtime, minimal entitlements and Sparkle update signing')
 PY
 
 echo "Notarizing signed app"

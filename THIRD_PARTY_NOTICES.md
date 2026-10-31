@@ -18,6 +18,44 @@ arrangement recorded with their corresponding source revisions. Do not remove
 notices from those historical packages. The dependency notices below still apply
 to current distributions; replacement of the sensor backend does not remove them.
 
+## macOS Sparkle updater
+
+The macOS app embeds [Sparkle](https://github.com/sparkle-project/Sparkle)
+2.10.1 (Swift Package Manager, `Sparkle` product) for signed appcast update
+checks. Sparkle is distributed under the MIT license:
+
+> Copyright (c) 2006-2013 Andy Matuschak.
+> Copyright (c) 2009-2013 Elgato Systems GmbH.
+> Copyright (c) 2011-2014 Kornel Lesiński.
+> Copyright (c) 2015-2017 Mayur Pawashe.
+> Copyright (c) 2014 C.W. Betts.
+> Copyright (c) 2014 Petroules Corporation.
+> Copyright (c) 2014 Big Nerd Ranch.
+> All rights reserved.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of
+> this software and associated documentation files (the "Software"), to deal in
+> the Software without restriction, including without limitation the rights to
+> use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software is furnished to do so,
+> subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+The resolved package version is recorded in
+`XRG-ng.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
+Sparkle's framework and its bundled XPC services keep their own notices inside
+`Sparkle.framework`.
+
 ## Other contributors
 
 Other authors' source notices and Git authorship remain part of the project

@@ -10,6 +10,15 @@ build/*
 !default.perspectivev3
 *.xcworkspace
 !default.xcworkspace
+# Commit the SwiftPM resolution record (Sparkle); nothing else inside the
+# ignored project.xcworkspace becomes visible.
+!XRG-ng.xcodeproj/project.xcworkspace/
+XRG-ng.xcodeproj/project.xcworkspace/*
+!XRG-ng.xcodeproj/project.xcworkspace/xcshareddata/
+XRG-ng.xcodeproj/project.xcworkspace/xcshareddata/*
+!XRG-ng.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+XRG-ng.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!XRG-ng.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 xcuserdata
 profile
 *.moved-aside

@@ -40,6 +40,9 @@
 		FCAF26003093000000000001 /* XRGAppDelegate.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = FC9F0B02308E6333001445A9 /* XRGAppDelegate.swift */; };
 		FCAA3A01308F000100000001 /* Sensors.xib in Test Resources */ = {isa = PBXBuildFile; fileRef = 278E90B823F21F6600874941 /* Sensors.xib */; };
 		FCAA3A03308F000100000001 /* XRGTemperatureHardwareReader.m in Test Sources */ = {isa = PBXBuildFile; fileRef = 273ECE9E15740EAF00E65D82 /* XRGTemperatureHardwareReader.m */; settings = {COMPILER_FLAGS = "-DXRG_SENSOR_TEST_TRANSPORTS=1"; }; };
+		FCAB00000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FCAB00000000000000000002 /* Sparkle */; };
+		FCAB00000000000000000005 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FCAB00000000000000000004 /* Sparkle */; };
+		FCAB00000000000000000007 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FCAB00000000000000000006 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -144,6 +147,7 @@
 				273ECF661574145100E65D82 /* IOKit.framework in Frameworks */,
 				273ECE6A15740DE700E65D82 /* Cocoa.framework in Frameworks */,
 				A1B2C3D4E5F6071829AABBCC /* libsqlite3.tbd in Frameworks */,
+				FCAB00000000000000000003 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,6 +155,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FCAB00000000000000000005 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -158,6 +163,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FCAB00000000000000000007 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -371,6 +377,9 @@
 			dependencies = (
 			);
 			name = "XRG-ng";
+			packageProductDependencies = (
+				FCAB00000000000000000002 /* Sparkle */,
+			);
 			productName = "XRG-ng";
 			productReference = 273ECE6515740DE700E65D82 /* XRG-ng.app */;
 			productType = "com.apple.product-type.application";
@@ -393,6 +402,7 @@
 			);
 			name = XRGTests;
 			packageProductDependencies = (
+				FCAB00000000000000000004 /* Sparkle */,
 			);
 			productName = XRGTests;
 			productReference = FC9F0AE2308E5E96001445A9 /* XRGTests.xctest */;
@@ -417,6 +427,7 @@
 			);
 			name = XRGCore;
 			packageProductDependencies = (
+				FCAB00000000000000000006 /* Sparkle */,
 			);
 			productName = XRGCore;
 			productReference = FC9F0AF1308E61FB001445A9 /* XRGCore.framework */;
@@ -458,6 +469,9 @@
 				Base,
 			);
 			mainGroup = 273ECE5A15740DE700E65D82;
+			packageReferences = (
+				FCAB00000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			productRefGroup = 273ECE6615740DE700E65D82 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -674,6 +688,9 @@
 				GCC_VERSION = "";
 				INFOPLIST_FILE = "XRG-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.2.1;
 				OTHER_LDFLAGS = (
@@ -726,6 +743,9 @@
 				GCC_VERSION = "";
 				INFOPLIST_FILE = "XRG-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.2.1;
 				OTHER_LDFLAGS = (
@@ -1030,6 +1050,34 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+/* Begin XCRemoteSwiftPackageReference section */
+		FCAB00000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 2.10.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FCAB00000000000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FCAB00000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		FCAB00000000000000000004 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FCAB00000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		FCAB00000000000000000006 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FCAB00000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 273ECE5C15740DE700E65D82 /* Project object */;
 }

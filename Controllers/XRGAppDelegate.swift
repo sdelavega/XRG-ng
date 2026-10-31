@@ -22,6 +22,7 @@
  */
 
 import AppKit
+import Sparkle
 import XRGCore
 
 @MainActor
@@ -36,6 +37,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     private let sensorProvider: (Bool) -> [XRGSensorData]
     private let includeUnknownSensors: () -> Bool
     private let invalidThemeNotice: (Error) -> Void
+    private var updater: XRGUpdater?
 
     override convenience init() {
         self.init(defaults: .standard, budgetNotifications: XRGAIBudgetNotifications(),
@@ -169,6 +171,20 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         // Preserve the existing launch ordering until menu activation is
         // verified independently of the language migration.
         activateApplication()
+
+        // Sparkle owns update checks from 0.2.1 on (replacing the legacy
+        // XRGURL server probe). The updater is created unstarted so unhosted
+        // test processes and disposable bundle copies never run checks or
+        // present Sparkle's automatic-checks prompt; the shipping bundle then
+        // starts the standard updater, which asks the user itself.
+        let updater = XRGUpdater(startingUpdater: false)
+        self.updater = updater
+        if let appMenu = NSApp.mainMenu?.items.first?.submenu {
+            _ = XRGUpdater.insertCheckForUpdatesItem(into: appMenu, target: updater)
+        }
+        if Bundle.main.bundleIdentifier == "com.sdelavega.xrg" {
+            updater.controller.startUpdater()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

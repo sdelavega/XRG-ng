@@ -59,7 +59,10 @@ def main():
                  "ENABLE_TESTABILITY=YES", "build-for-testing"], output / "build.log", cwd=root)
     fixture_resources = products / "XRGTests.xctest/Contents/Resources"
     framework = products / "XRGCore.framework"
-    if not framework.is_dir() or not fixture_resources.is_dir():
+    # XRGCore carries the Sparkle-backed updater, so the smoke app must bundle
+    # the same dynamic framework the shipped app embeds, or dyld cannot load it.
+    sparkle = products / "Sparkle.framework"
+    if not framework.is_dir() or not sparkle.is_dir() or not fixture_resources.is_dir():
         raise RuntimeError("Missing test framework or resources; build XRGTests with ENABLE_TESTABILITY=YES")
     domain = "com.sdelavega.XRG-ng.Smoke." + str(uuid.uuid4())
     app = output / "XRGSmoke.app"
@@ -67,6 +70,7 @@ def main():
     for folder in ("MacOS", "Frameworks", "Resources"):
         (contents / folder).mkdir(parents=True)
     shutil.copytree(framework, contents / "Frameworks/XRGCore.framework", symlinks=True)
+    shutil.copytree(sparkle, contents / "Frameworks/Sparkle.framework", symlinks=True)
     for name in ("Preferences.nib", "SmokeSensors.nib", "PreferencesOutletKeys.plist"):
         source, destination = fixture_resources / name, contents / "Resources" / name
         if source.is_dir():
@@ -83,12 +87,14 @@ def main():
     command(["xcrun", "swiftc", "-swift-version", "5", "-module-name", "XRGSmoke",
              *optimization,
              "-target", platform.machine() + "-apple-macos26.0", "-F", str(products),
-             "-framework", "XRGCore", "-framework", "AppKit",
+             "-framework", "XRGCore", "-framework", "Sparkle", "-framework", "AppKit",
              "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
              "Controllers/XRGAppDelegate.swift", "XRGTests/XRGApplicationSmokeScene.swift",
              "Tools/SmokeApp/main.swift", "-o", str(binary)], output / "compile.log", cwd=root)
     command(["codesign", "--force", "--sign", "-", str(contents / "Frameworks/XRGCore.framework")],
             output / "sign-framework.log", cwd=root)
+    command(["codesign", "--force", "--sign", "-", str(contents / "Frameworks/Sparkle.framework")],
+            output / "sign-sparkle.log", cwd=root)
     command(["codesign", "--force", "--sign", "-", str(app)], output / "sign-app.log", cwd=root)
     passed = False
     try:

@@ -62,5 +62,11 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://sdelavega.github.io/XRG-ng/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>25JVCtq4UFWtQb8WlPsN+3Y7t3PRyTSu0Y9QR29Rsa4=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>
