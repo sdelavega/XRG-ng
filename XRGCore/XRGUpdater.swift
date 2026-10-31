@@ -10,27 +10,68 @@ import Sparkle
 /// controller without starting update checks, which keeps unhosted test
 /// processes and disposable bundle copies inert; the shipping app starts the
 /// updater through `controller.startUpdater()` once launch work is done.
+///
+/// The internal `init(startingUpdater:host:defaults:)` is the seam the 0.1.0
+/// upgrade test exercises: Sparkle's `SUHost` binds a non-main host bundle to
+/// the `UserDefaults` suite named by that bundle's identifier, so a test host
+/// whose identifier names an isolated suite makes the updater's defaults
+/// traffic observable in, and confined to, that seeded suite.
 @MainActor
 public final class XRGUpdater: NSObject {
     /// Sparkle's standard controller. The app menu item targets this adapter
     /// so the updater can also stay unstarted while the item already exists.
     public var controller: SPUStandardUpdaterController
 
-    public init(startingUpdater: Bool) {
-        controller = SPUStandardUpdaterController(startingUpdater: startingUpdater,
-                                                   updaterDelegate: nil, userDriverDelegate: nil)
+    /// Sparkle's updater bound to the host bundle this adapter was created
+    /// with: `controller.updater` in the shipping app (main-bundle host), or
+    /// the updater Sparkle binds to a non-main test host.
+    let sparkleUpdater: SPUUpdater
+
+    /// The defaults domain this adapter itself writes through (the shipping
+    /// app passes the application's standard domain).
+    let defaults: UserDefaults
+
+    public convenience init(startingUpdater: Bool) {
+        self.init(startingUpdater: startingUpdater, host: .main, defaults: .standard)
+    }
+
+    /// - Parameters:
+    ///   - host: the bundle Sparkle updates. Sparkle reads and writes a
+    ///     non-main host's settings in the `UserDefaults` suite named by that
+    ///     bundle's identifier (`SUHost`); `Bundle.main` uses the standard
+    ///     domain. Pass a `defaults` that is that same suite for non-main
+    ///     hosts so both handles observe one seeded domain.
+    ///   - defaults: the domain this adapter itself writes through.
+    init(startingUpdater: Bool, host: Bundle, defaults: UserDefaults) {
+        if host === Bundle.main {
+            controller = SPUStandardUpdaterController(startingUpdater: startingUpdater,
+                                                      updaterDelegate: nil, userDriverDelegate: nil)
+            sparkleUpdater = controller.updater
+        } else {
+            // Sparkle's standard controller binds `Bundle.main` only, so bind
+            // the updater to `host` directly. `controller` stays inert and
+            // unstarted (the public interface and the shipping app still see
+            // Sparkle's standard controller); the host-bound updater above is
+            // the one the adapter drives.
+            controller = SPUStandardUpdaterController(startingUpdater: false,
+                                                      updaterDelegate: nil, userDriverDelegate: nil)
+            sparkleUpdater = SPUUpdater(hostBundle: host, applicationBundle: host,
+                                        userDriver: SPUStandardUserDriver(hostBundle: host, delegate: nil),
+                                        delegate: nil)
+        }
+        self.defaults = defaults
         super.init()
     }
 
     /// Menu action behind "Check for Updates…".
     @objc public func checkForUpdates(_ sender: Any?) {
-        controller.checkForUpdates(sender)
+        sparkleUpdater.checkForUpdates()
     }
 
     /// Mirrors Sparkle's own menu-item validation: the item is enabled only
     /// while the updater can run a user-initiated check.
     @objc public func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        item.action == #selector(checkForUpdates(_:)) ? controller.updater.canCheckForUpdates : true
+        item.action == #selector(checkForUpdates(_:)) ? sparkleUpdater.canCheckForUpdates : true
     }
 
     /// The application menu's "Check for Updates…" item, placed directly after

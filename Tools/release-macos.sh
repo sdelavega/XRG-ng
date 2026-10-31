@@ -23,6 +23,72 @@ source_commit=$(git rev-parse HEAD)
 echo "Release artifacts: $output"
 echo "Source commit: $source_commit"
 
+# Re-signs Sparkle's nested components inside-out after the archived app is
+# copied out and verifies every component. Sparkle documents that signing or
+# copying the framework alone leaves its nested XPC services and helpers
+# (ad-hoc signed in the distribution) untouched; archive-and-export re-signs
+# them, so this pipeline does the equivalent explicitly. Order, as documented:
+# XPCServices/*.xpc, Autoupdate, Updater.app, then the framework, then the app
+# with its entitlements.
+# Usage: sign_sparkle_components APP IDENTITY TEAM ENTITLEMENTS LOG
+# IDENTITY "-" exercises the function ad-hoc (no secure timestamp is embedded).
+# TEAM is the TeamIdentifier every component must carry ("" for ad-hoc).
+sign_sparkle_components() {
+    local app="$1" identity="$2" team="$3" entitlements="$4" log="$5"
+    local framework="$app/Contents/Frameworks/Sparkle.framework"
+    local version_dir component
+    version_dir=$(cd "$framework/Versions" && for component in *; do
+        [[ -d "$component" && ! -L "$component" ]] && { echo "$component"; break; }
+    done)
+    [[ -n "$version_dir" ]] || { echo "Sparkle.framework has no version directory" >&2; return 2; }
+    local sign_args=(--force --options runtime --sign "$identity" --timestamp)
+    for component in "$framework/Versions/$version_dir/XPCServices"/*.xpc; do
+        [[ -e "$component" ]] || continue
+        echo "codesign ${sign_args[*]} $component" >> "$log"
+        codesign "${sign_args[@]}" "$component" >> "$log" 2>&1
+    done
+    for component in "$framework/Versions/$version_dir/Autoupdate" \
+                     "$framework/Versions/$version_dir/Updater.app" \
+                     "$framework"; do
+        echo "codesign ${sign_args[*]} $component" >> "$log"
+        codesign "${sign_args[@]}" "$component" >> "$log" 2>&1
+    done
+    echo "codesign ${sign_args[*]} --entitlements $entitlements $app" >> "$log"
+    codesign "${sign_args[@]}" --entitlements "$entitlements" "$app" >> "$log" 2>&1
+    python3 - "$app" "$team" >> "$log" <<'PY'
+import plistlib
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+app, team = Path(sys.argv[1]), sys.argv[2]
+framework = app / 'Contents/Frameworks/Sparkle.framework'
+version_dir = next(p for p in (framework / 'Versions').iterdir() if p.is_dir() and not p.is_symlink())
+components = sorted((version_dir / 'XPCServices').glob('*.xpc'))
+components += [version_dir / 'Autoupdate', version_dir / 'Updater.app', framework, app]
+for component in components:
+    assert component.exists(), f'missing nested component {component}'
+    subprocess.run(['codesign', '--verify', '--strict', str(component)], check=True, capture_output=True)
+    display = subprocess.run(['codesign', '--display', '--verbose=4', str(component)],
+                             check=True, capture_output=True, text=True)
+    details = display.stdout + display.stderr
+    match = re.search(r'TeamIdentifier=(.*)', details)
+    found = match.group(1).strip() if match else ''
+    if found.lower() == 'not set':
+        found = ''
+    assert found == team, f'{component.name}: TeamIdentifier {found!r} != {team!r}'
+    flags = re.search(r'flags=0x([0-9a-fA-F]+)', details)
+    assert flags and int(flags.group(1), 16) & 0x10000, f'{component.name}: hardened runtime flag missing'
+    entitlement_data = subprocess.run(['codesign', '--display', '--entitlements', ':-', str(component)],
+                                      check=True, capture_output=True).stdout
+    entitlements = plistlib.loads(entitlement_data) if entitlement_data.strip() else {}
+    assert not any(entitlements.values()), f'{component.name}: unexpected entitlements {sorted(entitlements)}'
+    print(f'verified {component.name}: team={team or "(ad-hoc)"} hardened-runtime=yes entitlements=none')
+PY
+    echo "Sparkle components re-signed inside-out and verified (TeamIdentifier $team)"
+}
+
 echo "Building and signing universal archive"
 xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng -configuration Release \
     -destination 'generic/platform=macOS' -archivePath "$output/XRG-ng.xcarchive" \
@@ -33,6 +99,7 @@ xcodebuild -project XRG-ng.xcodeproj -scheme XRG-ng -configuration Release \
 
 app="$output/XRG-ng.app"
 ditto "$output/XRG-ng.xcarchive/Products/Applications/XRG-ng.app" "$app"
+sign_sparkle_components "$app" "$identity" "N5PUFD82GV" "XRG.entitlements" "$output/sparkle-signing.log"
 codesign --verify --deep --strict --verbose=2 "$app" > "$output/signature-verify.log" 2>&1
 codesign --display --verbose=4 "$app" > "$output/signature.log" 2>&1
 codesign --display --entitlements :- "$app" > "$output/entitlements.plist" 2> "$output/entitlements.log"
