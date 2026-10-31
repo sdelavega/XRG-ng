@@ -12,6 +12,12 @@ See the [new Linux build and migration status](xrg-linux/rust/README.md).
 The Linux build includes an opt-in [station weather window](xrg-linux/rust/README.md#weather-observations)
 using the same Swift METAR decoder as macOS.
 
+## Windows is coming
+
+<img width="1200" height="300" alt="Windows is coming: XRG-ng's Windows port is planned for 0.3.0" src="docs/images/windows-is-coming.svg" />
+
+XRG-ng's Windows port is planned for 0.3.0, aiming for full macOS-style parity: the same floating-graph experience and the macOS 26 look, Liquid Glass materials included. See the [Windows port plan](docs/WINDOWS_PORT.md) for what already compiles today and what each collector still needs.
+
 
 
 Original XRG website: https://gaucho.software/xrg/

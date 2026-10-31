@@ -1,0 +1,154 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Stephen de la Vega. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img">
+  <title>Windows is coming — XRG-ng 0.3.0</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A1220"/>
+      <stop offset="0.55" stop-color="#122340"/>
+      <stop offset="1" stop-color="#1D3A5F"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#EAF2FF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#EAF2FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#F4F8FF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#F4F8FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fr">
+      <stop offset="0" stop-color="#F4F9FF" stop-opacity="0.95"/>
+      <stop offset="0.45" stop-color="#E2ECFA" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#E2ECFA" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#BFD8F4" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#8FB2D8" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F0F5FC"/>
+      <stop offset="0.5" stop-color="#C9D8EA"/>
+      <stop offset="1" stop-color="#9FB4CF"/>
+    </linearGradient>
+    <filter id="med" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="1.4"/></filter>
+    <filter id="big" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter>
+    <clipPath id="panes">
+      <rect x="116" y="46" width="136" height="96"/>
+      <rect x="268" y="46" width="136" height="96"/>
+      <rect x="116" y="158" width="136" height="96"/>
+      <rect x="268" y="158" width="136" height="96"/>
+    </clipPath>
+    <path id="spk" d="M0,-4 L1.1,-1.1 4,0 1.1,1.1 0,4 -1.1,1.1 -4,0 -1.1,-1.1 Z"/>
+    <g id="flk" stroke="#FFFFFF" stroke-width="1.4" stroke-linecap="round" fill="none">
+      <path d="M0,-9V9"/>
+      <path d="M0,-9V9" transform="rotate(60)"/>
+      <path d="M0,-9V9" transform="rotate(120)"/>
+      <circle r="1.4" fill="#FFFFFF" stroke="none"/>
+    </g>
+  </defs>
+
+  <!-- night sky -->
+  <rect width="1200" height="300" fill="url(#sky)"/>
+  <g fill="#FFFFFF">
+    <circle cx="60" cy="62" r="1.3" opacity="0.5"/><circle cx="82" cy="148" r="1" opacity="0.4"/>
+    <circle cx="48" cy="236" r="1.5" opacity="0.5"/><circle cx="36" cy="96" r="1" opacity="0.35"/>
+    <circle cx="210" cy="16" r="1.1" opacity="0.4"/><circle cx="338" cy="20" r="1" opacity="0.35"/>
+    <circle cx="446" cy="52" r="1.3" opacity="0.5"/><circle cx="468" cy="158" r="1" opacity="0.4"/>
+    <circle cx="442" cy="246" r="1.4" opacity="0.5"/><circle cx="742" cy="50" r="1.2" opacity="0.3"/>
+    <circle cx="920" cy="40" r="1.4" opacity="0.35"/><circle cx="1064" cy="66" r="1.3" opacity="0.4"/>
+    <circle cx="1156" cy="54" r="1.2" opacity="0.4"/><circle cx="1180" cy="142" r="1.5" opacity="0.45"/>
+    <circle cx="1128" cy="252" r="1.4" opacity="0.5"/><circle cx="988" cy="268" r="1.6" opacity="0.55"/>
+    <circle cx="648" cy="282" r="1.3" opacity="0.5"/>
+  </g>
+  <ellipse cx="810" cy="150" rx="360" ry="190" fill="url(#glow)"/>
+
+  <!-- window shadow, frame and glass -->
+  <rect x="100" y="40" width="320" height="240" rx="14" fill="#04070E" opacity="0.55" filter="url(#big)"/>
+  <rect x="100" y="30" width="320" height="240" rx="12" fill="url(#frame)" stroke="#8FA6C4" stroke-opacity="0.35"/>
+  <g clip-path="url(#panes)">
+    <rect x="116" y="46" width="136" height="96" fill="url(#sky)"/>
+    <rect x="268" y="46" width="136" height="96" fill="url(#sky)"/>
+    <rect x="116" y="158" width="136" height="96" fill="url(#sky)"/>
+    <rect x="268" y="158" width="136" height="96" fill="url(#sky)"/>
+    <circle cx="178" cy="88" r="38" fill="url(#halo)"/>
+    <circle cx="178" cy="88" r="19" fill="#F4F8FF" opacity="0.95"/>
+    <circle cx="350" cy="70" r="1.2" fill="#FFFFFF" opacity="0.5"/>
+    <circle cx="300" cy="200" r="1" fill="#FFFFFF" opacity="0.4"/>
+    <rect x="116" y="46" width="136" height="96" fill="url(#glass)"/>
+    <rect x="268" y="46" width="136" height="96" fill="url(#glass)"/>
+    <rect x="116" y="158" width="136" height="96" fill="url(#glass)"/>
+    <rect x="268" y="158" width="136" height="96" fill="url(#glass)"/>
+  </g>
+
+  <!-- frost creeping in from the corners -->
+  <g clip-path="url(#panes)" fill="url(#fr)">
+    <circle cx="116" cy="46" r="64" opacity="0.95"/><circle cx="404" cy="46" r="62" opacity="0.9"/>
+    <circle cx="116" cy="254" r="62" opacity="0.9"/><circle cx="404" cy="254" r="64" opacity="0.95"/>
+    <circle cx="186" cy="46" r="24" opacity="0.65"/><circle cx="336" cy="46" r="24" opacity="0.65"/>
+    <circle cx="186" cy="254" r="24" opacity="0.6"/><circle cx="336" cy="254" r="24" opacity="0.6"/>
+    <circle cx="252" cy="46" r="34" opacity="0.75"/><circle cx="268" cy="46" r="34" opacity="0.75"/>
+    <circle cx="252" cy="254" r="36" opacity="0.75"/><circle cx="268" cy="254" r="36" opacity="0.75"/>
+    <circle cx="116" cy="142" r="30" opacity="0.7"/><circle cx="404" cy="142" r="30" opacity="0.7"/>
+    <circle cx="252" cy="142" r="24" opacity="0.6"/><circle cx="268" cy="142" r="24" opacity="0.6"/>
+  </g>
+  <g clip-path="url(#panes)" stroke="#F2F7FF" stroke-opacity="0.65" stroke-width="1.6" fill="none" stroke-linecap="round">
+    <path d="M116,46 l38,18 26,-9 32,15"/><path d="M116,46 l18,35 9,28 15,24"/>
+    <path d="M404,46 l-38,18 -26,-9 -32,15"/><path d="M404,46 l-18,35 -9,28 -15,24"/>
+    <path d="M116,254 l36,-16 28,8 30,-13"/><path d="M116,254 l20,-28 11,-26 15,-22"/>
+    <path d="M404,254 l-36,-16 -28,8 -30,-13"/><path d="M404,254 l-20,-28 -11,-26 -15,-22"/>
+  </g>
+  <g fill="#FFFFFF" opacity="0.5">
+    <use href="#spk" transform="translate(268,158) scale(0.9)"/>
+    <use href="#spk" transform="translate(190,72) scale(0.7)"/>
+    <use href="#spk" transform="translate(352,196) scale(0.75)"/>
+  </g>
+
+  <!-- XRG-style graph lines crossing the panes -->
+  <g clip-path="url(#panes)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M116,120 C136,116 142,98 158,100 C174,102 178,122 194,120 C210,118 216,86 232,90 C248,94 250,114 262,110 C274,106 282,92 296,94 C310,96 316,124 332,122 C348,120 354,90 370,94 C386,98 396,114 404,110" stroke="#34C759" stroke-width="7" opacity="0.32" filter="url(#med)"/>
+    <path d="M116,120 C136,116 142,98 158,100 C174,102 178,122 194,120 C210,118 216,86 232,90 C248,94 250,114 262,110 C274,106 282,92 296,94 C310,96 316,124 332,122 C348,120 354,90 370,94 C386,98 396,114 404,110" stroke="#34C759" stroke-width="2.6"/>
+    <path d="M116,232 L146,230 162,234 186,228 200,234 216,204 230,232 252,229 268,231 292,234 310,226 324,232 342,196 356,230 376,227 394,232 404,229" stroke="#EBAA56" stroke-width="7" opacity="0.32" filter="url(#med)"/>
+    <path d="M116,232 L146,230 162,234 186,228 200,234 216,204 230,232 252,229 268,231 292,234 310,226 324,232 342,196 356,230 376,227 394,232 404,229" stroke="#EBAA56" stroke-width="2.6"/>
+  </g>
+
+  <!-- glass sheen -->
+  <g clip-path="url(#panes)" fill="#FFFFFF">
+    <path d="M152,46 L216,46 136,254 88,254 Z" opacity="0.09"/>
+    <path d="M262,46 L286,46 206,254 182,254 Z" opacity="0.07"/>
+  </g>
+
+  <!-- mullions -->
+  <rect x="252" y="46" width="16" height="208" fill="url(#frame)"/>
+  <rect x="116" y="142" width="288" height="16" fill="url(#frame)"/>
+
+  <!-- snow on the sill -->
+  <path d="M102,255 c30,-11 60,-12 92,-5 c28,6 48,7 76,1 c30,-7 56,-8 84,-2 c24,5 46,4 68,-3 l0,13 -320,0 Z" fill="#F4F8FF" opacity="0.95" filter="url(#soft)"/>
+
+  <!-- falling snow -->
+  <use href="#flk" transform="translate(62,112)" opacity="0.9"/>
+  <use href="#flk" transform="translate(446,86) scale(0.95)" opacity="0.8"/>
+  <use href="#flk" transform="translate(328,18) scale(0.85)" opacity="0.75"/>
+  <use href="#flk" transform="translate(1135,65) scale(1)" opacity="0.85"/>
+  <use href="#flk" transform="translate(1012,46) scale(0.75)" opacity="0.8"/>
+  <use href="#flk" transform="translate(606,280) scale(0.8)" opacity="0.7"/>
+  <use href="#flk" transform="translate(146,287) scale(0.85)" opacity="0.75"/>
+  <use href="#flk" transform="translate(866,256) scale(0.75)" opacity="0.65"/>
+  <g fill="#FFFFFF">
+    <circle cx="190" cy="70" r="1.6" opacity="0.6"/><circle cx="330" cy="110" r="1.3" opacity="0.5"/>
+    <circle cx="300" cy="230" r="1.5" opacity="0.55"/><circle cx="170" cy="210" r="1.2" opacity="0.5"/>
+    <circle cx="76" cy="180" r="1.1" opacity="0.45"/><circle cx="462" cy="40" r="1.5" opacity="0.5"/>
+    <circle cx="455" cy="250" r="1.2" opacity="0.4"/><circle cx="1070" cy="70" r="1.3" opacity="0.4"/>
+    <circle cx="1150" cy="150" r="1.6" opacity="0.45"/><circle cx="1180" cy="60" r="1.2" opacity="0.4"/>
+    <circle cx="1120" cy="250" r="1.5" opacity="0.5"/><circle cx="990" cy="270" r="1.7" opacity="0.55"/>
+    <circle cx="640" cy="283" r="1.4" opacity="0.5"/><circle cx="35" cy="140" r="1" opacity="0.35"/>
+    <circle cx="20" cy="90" r="1.3" opacity="0.4"/><circle cx="500" cy="215" r="1" opacity="0.3"/>
+  </g>
+
+  <!-- headline -->
+  <g style="font-family:-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="482" y="156" font-size="72" font-weight="600" letter-spacing="0.5" fill="#FFFFFF" opacity="0.55" filter="url(#med)">Windows is coming</text>
+    <text x="482" y="156" font-size="72" font-weight="600" letter-spacing="0.5" fill="#FFFFFF">Windows is coming</text>
+    <text x="486" y="200" font-size="27" font-weight="500" letter-spacing="3" fill="#B9CDE8">XRG-ng 0.3.0</text>
+  </g>
+</svg>
