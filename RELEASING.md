@@ -145,7 +145,8 @@ refuses the publish unless:
   `signing/fingerprint.txt` records — is available in the release keyring
   (`XRG_RELEASE_GNUPGHOME`, default
   `$HOME/.local/share/xrg-ng-release/gnupg`), checked with
-  `gpg --list-secret-keys` before any side effect; `--create-draft` verifies
+  `gpg --list-secret-keys` before any side effect; `--create-draft` requires
+  origin's tag to be the same tag object as the local one, and verifies
   the pushed tag with that keyring's public key only;
 - with `--execute`, `XRG_TAP_DIR` is a git work tree with a clean index and
   worktree, checked before any side effect.

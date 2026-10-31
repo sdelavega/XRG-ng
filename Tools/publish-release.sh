@@ -630,6 +630,13 @@ do_draft_phase() {
         done <<< "$remote_tags"
         [[ -n "$remote_tag_object" ]] || { echo "REFUSED: origin has no refs/tags/$tag; push the tag first" >&2; exit 1; }
         [[ -n "$remote_tag_commit" ]] || remote_tag_commit=$remote_tag_object
+        # The pushed tag must be the verified local tag object itself, not
+        # some other (unsigned or differently signed) tag on the same commit.
+        local_tag_object=$(git rev-parse "refs/tags/$tag")
+        if [[ "$remote_tag_object" != "$local_tag_object" ]]; then
+            echo "REFUSED: origin's $tag is tag object $remote_tag_object, not the verified local tag $local_tag_object" >&2
+            exit 1
+        fi
         local_tag_commit=$(git rev-parse "$tag^{commit}")
         if [[ "$remote_tag_commit" != "$local_tag_commit" ]]; then
             echo "REFUSED: origin's $tag resolves to $remote_tag_commit, not the local tag's $local_tag_commit" >&2

@@ -484,12 +484,14 @@ class PublishScriptTests(unittest.TestCase):
             json.dumps({"isDraft": draft, "assets": assets}) + "\n",
             encoding="utf-8")
 
-    def simulate_pushed_tag(self, commit=None):
+    def simulate_pushed_tag(self, commit=None, tag_object=None):
         """Write the remote-tags file the ls-remote/gh shims read: the pushed
-        annotated tag vVERSION, optionally resolving to another commit."""
-        tag_object = subprocess.run(["git", "rev-parse", f"v{VERSION}"],
-                                    cwd=self.repo, check=True,
-                                    capture_output=True, text=True).stdout.strip()
+        annotated tag vVERSION, optionally another tag object or resolving
+        to another commit."""
+        if tag_object is None:
+            tag_object = subprocess.run(["git", "rev-parse", f"v{VERSION}"],
+                                        cwd=self.repo, check=True,
+                                        capture_output=True, text=True).stdout.strip()
         tag_commit = subprocess.run(["git", "rev-parse", f"v{VERSION}^{{}}"],
                                     cwd=self.repo, check=True,
                                     capture_output=True, text=True).stdout.strip()
@@ -981,6 +983,21 @@ class PublishScriptTests(unittest.TestCase):
         combined = draft.stdout + draft.stderr
         self.assertEqual(draft.returncode, 1, combined)
         self.assertIn("resolves to", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[0] == "gh"], [],
+                         "no gh call happened before the refusal")
+
+    def test_create_draft_refused_when_remote_tag_is_another_object(self):
+        # An unsigned or differently signed tag on the same commit must not
+        # stand in for the verified local tag.
+        self.build_fixture()
+        result = self.publish(execute=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.simulate_pushed_tag(tag_object="d" * 40)
+        draft = self.publish(create_draft=True)
+        combined = draft.stdout + draft.stderr
+        self.assertEqual(draft.returncode, 1, combined)
+        self.assertIn("not the verified local tag", combined)
         self.assertEqual([call for call in self.spy_calls()
                           if call[0] == "gh"], [],
                          "no gh call happened before the refusal")
