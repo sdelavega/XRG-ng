@@ -83,9 +83,10 @@ branch=$(git branch --show-current)
 
 # Exactly one dirty path is tolerated: the docs/appcast.xml update written by
 # Tools/release-macos.sh, still unstaged (porcelain " M"). Staged, deleted,
-# conflicted, untracked or additional dirt refuses the publish. The dirty
-# status only decides whether publishing commits the appcast; the feed
-# itself is always validated (R3 and Important 2).
+# conflicted, untracked or additional dirt refuses the publish. The feed
+# itself is always validated (R3 and Important 2); the commit decision
+# compares the feed committed at HEAD, so a later valid edit of the committed
+# item never creates a second appcast commit.
 appcast_pending=false
 dirty=$(git status --porcelain)
 if [[ -n "$dirty" ]]; then
@@ -122,9 +123,25 @@ fi
 
 head=$(git rev-parse HEAD)
 tag="v$version"
-# An existing local tag is reused only when it is a signed annotated tag
-# pointing at this release's commit (R11): HEAD, or -- after the appcast
-# commit -- the recorded release commit plus exactly that one commit.
+# A release resume is structural, never a commit-subject comparison: HEAD is
+# either the recorded commit itself, or exactly one commit whose first
+# parent is that commit and whose only changed path is docs/appcast.xml
+# (the publish appcast commit). A commit with the right title but any other
+# content, or a divergent history, refuses (final review, Important 1).
+resumes_after_appcast_commit() {
+    local base="$1" tip="$2" count parent paths
+    [[ "$base" == "$tip" ]] && return 0
+    count=$(git rev-list --count "$base..$tip" 2>/dev/null) || return 1
+    [[ "$count" == "1" ]] || return 1
+    parent=$(git rev-parse "$tip^" 2>/dev/null) || return 1
+    [[ "$parent" == "$base" ]] || return 1
+    paths=$(git diff --name-only "$base" "$tip" 2>/dev/null) || return 1
+    [[ "$paths" == "docs/appcast.xml" ]] || return 1
+}
+
+# An existing local tag is reused only when it is an annotated tag signed
+# with the XRG-ng release key (see verify_release_tag) and structurally at
+# this release's commit (see resumes_after_appcast_commit).
 existing_tag_kind() {
     git rev-parse -q --verify "$tag^{commit}" >/dev/null 2>&1 || return 1
     git cat-file -t "$tag" 2>/dev/null || true
@@ -156,14 +173,11 @@ validate_existing_tag() {
         return 1
     fi
     verify_release_tag || return 1
-    local tag_commit extra
+    local tag_commit
     tag_commit=$(git rev-parse "$tag^{commit}")
-    if [[ "$tag_commit" != "$head" ]]; then
-        extra=$(git log --format=%s "$tag_commit..$head")
-        if [[ "$extra" != "Publish appcast for XRG-ng $version" ]]; then
-            echo "REFUSED: the existing v$version points at $tag_commit, not HEAD ($head)" >&2
-            return 1
-        fi
+    if ! resumes_after_appcast_commit "$tag_commit" "$head"; then
+        echo "REFUSED: the existing v$version points at $tag_commit, which is neither HEAD ($head) nor exactly one commit behind whose only changed path is docs/appcast.xml" >&2
+        return 1
     fi
 }
 
@@ -182,10 +196,10 @@ fi
 [[ -n "$remote_main" ]] || { echo "origin has no refs/heads/main to compare with HEAD" >&2; exit 1; }
 # The local phase can run while --execute's appcast commit is still unpushed
 # (main is pushed only in manual step 4): tolerate exactly one unpushed local
-# commit, the appcast publish commit -- never anything else.
+# commit -- structurally the appcast publish commit (first parent, appcast
+# only) -- never anything else.
 if [[ "$remote_main" != "$head" ]]; then
-    extra=$(git log --format=%s "$remote_main..$head")
-    [[ "$extra" == "Publish appcast for XRG-ng $version" ]] || {
+    resumes_after_appcast_commit "$remote_main" "$head" || {
         echo "origin's main ($remote_main) does not match HEAD ($head); push main first" >&2
         exit 1
     }
@@ -200,6 +214,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 from xml.etree import ElementTree
 
@@ -345,6 +360,41 @@ expected_length = item_enclosure.get("length")
 expected_signature = item_enclosure.get(f"{{{SPARKLE_NS}}}edSignature")
 if expected_length is None or expected_signature is None:
     refuse("the macOS appcast-item.xml enclosure lacks length or sparkle:edSignature")
+
+
+def item_build(element):
+    """The item's sparkle:version, as child element, attribute or on the
+    enclosure -- whichever form the feed uses."""
+    candidate = element.find(f"{{{SPARKLE_NS}}}version")
+    value = candidate.text.strip() if candidate is not None and candidate.text else None
+    if value is None:
+        value = element.get(f"{{{SPARKLE_NS}}}version")
+        if value is None:
+            nested = element.find("enclosure")
+            if nested is not None:
+                value = nested.get(f"{{{SPARKLE_NS}}}version")
+    return value
+
+
+def item_is_release_item(element):
+    """The item is this release's: same build and the recorded enclosure."""
+    enclosure = element.find("enclosure")
+    return (enclosure is not None
+            and enclosure.get("length") == expected_length
+            and enclosure.get(f"{{{SPARKLE_NS}}}edSignature") == expected_signature)
+
+
+def feed_items(feed_text):
+    """The parsed channel items of an appcast feed, or None when the feed
+    does not parse or has no channel."""
+    try:
+        root = ElementTree.fromstring(feed_text)
+    except ElementTree.ParseError:
+        return None
+    channel = root.find("channel")
+    return None if channel is None else channel.findall("item")
+
+
 try:
     channel = ElementTree.parse("docs/appcast.xml").getroot().find("channel")
 except ElementTree.ParseError as error:
@@ -354,14 +404,7 @@ if channel is None:
 feed_builds = []
 pending = None
 for element in channel.findall("item"):
-    candidate = element.find(f"{{{SPARKLE_NS}}}version")
-    value = candidate.text.strip() if candidate is not None and candidate.text else None
-    if value is None:
-        value = element.get(f"{{{SPARKLE_NS}}}version")
-        if value is None:
-            nested = element.find("enclosure")
-            if nested is not None:
-                value = nested.get(f"{{{SPARKLE_NS}}}version")
+    value = item_build(element)
     if value is not None:
         feed_builds.append(value)
         if value == project_build:
@@ -370,11 +413,20 @@ if pending is None:
     refuse(f"the docs/appcast.xml feed carries no item for build {project_build} "
            f"(macOS release metadata build {mac_build_number}; feed builds: "
            f"{', '.join(feed_builds) if feed_builds else 'none'})")
-enclosure = pending.find("enclosure")
-if enclosure is None or enclosure.get("length") != expected_length \
-        or enclosure.get(f"{{{SPARKLE_NS}}}edSignature") != expected_signature:
+if not item_is_release_item(pending):
     refuse("the docs/appcast.xml item does not match the release appcast item "
            "(enclosure length or sparkle:edSignature)")
+# The appcast commit decision (the local phase commits only when the feed
+# committed at HEAD lacks this release's item): a later valid edit of the
+# committed item must not produce a second appcast commit. The commit is
+# compared with the same item the release recorded.
+committed_feed = subprocess.run(["git", "show", "HEAD:docs/appcast.xml"],
+                                capture_output=True, text=True)
+committed_items = feed_items(committed_feed.stdout) if committed_feed.stdout else None
+appcast_committed = any(
+    item_build(element) == project_build and item_is_release_item(element)
+    for element in committed_items or [])
+print("APPCAST_COMMITTED ready" if appcast_committed else "APPCAST_COMMITTED missing")
 if mac_build_number != project_build:
     refuse(f"the build numbers disagree: project build {project_build}, "
            f"macOS release metadata build {mac_build_number}, "
@@ -395,14 +447,17 @@ PYVERIFY
 
 dmg_sha256=""
 assets=()
+appcast_committed=""
 while IFS= read -r line; do
     case "$line" in
         DMG_SHA256\ *) dmg_sha256=${line#DMG_SHA256 };;
         ASSET\ *) assets+=("${line#ASSET }");;
+        APPCAST_COMMITTED\ *) appcast_committed=${line#APPCAST_COMMITTED };;
         *) echo "PUBLISH_REFUSED unexpected preflight output: $line" >&2; exit 1;;
     esac
 done <<< "$preflight"
 [[ -n "$dmg_sha256" && ${#assets[@]} -gt 0 ]] || { echo "PUBLISH_REFUSED the preflight did not report the asset inventory" >&2; exit 1; }
+[[ "$appcast_committed" == "ready" || "$appcast_committed" == "missing" ]] || { echo "PUBLISH_REFUSED the preflight did not report the committed appcast state" >&2; exit 1; }
 
 check_tap() {
     [[ "$(git -C "$XRG_TAP_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || {
@@ -446,6 +501,17 @@ run() {
     if $execute; then "$@"; else echo "DRY: $*"; fi
 }
 
+# The tap comparison renders the expected cask to temporary files; one EXIT
+# trap removes them on every path, including a set -e failure between the
+# mktemp and the end of the tap step (final review: temp-file leak).
+cask_temp=""
+remove_cask_temps() {
+    if [[ -n "$cask_temp" ]]; then
+        rm -f "$cask_temp" "$cask_temp.in_head"
+    fi
+}
+trap remove_cask_temps EXIT
+
 do_local_phase() {
     echo "Creating (or reusing) the release-key-signed tag"
     if existing_tag_kind >/dev/null; then
@@ -459,21 +525,24 @@ do_local_phase() {
     fi
 
     echo "Committing the updated appcast"
-    if $appcast_pending; then
+    if [[ "$appcast_committed" == "ready" ]]; then
+        echo "docs/appcast.xml is already committed with this release's item; nothing to commit"
+    elif $appcast_pending; then
         run git add docs/appcast.xml
         run git commit -m "Publish appcast for XRG-ng $version" -- docs/appcast.xml
     else
-        echo "docs/appcast.xml is already committed with this release's item; nothing to commit"
+        echo "PUBLISH_REFUSED the committed docs/appcast.xml lacks this release's item but is not the pending update" >&2
+        exit 1
     fi
 
     echo "Writing the Homebrew cask into the tap"
     if $execute; then
-        expected_cask=$(mktemp "${TMPDIR:-/tmp}/xrg-publish-cask.XXXXXX")
+        cask_temp=$(mktemp "${TMPDIR:-/tmp}/xrg-publish-cask.XXXXXX")
         python3 Tools/cask.py --version "$version" --sha256 "$dmg_sha256" \
-            --output "$expected_cask" >/dev/null
+            --output "$cask_temp" >/dev/null
         tap_cask="$XRG_TAP_DIR/Casks/xrg-ng.rb"
-        if git -C "$XRG_TAP_DIR" show HEAD:Casks/xrg-ng.rb > "$expected_cask.in_head" 2>/dev/null \
-                && cmp -s "$expected_cask" "$expected_cask.in_head"; then
+        if git -C "$XRG_TAP_DIR" show HEAD:Casks/xrg-ng.rb > "$cask_temp.in_head" 2>/dev/null \
+                && cmp -s "$cask_temp" "$cask_temp.in_head"; then
             echo "The tap's committed Casks/xrg-ng.rb already matches this release; nothing to commit"
         else
             python3 Tools/cask.py --version "$version" --sha256 "$dmg_sha256" \
@@ -481,7 +550,6 @@ do_local_phase() {
             (cd "$XRG_TAP_DIR" && git add Casks/xrg-ng.rb \
                 && git commit -m "xrg-ng $version" -- Casks/xrg-ng.rb)
         fi
-        rm -f "$expected_cask" "$expected_cask.in_head"
     else
         echo "DRY: python3 Tools/cask.py --version $version --sha256 $dmg_sha256 --output \"\$XRG_TAP_DIR\"/Casks/xrg-ng.rb"
         echo "DRY: (cd \"\$XRG_TAP_DIR\" && git add Casks/xrg-ng.rb && git commit -m \"xrg-ng $version\" -- Casks/xrg-ng.rb)"
@@ -507,6 +575,33 @@ Remaining manual steps (this script never runs them):
   push the tap commit: (cd "\${XRG_TAP_DIR:-<tap directory>}" && git push)
 EOF
 }
+
+# Classify an existing GitHub release against the local public inventory:
+# REUSE (a draft with exactly these assets, every size matching), PUBLISHED
+# (a non-draft release) or a refusal for anything else, including a
+# malformed answer. The first argument is gh's --json isDraft,assets output;
+# the remaining arguments are the local asset paths.
+gh_release_verdict='
+import json
+import os
+import sys
+
+try:
+    release = json.loads(sys.argv[1])
+    expected = {os.path.basename(path): os.path.getsize(path)
+                for path in sys.argv[2:]}
+    recorded = {asset["name"]: asset["size"]
+                for asset in release["assets"]}
+except (ValueError, KeyError, TypeError, OSError):
+    print("REFUSED")
+else:
+    if release.get("isDraft") is not True:
+        print("PUBLISHED")
+    elif recorded == expected:
+        print("REUSE")
+    else:
+        print("REFUSED")
+'
 
 do_draft_phase() {
     echo "Creating the GitHub release draft with the public asset inventory"
@@ -540,16 +635,24 @@ do_draft_phase() {
             echo "REFUSED: origin's $tag resolves to $remote_tag_commit, not the local tag's $local_tag_commit" >&2
             exit 1
         fi
-        # An existing release is reused only when its asset names equal the
-        # expected public inventory; a mismatch refuses the publish.
-        expected_names=$(printf '%s\n' "${assets[@]}" | sed 's|.*/||' | sort)
-        if existing_names=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null); then
-            if [[ "$(printf '%s\n' "$existing_names" | sort)" == "$expected_names" ]]; then
-                echo "A GitHub release for $tag already exists with the matching asset inventory; skipping creation"
-            else
-                echo "REFUSED: the existing GitHub release for $tag carries different assets" >&2
-                exit 1
-            fi
+        # An existing release is reused only when it is still a draft whose
+        # assets are exactly this release's public inventory with every
+        # asset's size equal to the local file (names alone cannot tell two
+        # builds of the same version apart); a published release, or any
+        # disagreement, refuses (final review, Important 3).
+        if existing_release=$(gh release view "$tag" --json isDraft,assets 2>/dev/null); then
+            verdict=$(python3 -c "$gh_release_verdict" "$existing_release" \
+                      "${assets[@]}" 2>/dev/null || printf 'REFUSED\n')
+            case "$verdict" in
+                REUSE)
+                    echo "A draft release for $tag already exists with the matching asset inventory (names and sizes); skipping creation";;
+                PUBLISHED)
+                    echo "REFUSED: a GitHub release for $tag is already published; inspect it manually" >&2
+                    exit 1;;
+                *)
+                    echo "REFUSED: the existing GitHub release for $tag is not this release's draft (isDraft, asset names or sizes differ)" >&2
+                    exit 1;;
+            esac
         else
             gh release create "$tag" --draft --verify-tag \
                 --title "XRG-ng $version" --notes-file "releases/$version.md" "${assets[@]}"

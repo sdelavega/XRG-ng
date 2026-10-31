@@ -119,10 +119,13 @@ refuses the publish unless:
   release metadata's `build` (`release-build.json`) and the appcast item's
   `sparkle:version` are all present and equal;
 - `origin`'s `main` is `HEAD`, or differs by exactly one unpushed local
-  commit — the appcast publish commit `--execute` wrote (main is pushed
-  only in the final manual step); the release directories' metadata must
-  record that same release commit (`sourceCommit`/`revision`: `HEAD`, or
-  the existing release tag's commit when resuming);
+  commit whose first parent is `origin`'s tip and whose only changed path is
+  `docs/appcast.xml` (`git diff --name-only`) — structurally the appcast
+  publish commit `--execute` wrote, never merely a commit with its subject
+  (`main` is pushed only in the final manual step); the release
+  directories' metadata must record that same release commit
+  (`sourceCommit`/`revision`: `HEAD`, or the existing release tag's commit
+  when resuming);
 - both release directories hold the complete public asset inventory, every
   asset a regular file (never a symlink) with a safe basename contained in
   its release directory. macOS publishes exactly the DMG, the ZIP,
@@ -148,8 +151,7 @@ refuses the publish unless:
   worktree, checked before any side effect.
 
 `--execute` performs the local phase only, and every step is idempotent so a
-rerun after a failure resumes where it stopped (a rerun after the appcast
-commit additionally requires `main` to be pushed, per the origin check):
+rerun after a failure resumes where it stopped:
 
 1. the signed annotated `vX.Y.Z` tag: it is signed by the XRG-ng release
    OpenPGP key — the primary fingerprint `signing/fingerprint.txt` records —
@@ -161,13 +163,15 @@ commit additionally requires `main` to be pushed, per the origin check):
    there — `GNUPGHOME=<keyring> git -c gpg.format=openpgp verify-tag --raw
    vX.Y.Z` must succeed and report a `[GNUPG:] VALIDSIG` line naming that
    exact primary fingerprint; an unsigned tag, or one signed by any other
-   key, refuses the publish — and it points at the recorded release commit
-   (at most one local commit behind `HEAD`: the appcast commit); a tag
-   pointing anywhere else refuses the publish. Otherwise it is created with
-   the command above and verified the same way immediately;
-2. the appcast commit: skipped when `docs/appcast.xml` is already committed
-   with this release's item; otherwise `docs/appcast.xml` alone is committed
-   from `main`;
+   key, refuses the publish — and it points at the recorded release commit:
+   `HEAD`, or exactly one commit behind whose first parent is the tag commit
+   and whose only changed path (`git diff --name-only`) is `docs/appcast.xml`
+   (never merely a commit with the appcast commit's subject). Otherwise it
+   is created with the command above and verified the same way immediately;
+2. the appcast commit: skipped when the `docs/appcast.xml` committed at
+   `HEAD` already carries this release's item — so a later valid edit of an
+   already-published item never creates a second appcast commit; otherwise
+   the pending `docs/appcast.xml` alone is committed from `main`;
 3. the tap commit: skipped when `Casks/xrg-ng.rb` in the tap's `HEAD` already
    equals what `Tools/cask.py` renders for this release; otherwise the cask
    is written via `Tools/cask.py --version V --sha256 HEX --output
@@ -176,15 +180,18 @@ commit additionally requires `main` to be pushed, per the origin check):
 
 `--execute` never calls `gh release create`. After the tag is pushed
 manually, `--create-draft` performs the remote phase: it requires the local
-signed tag to exist and `git ls-remote origin refs/tags/vX.Y.Z` (peeled for
-annotated tags) to resolve to the same commit. The origin-main check
-tolerates exactly one unpushed local commit there — the appcast publish
-commit `--execute` wrote — since `main` is pushed only in manual step 4.
-It then runs `gh release create
+release-key-signed tag to exist and `git ls-remote origin refs/tags/vX.Y.Z`
+(peeled for annotated tags) to resolve to the same commit. The origin-main
+check tolerates exactly one unpushed local commit there — structurally the
+appcast publish commit `--execute` wrote, as above — since `main` is pushed
+only in manual step 4. It then runs `gh release create
 vX.Y.Z --draft --verify-tag --title "XRG-ng X.Y.Z" --notes-file
-releases/X.Y.Z.md` with the public assets. When `gh release view vX.Y.Z`
-already shows a release, it is reused only if its asset names equal the
-expected inventory; any mismatch refuses the publish.
+releases/X.Y.Z.md` with the public assets. When `gh release view vX.Y.Z
+--json isDraft,assets` already shows a release, it is reused only when the
+release is still a draft, its asset names are exactly the expected public
+inventory and every asset's size equals the local file's (names alone cannot
+tell two builds of the same version apart); a published release refuses
+with "already published", and any other disagreement refuses the publish.
 
 The cask uses the public Sparkle appcast
 (`https://sdelavega.github.io/XRG-ng/appcast.xml`) for livecheck, matching

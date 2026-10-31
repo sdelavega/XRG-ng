@@ -128,7 +128,8 @@ class PublishScriptTests(unittest.TestCase):
     recording every call (answering refs/tags ls-remote queries from the
     ``remote-tags`` file when it exists), gh records and simulates the GitHub
     release phase: ``release create`` fails unless the remote-tags file shows
-    the pushed tag, ``release view`` reports the ``gh-release`` asset list.
+    the pushed tag, ``release view`` emits the ``gh-release`` JSON document
+    (isDraft, assets with names and sizes) that ``write_gh_release`` writes.
     Tests assert from the spy log that refusals happen before any tag,
     commit, fetch or release call. Fixture tags are signed with the
     throwaway OpenPGP release key of ``make_release_key``.
@@ -248,6 +249,7 @@ class PublishScriptTests(unittest.TestCase):
             "        echo \"gh: refusing to create a release for the unpushed tag $tag\" >&2\n"
             "        exit 1;;\n"
             "    'release view')\n"
+            "        # emit the gh-release JSON document (isDraft, assets)\n"
             "        if [ -f \"$release_assets\" ]; then cat \"$release_assets\"; exit 0; fi\n"
             "        exit 1;;\n"
             "esac\n"
@@ -461,6 +463,26 @@ class PublishScriptTests(unittest.TestCase):
                                   capture_output=True, text=True).stdout
         return [subject for subject in listing.splitlines()
                 if subject.startswith(message_prefix)]
+
+    def write_gh_release(self, draft=True, wrong_size=False,
+                         foreign_names=False):
+        """The gh-release JSON document the shim's `release view` emits: the
+        release's draft flag and the recorded assets' names and sizes, by
+        default exactly the local public inventory."""
+        if foreign_names:
+            assets = [{"name": "XRG-ng-0.0.1-macOS-universal.dmg",
+                       "size": 123}]
+        else:
+            assets = []
+            for directory, names in ((self.mac, mac_public_assets(VERSION)),
+                                     (self.linux, linux_public_assets(VERSION))):
+                for name in names:
+                    size = (directory / name).stat().st_size
+                    assets.append({"name": name,
+                                   "size": size + 1 if wrong_size else size})
+        self.gh_release.write_text(
+            json.dumps({"isDraft": draft, "assets": assets}) + "\n",
+            encoding="utf-8")
 
     def simulate_pushed_tag(self, commit=None):
         """Write the remote-tags file the ls-remote/gh shims read: the pushed
@@ -729,6 +751,38 @@ class PublishScriptTests(unittest.TestCase):
                          "no commit happened before the refusal")
         self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
 
+    def test_execute_refuses_tag_resume_commit_touching_other_files(self):
+        # A commit titled "Publish appcast for XRG-ng $VERSION" that also
+        # changes anything beyond docs/appcast.xml must not resume the tag:
+        # the check is ancestry plus the changed-path set, never the subject.
+        self.build_fixture()
+        self.git_signed("tag", "-s", "-u", self.release_key, f"v{VERSION}",
+                        "-m", f"XRG-ng {VERSION}")
+        (self.repo / "extra.txt").write_text("sneaky change\n")
+        self.git("add", "docs/appcast.xml", "extra.txt")
+        self.git("commit", "-m", f"Publish appcast for XRG-ng {VERSION}")
+        self.git("push", "origin", "main")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("neither HEAD", combined)
+        self.assertIn("only changed path is docs/appcast.xml", combined)
+        self.assertEqual(self.mutating_calls(), [],
+                         "no commit happened before the refusal")
+        self.assertEqual(len(self.main_commits("xrg-ng 0.2.1",
+                                                cwd=self.tap)), 0)
+
+    def test_execute_refuses_origin_resume_commit_touching_other_files(self):
+        # Same structural rule for origin/main versus HEAD: the unpushed
+        # commit may change docs/appcast.xml only, whatever its subject.
+        self.build_fixture()
+        (self.repo / "extra.txt").write_text("sneaky change\n")
+        self.git("add", "docs/appcast.xml", "extra.txt")
+        self.git("commit", "-m", f"Publish appcast for XRG-ng {VERSION}")
+        result = self.publish(execute=True)
+        self.assert_refused_before_side_effects(result,
+                                                 "does not match HEAD")
+
     def test_execute_refuses_unsigned_existing_tag(self):
         self.build_fixture()
         self.git("tag", "-a", f"v{VERSION}", "-m", f"XRG-ng {VERSION}")
@@ -881,6 +935,28 @@ class PublishScriptTests(unittest.TestCase):
         self.assertEqual(self.tag_calls(), [],
                          "no duplicate tag was created")
 
+    def test_execute_skips_second_appcast_commit_after_later_valid_edit(self):
+        # The appcast commit decision must look at the committed feed, not
+        # only at dirt: after a successful run, a later valid edit of
+        # docs/appcast.xml (still carrying this release's item) must not
+        # produce a second appcast commit.
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        self.git("push", "origin", "main")
+        appcast_path = self.repo / "docs" / "appcast.xml"
+        appcast_path.write_text(appcast_path.read_text(
+            encoding="utf-8").replace("<title>XRG-ng</title>",
+                                     "<title>XRG-ng</title>"
+                                     "<!-- later valid edit -->"),
+            encoding="utf-8")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined)
+        self.assertIn("already committed with this release's item", combined)
+        self.assertEqual(len(self.main_commits("Publish appcast")), 1,
+                         "a later valid edit must not create a second "
+                         "appcast commit")
+
     # --- --create-draft phase ---
 
     def test_create_draft_refused_when_remote_tag_missing(self):
@@ -969,34 +1045,64 @@ class PublishScriptTests(unittest.TestCase):
                             for name in linux_public_assets(VERSION)}
         self.assertEqual(set(arguments[9:]), expected_assets)
 
-    def test_create_draft_skips_existing_release_with_matching_assets(self):
+    def test_create_draft_reuses_existing_draft_with_matching_assets(self):
         self.build_fixture()
         self.assertEqual(self.publish(execute=True).returncode, 0)
         self.simulate_pushed_tag()
-        expected_names = sorted(
-            {name for name in mac_public_assets(VERSION)}
-            | {name for name in linux_public_assets(VERSION)})
-        self.gh_release.write_text("\n".join(expected_names) + "\n")
+        self.write_gh_release()
         result = self.publish(create_draft=True)
         combined = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, combined)
-        self.assertIn("matching asset inventory; skipping creation", combined)
+        self.assertIn("matching asset inventory (names and sizes)", combined)
+        self.assertIn(["gh", "release", "view", f"v{VERSION}", "--json",
+                       "isDraft,assets"], self.spy_calls())
         self.assertEqual([call for call in self.spy_calls()
                           if call[:3] == ["gh", "release", "create"]], [],
-                         "an existing matching release must not be recreated")
+                         "an existing matching draft must not be recreated")
 
     def test_create_draft_refuses_existing_release_with_other_assets(self):
         self.build_fixture()
         self.assertEqual(self.publish(execute=True).returncode, 0)
         self.simulate_pushed_tag()
-        self.gh_release.write_text("XRG-ng-0.0.1-macOS-universal.dmg\n")
+        self.write_gh_release(foreign_names=True)
         result = self.publish(create_draft=True)
         combined = result.stdout + result.stderr
         self.assertEqual(result.returncode, 1, combined)
-        self.assertIn("carries different assets", combined)
+        self.assertIn("not this release's draft", combined)
         self.assertEqual([call for call in self.spy_calls()
                           if call[:3] == ["gh", "release", "create"]], [],
                          "a mismatched existing release must not be recreated")
+
+    def test_create_draft_refuses_published_release(self):
+        # A published (non-draft) release for this tag must never be reused
+        # or recreated, even when its assets match exactly.
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        self.simulate_pushed_tag()
+        self.write_gh_release(draft=False)
+        result = self.publish(create_draft=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("already published", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[:3] == ["gh", "release", "create"]], [],
+                         "a published release must not be recreated")
+
+    def test_create_draft_refuses_draft_with_matching_names_but_wrong_sizes(self):
+        # Asset names alone cannot tell two builds of the same version
+        # apart; every asset's size must equal the local file's size.
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        self.simulate_pushed_tag()
+        self.write_gh_release(wrong_size=True)
+        result = self.publish(create_draft=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("names or sizes differ", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[:3] == ["gh", "release", "create"]], [],
+                         "a same-named but different build must not be "
+                         "reused or recreated")
 
 
 if __name__ == "__main__":
