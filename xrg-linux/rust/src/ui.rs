@@ -877,12 +877,70 @@ mod tests {
         assert_eq!(SPONSORS_URL, "https://github.com/sponsors/sdelavega");
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
-        let mut output = ctx.run_ui(egui::RawInput::default(), about_content);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(480., 360.));
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        // Frame 1: render the About content and locate the rendered link,
+        // so the click below lands inside its own rect.
+        let mut output = ctx.run_ui(raw.clone(), about_content);
         let tree = output.platform_output.accesskit_update.as_ref().unwrap();
-        let sponsors = tree.nodes.iter().any(|(_, node)| {
-            node.role() == egui::accesskit::Role::Link && node.label() == Some("Support XRG-ng…")
+        let sponsors_rect = tree
+            .nodes
+            .iter()
+            .find_map(|(_, node)| {
+                if node.role() == egui::accesskit::Role::Link
+                    && node.label() == Some("Support XRG-ng…")
+                {
+                    node.bounds()
+                } else {
+                    None
+                }
+            })
+            .expect("the About window must link to GitHub Sponsors");
+        output.textures_delta.clear();
+        let center = egui::pos2(
+            ((sponsors_rect.x0 + sponsors_rect.x1) / 2.) as f32,
+            ((sponsors_rect.y0 + sponsors_rect.y1) / 2.) as f32,
+        );
+        // Frame 2: press the rendered support link.
+        let press = egui::RawInput {
+            events: vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::PointerButton {
+                    pos: center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..raw.clone()
+        };
+        ctx.run_ui(press, about_content).textures_delta.clear();
+        // Frame 3: release inside the link and inspect the emitted command.
+        let release = egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..raw
+        };
+        let mut output = ctx.run_ui(release, about_content);
+        let opened = output.platform_output.commands.iter().any(|command| {
+            matches!(
+                command,
+                egui::OutputCommand::OpenUrl(egui::OpenUrl { url, .. })
+                    if url == SPONSORS_URL
+            )
         });
-        assert!(sponsors, "the About window must link to GitHub Sponsors");
+        assert!(
+            opened,
+            "clicking the support link must open {SPONSORS_URL}, got {:?}",
+            output.platform_output.commands
+        );
         output.textures_delta.clear();
     }
     #[test]
