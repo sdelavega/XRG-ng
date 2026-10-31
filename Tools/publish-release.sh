@@ -7,11 +7,21 @@
 # both checksum manifests, the unified build number across the project, the
 # macOS release metadata and the appcast item, and the Homebrew tap
 # checkout. Then --execute performs the local phase only: create (or reuse)
-# the signed annotated tag and commit the pending appcast and the tap cask.
-# --create-draft performs the remote phase only, after the tag was pushed:
-# it creates the GitHub release draft with `gh release create --verify-tag`,
-# or skips creation when a matching draft already exists. Every --execute
-# step is idempotent, so a rerun after a failure resumes where it stopped.
+# the release-key-signed annotated tag and commit the pending appcast and
+# the tap cask. --create-draft performs the remote phase only, after the tag
+# was pushed: it creates the GitHub release draft with `gh release create
+# --verify-tag`, or skips creation when a matching draft already exists.
+# Every --execute step is idempotent, so a rerun after a failure resumes
+# where it stopped.
+#
+# The release tag is signed by the XRG-ng release OpenPGP key whose primary
+# fingerprint signing/fingerprint.txt records, using the release keyring
+# "${XRG_RELEASE_GNUPGHOME:-$HOME/.local/share/xrg-ng-release/gnupg}":
+# --execute requires that key's secret half in the keyring before any side
+# effect, and a tag (existing or just created) counts as signed only when
+# git verify-tag succeeds there and reports a VALIDSIG naming exactly that
+# primary fingerprint -- anything else fails closed.
+#
 # No check writes to git: origin's refs are compared with HEAD through the
 # read-only `git ls-remote` (never a fetch). The script never pushes
 # anything, never un-drafts a release, and never calls gh outside
@@ -88,6 +98,28 @@ if [[ -n "$dirty" ]]; then
     fi
 fi
 
+# Release-key signing: the tag must be signed by the XRG-ng release OpenPGP
+# key, whose primary fingerprint signing/fingerprint.txt records, in the
+# release keyring. --execute signs, so it needs the secret key there before
+# any side effect; --create-draft and the dry run only verify the existing
+# tag and need just the public key.
+if ! release_key=$(cat signing/fingerprint.txt 2>/dev/null); then
+    echo "signing/fingerprint.txt is missing; it must hold the release key's primary fingerprint" >&2
+    exit 1
+fi
+release_key=$(printf '%s' "$release_key" | tr -d '[:space:]' | tr 'a-f' 'A-F')
+[[ "$release_key" =~ ^[0-9A-F]{40}$ ]] || {
+    echo "signing/fingerprint.txt must hold the release key's 40-hex-digit primary fingerprint" >&2
+    exit 1
+}
+release_gnupg="${XRG_RELEASE_GNUPGHOME:-$HOME/.local/share/xrg-ng-release/gnupg}"
+if $execute; then
+    gpg --homedir "$release_gnupg" --batch --list-secret-keys "$release_key" >/dev/null 2>&1 || {
+        echo "REFUSED: the XRG-ng release secret key $release_key is not available in the release keyring $release_gnupg (set XRG_RELEASE_GNUPGHOME to override it)" >&2
+        exit 1
+    }
+fi
+
 head=$(git rev-parse HEAD)
 tag="v$version"
 # An existing local tag is reused only when it is a signed annotated tag
@@ -98,16 +130,32 @@ existing_tag_kind() {
     git cat-file -t "$tag" 2>/dev/null || true
 }
 
+# A tag counts as signed only when the release keyring verifies its
+# signature against the XRG-ng release key: git verify-tag must succeed and
+# its raw GnuPG status output must carry a VALIDSIG line whose last field
+# (the primary key fingerprint) is exactly the release key. There is no
+# textual fallback: an unsigned tag, or one signed by any other key, fails
+# closed.
+verify_release_tag() {
+    local status
+    if ! status=$(GNUPGHOME="$release_gnupg" git -c gpg.format=openpgp verify-tag --raw "$tag" 2>&1); then
+        echo "REFUSED: $tag is not signed with a verifiable OpenPGP signature (git verify-tag failed; expected the XRG-ng release key $release_key from the keyring $release_gnupg)" >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$status" | awk -v key="$release_key" '
+            $1 == "[GNUPG:]" && $2 == "VALIDSIG" && $NF == key { found = 1 }
+            END { exit(found ? 0 : 1) }'; then
+        echo "REFUSED: $tag is not signed by the XRG-ng release key $release_key (the signature was made by a different key)" >&2
+        return 1
+    fi
+}
+
 validate_existing_tag() {
     if [[ "$(existing_tag_kind)" != "tag" ]]; then
         echo "REFUSED: v$version already exists but is not an annotated tag; delete it or inspect it manually" >&2
         return 1
     fi
-    if ! git verify-tag "$tag" >/dev/null 2>&1 \
-            && ! git cat-file tag "$tag" 2>/dev/null | grep -q 'BEGIN \(SSH\|PGP\) SIGNATURE'; then
-        echo "REFUSED: the existing v$version is not signed (git verify-tag fails and the tag object carries no signature)" >&2
-        return 1
-    fi
+    verify_release_tag || return 1
     local tag_commit extra
     tag_commit=$(git rev-parse "$tag^{commit}")
     if [[ "$tag_commit" != "$head" ]]; then
@@ -399,12 +447,15 @@ run() {
 }
 
 do_local_phase() {
-    echo "Creating (or reusing) the signed release tag"
+    echo "Creating (or reusing) the release-key-signed tag"
     if existing_tag_kind >/dev/null; then
         validate_existing_tag || exit 1
         echo "Reusing the existing signed annotated tag $tag at HEAD"
     else
-        run git tag -s "$tag" -m "XRG-ng $version"
+        run env GNUPGHOME="$release_gnupg" git -c gpg.format=openpgp tag -s -u "$release_key" "$tag" -m "XRG-ng $version"
+        if $execute; then
+            verify_release_tag || exit 1
+        fi
     fi
 
     echo "Committing the updated appcast"

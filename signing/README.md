@@ -33,7 +33,7 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 # SHA256SUMS also lists local-only files (per-payload .sha256 sidecars,
 # fingerprint.txt, xrg-ng-release.asc) that are NOT part of the public
 # download, so check only the downloaded subset:
-sha256sum -c <(grep -vE '  (fingerprint\.txt|xrg-ng-release\.asc|\.sha256)$' SHA256SUMS)
+sha256sum -c <(grep -vE '  (fingerprint\.txt|xrg-ng-release\.asc|.*\.sha256)$' SHA256SUMS)
 for artifact in *.tar.gz *.deb *.rpm *.AppImage; do
     [ -e "$artifact" ] || continue
     gpg --verify "$artifact.asc" "$artifact"

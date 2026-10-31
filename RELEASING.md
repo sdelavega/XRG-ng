@@ -138,6 +138,12 @@ refuses the publish unless:
   covered by its manifest, and every listed digest matches the file
   (`SHA256SUMS.txt` covers the DMG and ZIP; Linux `SHA256SUMS` covers every
   payload and `release-metadata.json`);
+- with `--execute`, the XRG-ng release secret key — the primary fingerprint
+  `signing/fingerprint.txt` records — is available in the release keyring
+  (`XRG_RELEASE_GNUPGHOME`, default
+  `$HOME/.local/share/xrg-ng-release/gnupg`), checked with
+  `gpg --list-secret-keys` before any side effect; `--create-draft` verifies
+  the pushed tag with that keyring's public key only;
 - with `--execute`, `XRG_TAP_DIR` is a git work tree with a clean index and
   worktree, checked before any side effect.
 
@@ -145,12 +151,20 @@ refuses the publish unless:
 rerun after a failure resumes where it stopped (a rerun after the appcast
 commit additionally requires `main` to be pushed, per the origin check):
 
-1. the signed annotated `vX.Y.Z` tag: when `vX.Y.Z` already exists locally it
-   is reused only if it is a signed annotated tag (`git verify-tag`, or a
-   tag object carrying a signature) pointing at the recorded release commit
+1. the signed annotated `vX.Y.Z` tag: it is signed by the XRG-ng release
+   OpenPGP key — the primary fingerprint `signing/fingerprint.txt` records —
+   using the release keyring (`XRG_RELEASE_GNUPGHOME`, default
+   `$HOME/.local/share/xrg-ng-release/gnupg`): `GNUPGHOME` is set only for
+   the `git -c gpg.format=openpgp tag -s -u <fingerprint> vX.Y.Z` call.
+   When `vX.Y.Z` already exists locally it is reused only if it is an
+   annotated tag whose signature verifies against exactly that release key
+   there — `GNUPGHOME=<keyring> git -c gpg.format=openpgp verify-tag --raw
+   vX.Y.Z` must succeed and report a `[GNUPG:] VALIDSIG` line naming that
+   exact primary fingerprint; an unsigned tag, or one signed by any other
+   key, refuses the publish — and it points at the recorded release commit
    (at most one local commit behind `HEAD`: the appcast commit); a tag
-   pointing anywhere else or an unsigned tag refuses the publish. Otherwise
-   it is created with `git tag -s vX.Y.Z -m "XRG-ng X.Y.Z"`;
+   pointing anywhere else refuses the publish. Otherwise it is created with
+   the command above and verified the same way immediately;
 2. the appcast commit: skipped when `docs/appcast.xml` is already committed
    with this release's item; otherwise `docs/appcast.xml` alone is committed
    from `main`;

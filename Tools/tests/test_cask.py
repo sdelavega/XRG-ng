@@ -9,6 +9,11 @@ ever touches the real checkout, its remote or the Homebrew tap. The expected
 public asset inventories mirror what ``Tools/release-linux.py`` and
 ``Tools/release-signing.py`` produce.
 
+Every fixture signs with a throwaway OpenPGP key generated in the test's own
+``GNUPGHOME`` — recorded in the fixture repo's ``signing/fingerprint.txt`` and
+offered through ``XRG_RELEASE_GNUPGHOME`` — so the real release keyring and
+the user's default keyring are never read or written.
+
 The shims also simulate the remote release phase: ``git ls-remote`` answers
 refs/tags queries from a ``remote-tags`` file when it exists (the pushed
 annotated tag), and ``gh release create`` fails unless that file carries the
@@ -33,7 +38,7 @@ REPO_ROOT = TOOLS.parent
 
 # Standing rule: every artifact this suite creates stays under the task's
 # build root in $TMPDIR.
-WORK_ROOT = Path(tempfile.gettempdir()) / "xrg-0.2.1-final"
+WORK_ROOT = Path(tempfile.gettempdir()) / "xrg-0.2.1-final2"
 
 _spec = importlib.util.spec_from_file_location("cask", TOOLS / "cask.py")
 cask = importlib.util.module_from_spec(_spec)
@@ -125,7 +130,8 @@ class PublishScriptTests(unittest.TestCase):
     release phase: ``release create`` fails unless the remote-tags file shows
     the pushed tag, ``release view`` reports the ``gh-release`` asset list.
     Tests assert from the spy log that refusals happen before any tag,
-    commit, fetch or release call.
+    commit, fetch or release call. Fixture tags are signed with the
+    throwaway OpenPGP release key of ``make_release_key``.
     """
 
     def setUp(self):
@@ -142,10 +148,72 @@ class PublishScriptTests(unittest.TestCase):
         self.shims = self.root / "shims"
         self.remote_tags = self.root / "remote-tags"
         self.gh_release = self.root / "gh-release"
+        # The throwaway OpenPGP keyring every gpg/git call in the fixture
+        # and in the script under test must use; make_release_key creates
+        # it at a short path because gpg-agent sockets cannot live as deep
+        # as the per-test fixture root (Unix socket path limits). The real
+        # release keyring and the user's default keyring are never touched.
+        self.gnupg = None
+        self.gnupg_homes = []
+
+    def tearDown(self):
+        # Kill any gpg-agent/keyboxd started for a test keyring, then remove
+        # the keyrings created outside the fixture root; the setUp cleanup
+        # removes the fixture root itself afterwards.
+        gpgconf = shutil.which("gpgconf")
+        if gpgconf is not None:
+            for home in self.gnupg_homes:
+                subprocess.run([gpgconf, "--homedir", str(home),
+                                "--kill", "all"],
+                               check=False, capture_output=True)
+        for home in self.gnupg_homes:
+            shutil.rmtree(home, ignore_errors=True)
 
     def git(self, *arguments, cwd=None):
         return subprocess.run(["git", *arguments], cwd=cwd or self.repo,
                               check=True, capture_output=True, text=True)
+
+    def git_signed(self, *arguments, cwd=None):
+        """git with the test's throwaway OpenPGP keyring (GNUPGHOME), for
+        fixture tag signing; the same keyring the script under test resolves
+        through XRG_RELEASE_GNUPGHOME."""
+        env = dict(os.environ)
+        env["GNUPGHOME"] = str(self.gnupg)
+        return subprocess.run(["git", *arguments], cwd=cwd or self.repo,
+                              check=True, capture_output=True, text=True,
+                              env=env)
+
+    def secret_key_fingerprints(self):
+        listing = subprocess.run(
+            [shutil.which("gpg"), "--homedir", str(self.gnupg), "--batch",
+             "--list-secret-keys", "--with-colons"],
+            check=True, capture_output=True, text=True).stdout
+        return {line.split(":")[9] for line in listing.splitlines()
+                if line.startswith("fpr:")}
+
+    def generate_key(self, user_id):
+        """One throwaway OpenPGP signing key in the test's own keyring; the
+        real release keyring and the default keyring are never touched."""
+        before = self.secret_key_fingerprints()
+        subprocess.run(
+            [shutil.which("gpg"), "--homedir", str(self.gnupg), "--batch",
+             "--passphrase", "", "--quick-generate-key", user_id,
+             "ed25519", "sign", "never"],
+            check=True, capture_output=True, text=True)
+        new = sorted(self.secret_key_fingerprints() - before)
+        self.assertEqual(len(new), 1,
+                         "expected exactly one new secret key fingerprint")
+        return new[0]
+
+    def make_release_key(self):
+        """The throwaway XRG-ng release key whose primary fingerprint the
+        fixture repo's signing/fingerprint.txt records. gpg-agent's sockets
+        cannot live as deep as the per-test fixture root (Unix socket path
+        limits), so the keyring gets a short sibling directory directly
+        under WORK_ROOT (mkdtemp creates it private)."""
+        self.gnupg = Path(tempfile.mkdtemp(prefix="g-", dir=WORK_ROOT))
+        self.gnupg_homes.append(self.gnupg)
+        self.release_key = self.generate_key("XRG test <test@example.invalid>")
 
     def make_shims(self):
         self.shims.mkdir()
@@ -193,11 +261,35 @@ class PublishScriptTests(unittest.TestCase):
         return [line.split("\t")[:-1]
                 for line in self.log.read_text(encoding="utf-8").splitlines()]
 
+    def tag_calls(self):
+        """git tag invocations, including those behind -c config prefixes."""
+        calls = []
+        for call in self.spy_calls():
+            if call[0] != "git":
+                continue
+            rest = call[1:]
+            while rest and rest[0].startswith("-c"):
+                rest = rest[2:]
+            if rest and rest[0] == "tag":
+                calls.append(call)
+        return calls
+
     def mutating_calls(self):
         """Spy calls that create tags/commits/releases or fetch remote state."""
-        return [call for call in self.spy_calls()
-                if (call[0] == "git" and call[1] in ("tag", "commit", "fetch"))
-                or call[0] == "gh"]
+        calls = []
+        for call in self.spy_calls():
+            if call[0] == "gh":
+                if call[1:3] == ["release", "create"]:
+                    calls.append(call)
+                continue
+            if call[0] != "git":
+                continue
+            rest = call[1:]
+            while rest and rest[0].startswith("-c"):
+                rest = rest[2:]
+            if rest and rest[0] in ("tag", "commit", "fetch"):
+                calls.append(call)
+        return calls
 
     def write_repo_sources(self):
         self.repo.mkdir(parents=True)
@@ -209,6 +301,9 @@ class PublishScriptTests(unittest.TestCase):
         manifest = self.repo / "xrg-linux" / "rust" / "Cargo.toml"
         manifest.parent.mkdir(parents=True)
         manifest.write_text(f'[package]\nname = "xrg-ng"\nversion = "{VERSION}"\n')
+        signing = self.repo / "signing"
+        signing.mkdir()
+        (signing / "fingerprint.txt").write_text(f"{self.release_key}\n")
         appcast = self.repo / "docs" / "appcast.xml"
         appcast.parent.mkdir(parents=True)
         shutil.copyfile(REPO_ROOT / "docs" / "appcast.xml", appcast)
@@ -221,15 +316,9 @@ class PublishScriptTests(unittest.TestCase):
             shutil.copyfile(TOOLS / name, tools / name)
 
     def commit_repo(self):
-        subprocess.run([shutil.which("ssh-keygen"), "-q", "-t", "ed25519",
-                        "-N", "", "-f", str(self.root / "ssh-signing-key")],
-                       check=True, capture_output=True)
         self.git("init", "--initial-branch=main", ".")
         self.git("config", "user.name", "XRG test")
         self.git("config", "user.email", "test@example.invalid")
-        # SSH signing lets --execute create the signed tag without GnuPG.
-        self.git("config", "gpg.format", "ssh")
-        self.git("config", "user.signingkey", str(self.root / "ssh-signing-key"))
         self.git("add", ".")
         self.git("commit", "-m", "fixture")
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo,
@@ -308,6 +397,7 @@ class PublishScriptTests(unittest.TestCase):
 
     def build_fixture(self, pending_appcast=True):
         self.make_shims()
+        self.make_release_key()
         self.write_repo_sources()
         head = self.commit_repo()
         self.write_release_dirs(head)
@@ -317,9 +407,17 @@ class PublishScriptTests(unittest.TestCase):
         return head
 
     def publish(self, execute=False, create_draft=False, tap=True,
-                confirm=None, tap_path=None):
+                confirm=None, tap_path=None, gnupg=None):
         env = dict(os.environ)
         env["PATH"] = f"{self.shims}{os.pathsep}{env['PATH']}"
+        keyring = Path(gnupg) if gnupg is not None else self.gnupg
+        if keyring not in self.gnupg_homes:
+            self.gnupg_homes.append(keyring)
+        # The script resolves the release keyring from XRG_RELEASE_GNUPGHOME;
+        # GNUPGHOME keeps every other gpg call inside a test keyring too, so
+        # neither the real release keyring nor ~/.gnupg is ever consulted.
+        env["XRG_RELEASE_GNUPGHOME"] = str(keyring)
+        env["GNUPGHOME"] = str(keyring)
         if tap_path is not None:
             env["XRG_TAP_DIR"] = str(tap_path)
         elif tap:
@@ -386,7 +484,8 @@ class PublishScriptTests(unittest.TestCase):
         result = self.publish()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         combined = result.stdout + result.stderr
-        for planned in ["git tag -s", "gh release create", f"v{VERSION}",
+        for planned in ["gpg.format=openpgp", "tag -s", self.release_key,
+                        "gh release create", f"v{VERSION}",
                         "--create-draft", "cask.py"]:
             self.assertIn(planned, combined)
         for asset in (mac_public_assets(VERSION) + linux_public_assets(VERSION)):
@@ -620,8 +719,8 @@ class PublishScriptTests(unittest.TestCase):
         self.build_fixture()
         self.git("commit", "--allow-empty", "-m", "newer head")
         self.git("push", "origin", "main")
-        self.git("tag", "-s", f"v{VERSION}", "-m", f"XRG-ng {VERSION}",
-                 "HEAD~1")
+        self.git_signed("tag", "-s", "-u", self.release_key, f"v{VERSION}",
+                        "-m", f"XRG-ng {VERSION}", "HEAD~1")
         result = self.publish(execute=True)
         combined = result.stdout + result.stderr
         self.assertEqual(result.returncode, 1, combined)
@@ -641,6 +740,56 @@ class PublishScriptTests(unittest.TestCase):
                          "no commit happened before the refusal")
         self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
 
+    def test_execute_refuses_tag_signed_by_a_different_key(self):
+        # A tag signed by another OpenPGP key present in the same keyring
+        # verifies cryptographically; only the VALIDSIG fingerprint check
+        # names the wrong key.
+        self.build_fixture()
+        other_key = self.generate_key("XRG other <other@example.invalid>")
+        self.git_signed("tag", "-s", "-u", other_key, f"v{VERSION}",
+                        "-m", f"XRG-ng {VERSION}")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("not signed by the XRG-ng release key", combined)
+        self.assertIn(self.release_key, combined)
+        self.assertEqual(self.mutating_calls(), [],
+                         "no commit happened before the refusal")
+        self.assertEqual(len(self.main_commits("Publish appcast")), 0)
+        self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
+
+    def test_execute_refuses_signature_text_without_real_signature(self):
+        # An annotated tag whose message merely contains signature-looking
+        # text carries no signature; the publish must fail closed on it.
+        self.build_fixture()
+        self.git("tag", "-a", f"v{VERSION}",
+                 "-m", "-----BEGIN PGP SIGNATURE-----\nnot a real signature\n"
+                       "-----END PGP SIGNATURE-----")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("not signed", combined)
+        self.assertEqual(self.mutating_calls(), [],
+                         "no commit happened before the refusal")
+        self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
+
+    def test_execute_refuses_missing_release_secret_key(self):
+        # --execute must preflight the release secret key and refuse before
+        # any side effect when the keyring does not hold it.
+        self.build_fixture()
+        empty_keyring = Path(tempfile.mkdtemp(prefix="g-", dir=WORK_ROOT))
+        result = self.publish(execute=True, gnupg=empty_keyring)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("not available in the release keyring", combined)
+        self.assertIn(str(empty_keyring), combined,
+                      "the refusal must name the keyring path")
+        self.assertIn(self.release_key, combined)
+        self.assertEqual(self.mutating_calls(), [],
+                         "no tag, commit or release happened before the refusal")
+        self.assertEqual(self.tags(), [])
+        self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
+
     # --- --execute happy paths ---
 
     def test_execute_publishes_tag_and_commits_without_gh(self):
@@ -655,9 +804,9 @@ class PublishScriptTests(unittest.TestCase):
                          "no fetch anywhere; the remote check is ls-remote")
         self.assertEqual([call for call in calls if call[0] == "gh"], [],
                          "--execute is the local phase only; no gh call")
-        tags_calls = [call for call in calls if call[:2] == ["git", "tag"]]
-        self.assertEqual(tags_calls, [["git", "tag", "-s", f"v{VERSION}",
-                                       "-m", f"XRG-ng {VERSION}"]])
+        self.assertEqual(self.tag_calls(), [
+            ["git", "-c", "gpg.format=openpgp", "tag", "-s", "-u",
+             self.release_key, f"v{VERSION}", "-m", f"XRG-ng {VERSION}"]])
         commits = [call for call in calls if call[:2] == ["git", "commit"]]
         self.assertEqual(commits, [
             ["git", "commit", "-m", f"Publish appcast for XRG-ng {VERSION}",
@@ -686,7 +835,8 @@ class PublishScriptTests(unittest.TestCase):
         # only decides the commit). The tag exists and the appcast commit
         # is the one unpushed local commit -- a resume state.
         self.build_fixture()
-        self.git("tag", "-s", f"v{VERSION}", "-m", f"XRG-ng {VERSION}")
+        self.git_signed("tag", "-s", "-u", self.release_key, f"v{VERSION}",
+                        "-m", f"XRG-ng {VERSION}")
         self.git("add", "docs/appcast.xml")
         self.git("commit", "-m", f"Publish appcast for XRG-ng {VERSION}")
         self.git("push", "origin", "main")
@@ -704,7 +854,8 @@ class PublishScriptTests(unittest.TestCase):
         # The tag already exists (a previous run stopped after tagging);
         # the rerun must reuse it and still commit appcast and tap cask.
         self.build_fixture()
-        self.git("tag", "-s", f"v{VERSION}", "-m", f"XRG-ng {VERSION}")
+        self.git_signed("tag", "-s", "-u", self.release_key, f"v{VERSION}",
+                        "-m", f"XRG-ng {VERSION}")
         result = self.publish(execute=True)
         combined = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, combined)
@@ -727,9 +878,8 @@ class PublishScriptTests(unittest.TestCase):
         self.assertEqual(len(self.main_commits("Publish appcast")), 1)
         self.assertEqual(len(self.main_commits("xrg-ng 0.2.1",
                                                cwd=self.tap)), 1)
-        tag_creates = [call for call in self.spy_calls()
-                       if call[:3] == ["git", "tag", "-s"]]
-        self.assertEqual(tag_creates, [], "no duplicate tag was created")
+        self.assertEqual(self.tag_calls(), [],
+                         "no duplicate tag was created")
 
     # --- --create-draft phase ---
 
