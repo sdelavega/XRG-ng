@@ -20,11 +20,38 @@ sha256sum -c SHA256SUMS
 The signature must validate against this primary fingerprint, through its signing
 subkey. A GnuPG warning about an uncertified owner is expected until you establish
 trust yourself; a bad signature or a different fingerprint is a failure.
-Download every file listed in SHA256SUMS to run the complete checksum check.
-Individual artifacts also have detached signatures (`.asc`, or binary `.sig`
-for Arch packages). `Tools/release-signing.py verify /path/to/release` verifies
-the entire downloaded set against the repository's pinned public key and rejects
-missing, altered or unlisted files.
+
+Verify a **downloaded release** (from the `vX.Y.Z` GitHub release, which carries
+every payload, its detached signature, `SHA256SUMS`, `SHA256SUMS.asc` and
+`release-metadata.json` — nothing else) from inside the download directory:
+
+```sh
+# the pinned key, from this repository's signing/ directory:
+gpg --show-keys --with-fingerprint xrg-ng-release.asc
+gpg --import xrg-ng-release.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS
+# SHA256SUMS also lists local-only files (per-payload .sha256 sidecars,
+# fingerprint.txt, xrg-ng-release.asc) that are NOT part of the public
+# download, so check only the downloaded subset:
+sha256sum -c <(grep -vE '  (fingerprint\.txt|xrg-ng-release\.asc|\.sha256)$' SHA256SUMS)
+for artifact in *.tar.gz *.deb *.rpm *.AppImage; do
+    [ -e "$artifact" ] || continue
+    gpg --verify "$artifact.asc" "$artifact"
+done
+for package in *.pkg.tar.zst; do
+    [ -e "$package" ] || continue
+    gpg --verify "$package.sig" "$package"
+done
+```
+
+The macOS release on the same `vX.Y.Z` download carries only the DMG, the ZIP,
+`SHA256SUMS.txt` (covering the DMG and ZIP) and `release-build.json`; check it
+with `sha256sum -c SHA256SUMS.txt` after `gpg --import` above. Individual Linux
+artifacts also have detached signatures (`.asc`, or binary `.sig` for Arch
+packages), verified by the loops above. `Tools/release-signing.py verify
+/path/to/release` verifies the **complete locally collected release directory**
+against the repository's pinned public key — including the local-only files it
+contains — and is not applicable to the downloaded subset.
 
 RPM packages additionally carry native OpenPGP header signatures. After checking
 the public key fingerprint, import it with `sudo rpm --import xrg-ng-release.asc`

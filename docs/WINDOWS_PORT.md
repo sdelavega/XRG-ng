@@ -37,8 +37,10 @@ Windows. POSIX path handling keeps its `cfg(unix)` implementations with the
 | Temperature and fans | hwmon sysfs | WMI (`MSAcpi_ThermalZoneTemperature`, vendor namespaces) |
 | Filesystem usage | `/proc/mounts` + `statvfs` | `GetDiskFreeSpaceExW` / `GetLogicalDrives` |
 | AI usage | provider log files (`~/.*`) | identical parsing; `%USERPROFILE%`/`%LOCALAPPDATA%` paths |
-| Weather, TPU, engine | platform-neutral | unchanged |
-| Desktop notification | `notify-send`/stubs | Windows Toast (`WinRT`) — the `notification` stub fills in |
+| Weather | platform-neutral (HTTP) | unchanged |
+| TPU / NPU | Linux hardware: sysfs device/vendor discovery, `power/runtime_status` and readable DRM clients (`tpu`, `tpu::clients`) | vendor equivalents (WMI/D3DKMT); the sysfs and DRM seams do not exist on Windows |
+| Engine | platform-neutral | unchanged |
+| Desktop alerts | freedesktop D-Bus `Notify` directly in Rust (`ai::desktop_alert`) | Windows Toast (`WinRT`) — the `ai::desktop_alert` stub fills in; `notification` is only the generic publish/subscribe primitive, not the alerts seam |
 | Window/egg UI | egui (X11/Wayland) | egui with `winit`/Win32 backend, feature `egui-ui` |
 
 AI log parsing is pure string handling and already runs on Windows in the
