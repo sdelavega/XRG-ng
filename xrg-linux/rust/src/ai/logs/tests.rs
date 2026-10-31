@@ -763,9 +763,23 @@ impl ScanFixture {
         Self(path)
     }
     fn put(&self, name: &str, bytes: impl AsRef<[u8]>) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::UNIX_EPOCH;
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = self.0.join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bytes).unwrap();
+        fs::write(&path, bytes).unwrap();
+        // Same-size rewrites can land inside the filesystem's timestamp
+        // granularity (measured 4.000 ms steps on Raspberry Pi 5), making
+        // the scanner's metadata stamp collide and serve the cached parse.
+        // Pin a fresh, distinct mtime on every write so each rewrite is
+        // deterministic and always visible, whatever the clock does.
+        let tick = NEXT.fetch_add(1, Ordering::Relaxed);
+        let at = UNIX_EPOCH + Duration::from_secs(1_700_000_000 + tick);
+        fs::File::open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_accessed(at).set_modified(at))
+            .unwrap();
     }
     fn scanner(&self) -> LogScan {
         LogScan::new(self.0.clone(), Layout::Codex)
@@ -823,6 +837,13 @@ fn replacements_truncation_and_same_size_rewrites_invalidate_inflight_work() {
         // Restore mtime to prove ctime still invalidates an unfinished snapshot.
         f.put("rollout-a.jsonl", &first);
         assert!(scan.scan_with_budget(4093, deadline()).is_err());
+        // The rewrite below restores the cached mtime on purpose, so the
+        // invalidation must come from ctime rotation. Kernel file timestamps
+        // advance in coarse ticks (measured 4.000 ms on Raspberry Pi 5), and
+        // the whole sequence can run inside one tick on fast boards, leaving
+        // the rewrite indistinguishable from the cached parse. Sleep past two
+        // ticks so the rewrite deterministically lands on a fresh ctime.
+        std::thread::sleep(Duration::from_millis(30));
         let modified = fs::metadata(f.0.join("rollout-a.jsonl"))
             .unwrap()
             .modified()

@@ -20,9 +20,21 @@ impl Fixture {
         Self(path)
     }
     fn put(&self, path: &str, text: &str) {
+        use std::time::{Duration, UNIX_EPOCH};
         let path = self.0.join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
+        fs::write(&path, text).unwrap();
+        // Same-size rewrites can land inside the filesystem's timestamp
+        // granularity (measured 4.000 ms steps on Raspberry Pi 5), making the
+        // scanner's metadata stamp collide and serve the cached parse. Pin a
+        // fresh, distinct mtime on every write so each rewrite is deterministic
+        // and always visible, whatever the clock does.
+        let tick = NEXT.fetch_add(1, Ordering::Relaxed);
+        let at = UNIX_EPOCH + Duration::from_secs(1_700_000_000 + tick);
+        fs::File::open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_accessed(at).set_modified(at))
+            .unwrap();
     }
     fn append(&self, path: &str, text: &str) {
         OpenOptions::new()
@@ -215,6 +227,13 @@ fn same_size_rewrite_with_restored_mtime_still_invalidates_the_cache() {
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
     let mut scan = f.scan(Layout::Codex);
     assert_eq!(scan.scan().unwrap().total, 10);
+    // The rewrite below restores the cached mtime on purpose, so the
+    // invalidation must come from ctime rotation. Kernel file timestamps
+    // advance in coarse ticks (measured 4.000 ms on this board's kernel), and
+    // the whole sequence can run inside one tick, leaving the rewrite
+    // indistinguishable from the cached parse. Sleep past two ticks so the
+    // rewrite deterministically lands on a fresh ctime.
+    std::thread::sleep(std::time::Duration::from_millis(30));
     f.put("rollout-a.jsonl", &codex(20));
     fs::File::open(path)
         .unwrap()

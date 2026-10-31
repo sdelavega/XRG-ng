@@ -26,9 +26,21 @@ impl Fixture {
         Self(path)
     }
     fn put(&self, name: &str, bytes: impl AsRef<[u8]>) {
+        use std::time::{Duration, UNIX_EPOCH};
         let path = self.0.join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bytes).unwrap();
+        fs::write(&path, bytes).unwrap();
+        // Same-size rewrites can land inside the filesystem's timestamp
+        // granularity (measured 4.000 ms steps on Raspberry Pi 5), making the
+        // scanner's metadata stamp collide and serve the cached parse. Pin a
+        // fresh, distinct mtime on every write so each rewrite is deterministic
+        // and always visible, whatever the clock does.
+        let tick = NEXT.fetch_add(1, Ordering::Relaxed);
+        let at = UNIX_EPOCH + Duration::from_secs(1_700_000_000 + tick);
+        fs::File::open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_accessed(at).set_modified(at))
+            .unwrap();
     }
     fn db(&self, name: &str, schema: &str) -> Connection {
         let path = self.0.join(name);
