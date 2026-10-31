@@ -24,8 +24,8 @@ ran natively on ARM and under Rosetta (Rosetta does not replace physical Intel
 hardware), the full Linux gate ran in an ARM64 container and on physical
 Raspberry Pi 5 and Orange Pi 5 Plus boards (both complete debug gates pass
 for this release), Windows compile and unit-test checks ran manually on a
-Windows 11 machine, x86-64 Linux and Windows CI are pending on the release
-commit, and no physical sleep/wake claims are made. A known limitation of the
+Windows 11 machine, x86-64 and ARM64 Linux and Windows CI pass, and no
+physical sleep/wake claims are made. A known limitation of the
 pre-existing AI log scanner is documented: a same-size rewrite within the
 filesystem's timestamp granularity can go unnoticed on coarse-timestamp
 filesystems (observed on Raspberry Pi 5); a fix is planned after 0.2.1.
