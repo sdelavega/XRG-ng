@@ -7,10 +7,10 @@ use crate::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    os::unix::fs::MetadataExt,
     path::Path,
 };
+#[cfg(target_os = "linux")]
+use std::{fs, os::unix::fs::MetadataExt};
 #[derive(Clone, Debug)]
 pub struct CpuRecords {
     pub total: Cpu,
@@ -175,7 +175,10 @@ pub fn network(source: &LinuxSources) -> Result<Devices, String> {
             .ok()
             .flatten()
             .filter(|n| *n > 0);
+        #[cfg(target_os = "linux")]
         let inode = fs::metadata(&directory).ok().map(|m| m.ino());
+        #[cfg(not(target_os = "linux"))]
+        let inode: Option<u64> = None;
         identity_incomplete |= index.is_none() || inode.is_none();
         devices.insert(
             name,
@@ -230,7 +233,15 @@ pub fn disks(source: &LinuxSources) -> Result<Devices, String> {
     let mut identity_incomplete = false;
     for (name, path) in known {
         if let Some((values, number)) = records.get(&name) {
+            #[cfg(target_os = "linux")]
             let inode = fs::metadata(path).ok().map(|m| m.ino());
+            #[cfg(not(target_os = "linux"))]
+            let inode: Option<u64> = {
+                // No inode incarnation metadata off Linux; the existing
+                // "identity incomplete" flag keeps the counters untrusted.
+                let _ = path;
+                None
+            };
             identity_incomplete |= inode.is_none();
             devices.insert(
                 name,

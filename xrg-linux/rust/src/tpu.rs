@@ -10,10 +10,11 @@ use crate::{
 };
 pub use npu::parse_rockchip_load;
 use serde::Deserialize;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -267,6 +268,7 @@ impl Collector {
         })
     }
 }
+#[cfg(target_os = "linux")]
 fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     (
         m.dev(),
@@ -277,6 +279,18 @@ fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
         m.ctime(),
         m.ctime_nsec(),
     )
+}
+/// std::fs::Metadata has no device/inode/change times off Linux; size and
+/// modification time still detect a replaced producer file.
+#[cfg(not(target_os = "linux"))]
+fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
+    let (seconds, nanos) = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+        .unwrap_or((0, 0));
+    (0, 0, m.len(), seconds, nanos, 0, 0)
 }
 fn attr(path: &Path, name: &str) -> Result<Option<String>, String> {
     hardware::text(&path.join(name))

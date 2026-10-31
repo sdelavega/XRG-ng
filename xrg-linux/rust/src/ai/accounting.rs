@@ -6,9 +6,13 @@ use crate::shared::{TokenLedger, Usage};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs::{File, OpenOptions},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    fs::File,
     path::{Path, PathBuf},
+};
+#[cfg(target_os = "linux")]
+use std::{
+    fs::OpenOptions,
+    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,23 +263,32 @@ pub fn state_path() -> Option<PathBuf> {
     Some(root.join("xrg-ng/ai-usage.json"))
 }
 pub fn local_day() -> Result<String, String> {
-    let time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
-    let time = libc::time_t::try_from(time).map_err(|_| "Clock out of range")?;
-    let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // localtime_r owns no shared static result; TZ is read, never changed.
-    if unsafe { libc::localtime_r(&time, tm.as_mut_ptr()) }.is_null() {
-        return Err("Local calendar unavailable".into());
+    #[cfg(target_os = "linux")]
+    {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        let time = libc::time_t::try_from(time).map_err(|_| "Clock out of range")?;
+        let mut tm = std::mem::MaybeUninit::<libc::tm>::uninit();
+        // localtime_r owns no shared static result; TZ is read, never changed.
+        if unsafe { libc::localtime_r(&time, tm.as_mut_ptr()) }.is_null() {
+            return Err("Local calendar unavailable".into());
+        }
+        let tm = unsafe { tm.assume_init() };
+        Ok(format!(
+            "{:04}-{:02}-{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday
+        ))
     }
-    let tm = unsafe { tm.assume_init() };
-    Ok(format!(
-        "{:04}-{:02}-{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday
-    ))
+    #[cfg(not(target_os = "linux"))]
+    {
+        // No libc localtime_r off Linux; report the existing "local calendar
+        // unavailable" value rather than guessing a time zone.
+        Err("Local calendar unavailable".into())
+    }
 }
 struct Store {
     path: Option<PathBuf>,
@@ -284,6 +297,9 @@ struct Store {
     _lock: Option<File>,
 }
 impl Store {
+    // Off Linux the lock stub returns before the shared state-parsing tail,
+    // which reads as unreachable there; on Linux the whole body is reachable.
+    #[allow(unreachable_code)]
     fn open(path: Option<PathBuf>, day: &str) -> (Self, Daily) {
         let mut store = Self {
             path,
@@ -295,23 +311,36 @@ impl Store {
             let path = store.path.as_ref().ok_or("No state directory available")?;
             let parent = path.parent().ok_or("Invalid state path")?;
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            let lock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(parent.join("ai-usage.lock"))
-                .map_err(|e| e.to_string())?;
-            if !lock.metadata().map_err(|e| e.to_string())?.is_file()
-                || unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
+            #[cfg(target_os = "linux")]
             {
+                let lock = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(parent.join("ai-usage.lock"))
+                    .map_err(|e| e.to_string())?;
+                if !lock.metadata().map_err(|e| e.to_string())?.is_file()
+                    || unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
+                {
+                    return Err(
+                        "Another instance owns AI accounting, or the state lock is invalid".into(),
+                    );
+                }
+                store._lock = Some(lock);
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // No O_NOFOLLOW/O_NONBLOCK/flock discipline exists off Linux;
+                // report the store's existing "blocked by another instance"
+                // value instead of writing unprotected shared state.
+                let _ = parent;
                 return Err(
                     "Another instance owns AI accounting, or the state lock is invalid".into(),
                 );
             }
-            store._lock = Some(lock);
             store.expected = read_state(path)?;
             match &store.expected {
                 Some(bytes) => {

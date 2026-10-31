@@ -12,6 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The Linux implementation of the GPU collector (sysfs/DRM discovery, the
+/// Intel perf and Xe ioctl native readers, and the NVIDIA query).
+pub const IMPLEMENTATION: &str = "linux";
+
 #[derive(Clone, Debug)]
 pub struct EngineActivity {
     pub percent: f64,

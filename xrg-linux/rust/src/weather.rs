@@ -405,6 +405,7 @@ impl Collector {
         update
     }
 }
+#[cfg(target_os = "linux")]
 fn utc(timestamp: i64) -> String {
     let epoch = timestamp as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -418,6 +419,32 @@ fn utc(timestamp: i64) -> String {
         tm.tm_mday,
         tm.tm_hour,
         tm.tm_min
+    )
+}
+/// Off Linux there is no libc gmtime_r. The civil-from-days algorithm
+/// (Howard Hinnant, public domain) formats the same UTC date and time with
+/// plain arithmetic, including instants before the epoch.
+#[cfg(not(target_os = "linux"))]
+fn utc(timestamp: i64) -> String {
+    let days = timestamp.div_euclid(86_400);
+    let seconds = timestamp.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let (month, year) = if mp < 10 {
+        (mp + 3, year)
+    } else {
+        (mp - 9, year + 1)
+    };
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}",
+        seconds / 3_600,
+        (seconds % 3_600) / 60
     )
 }
 #[derive(Default)]
@@ -507,6 +534,15 @@ impl Drop for Worker {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn utc_formats_known_instants_identically_on_every_platform() {
+        // The Linux arm uses gmtime_r; the off-Linux arm is pure arithmetic.
+        // Both must format the same UTC calendar, including before the epoch.
+        assert_eq!(utc(0), "1970-01-01 00:00");
+        assert_eq!(utc(1_700_000_000), "2023-11-14 22:13");
+        assert_eq!(utc(1_735_689_600), "2025-01-01 00:00");
+        assert_eq!(utc(-1), "1969-12-31 23:59");
+    }
     struct Fixture {
         calls: Arc<AtomicUsize>,
     }

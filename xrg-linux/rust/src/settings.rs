@@ -10,10 +10,11 @@ use crate::{
     system_file,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -980,10 +981,21 @@ fn atomic_write_bounded(
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        #[cfg(target_os = "linux")]
         let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        #[cfg(not(target_os = "linux"))]
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
             .open(&temporary)
         {
             Ok(file) => file,

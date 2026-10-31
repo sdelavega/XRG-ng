@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Fade the completed dashboard once, rather than each overlapping graph shape.
+/// The Linux implementation of the fade compositor.
+pub const IMPLEMENTATION: &str = "linux";
 use eframe::{
     egui,
     glow::{self, HasContext},

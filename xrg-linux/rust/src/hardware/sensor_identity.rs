@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use std::{fs, os::unix::fs::MetadataExt, path::Path};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+use std::{fs, path::Path};
 
 /// The saved source excludes hwmon class numbering and transient inode numbers
 /// when sysfs exposes a physical device path. The history identity includes the
@@ -53,11 +55,20 @@ pub(super) fn identity(
     if !input.is_file() {
         return Err("Expected a regular sensor attribute".into());
     }
+    #[cfg(target_os = "linux")]
     let id = format!(
         "{source}:{}:{}:{}",
         directory.dev(),
         directory.ino(),
         input.ino()
     );
+    #[cfg(not(target_os = "linux"))]
+    let id = {
+        // No device/inode incarnation metadata exists off Linux, so the
+        // history identity degrades to the saved source identity; sysfs
+        // never exists there to be scanned either.
+        let _ = directory;
+        format!("{source}:unavailable")
+    };
     Ok((source, id))
 }

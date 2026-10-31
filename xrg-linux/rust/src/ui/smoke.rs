@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Real native event-loop, GPU paint, worker and persistence gate (20 seconds).
 use super::{App, file_picker_smoke, preferences};
+use crate::settings::{GraphStyle, Layout, Module, Store};
 use eframe::egui;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     fs,
-    os::unix::fs::DirBuilderExt,
     path::PathBuf,
     sync::{
         Arc,
@@ -14,7 +16,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use xrg_ng_linux::settings::{GraphStyle, Layout, Module, Store};
 pub(super) struct Harness {
     directory: PathBuf,
     started: Instant,
@@ -39,10 +40,19 @@ impl Harness {
                 .map_err(|e| e.to_string())?
                 .as_nanos()
         ));
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&directory)
-            .map_err(|e| e.to_string())?;
+        #[cfg(target_os = "linux")]
+        {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            fs::DirBuilder::new()
+                .create(&directory)
+                .map_err(|e| e.to_string())?;
+        }
         let (sender, receiver) = mpsc::channel();
         Ok(Self {
             directory,
@@ -209,13 +219,13 @@ impl Harness {
                             Ok("weather") => {
                                 editor.tab = 4;
                                 editor.draft.weather.temperature_units =
-                                    Some(xrg_ng_linux::weather::Units::Us);
+                                    Some(crate::weather::Units::Us);
                                 editor.draft.weather.distance_units =
-                                    Some(xrg_ng_linux::weather::Units::Metric);
+                                    Some(crate::weather::Units::Metric);
                                 editor.draft.weather.pressure_units =
-                                    Some(xrg_ng_linux::weather::Units::Metric);
+                                    Some(crate::weather::Units::Metric);
                                 editor.draft.weather.wind_units =
-                                    Some(xrg_ng_linux::weather::WindUnits::Knots);
+                                    Some(crate::weather::WindUnits::Knots);
                             }
                             Ok("graphs") => editor.tab = 1,
                             Ok("sources") => editor.tab = 2,
@@ -294,7 +304,7 @@ impl Harness {
                         self.waiting = true;
                         let sender = self.sender.clone();
                         std::thread::spawn(move || {
-                            let result = xrg_ng_linux::command::BoundedCommand::default()
+                            let result = crate::command::BoundedCommand::default()
                                 .output(
                                     std::path::Path::new("/usr/bin/xclip"),
                                     &["-selection", "clipboard", "-out"],
@@ -363,10 +373,9 @@ impl Harness {
                     next.layout = Layout::Horizontal;
                     next.window_opacity = 0.7;
                     next.activity_bars.visible = true;
-                    let mut theme =
-                        xrg_ng_linux::settings::ThemeDocument::new(&next.theme.palette()?);
+                    let mut theme = crate::settings::ThemeDocument::new(&next.theme.palette()?);
                     theme.colors[0][3] = 0.;
-                    next.theme = xrg_ng_linux::settings::ThemeChoice::Custom {
+                    next.theme = crate::settings::ThemeChoice::Custom {
                         theme: Box::new(theme),
                     };
                     for (i, m) in next.modules.iter_mut().enumerate() {
@@ -461,10 +470,10 @@ impl Harness {
                     }
                     // Export and reimport use the same bounded portable formats as Preferences.
                     let palette = app.settings.theme.palette()?;
-                    let theme = xrg_ng_linux::settings::ThemeDocument::new(&palette);
+                    let theme = crate::settings::ThemeDocument::new(&palette);
                     let path = self.directory.join("roundtrip.json");
                     theme.save(&path)?;
-                    if xrg_ng_linux::settings::ThemeDocument::load(&path)? != theme {
+                    if crate::settings::ThemeDocument::load(&path)? != theme {
                         return Err("Theme round trip changed palette".into());
                     }
                     self.capture(ctx, egui::ViewportId::ROOT, "XRG_SMOKE_LAYOUT_IMAGE");

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Dedicated native chooser flow. It runs under the outer unchanged 20s gate.
 use super::{App, file_picker::Action};
+use crate::settings::{Module, Settings, ThemeChoice, ThemeDocument};
 use eframe::egui;
 use std::{
     ffi::OsStr,
@@ -9,7 +10,6 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-use xrg_ng_linux::settings::{Module, Settings, ThemeChoice, ThemeDocument};
 const LEGACY: &[u8] = b"[Modules]\nshow_cpu=false\n";
 const XTF: &[u8] = include_bytes!("../../tests/fixtures/ModernSRGB.xtf");
 pub(super) enum Step {
@@ -98,7 +98,7 @@ impl Harness {
                 if ThemeDocument::load(&saved)? != expected {
                     return Err("Chooser did not export the selected palette".into());
                 }
-                let alternative = xrg_ng_linux::shared::themes()
+                let alternative = crate::shared::themes()
                     .into_iter()
                     .find(|t| t.name != expected.name)
                     .ok_or("Missing second theme")?;

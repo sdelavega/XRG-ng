@@ -2,7 +2,12 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Native egui shell. Workers publish copied data; painting never collects it.
 mod collapse;
-mod compositor;
+#[cfg(target_os = "linux")]
+#[path = "ui/compositor.rs"]
+pub mod compositor;
+#[cfg(not(target_os = "linux"))]
+#[path = "ui/compositor_stub.rs"]
+pub mod compositor;
 mod dashboard;
 mod diagnostics;
 mod file_picker;
@@ -10,6 +15,11 @@ mod file_picker_smoke;
 mod inspectors;
 mod preferences;
 mod smoke;
+use crate::{
+    engine::{Panel, Snapshot, Worker},
+    settings::{self, Layout, Module, Settings, Store, Writer},
+    shared::Theme,
+};
 use eframe::egui::{self, Color32, ViewportCommand, ViewportId, vec2};
 use std::{
     collections::BTreeSet,
@@ -17,11 +27,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-};
-use xrg_ng_linux::{
-    engine::{Panel, Snapshot, Worker},
-    settings::{self, Layout, Module, Settings, Store, Writer},
-    shared::Theme,
 };
 
 struct App {
@@ -262,7 +267,7 @@ impl App {
                     ui.close();
                 }
                 ui.menu_button("Theme", |ui| {
-                    for theme in xrg_ng_linux::shared::themes() {
+                    for theme in crate::shared::themes() {
                         if ui.button(&theme.name).clicked() {
                             let mut settings = self.settings.clone();
                             settings.theme = settings::ThemeChoice::Builtin { name: theme.name };
@@ -699,16 +704,25 @@ pub fn run(smoke_mode: bool) -> bool {
 }
 
 fn hostname() -> String {
-    let mut bytes = [0u8; 256];
-    // POSIX gethostname writes at most the supplied buffer, with no allocation.
-    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } == 0 {
-        let length = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
-        return String::from_utf8_lossy(&bytes[..length])
-            .chars()
-            .filter(|c| !c.is_control())
-            .collect();
+    #[cfg(target_os = "linux")]
+    {
+        let mut bytes = [0u8; 256];
+        // POSIX gethostname writes at most the supplied buffer, with no allocation.
+        if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } == 0 {
+            let length = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+            return String::from_utf8_lossy(&bytes[..length])
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect();
+        }
+        "XRG-ng".into()
     }
-    "XRG-ng".into()
+    #[cfg(not(target_os = "linux"))]
+    {
+        // No POSIX gethostname off Linux; use the same fallback the Linux
+        // shell already uses when gethostname fails.
+        "XRG-ng".into()
+    }
 }
 
 fn resize_edges(ui: &mut egui::Ui) {

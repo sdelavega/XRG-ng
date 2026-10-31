@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Publication wakeups, independent of any UI toolkit. Slots remain the source of truth.
+/// The Linux implementation of the publication wakeup registry.
+pub const IMPLEMENTATION: &str = "linux";
 use std::sync::{Arc, Mutex};
 type Callback = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone, Default)]

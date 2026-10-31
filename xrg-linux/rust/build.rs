@@ -20,17 +20,24 @@ fn main() {
             directory.is_absolute(),
             "XRG_SHARED_LIB_DIR must be absolute"
         );
-        let library = directory.join(if cfg!(target_os = "macos") {
-            "libXRGSharedCore.dylib"
-        } else {
-            "libXRGSharedCore.so"
-        });
+        let library = directory.join(library_file());
         assert!(
             library.is_file(),
             "Missing Swift library: {}",
             library.display()
         );
         println!("cargo:rerun-if-changed={}", library.display());
+        if cfg!(target_os = "windows") {
+            // The MSVC linker resolves `dylib=XRGSharedCore` through this
+            // import library, which Swift emits next to the DLL.
+            let import = directory.join("XRGSharedCore.lib");
+            assert!(
+                import.is_file(),
+                "Missing Swift import library: {}",
+                import.display()
+            );
+            println!("cargo:rerun-if-changed={}", import.display());
+        }
         directory
             .to_str()
             .expect("Swift library path must be UTF-8")
@@ -65,8 +72,11 @@ fn main() {
     };
     println!("cargo:rustc-link-search=native={bin}");
     println!("cargo:rustc-link-lib=dylib=XRGSharedCore");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{bin}");
-    // This rpath is for local builds. Installed bundles use their own runtime layout.
+    if !cfg!(target_os = "windows") {
+        // This rpath is for local builds. Installed bundles use their own
+        // runtime layout, and MSVC linking has no rpath switch.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{bin}");
+    }
     println!("cargo:rerun-if-changed={}", root.join("Shared").display());
     println!(
         "cargo:rerun-if-changed={}",
@@ -74,4 +84,17 @@ fn main() {
     );
     println!("cargo:rerun-if-env-changed=SWIFT");
     println!("cargo:rerun-if-env-changed=XRG_SHARED_LIB_DIR");
+}
+
+/// The Swift dynamic product keeps each platform's native library naming:
+/// libXRGSharedCore.dylib on macOS, XRGSharedCore.dll (with the
+/// XRGSharedCore.lib import library) on Windows, libXRGSharedCore.so on Linux.
+fn library_file() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "libXRGSharedCore.dylib"
+    } else if cfg!(target_os = "windows") {
+        "XRGSharedCore.dll"
+    } else {
+        "libXRGSharedCore.so"
+    }
 }

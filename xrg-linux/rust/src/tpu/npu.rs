@@ -4,10 +4,11 @@
 //! clock, a loaded module, CPU model, memory allocation or firmware availability.
 use super::{Device, Family, note};
 use crate::hardware::{self, Readings};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::fs::MetadataExt,
     path::Path,
     time::{Duration, Instant},
 };
@@ -422,9 +423,16 @@ impl Activity {
                 continue;
             }
             let root = Path::new(&device.id);
+            #[cfg(target_os = "linux")]
             let identity = fs::metadata(root).and_then(|physical| {
                 fs::symlink_metadata(root.join("driver"))
                     .map(|driver| (device.driver.clone(), physical.ino(), driver.ino()))
+            });
+            #[cfg(not(target_os = "linux"))]
+            let identity = fs::metadata(root).and_then(|_| {
+                // No inode incarnation metadata off Linux; the bound driver
+                // name keys the activity identity instead.
+                fs::symlink_metadata(root.join("driver")).map(|_| (device.driver.clone(), 0, 0))
             });
             let identity = match identity {
                 Ok(value) => value,

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
+//! Xe ioctl native reader. The Linux-only `gpu` module gate is this native
+//! reader's compile seam: off Linux the whole collector subtree is absent,
+//! so no stub can be mistakenly selected; `gpu::IMPLEMENTATION` reports it.
 use super::{Counter, Counters, Open, Reading, discovery::Spec};
 use std::collections::BTreeSet;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

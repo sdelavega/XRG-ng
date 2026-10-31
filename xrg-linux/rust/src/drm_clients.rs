@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Bounded read-only DRM fdinfo scan shared by GPU and accelerator collectors.
+/// The Linux implementation of the DRM client scan.
+pub const IMPLEMENTATION: &str = "linux";
 use std::{
     collections::BTreeMap,
     fs, io,

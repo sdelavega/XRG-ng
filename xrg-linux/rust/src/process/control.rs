@@ -2,6 +2,10 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Explicit process actions. A pidfd pins the validated target through review;
 //! signal delivery never falls back to a numeric PID or a process group.
+#[cfg(target_os = "linux")]
+pub const IMPLEMENTATION: &str = "linux";
+#[cfg(not(target_os = "linux"))]
+pub const IMPLEMENTATION: &str = "stub";
 use super::Process;
 #[cfg(target_os = "linux")]
 use std::{
@@ -95,7 +99,10 @@ pub fn inspect(pid: u32) -> Result<Process, String> {
     if !super::live_namespace(std::path::Path::new("/proc")) {
         return Err("Live /proc PID namespace is unavailable".into());
     }
+    #[cfg(target_os = "linux")]
     let page_size = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap_or(0);
+    #[cfg(not(target_os = "linux"))]
+    let page_size = 0;
     super::read_process(std::path::Path::new("/proc"), pid, page_size)
         .map_err(|e| format!("Process is no longer readable: {e}"))
 }

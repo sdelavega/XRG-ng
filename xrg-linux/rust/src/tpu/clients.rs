@@ -6,10 +6,11 @@ use crate::{
     drm_clients::{self, Counter},
     hardware::{self, Readings},
 };
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
@@ -43,7 +44,17 @@ fn owner(device: &Device) -> Result<Owner, String> {
     {
         return Err("AMD NPU driver changed during client scan".into());
     }
-    Ok((physical.dev(), physical.ino(), link.ino()))
+    #[cfg(target_os = "linux")]
+    {
+        Ok((physical.dev(), physical.ino(), link.ino()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // No device/inode identity off Linux; the driver binding checks above
+        // still pin the device, and client accounting is never fabricated.
+        let _ = physical;
+        Ok((0, 0, 0))
+    }
 }
 #[derive(Default)]
 pub(super) struct Collector {

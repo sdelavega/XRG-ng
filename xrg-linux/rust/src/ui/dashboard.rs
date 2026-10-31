@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use eframe::egui::{self, Color32, FontId, Painter, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use xrg_ng_linux::{
+use crate::{
     dashboard::Row,
     engine::Panel,
     graph::{self, Plot},
@@ -9,6 +8,7 @@ use xrg_ng_linux::{
     shared::Theme,
     temperature::Units,
 };
+use eframe::egui::{self, Color32, FontId, Painter, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 pub(super) fn color(v: [f64; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(
         (v[0] * 255.).round() as u8,

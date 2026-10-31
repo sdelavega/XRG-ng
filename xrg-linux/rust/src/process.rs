@@ -167,6 +167,7 @@ pub struct Collector {
     budget: Duration,
 }
 impl Collector {
+    #[cfg(target_os = "linux")]
     pub fn new(root: PathBuf) -> Self {
         let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
         let pages = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -175,6 +176,12 @@ impl Collector {
             u64::try_from(ticks).unwrap_or(0),
             u64::try_from(pages).unwrap_or(0),
         )
+    }
+    #[cfg(not(target_os = "linux"))]
+    pub fn new(root: PathBuf) -> Self {
+        // No sysconf clock/page size off Linux; sample_at then reports the
+        // collector's existing "configuration unavailable" value.
+        Self::with_parameters(root, 0, 0)
     }
     pub fn with_parameters(root: PathBuf, ticks_per_second: u64, page_size: u64) -> Self {
         Self {
@@ -293,9 +300,12 @@ impl Collector {
                 }
                 Err(error) => {
                     self.previous.remove(&pid);
-                    if matches!(error.raw_os_error(), Some(libc::ESRCH))
-                        || error.kind() == io::ErrorKind::NotFound
-                    {
+                    #[cfg(target_os = "linux")]
+                    let vanished = matches!(error.raw_os_error(), Some(libc::ESRCH))
+                        || error.kind() == io::ErrorKind::NotFound;
+                    #[cfg(not(target_os = "linux"))]
+                    let vanished = error.kind() == io::ErrorKind::NotFound;
+                    if vanished {
                         report.vanished += 1;
                     } else {
                         report.unreadable += 1;
@@ -382,6 +392,7 @@ pub fn parse_stat(bytes: &[u8], expected_pid: u32, page_size: u64) -> Result<Pro
         identity: None,
     })
 }
+#[cfg(target_os = "linux")]
 fn read_process(root: &Path, pid: u32, page_size: u64) -> io::Result<Process> {
     let path = root.join(pid.to_string());
     use std::os::unix::fs::MetadataExt;
@@ -425,6 +436,16 @@ fn read_process(root: &Path, pid: u32, page_size: u64) -> io::Result<Process> {
         });
     }
     Ok(after)
+}
+#[cfg(not(target_os = "linux"))]
+fn read_process(root: &Path, pid: u32, page_size: u64) -> io::Result<Process> {
+    // procfs process directories only exist on Linux; there is nothing to read,
+    // and a caller never receives an invented process row.
+    let _ = (root, pid, page_size);
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Process details require Linux procfs",
+    ))
 }
 
 fn live_namespace(root: &Path) -> bool {

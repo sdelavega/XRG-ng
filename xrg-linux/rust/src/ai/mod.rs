@@ -4,7 +4,11 @@
 //! from delaying system collection or the UI. Tests inject roots and API responses.
 pub mod accounting;
 pub mod database;
-mod desktop_alert;
+#[cfg(target_os = "linux")]
+pub mod desktop_alert;
+#[cfg(not(target_os = "linux"))]
+#[path = "desktop_alert_stub.rs"]
+pub mod desktop_alert;
 pub mod logs;
 mod models;
 mod preferences;
@@ -923,11 +927,13 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(test, unix))] // Only the bounded-subprocess tests use these.
     use std::{
         io::{Read, Write},
         net::TcpListener,
     };
     #[test]
+    #[cfg(all(test, unix))] // Exercises the Unix bounded subprocess runner.
     fn local_http_reader_handles_chunking_and_rejects_error_status() {
         for (response, expected) in [
             (
@@ -1103,6 +1109,7 @@ mod tests {
         assert!(stop.elapsed() < Duration::from_secs(2));
     }
     #[test]
+    #[cfg(all(test, unix))] // Exercises the Unix bounded subprocess runner.
     fn configured_http_endpoint_reaches_the_requested_loopback_port_and_path() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -1145,5 +1152,5 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod worker_accounting_tests;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Freedesktop notification protocol directly in Rust. No toolkit or libnotify.
+/// The Linux implementation of the desktop alert.
+pub const IMPLEMENTATION: &str = "linux";
 use std::{collections::HashMap, time::Duration};
 pub(super) fn send(percent: f64) -> Result<(), String> {
     send_on(percent, None)

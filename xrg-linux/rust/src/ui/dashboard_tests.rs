@@ -19,7 +19,7 @@ fn frame(
         .unwrap()
         .native_pixels_per_point = Some(scale);
     let settings = Settings::default();
-    let theme = xrg_ng_linux::shared::themes().remove(0);
+    let theme = crate::shared::themes().remove(0);
     let mut responses = Vec::new();
     let mut output = ctx.run_ui(raw, |ui| {
         responses.clear();
@@ -145,7 +145,7 @@ fn focusing_an_offscreen_graph_scrolls_it_into_view() {
     let ctx = egui::Context::default();
     ctx.enable_accesskit();
     let settings = Settings::default();
-    let theme = xrg_ng_linux::shared::themes().remove(0);
+    let theme = crate::shared::themes().remove(0);
     let mut last: Option<egui::Id> = None;
     let mut offset = 0.;
     for step in 0..8 {
@@ -197,7 +197,7 @@ fn focusing_an_offscreen_graph_scrolls_it_into_view() {
 fn keyboard_context_menu_remains_visible_without_pointer_position() {
     let ctx = egui::Context::default();
     let settings = Settings::default();
-    let theme = xrg_ng_linux::shared::themes().remove(0);
+    let theme = crate::shared::themes().remove(0);
     let mut shown = Vec::new();
     for step in 0..3 {
         let mut raw = RawInput {

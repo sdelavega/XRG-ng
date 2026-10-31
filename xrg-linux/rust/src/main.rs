@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-#[cfg(feature = "egui-ui")]
-mod ui;
 use std::{process::ExitCode, time::Instant};
 use xrg_ng_linux::{engine::Sampler, shared};
 
@@ -69,7 +67,7 @@ fn main() -> ExitCode {
     }
     #[cfg(feature = "egui-ui")]
     if args.is_empty() || args == ["--smoke-test"] {
-        return if ui::run(!args.is_empty()) {
+        return if xrg_ng_linux::ui::run(!args.is_empty()) {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE

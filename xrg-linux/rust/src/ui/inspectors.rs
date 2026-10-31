@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 use super::App;
-use eframe::egui::{self, Color32};
-use std::collections::BTreeMap;
-use xrg_ng_linux::{
+use crate::{
     dashboard::bytes,
     process::{
         self,
@@ -12,6 +10,8 @@ use xrg_ng_linux::{
     },
     settings::Module,
 };
+use eframe::egui::{self, Color32};
+use std::collections::BTreeMap;
 #[derive(Default)]
 pub(super) struct Processes {
     details: BTreeMap<(u32, u64), View>,
@@ -287,7 +287,16 @@ impl Processes {
             ui.add(egui::TextEdit::singleline(&mut view.filter).char_limit(128));
             let mut filtered = view.uid.is_some();
             if ui.checkbox(&mut filtered, "Filter UID").changed() {
-                view.uid = filtered.then(|| unsafe { libc::geteuid() });
+                #[cfg(target_os = "linux")]
+                {
+                    view.uid = filtered.then(|| unsafe { libc::geteuid() });
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    // No effective-UID concept is exposed off Linux; leave the
+                    // filter unset rather than inventing an owner.
+                    view.uid = None;
+                }
             }
             if let Some(uid) = &mut view.uid {
                 ui.add(egui::DragValue::new(uid).range(0..=u32::MAX));

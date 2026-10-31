@@ -5,10 +5,11 @@ mod codex;
 mod stream;
 use super::{ModelUsage, models::Totals};
 use crate::shared::{self, Usage};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -37,6 +38,7 @@ struct Stamp {
     changed_nanos: i64,
 }
 impl Stamp {
+    #[cfg(target_os = "linux")]
     fn from(m: &fs::Metadata) -> Self {
         Self {
             device: m.dev(),
@@ -46,6 +48,26 @@ impl Stamp {
             nanos: m.mtime_nsec(),
             changed_seconds: m.ctime(),
             changed_nanos: m.ctime_nsec(),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    fn from(m: &fs::Metadata) -> Self {
+        // std::fs::Metadata has no device/inode/change times off Linux; size
+        // and modification time still detect log rotation, best effort.
+        let (seconds, nanos) = m
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+            .unwrap_or((0, 0));
+        Self {
+            device: 0,
+            inode: 0,
+            size: m.len(),
+            seconds,
+            nanos,
+            changed_seconds: 0,
+            changed_nanos: 0,
         }
     }
 }
@@ -347,9 +369,15 @@ fn discover(
     Ok(())
 }
 pub(super) fn open_regular(path: &Path) -> Result<File, String> {
+    #[cfg(target_os = "linux")]
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "linux"))]
+    let file = OpenOptions::new()
+        .read(true)
         .open(path)
         .map_err(|e| e.to_string())?;
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {

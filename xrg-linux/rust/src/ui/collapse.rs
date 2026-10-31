@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Transient hover/geometry state is separate from the persisted manual latch.
+use crate::settings::{CollapseAnchor, Layout, WindowCollapse};
 use eframe::egui::{Pos2, Vec2, vec2};
-use xrg_ng_linux::settings::{CollapseAnchor, Layout, WindowCollapse};
 pub(super) const STRIP: f32 = 28.;
 const ENTER: f64 = 0.2;
 const LEAVE: f64 = 0.25;

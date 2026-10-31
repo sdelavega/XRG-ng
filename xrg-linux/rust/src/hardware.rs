@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Read-only kernel sysfs collection. Paths are injectable for hardware fixtures.
 //! Values follow the power_supply and hwmon kernel ABIs; no subprocesses are used.
+/// The Linux implementation of sysfs collection.
+pub const IMPLEMENTATION: &str = "linux";
 mod battery;
 mod fans;
 mod sensor_identity;

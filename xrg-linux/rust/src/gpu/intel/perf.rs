@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Counting-only perf ABI; no sampling buffers, helpers or privilege changes.
+//! The Linux-only `gpu` module gate is this native reader's compile seam:
+//! off Linux the whole collector subtree is absent, so no stub can be
+//! mistakenly selected; `gpu::IMPLEMENTATION` reports the selection.
 use super::discovery::{Event, Spec};
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Reading {

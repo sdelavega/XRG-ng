@@ -5,16 +5,16 @@ use super::{
     App,
     file_picker::{Action, Choice, Decision, PathField, Picker},
 };
-use eframe::egui::{self, Color32};
-use std::{path::PathBuf, sync::mpsc};
-use xrg_ng_linux::{
+use crate::{
     metrics::{Inventory, SourceOption},
     settings::{self, GraphStyle, Layout, Settings, ThemeChoice, ThemeDocument},
 };
+use eframe::egui::{self, Color32};
+use std::{path::PathBuf, sync::mpsc};
 
 enum Loaded {
     Theme(Box<ThemeDocument>),
-    Legacy(Box<xrg_ng_linux::legacy::Import>),
+    Legacy(Box<crate::legacy::Import>),
     Saved,
 }
 pub(super) struct Editor {
@@ -24,7 +24,7 @@ pub(super) struct Editor {
     legacy_path: PathField,
     pub(super) picker: Option<Picker>,
     message: Option<String>,
-    import: Option<xrg_ng_linux::legacy::Import>,
+    import: Option<crate::legacy::Import>,
     pending: Option<mpsc::Receiver<Result<Loaded, String>>>,
     replace_theme: bool,
 }
@@ -36,7 +36,7 @@ impl Editor {
             theme_path: PathField::default(),
             picker: None,
             legacy_path: PathField::new(
-                xrg_ng_linux::legacy::path_from(
+                crate::legacy::path_from(
                     std::env::var_os("XDG_CONFIG_HOME").as_deref(),
                     std::env::var_os("HOME").as_deref(),
                 )
@@ -195,7 +195,7 @@ impl Editor {
     fn review_legacy(&mut self, ctx: &egui::Context, path: PathBuf) {
         let base = self.draft.clone();
         self.start(ctx, move || {
-            xrg_ng_linux::legacy::load(&path, &base).map(|i| Loaded::Legacy(Box::new(i)))
+            crate::legacy::load(&path, &base).map(|i| Loaded::Legacy(Box::new(i)))
         });
     }
     fn chosen(&mut self, choice: Choice, ctx: &egui::Context) {
@@ -424,7 +424,7 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
             let label = ui.label("System sampling target");
             ui.add(
                 egui::DragValue::new(&mut s.sampling_interval_ms)
-                    .range(xrg_ng_linux::sampling::MIN_MS..=xrg_ng_linux::sampling::MAX_MS)
+                    .range(crate::sampling::MIN_MS..=crate::sampling::MAX_MS)
                     .speed(50.)
                     .suffix(" ms"),
             )
@@ -434,12 +434,12 @@ fn general(ui: &mut egui::Ui, s: &mut Settings) {
             ui.horizontal(|ui| {
                 ui.selectable_value(
                     &mut s.temperature_units,
-                    xrg_ng_linux::temperature::Units::Celsius,
+                    crate::temperature::Units::Celsius,
                     "°C",
                 );
                 ui.selectable_value(
                     &mut s.temperature_units,
-                    xrg_ng_linux::temperature::Units::Fahrenheit,
+                    crate::temperature::Units::Fahrenheit,
                     "°F",
                 );
             });
@@ -565,20 +565,18 @@ fn graphs(ui: &mut egui::Ui, s: &mut Settings) {
                         let label = ui.label("Battery history");
                         egui::ComboBox::from_id_salt("battery-mode")
                             .selected_text(match s.metrics.battery_mode {
-                                xrg_ng_linux::battery::Mode::Charge => "Charge (%)",
-                                xrg_ng_linux::battery::Mode::Power => {
-                                    "Charging/discharging power (W)"
-                                }
+                                crate::battery::Mode::Charge => "Charge (%)",
+                                crate::battery::Mode::Power => "Charging/discharging power (W)",
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut s.metrics.battery_mode,
-                                    xrg_ng_linux::battery::Mode::Charge,
+                                    crate::battery::Mode::Charge,
                                     "Charge (%)",
                                 );
                                 ui.selectable_value(
                                     &mut s.metrics.battery_mode,
-                                    xrg_ng_linux::battery::Mode::Power,
+                                    crate::battery::Mode::Power,
                                     "Charging/discharging power (W)",
                                 );
                             })
@@ -675,7 +673,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
         let label = ui.label("CPU time window (minutes; 0 uses samples)");
         ui.add(
             egui::DragValue::new(&mut s.metrics.cpu_history_minutes)
-                .range(0..=xrg_ng_linux::shared::timed_projection_settings()[0]),
+                .range(0..=crate::shared::timed_projection_settings()[0]),
         )
         .labelled_by(label.id);
     });
@@ -685,7 +683,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
             let label = ui.label("Retained CPU samples");
             ui.add(
                 egui::DragValue::new(&mut s.metrics.cpu_history_samples)
-                    .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+                    .range(0..=crate::shared::sampling_settings()[3]),
             )
             .labelled_by(label.id);
         });
@@ -726,7 +724,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
                 let label = ui.label(format!("{title} time window (minutes; 0 uses samples)"));
                 ui.add(
                     egui::DragValue::new(&mut minutes)
-                        .range(0..=xrg_ng_linux::shared::timed_projection_settings()[0]),
+                        .range(0..=crate::shared::timed_projection_settings()[0]),
                 )
                 .labelled_by(label.id);
             });
@@ -742,7 +740,7 @@ fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
                 let label = ui.label(format!("Retained {title} samples"));
                 ui.add(
                     egui::DragValue::new(&mut count)
-                        .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+                        .range(0..=crate::shared::sampling_settings()[3]),
                 )
                 .labelled_by(label.id);
             });
@@ -835,7 +833,7 @@ fn ai(ui: &mut egui::Ui, s: &mut Settings) {
         let label = ui.label("AI time window (minutes; 0 uses samples)");
         ui.add(
             egui::DragValue::new(&mut s.ai.history_minutes)
-                .range(0..=xrg_ng_linux::shared::timed_history_settings()[0]),
+                .range(0..=crate::shared::timed_history_settings()[0]),
         )
         .labelled_by(label.id);
     });
@@ -845,14 +843,13 @@ fn ai(ui: &mut egui::Ui, s: &mut Settings) {
             let label = ui.label("Retained AI samples");
             ui.add(
                 egui::DragValue::new(&mut s.ai.history_samples)
-                    .range(0..=xrg_ng_linux::shared::sampling_settings()[3]),
+                    .range(0..=crate::shared::sampling_settings()[3]),
             )
             .labelled_by(label.id);
         });
     });
     let capacity = s.ai.history_capacity();
-    let span =
-        (capacity - 1) as f64 * xrg_ng_linux::shared::ai_sampling_milliseconds() as f64 / 1000.;
+    let span = (capacity - 1) as f64 * crate::shared::ai_sampling_milliseconds() as f64 / 1000.;
     if s.ai.history_minutes == 0 {
         ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Changing retention does not add a collection or delay the next sample."));
     }
@@ -899,7 +896,7 @@ fn ai(ui: &mut egui::Ui, s: &mut Settings) {
     egui::ComboBox::from_label("Claude source")
         .selected_text(format!("{:?}", s.ai.claude_source))
         .show_ui(ui, |ui| {
-            use xrg_ng_linux::ai::ClaudeSource::*;
+            use crate::ai::ClaudeSource::*;
             for (value, label) in [
                 (Auto, "Automatic"),
                 (Logs, "Logs"),
@@ -955,10 +952,10 @@ fn weather(ui: &mut egui::Ui, s: &mut Settings) {
         ui.label("Default unit system");
         ui.selectable_value(
             &mut s.weather.units,
-            xrg_ng_linux::weather::Units::Metric,
+            crate::weather::Units::Metric,
             "Metric",
         );
-        ui.selectable_value(&mut s.weather.units, xrg_ng_linux::weather::Units::Us, "US");
+        ui.selectable_value(&mut s.weather.units, crate::weather::Units::Us, "US");
     });
     for (id, label, value, metric, us) in [
         (
@@ -988,20 +985,20 @@ fn weather(ui: &mut egui::Ui, s: &mut Settings) {
             egui::ComboBox::from_id_salt(id)
                 .selected_text(match value {
                     None => "Default",
-                    Some(xrg_ng_linux::weather::Units::Metric) => metric,
-                    Some(xrg_ng_linux::weather::Units::Us) => us,
+                    Some(crate::weather::Units::Metric) => metric,
+                    Some(crate::weather::Units::Us) => us,
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(value, None, "Default");
-                    ui.selectable_value(value, Some(xrg_ng_linux::weather::Units::Metric), metric);
-                    ui.selectable_value(value, Some(xrg_ng_linux::weather::Units::Us), us);
+                    ui.selectable_value(value, Some(crate::weather::Units::Metric), metric);
+                    ui.selectable_value(value, Some(crate::weather::Units::Us), us);
                 })
                 .response
                 .labelled_by(label.id);
         });
     }
     ui.horizontal(|ui| {
-        use xrg_ng_linux::weather::WindUnits::*;
+        use crate::weather::WindUnits::*;
         let label = ui.label("Wind / gusts");
         egui::ComboBox::from_id_salt("weather-wind")
             .selected_text(match s.weather.wind_units {
@@ -1045,7 +1042,7 @@ fn weather(ui: &mut egui::Ui, s: &mut Settings) {
             .labelled_by(label.id);
     });
     ui.horizontal(|ui| {
-        use xrg_ng_linux::weather::Secondary::*;
+        use crate::weather::Secondary::*;
         let label = ui.label("Secondary curve");
         egui::ComboBox::from_id_salt("weather-secondary")
             .selected_text(format!("{:?}", s.weather.secondary))
@@ -1098,7 +1095,7 @@ fn theme_picker(ui: &mut egui::Ui, choice: &mut ThemeChoice) {
     egui::ComboBox::from_id_salt("theme")
         .selected_text(label)
         .show_ui(ui, |ui| {
-            for theme in xrg_ng_linux::shared::themes() {
+            for theme in crate::shared::themes() {
                 ui.selectable_value(
                     choice,
                     ThemeChoice::Builtin {
