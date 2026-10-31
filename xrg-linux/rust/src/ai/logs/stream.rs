@@ -10,7 +10,7 @@ pub(super) use job::Job;
 use std::{
     io::{self, Read, Seek},
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 pub(super) const CHUNK: usize = 64 * 1024;
 
@@ -153,6 +153,7 @@ pub(super) fn parse<R: Read + Seek>(
         return Err("Log exceeds the 64 MiB per-file limit".into());
     }
     if matches!(layout, Layout::Gemini) && session {
+        let observed = SystemTime::now();
         reader.rewind().map_err(|e| e.to_string())?;
         let mut input = Input::new(reader, budget, deadline);
         let mut parsed = Arc::new(Parsed::default());
@@ -190,6 +191,7 @@ pub(super) fn parse<R: Read + Seek>(
         check(deadline)?;
         return Ok(Entry {
             stamp,
+            observed,
             parsed,
             checkpoint: None,
         });
