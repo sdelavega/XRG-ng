@@ -84,20 +84,25 @@ release assets. Retain the archive/dSYMs locally for diagnostics.
 # Publishing
 
 `Tools/publish-release.sh` verifies and publishes both release directories
-together. `Tools/release-macos.sh` has already updated `docs/appcast.xml` in
-the working tree; that update is committed by publishing, nothing else may be
-pending:
+together, in two resumable phases. `Tools/release-macos.sh` has already
+updated `docs/appcast.xml` in the working tree; that update is committed by
+publishing's local phase, nothing else may be pending:
 
 ```sh
+# 1. dry run: every check, no side effect
 XRG_TAP_DIR=/absolute/path/to/homebrew-tap \
   bash Tools/publish-release.sh X.Y.Z /absolute/mac/release /absolute/linux/release
+# 2. local phase: signed tag, appcast commit, tap cask commit (idempotent)
+XRG_TAP_DIR=/absolute/path/to/homebrew-tap \
+  bash Tools/publish-release.sh X.Y.Z /absolute/mac/release /absolute/linux/release --execute
 ```
 
-The default is a dry run that prints every command it would run. `--execute`
-requires typing the version to confirm and a set `XRG_TAP_DIR`. Every check
-runs before any side effect (tag, release, commit), and no check writes to
-git — `origin`'s `main` is compared with `HEAD` using the read-only
-`git ls-remote`, never a fetch. The script refuses the publish unless:
+The default is a dry run that prints every command both phases would run.
+`--execute` and `--create-draft` each require typing the version to confirm;
+`--execute` additionally requires a set `XRG_TAP_DIR`. Every check runs before
+any side effect, and no check writes to git — `origin`'s refs are compared
+with `HEAD` using the read-only `git ls-remote`, never a fetch. The script
+refuses the publish unless:
 
 - the unified version agrees (`Tools/check-version.py --expect`),
   `latest_version.txt` and `releases/X.Y.Z.md` are in place and the branch
@@ -108,8 +113,11 @@ git — `origin`'s `main` is compared with `HEAD` using the read-only
   and carry the item whose `sparkle:version` is this release's build with
   exactly the enclosure length and `sparkle:edSignature` recorded in the
   macOS release directory's `appcast-item.xml`;
-- `origin`'s `main` is exactly `HEAD`, which is the `sourceCommit`/`revision`
-  recorded in both release directories' metadata;
+- `origin`'s `main` is `HEAD`, or differs by exactly one unpushed local
+  commit — the appcast publish commit `--execute` wrote (main is pushed
+  only in the final manual step); the release directories' metadata must
+  record that same release commit (`sourceCommit`/`revision`: `HEAD`, or
+  the existing release tag's commit when resuming);
 - both release directories hold the complete public asset inventory, every
   asset a regular file (never a symlink) with a safe basename contained in
   its release directory. macOS publishes exactly the DMG, the ZIP,
@@ -126,20 +134,48 @@ git — `origin`'s `main` is compared with `HEAD` using the read-only
   (`SHA256SUMS.txt` covers the DMG and ZIP; Linux `SHA256SUMS` covers every
   payload and `release-metadata.json`);
 - with `--execute`, `XRG_TAP_DIR` is a git work tree with a clean index and
-  worktree, checked before the tag.
+  worktree, checked before any side effect.
 
-It then creates the signed annotated `vX.Y.Z` tag
-(`git tag -s vX.Y.Z -m "XRG-ng X.Y.Z"`), a `gh release` draft carrying the
-public assets listed above plus `releases/X.Y.Z.md`, commits the pending
-`docs/appcast.xml` (only that path, only from `main`), and writes the
-Homebrew cask via `Tools/cask.py` into `$XRG_TAP_DIR/Casks/xrg-ng.rb`,
-committing only that path in the tap.
+`--execute` performs the local phase only, and every step is idempotent so a
+rerun after a failure resumes where it stopped (a rerun after the appcast
+commit additionally requires `main` to be pushed, per the origin check):
 
-Generate the cask alone with `python3 Tools/cask.py --version V --sha256 HEX
---output Casks/xrg-ng.rb` (the sha256 is the release DMG's digest). It uses
-the public Sparkle appcast (`https://sdelavega.github.io/XRG-ng/appcast.xml`)
-for livecheck, matching the app's update feed.
+1. the signed annotated `vX.Y.Z` tag: when `vX.Y.Z` already exists locally it
+   is reused only if it is a signed annotated tag (`git verify-tag`, or a
+   tag object carrying a signature) pointing at the recorded release commit
+   (at most one local commit behind `HEAD`: the appcast commit); a tag
+   pointing anywhere else or an unsigned tag refuses the publish. Otherwise
+   it is created with `git tag -s vX.Y.Z -m "XRG-ng X.Y.Z"`;
+2. the appcast commit: skipped when `docs/appcast.xml` is already committed
+   with this release's item; otherwise `docs/appcast.xml` alone is committed
+   from `main`;
+3. the tap commit: skipped when `Casks/xrg-ng.rb` in the tap's `HEAD` already
+   equals what `Tools/cask.py` renders for this release; otherwise the cask
+   is written via `Tools/cask.py --version V --sha256 HEX --output
+   $XRG_TAP_DIR/Casks/xrg-ng.rb` (the sha256 is the release DMG's digest)
+   and committed, only that path, in the tap.
 
-Pushing the tag and `main`, pushing the tap commit, and un-drafting the
-release (`gh release edit vX.Y.Z --draft=false`) are printed as manual
-commands; the script never runs them.
+`--execute` never calls `gh release create`. After the tag is pushed
+manually, `--create-draft` performs the remote phase: it requires the local
+signed tag to exist and `git ls-remote origin refs/tags/vX.Y.Z` (peeled for
+annotated tags) to resolve to the same commit. The origin-main check
+tolerates exactly one unpushed local commit there — the appcast publish
+commit `--execute` wrote — since `main` is pushed only in manual step 4.
+It then runs `gh release create
+vX.Y.Z --draft --verify-tag --title "XRG-ng X.Y.Z" --notes-file
+releases/X.Y.Z.md` with the public assets. When `gh release view vX.Y.Z`
+already shows a release, it is reused only if its asset names equal the
+expected inventory; any mismatch refuses the publish.
+
+The cask uses the public Sparkle appcast
+(`https://sdelavega.github.io/XRG-ng/appcast.xml`) for livecheck, matching
+the app's update feed.
+
+The script then prints the manual steps it never runs, in this order:
+
+1. `git push origin vX.Y.Z` — the tag only;
+2. `bash Tools/publish-release.sh X.Y.Z <mac> <linux> --create-draft`;
+3. verify the draft, then `gh release edit vX.Y.Z --draft=false`;
+4. `git push origin main` — the appcast goes live only after the release
+   assets are live;
+5. push the tap commit.

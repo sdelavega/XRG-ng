@@ -2,34 +2,46 @@
 # Copyright (C) 2026 Stephen de la Vega.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Publish one verified XRG-ng release: validate both release directories'
-# complete public asset inventories, both checksum manifests, the pending
-# appcast and the Homebrew tap checkout, then (only with --execute) create
-# the signed tag, the GitHub release draft, the appcast commit and the tap
-# cask commit. Every check runs before any of those side effects, and no
-# check writes to git: origin's main is compared with HEAD through the
-# read-only `git ls-remote` (never a fetch).
+# Publish one verified XRG-ng release in two resumable phases. First every
+# check runs: both release directories' complete public asset inventories,
+# both checksum manifests, the unified build number across the project, the
+# macOS release metadata and the appcast item, and the Homebrew tap
+# checkout. Then --execute performs the local phase only: create (or reuse)
+# the signed annotated tag and commit the pending appcast and the tap cask.
+# --create-draft performs the remote phase only, after the tag was pushed:
+# it creates the GitHub release draft with `gh release create --verify-tag`,
+# or skips creation when a matching draft already exists. Every --execute
+# step is idempotent, so a rerun after a failure resumes where it stopped.
+# No check writes to git: origin's refs are compared with HEAD through the
+# read-only `git ls-remote` (never a fetch). The script never pushes
+# anything, never un-drafts a release, and never calls gh outside
+# --create-draft.
 #
-# Usage: bash Tools/publish-release.sh VERSION MAC_RELEASE_DIR LINUX_RELEASE_DIR [--execute]
+# Usage: bash Tools/publish-release.sh VERSION MAC_RELEASE_DIR LINUX_RELEASE_DIR [--execute | --create-draft]
 #
-# The default is a dry run that prints every command it would run.
-# --execute additionally requires typing the version to confirm and
-# XRG_TAP_DIR (the local Homebrew tap checkout) to be a git work tree with a
-# clean index and worktree. Pushing the tag/main, pushing the tap and
-# un-drafting the release stay manual.
+# The default is a dry run that prints every command both phases would run.
+# --execute and --create-draft each require typing the version to confirm;
+# --execute additionally requires XRG_TAP_DIR (the local Homebrew tap
+# checkout) to be a git work tree with a clean index and worktree.
+# Pushing the tag and main, un-drafting the release and pushing the tap
+# stay manual.
 set -euo pipefail
 
 if [[ $# != 3 && $# != 4 ]]; then
-    echo "Usage: bash Tools/publish-release.sh VERSION MAC_RELEASE_DIR LINUX_RELEASE_DIR [--execute]" >&2
+    echo "Usage: bash Tools/publish-release.sh VERSION MAC_RELEASE_DIR LINUX_RELEASE_DIR [--execute | --create-draft]" >&2
     exit 2
 fi
 version="$1"
 mac_dir="$2"
 linux_dir="$3"
 execute=false
+create_draft=false
 if [[ $# == 4 ]]; then
-    [[ "$4" == "--execute" ]] || { echo "Unexpected argument: $4" >&2; exit 2; }
-    execute=true
+    case "$4" in
+        --execute) execute=true;;
+        --create-draft) create_draft=true;;
+        *) echo "Unexpected argument: $4" >&2; exit 2;;
+    esac
 fi
 
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected a numeric release version" >&2; exit 2; }
@@ -52,7 +64,9 @@ branch=$(git branch --show-current)
 
 # Exactly one dirty path is tolerated: the docs/appcast.xml update written by
 # Tools/release-macos.sh, still unstaged (porcelain " M"). Staged, deleted,
-# conflicted, untracked or additional dirt refuses the publish.
+# conflicted, untracked or additional dirt refuses the publish. The dirty
+# status only decides whether publishing commits the appcast; the feed
+# itself is always validated (R3 and Important 2).
 appcast_pending=false
 dirty=$(git status --porcelain)
 if [[ -n "$dirty" ]]; then
@@ -65,20 +79,67 @@ if [[ -n "$dirty" ]]; then
     fi
 fi
 
+
 head=$(git rev-parse HEAD)
+tag="v$version"
+# An existing local tag is reused only when it is a signed annotated tag
+# pointing at this release's commit (R11): HEAD, or -- after the appcast
+# commit -- the recorded release commit plus exactly that one commit.
+existing_tag_kind() {
+    git rev-parse -q --verify "$tag^{commit}" >/dev/null 2>&1 || return 1
+    git cat-file -t "$tag" 2>/dev/null || true
+}
+
+validate_existing_tag() {
+    if [[ "$(existing_tag_kind)" != "tag" ]]; then
+        echo "REFUSED: v$version already exists but is not an annotated tag; delete it or inspect it manually" >&2
+        return 1
+    fi
+    if ! git verify-tag "$tag" >/dev/null 2>&1 \
+            && ! git cat-file tag "$tag" 2>/dev/null | grep -q 'BEGIN \(SSH\|PGP\) SIGNATURE'; then
+        echo "REFUSED: the existing v$version is not signed (git verify-tag fails and the tag object carries no signature)" >&2
+        return 1
+    fi
+    local tag_commit extra
+    tag_commit=$(git rev-parse "$tag^{commit}")
+    if [[ "$tag_commit" != "$head" ]]; then
+        extra=$(git log --format=%s "$tag_commit..$head")
+        if [[ "$extra" != "Publish appcast for XRG-ng $version" ]]; then
+            echo "REFUSED: the existing v$version points at $tag_commit, not HEAD ($head)" >&2
+            return 1
+        fi
+    fi
+}
+
+# The commit both release directories must have been built from: HEAD, or
+# the existing validated release tag's commit when resuming.
+release_commit="$head"
+if existing_tag_kind >/dev/null; then
+    validate_existing_tag || exit 1
+    release_commit=$(git rev-parse "$tag^{commit}")
+fi
 # Read-only remote comparison; a fetch would mutate remote-tracking refs.
 if ! remote_main=$(git ls-remote origin refs/heads/main | awk '{print $1}'); then
     echo "Could not query origin's refs/heads/main with git ls-remote" >&2
     exit 1
 fi
 [[ -n "$remote_main" ]] || { echo "origin has no refs/heads/main to compare with HEAD" >&2; exit 1; }
-[[ "$remote_main" == "$head" ]] || { echo "origin's main ($remote_main) does not match HEAD ($head); push main first" >&2; exit 1; }
+# The local phase can run while --execute's appcast commit is still unpushed
+# (main is pushed only in manual step 4): tolerate exactly one unpushed local
+# commit, the appcast publish commit -- never anything else.
+if [[ "$remote_main" != "$head" ]]; then
+    extra=$(git log --format=%s "$remote_main..$head")
+    [[ "$extra" == "Publish appcast for XRG-ng $version" ]] || {
+        echo "origin's main ($remote_main) does not match HEAD ($head); push main first" >&2
+        exit 1
+    }
+fi
 
-# Validate the complete public asset inventories and both checksum manifests
-# before anything is created. The ASSET lines list exactly the files the
-# release draft carries; anything else in the release directories is ignored
-# and never uploaded.
-preflight=$(python3 - "$version" "$mac_dir" "$linux_dir" "$head" "$appcast_pending" <<'PYVERIFY'
+# Validate the complete public asset inventories, both checksum manifests,
+# the build numbers and the appcast feed before anything is created. The
+# ASSET lines list exactly the files the release draft carries; anything
+# else in the release directories is ignored and never uploaded.
+preflight=$(python3 - "$version" "$mac_dir" "$linux_dir" "$release_commit" "$appcast_pending" <<'PYVERIFY'
 import hashlib
 import json
 from pathlib import Path
@@ -91,7 +152,7 @@ SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.+~\-]+")
 MANIFEST_ROW = re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9_.+~\-]+)")
 
-version, mac_dir, linux_dir, head, appcast_pending = sys.argv[1:6]
+version, mac_dir, linux_dir, release_commit, appcast_pending = sys.argv[1:6]
 mac_dir, linux_dir = Path(mac_dir), Path(linux_dir)
 appcast_pending = appcast_pending == "true"
 
@@ -164,11 +225,10 @@ for name in mac_assets:
 mac_manifest = verify_manifest(mac_dir, "SHA256SUMS.txt",
                                [f"{stem}.dmg", f"{stem}.zip"], "macOS")
 mac_build = read_json(mac_dir / "release-build.json", "macOS release metadata")
-if mac_build.get("version") != version or mac_build.get("sourceCommit") != head:
+if mac_build.get("version") != version or mac_build.get("sourceCommit") != release_commit:
     refuse(f"the macOS release was built from {mac_build.get('sourceCommit')} "
-           f"(version {mac_build.get('version')}), not this checkout ({head}) "
-           f"of {version}")
-
+           f"(version {mac_build.get('version')}), not this checkout "
+           f"({release_commit}) of {version}")
 # Linux publishes the payloads, SHA256SUMS(+.asc), every payload signature
 # and release-metadata.json, exactly as Tools/release-linux.py and
 # Tools/release-signing.py produce them; sidecar checksums, the public key
@@ -191,17 +251,17 @@ linux_assets = sorted(payloads + [signature(n) for n in payloads]
 for name in linux_assets:
     checked_file(linux_dir, name, "Linux")
 verify_manifest(linux_dir, "SHA256SUMS",
-                payloads + ["release-metadata.json"], "Linux")
+                 payloads + ["release-metadata.json"], "Linux")
 linux_build = read_json(linux_dir / "release-metadata.json", "Linux release metadata")
-if linux_build.get("version") != version or linux_build.get("revision") != head:
+if linux_build.get("version") != version or linux_build.get("revision") != release_commit:
     refuse(f"the Linux release was built from {linux_build.get('revision')} "
-           f"(version {linux_build.get('version')}), not this checkout ({head}) "
-           f"of {version}")
+           f"(version {linux_build.get('version')}), not this checkout "
+           f"({release_commit}) of {version}")
 
-# The pending appcast must be exactly this release's Sparkle item: it parses,
-# carries the item whose sparkle:version is the release build, and that
-# item's enclosure length and sparkle:edSignature match the item the macOS
-# release recorded in appcast-item.xml.
+# The pending appcast must be exactly this release's Sparkle item: it
+# parses, carries the item whose sparkle:version is the release build, and
+# that item's enclosure length and sparkle:edSignature match the item the
+# macOS release recorded in appcast-item.xml.
 if appcast_pending:
     item_file = checked_file(mac_dir, "appcast-item.xml", "macOS")
     build = mac_build.get("build")
@@ -227,9 +287,9 @@ if appcast_pending:
     try:
         channel = ElementTree.parse("docs/appcast.xml").getroot().find("channel")
     except ElementTree.ParseError as error:
-        refuse(f"the pending docs/appcast.xml does not parse: {error}")
+        refuse(f"the docs/appcast.xml feed does not parse: {error}")
     if channel is None:
-        refuse("the pending docs/appcast.xml has no channel")
+        refuse("the docs/appcast.xml feed has no channel")
     pending = None
     for element in channel.findall("item"):
         candidate = element.find(f"{{{SPARKLE_NS}}}version")
@@ -244,17 +304,17 @@ if appcast_pending:
             pending = element
             break
     if pending is None:
-        refuse(f"the pending docs/appcast.xml carries no item for build {build.strip()}")
+        refuse(f"the docs/appcast.xml feed carries no item for build {build.strip()}")
     enclosure = pending.find("enclosure")
     if enclosure is None or enclosure.get("length") != expected_length \
             or enclosure.get(f"{{{SPARKLE_NS}}}edSignature") != expected_signature:
-        refuse("the pending docs/appcast.xml item does not match the release "
-               "appcast item (enclosure length or sparkle:edSignature)")
+        refuse("the docs/appcast.xml item does not match the release appcast item "
+               "(enclosure length or sparkle:edSignature)")
     note("Pending docs/appcast.xml verified: it carries this release's Sparkle item")
 
 note(f"Verified the macOS public asset inventory ({len(mac_assets)} assets) and checksums")
 note(f"Verified the Linux public asset inventory ({len(linux_assets)} assets) and checksums")
-note("Verified both release directories were built from this exact checkout")
+note(f"Verified both release directories were built from release commit {release_commit}")
 
 print(f"DMG_SHA256 {mac_manifest[f'{stem}.dmg']}")
 for name in mac_assets:
@@ -308,42 +368,136 @@ fi
 if $execute; then
     read -r -p "Type $version to confirm publishing: " confirmation
     [[ "$confirmation" == "$version" ]] || { echo "Aborted" >&2; exit 1; }
+elif $create_draft; then
+    read -r -p "Type $version to confirm creating the GitHub release draft: " confirmation
+    [[ "$confirmation" == "$version" ]] || { echo "Aborted" >&2; exit 1; }
 fi
 
 run() {
     if $execute; then "$@"; else echo "DRY: $*"; fi
 }
 
-echo "Creating the signed release tag"
-run git tag -s "v$version" -m "XRG-ng $version"
+do_local_phase() {
+    echo "Creating (or reusing) the signed release tag"
+    if existing_tag_kind >/dev/null; then
+        validate_existing_tag || exit 1
+        echo "Reusing the existing signed annotated tag $tag at HEAD"
+    else
+        run git tag -s "$tag" -m "XRG-ng $version"
+    fi
 
-echo "Creating the GitHub release draft with the public asset inventory"
-run gh release create "v$version" --draft --title "XRG-ng $version" \
-    --notes-file "releases/$version.md" "${assets[@]}"
+    echo "Committing the updated appcast"
+    if $appcast_pending; then
+        run git add docs/appcast.xml
+        run git commit -m "Publish appcast for XRG-ng $version" -- docs/appcast.xml
+    else
+        echo "docs/appcast.xml is already committed with this release's item; nothing to commit"
+    fi
 
-echo "Committing the updated appcast"
-if $appcast_pending; then
-    run git add docs/appcast.xml
-    run git commit -m "Publish appcast for XRG-ng $version" -- docs/appcast.xml
-else
-    echo "docs/appcast.xml unchanged; nothing to commit"
-fi
+    echo "Writing the Homebrew cask into the tap"
+    if $execute; then
+        expected_cask=$(mktemp "${TMPDIR:-/tmp}/xrg-publish-cask.XXXXXX")
+        python3 Tools/cask.py --version "$version" --sha256 "$dmg_sha256" \
+            --output "$expected_cask" >/dev/null
+        tap_cask="$XRG_TAP_DIR/Casks/xrg-ng.rb"
+        if git -C "$XRG_TAP_DIR" show HEAD:Casks/xrg-ng.rb > "$expected_cask.in_head" 2>/dev/null \
+                && cmp -s "$expected_cask" "$expected_cask.in_head"; then
+            echo "The tap's committed Casks/xrg-ng.rb already matches this release; nothing to commit"
+        else
+            python3 Tools/cask.py --version "$version" --sha256 "$dmg_sha256" \
+                --output "$tap_cask" >/dev/null
+            (cd "$XRG_TAP_DIR" && git add Casks/xrg-ng.rb \
+                && git commit -m "xrg-ng $version" -- Casks/xrg-ng.rb)
+        fi
+        rm -f "$expected_cask" "$expected_cask.in_head"
+    else
+        echo "DRY: python3 Tools/cask.py --version $version --sha256 $dmg_sha256 --output \"\$XRG_TAP_DIR\"/Casks/xrg-ng.rb"
+        echo "DRY: (cd \"\$XRG_TAP_DIR\" && git add Casks/xrg-ng.rb && git commit -m \"xrg-ng $version\" -- Casks/xrg-ng.rb)"
+    fi
+}
 
-echo "Writing the Homebrew cask into the tap"
-if $execute; then
-    python3 Tools/cask.py --version "$version" --sha256 "$dmg_sha256" \
-        --output "$XRG_TAP_DIR/Casks/xrg-ng.rb"
-    (cd "$XRG_TAP_DIR" && git add Casks/xrg-ng.rb \
-        && git commit -m "xrg-ng $version" -- Casks/xrg-ng.rb)
-else
-    echo "DRY: python3 Tools/cask.py --version $version --sha256 $dmg_sha256 --output \"\$XRG_TAP_DIR\"/Casks/xrg-ng.rb"
-    echo "DRY: (cd \"\$XRG_TAP_DIR\" && git add Casks/xrg-ng.rb && git commit -m \"xrg-ng $version\" -- Casks/xrg-ng.rb)"
-fi
-
-cat <<EOF
+draft_manual_steps() {
+    cat <<EOF
 Remaining manual steps (this script never runs them):
-  git push origin main "v$version"
-  verify the draft, then: gh release edit "v$version" --draft=false
+  git push origin "$tag"                          # the tag only
+  bash Tools/publish-release.sh "$version" "$mac_dir" "$linux_dir" --create-draft
+  verify the draft, then: gh release edit "$tag" --draft=false
+  git push origin main                            # the appcast goes live only after the assets
   push the tap commit: (cd "\${XRG_TAP_DIR:-<tap directory>}" && git push)
 EOF
-if $execute; then echo "PASS: XRG-ng $version published (tag, release draft, appcast and tap commits done; pushes stay manual)"; else echo "PASS: XRG-ng $version verified in dry run (no tag, release, or commits created)"; fi
+}
+
+after_draft_steps() {
+    cat <<EOF
+Remaining manual steps (this script never runs them):
+  verify the draft, then: gh release edit "$tag" --draft=false
+  git push origin main                            # the appcast goes live only after the assets
+  push the tap commit: (cd "\${XRG_TAP_DIR:-<tap directory>}" && git push)
+EOF
+}
+
+do_draft_phase() {
+    echo "Creating the GitHub release draft with the public asset inventory"
+    if $create_draft; then
+        # The local signed tag must exist and match HEAD before the remote
+        # phase; --create-draft never creates it.
+        if ! existing_tag_kind >/dev/null; then
+            echo "REFUSED: no local $tag; run the local phase first (bash Tools/publish-release.sh $version ... --execute)" >&2
+            exit 1
+        fi
+        validate_existing_tag || exit 1
+        # Read-only remote comparison; the pushed tag must resolve (peeled
+        # for annotated tags) to the same commit as the local tag.
+        if ! remote_tags=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}"); then
+            echo "Could not query origin's refs/tags/$tag with git ls-remote" >&2
+            exit 1
+        fi
+        remote_tag_commit=""
+        remote_tag_object=""
+        while read -r sha ref; do
+            [[ -n "$sha" ]] || continue
+            case "$ref" in
+                "refs/tags/$tag^{}") remote_tag_commit=$sha;;
+                "refs/tags/$tag") remote_tag_object=$sha;;
+            esac
+        done <<< "$remote_tags"
+        [[ -n "$remote_tag_object" ]] || { echo "REFUSED: origin has no refs/tags/$tag; push the tag first" >&2; exit 1; }
+        [[ -n "$remote_tag_commit" ]] || remote_tag_commit=$remote_tag_object
+        local_tag_commit=$(git rev-parse "$tag^{commit}")
+        if [[ "$remote_tag_commit" != "$local_tag_commit" ]]; then
+            echo "REFUSED: origin's $tag resolves to $remote_tag_commit, not the local tag's $local_tag_commit" >&2
+            exit 1
+        fi
+        # An existing release is reused only when its asset names equal the
+        # expected public inventory; a mismatch refuses the publish.
+        expected_names=$(printf '%s\n' "${assets[@]}" | sed 's|.*/||' | sort)
+        if existing_names=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null); then
+            if [[ "$(printf '%s\n' "$existing_names" | sort)" == "$expected_names" ]]; then
+                echo "A GitHub release for $tag already exists with the matching asset inventory; skipping creation"
+            else
+                echo "REFUSED: the existing GitHub release for $tag carries different assets" >&2
+                exit 1
+            fi
+        else
+            gh release create "$tag" --draft --verify-tag \
+                --title "XRG-ng $version" --notes-file "releases/$version.md" "${assets[@]}"
+        fi
+    else
+        echo "DRY: gh release create $tag --draft --verify-tag --title XRG-ng $version --notes-file releases/$version.md ${assets[*]}"
+    fi
+}
+
+if $create_draft; then
+    do_draft_phase
+    after_draft_steps
+    echo "PASS: XRG-ng $version draft phase complete (the draft exists; pushes, un-drafting and the tap push stay manual)"
+elif $execute; then
+    do_local_phase
+    draft_manual_steps
+    echo "PASS: XRG-ng $version local phase complete (signed tag, appcast and tap commits done; --create-draft after pushing the tag)"
+else
+    do_local_phase
+    do_draft_phase
+    draft_manual_steps
+    echo "PASS: XRG-ng $version verified in dry run (no tag, release, or commits created)"
+fi

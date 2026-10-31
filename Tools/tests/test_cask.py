@@ -8,6 +8,12 @@ refusal is proven to happen before any tag, release or commit and no test
 ever touches the real checkout, its remote or the Homebrew tap. The expected
 public asset inventories mirror what ``Tools/release-linux.py`` and
 ``Tools/release-signing.py`` produce.
+
+The shims also simulate the remote release phase: ``git ls-remote`` answers
+refs/tags queries from a ``remote-tags`` file when it exists (the pushed
+annotated tag), and ``gh release create`` fails unless that file carries the
+tag — mirroring the real GitHub CLI's ``--verify-tag`` rejection of a tag
+that was never pushed.
 """
 import hashlib
 import importlib.util
@@ -27,7 +33,7 @@ REPO_ROOT = TOOLS.parent
 
 # Standing rule: every artifact this suite creates stays under the task's
 # build root in $TMPDIR.
-WORK_ROOT = Path(tempfile.gettempdir()) / "xrg-0.2.1-task-4"
+WORK_ROOT = Path(tempfile.gettempdir()) / "xrg-0.2.1-final"
 
 _spec = importlib.util.spec_from_file_location("cask", TOOLS / "cask.py")
 cask = importlib.util.module_from_spec(_spec)
@@ -39,7 +45,7 @@ _spec.loader.exec_module(appcast)
 VERSION = "0.2.1"
 BUILD = "2"
 SHA256 = "3bab9b8c40df6b0443fe653cc99f2a1999fec2856b7af9ce9485795f8bb72f97"
-APPCAST_URL = "https://sdelavega.github.io/XRG-ng/appcast.xml"
+APCAST_URL = "https://sdelavega.github.io/XRG-ng/appcast.xml"
 
 EXPECTED_FIELDS = [
     'cask "xrg-ng"',
@@ -50,7 +56,7 @@ EXPECTED_FIELDS = [
     'name "XRG-ng"',
     'desc "Real-time system resource monitor with floating graphs"',
     'homepage "https://github.com/sdelavega/XRG-ng"',
-    f'url "{APPCAST_URL}"',
+    f'url "{APCAST_URL}"',
     "strategy :sparkle",
     "auto_updates true",
     "depends_on macos: :tahoe",
@@ -100,7 +106,7 @@ class RenderCaskTests(unittest.TestCase):
         rendered = cask.render_cask(VERSION, SHA256)
         for field in EXPECTED_FIELDS:
             self.assertIn(field, rendered)
-        self.assertIn(f"livecheck do\n    url \"{APPCAST_URL}\"", rendered)
+        self.assertIn(f"livecheck do\n    url \"{APCAST_URL}\"", rendered)
         self.assertNotIn("raw/main", rendered)
 
     def test_rejects_non_hex_sha(self):
@@ -111,11 +117,15 @@ class RenderCaskTests(unittest.TestCase):
 
 
 class PublishScriptTests(unittest.TestCase):
-    """Dry-run and --execute publish scenarios against throwaway repos.
+    """Dry-run, --execute and --create-draft scenarios against throwaway repos.
 
     ``git`` and ``gh`` are PATH-shimmed: git forwards to the real git while
-    recording every call, gh only records. Tests assert from the spy log that
-    refusals happen before any tag, commit, fetch or release call.
+    recording every call (answering refs/tags ls-remote queries from the
+    ``remote-tags`` file when it exists), gh records and simulates the GitHub
+    release phase: ``release create`` fails unless the remote-tags file shows
+    the pushed tag, ``release view`` reports the ``gh-release`` asset list.
+    Tests assert from the spy log that refusals happen before any tag,
+    commit, fetch or release call.
     """
 
     def setUp(self):
@@ -130,6 +140,8 @@ class PublishScriptTests(unittest.TestCase):
         self.tap = self.root / "homebrew-tap"
         self.log = self.root / "spy.log"
         self.shims = self.root / "shims"
+        self.remote_tags = self.root / "remote-tags"
+        self.gh_release = self.root / "gh-release"
 
     def git(self, *arguments, cwd=None):
         return subprocess.run(["git", *arguments], cwd=cwd or self.repo,
@@ -141,12 +153,36 @@ class PublishScriptTests(unittest.TestCase):
             "#!/bin/sh\n"
             f"log={shlex.quote(str(self.log))}\n"
             f"real={shlex.quote(shutil.which('git'))}\n"
+            f"remote_tags={shlex.quote(str(self.remote_tags))}\n"
             "{ printf 'git\\t'; printf '%s\\t' \"$@\"; printf '\\n'; } >> \"$log\"\n"
+            "# A refs/tags ls-remote is answered from the remote-tags file\n"
+            "# (the simulated pushed tag) when that file exists.\n"
+            "if [ \"$1\" = ls-remote ] && [ -f \"$remote_tags\" ]; then\n"
+            "    tags=false\n"
+            "    for argument in \"$@\"; do\n"
+            "        case \"$argument\" in refs/tags/*) tags=true;; esac\n"
+            "    done\n"
+            "    if [ \"$tags\" = true ]; then cat \"$remote_tags\"; exit 0; fi\n"
+            "fi\n"
             "exec \"$real\" \"$@\"\n")
         (self.shims / "gh").write_text(
             "#!/bin/sh\n"
             f"log={shlex.quote(str(self.log))}\n"
+            f"remote_tags={shlex.quote(str(self.remote_tags))}\n"
+            f"release_assets={shlex.quote(str(self.gh_release))}\n"
             "{ printf 'gh\\t'; printf '%s\\t' \"$@\"; printf '\\n'; } >> \"$log\"\n"
+            "case \"$1 $2\" in\n"
+            "    'release create')\n"
+            "        tag=$3\n"
+            "        if [ -f \"$remote_tags\" ] && grep -q \"refs/tags/$tag\" \"$remote_tags\"; then\n"
+            "            exit 0\n"
+            "        fi\n"
+            "        echo \"gh: refusing to create a release for the unpushed tag $tag\" >&2\n"
+            "        exit 1;;\n"
+            "    'release view')\n"
+            "        if [ -f \"$release_assets\" ]; then cat \"$release_assets\"; exit 0; fi\n"
+            "        exit 1;;\n"
+            "esac\n"
             "exit 0\n")
         os.chmod(self.shims / "git", 0o755)
         os.chmod(self.shims / "gh", 0o755)
@@ -280,7 +316,8 @@ class PublishScriptTests(unittest.TestCase):
             self.make_pending_appcast()
         return head
 
-    def publish(self, execute=False, tap=True, confirm=None, tap_path=None):
+    def publish(self, execute=False, create_draft=False, tap=True,
+                confirm=None, tap_path=None):
         env = dict(os.environ)
         env["PATH"] = f"{self.shims}{os.pathsep}{env['PATH']}"
         if tap_path is not None:
@@ -290,13 +327,16 @@ class PublishScriptTests(unittest.TestCase):
         else:
             env.pop("XRG_TAP_DIR", None)
         arguments = ["bash", str(self.repo / "Tools" / "publish-release.sh"),
-                     VERSION, str(self.mac), str(self.linux)]
+                      VERSION, str(self.mac), str(self.linux)]
         if execute:
             arguments.append("--execute")
+        elif create_draft:
+            arguments.append("--create-draft")
+        side_effecting = execute or create_draft
         return subprocess.run(arguments, capture_output=True, text=True,
                               env=env,
                               input=confirm if confirm is not None
-                              else (f"{VERSION}\n" if execute else ""),
+                              else (f"{VERSION}\n" if side_effecting else ""),
                               cwd=self.root)
 
     def tags(self):
@@ -317,6 +357,28 @@ class PublishScriptTests(unittest.TestCase):
         self.assertEqual(self.tags(), [])
         self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
 
+    def main_commits(self, message_prefix, cwd=None):
+        listing = subprocess.run(["git", "log", "--format=%s"],
+                                  cwd=cwd or self.repo, check=True,
+                                  capture_output=True, text=True).stdout
+        return [subject for subject in listing.splitlines()
+                if subject.startswith(message_prefix)]
+
+    def simulate_pushed_tag(self, commit=None):
+        """Write the remote-tags file the ls-remote/gh shims read: the pushed
+        annotated tag vVERSION, optionally resolving to another commit."""
+        tag_object = subprocess.run(["git", "rev-parse", f"v{VERSION}"],
+                                    cwd=self.repo, check=True,
+                                    capture_output=True, text=True).stdout.strip()
+        tag_commit = subprocess.run(["git", "rev-parse", f"v{VERSION}^{{}}"],
+                                    cwd=self.repo, check=True,
+                                    capture_output=True, text=True).stdout.strip()
+        if commit is not None:
+            tag_commit = commit
+        self.remote_tags.write_text(
+            f"{tag_commit}\trefs/tags/v{VERSION}^{{}}\n"
+            f"{tag_object}\trefs/tags/v{VERSION}\n", encoding="utf-8")
+
     # --- Dry runs ---
 
     def test_dry_run_prints_planned_steps_without_side_effects(self):
@@ -325,7 +387,7 @@ class PublishScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         for planned in ["git tag -s", "gh release create", f"v{VERSION}",
-                        "cask.py"]:
+                        "--create-draft", "cask.py"]:
             self.assertIn(planned, combined)
         for asset in (mac_public_assets(VERSION) + linux_public_assets(VERSION)):
             self.assertIn(asset, combined)
@@ -334,17 +396,6 @@ class PublishScriptTests(unittest.TestCase):
                         "xrg-ng-0.2.1-linux-x86_64.tar.gz.sha256"]:
             self.assertNotIn(private, combined)
         self.assertIn("XRG_TAP_DIR", combined)
-        self.assert_no_side_effects(result)
-
-    def test_dry_run_skips_appcast_commit_on_clean_tree(self):
-        self.build_fixture(pending_appcast=False)
-        # Local-only outputs are not required when no appcast update pends.
-        (self.mac / "verified-build.txt").unlink()
-        (self.mac / "appcast-item.xml").unlink()
-        result = self.publish()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("docs/appcast.xml unchanged; nothing to commit",
-                      result.stdout + result.stderr)
         self.assert_no_side_effects(result)
 
     def test_publish_dry_run_refuses_dirty_tree(self):
@@ -361,7 +412,7 @@ class PublishScriptTests(unittest.TestCase):
         result = self.publish()
         self.assert_refused_before_side_effects(result, "checksum")
 
-    # --- --execute refusals (spy-proven to precede any side effect) ---
+    # --- Pre-publication refusals (spy-proven to precede any side effect) ---
 
     def test_execute_refuses_dirty_source_tree(self):
         self.build_fixture()
@@ -375,6 +426,16 @@ class PublishScriptTests(unittest.TestCase):
         self.git("add", "docs/appcast.xml")
         self.assert_refused_before_side_effects(
             self.publish(execute=True), "Commit source changes")
+
+    def test_dry_run_skips_appcast_commit_on_clean_tree(self):
+        self.build_fixture(pending_appcast=False)
+        # Local-only outputs are not required when no appcast update pends.
+        (self.mac / "verified-build.txt").unlink()
+        (self.mac / "appcast-item.xml").unlink()
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("nothing to commit", result.stdout + result.stderr)
+        self.assert_no_side_effects(result)
 
     def test_execute_refuses_pending_appcast_mismatch(self):
         self.build_fixture()
@@ -494,41 +555,59 @@ class PublishScriptTests(unittest.TestCase):
         self.assert_refused_before_side_effects(
             self.publish(execute=True, confirm="nope\n"), "Aborted")
 
-    # --- --execute happy path ---
+    def test_create_draft_requires_confirmation(self):
+        self.build_fixture()
+        self.assert_refused_before_side_effects(
+            self.publish(create_draft=True, confirm="nope\n"), "Aborted")
 
-    def test_execute_publishes_tag_draft_and_commits(self):
+    def test_execute_refuses_existing_tag_at_another_commit(self):
+        self.build_fixture()
+        self.git("commit", "--allow-empty", "-m", "newer head")
+        self.git("push", "origin", "main")
+        self.git("tag", "-s", f"v{VERSION}", "-m", f"XRG-ng {VERSION}",
+                 "HEAD~1")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("points at", combined)
+        self.assertEqual(self.mutating_calls(), [],
+                         "no commit happened before the refusal")
+        self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
+
+    def test_execute_refuses_unsigned_existing_tag(self):
+        self.build_fixture()
+        self.git("tag", "-a", f"v{VERSION}", "-m", f"XRG-ng {VERSION}")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("not signed", combined)
+        self.assertEqual(self.mutating_calls(), [],
+                         "no commit happened before the refusal")
+        self.assertFalse((self.tap / "Casks" / "xrg-ng.rb").exists())
+
+    # --- --execute happy paths ---
+
+    def test_execute_publishes_tag_and_commits_without_gh(self):
         head = self.build_fixture()
         result = self.publish(execute=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         combined = result.stdout + result.stderr
-        self.assertIn(f"PASS: XRG-ng {VERSION} published", combined)
+        self.assertIn("PASS: XRG-ng 0.2.1 local phase complete", combined)
         calls = self.spy_calls()
         self.assertEqual([call for call in calls
                           if call[:2] == ["git", "fetch"]], [],
                          "no fetch anywhere; the remote check is ls-remote")
-        tags = [call for call in calls if call[:2] == ["git", "tag"]]
-        self.assertEqual(tags, [["git", "tag", "-s", f"v{VERSION}",
-                                 "-m", f"XRG-ng {VERSION}"]])
-        releases = [call for call in calls if call[0] == "gh"]
-        self.assertEqual(len(releases), 1, calls)
-        arguments = releases[0][1:]
-        self.assertEqual(arguments[:8],
-                         ["release", "create", f"v{VERSION}", "--draft",
-                          "--title", f"XRG-ng {VERSION}", "--notes-file",
-                          f"releases/{VERSION}.md"])
-        expected_assets = {str(self.mac / name)
-                           for name in mac_public_assets(VERSION)}
-        expected_assets |= {str(self.linux / name)
-                            for name in linux_public_assets(VERSION)}
-        self.assertEqual(len(arguments) - 8, len(expected_assets))
-        self.assertEqual(set(arguments[8:]), expected_assets)
+        self.assertEqual([call for call in calls if call[0] == "gh"], [],
+                         "--execute is the local phase only; no gh call")
+        tags_calls = [call for call in calls if call[:2] == ["git", "tag"]]
+        self.assertEqual(tags_calls, [["git", "tag", "-s", f"v{VERSION}",
+                                       "-m", f"XRG-ng {VERSION}"]])
         commits = [call for call in calls if call[:2] == ["git", "commit"]]
         self.assertEqual(commits, [
             ["git", "commit", "-m", f"Publish appcast for XRG-ng {VERSION}",
              "--", "docs/appcast.xml"],
             ["git", "commit", "-m", f"xrg-ng {VERSION}", "--",
              "Casks/xrg-ng.rb"]])
-
         self.assertEqual(self.tags(), [f"v{VERSION}"])
         self.assertNotEqual(subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=self.repo, check=True,
@@ -538,12 +617,180 @@ class PublishScriptTests(unittest.TestCase):
                              cwd=self.tap).stdout.split()
         self.assertEqual(tap_files, ["Casks/xrg-ng.rb"])
         self.assertEqual(self.git("status", "--porcelain",
-                                 cwd=self.tap).stdout, "")
+                                  cwd=self.tap).stdout, "")
         dmg = next(p for p in self.mac.iterdir() if p.suffix == ".dmg")
         cask = (self.tap / "Casks" / "xrg-ng.rb").read_text(encoding="utf-8")
         self.assertIn(f'sha256 "{hashlib.sha256(dmg.read_bytes()).hexdigest()}"',
                       cask)
-        self.assertIn(f'url "{APPCAST_URL}"', cask)
+        self.assertIn(f'url "{APCAST_URL}"', cask)
+
+    def test_execute_publishes_committed_appcast_without_appcast_commit(self):
+        # A clean tree whose committed feed already carries this release's
+        # item publishes with no appcast commit (Important 2: dirty status
+        # only decides the commit). The tag exists and the appcast commit
+        # is the one unpushed local commit -- a resume state.
+        self.build_fixture()
+        self.git("tag", "-s", f"v{VERSION}", "-m", f"XRG-ng {VERSION}")
+        self.git("add", "docs/appcast.xml")
+        self.git("commit", "-m", f"Publish appcast for XRG-ng {VERSION}")
+        self.git("push", "origin", "main")
+        appcast_commits = len(self.main_commits("Publish appcast"))
+        self.assertEqual(appcast_commits, 1)
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined)
+        self.assertIn("already committed with this release's item", combined)
+        self.assertEqual(len(self.main_commits("Publish appcast")), appcast_commits,
+                         "no second appcast commit was created")
+        self.assertEqual(self.tags(), [f"v{VERSION}"])
+
+    def test_execute_resumes_after_partial_failure_without_duplicates(self):
+        # The tag already exists (a previous run stopped after tagging);
+        # the rerun must reuse it and still commit appcast and tap cask.
+        self.build_fixture()
+        self.git("tag", "-s", f"v{VERSION}", "-m", f"XRG-ng {VERSION}")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined)
+        self.assertIn("Reusing the existing signed annotated tag", combined)
+        self.assertEqual(self.tags(), [f"v{VERSION}"])
+        self.assertEqual(len(self.main_commits("Publish appcast")), 1)
+        self.assertEqual(len(self.main_commits("xrg-ng 0.2.1",
+                                               cwd=self.tap)), 1)
+        # A full second local-phase run changes nothing (every step
+        # idempotent); main was pushed after the appcast commit.
+        self.git("push", "origin", "main")
+        self.log.unlink()
+        rerun = self.publish(execute=True)
+        rerun_combined = rerun.stdout + rerun.stderr
+        self.assertEqual(rerun.returncode, 0, rerun_combined)
+        self.assertIn("Reusing the existing signed annotated tag", rerun_combined)
+        self.assertIn("nothing to commit", rerun_combined)
+        self.assertIn("already matches this release", rerun_combined)
+        self.assertEqual(self.tags(), [f"v{VERSION}"])
+        self.assertEqual(len(self.main_commits("Publish appcast")), 1)
+        self.assertEqual(len(self.main_commits("xrg-ng 0.2.1",
+                                               cwd=self.tap)), 1)
+        tag_creates = [call for call in self.spy_calls()
+                       if call[:3] == ["git", "tag", "-s"]]
+        self.assertEqual(tag_creates, [], "no duplicate tag was created")
+
+    # --- --create-draft phase ---
+
+    def test_create_draft_refused_when_remote_tag_missing(self):
+        self.build_fixture()
+        result = self.publish(execute=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The tag exists locally only; --create-draft must refuse before gh.
+        draft = self.publish(create_draft=True)
+        combined = draft.stdout + draft.stderr
+        self.assertEqual(draft.returncode, 1, combined)
+        self.assertIn("origin has no refs/tags", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[0] == "gh"], [],
+                         "no gh call happened before the refusal")
+
+    def test_create_draft_refused_when_remote_tag_at_another_commit(self):
+        self.build_fixture()
+        result = self.publish(execute=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.simulate_pushed_tag(commit="c" * 40)
+        draft = self.publish(create_draft=True)
+        combined = draft.stdout + draft.stderr
+        self.assertEqual(draft.returncode, 1, combined)
+        self.assertIn("resolves to", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[0] == "gh"], [],
+                         "no gh call happened before the refusal")
+
+    def test_create_draft_refused_without_a_local_tag(self):
+        self.build_fixture()
+        draft = self.publish(create_draft=True)
+        combined = draft.stdout + draft.stderr
+        self.assertEqual(draft.returncode, 1, combined)
+        self.assertIn("no local", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[0] == "gh"], [],
+                         "no gh call happened before the refusal")
+
+    def test_create_draft_recovers_after_gh_rejects_unpushed_tag(self):
+        # The real GitHub CLI rejects a release for a tag missing from the
+        # remote (this also holds for drafts); the gh shim reproduces that.
+        # The rerun after the push resumes without side effects.
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        # Push the tag to the bare fixture origin for real, but the pushed
+        # tag is still invisible to the gh shim until the remote-tags file
+        # (the file the ls-remote shim reads) exists.
+        self.git("push", "origin", f"v{VERSION}")
+        failed = self.publish(create_draft=True)
+        combined = failed.stdout + failed.stderr
+        self.assertNotEqual(failed.returncode, 0, combined)
+        self.assertIn("unpushed tag", combined)
+        self.assertEqual(len([call for call in self.spy_calls()
+                              if call[:3] == ["gh", "release", "create"]]), 1)
+        # Simulate the push for the shims and rerun: the draft is created.
+        self.simulate_pushed_tag()
+        result = self.publish(create_draft=True)
+        rerun_combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, rerun_combined)
+        self.assertIn("PASS: XRG-ng 0.2.1 draft phase complete", rerun_combined)
+        self.assertEqual(len([call for call in self.spy_calls()
+                              if call[:3] == ["gh", "release", "create"]]), 2)
+
+    def test_create_draft_creates_the_draft_with_the_public_assets(self):
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        self.simulate_pushed_tag()
+        result = self.publish(create_draft=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined)
+        self.assertIn("PASS: XRG-ng 0.2.1 draft phase complete", combined)
+        self.assertIn("gh release edit", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[:2] == ["git", "fetch"]], [])
+        releases = [call for call in self.spy_calls()
+                    if call[:3] == ["gh", "release", "create"]]
+        self.assertEqual(len(releases), 1, self.spy_calls())
+        arguments = releases[0][1:]
+        self.assertEqual(arguments[:9],
+                         ["release", "create", f"v{VERSION}", "--draft",
+                          "--verify-tag", "--title", f"XRG-ng {VERSION}",
+                          "--notes-file", f"releases/{VERSION}.md"][:9])
+        expected_assets = {str(self.mac / name)
+                           for name in mac_public_assets(VERSION)}
+        expected_assets |= {str(self.linux / name)
+                            for name in linux_public_assets(VERSION)}
+        self.assertEqual(set(arguments[9:]), expected_assets)
+
+    def test_create_draft_skips_existing_release_with_matching_assets(self):
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        self.simulate_pushed_tag()
+        expected_names = sorted(
+            {name for name in mac_public_assets(VERSION)}
+            | {name for name in linux_public_assets(VERSION)})
+        self.gh_release.write_text("\n".join(expected_names) + "\n")
+        result = self.publish(create_draft=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, combined)
+        self.assertIn("matching asset inventory; skipping creation", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[:3] == ["gh", "release", "create"]], [],
+                         "an existing matching release must not be recreated")
+
+    def test_create_draft_refuses_existing_release_with_other_assets(self):
+        self.build_fixture()
+        self.assertEqual(self.publish(execute=True).returncode, 0)
+        self.simulate_pushed_tag()
+        self.gh_release.write_text("XRG-ng-0.0.1-macOS-universal.dmg\n")
+        result = self.publish(create_draft=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("carries different assets", combined)
+        self.assertEqual([call for call in self.spy_calls()
+                          if call[:3] == ["gh", "release", "create"]], [],
+                         "a mismatched existing release must not be recreated")
 
 
 if __name__ == "__main__":
