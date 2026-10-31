@@ -97,7 +97,11 @@ def smoke(args):
             run([installed, "--headless", "--samples", "2"], f"{label}-headless.log")
             require(config.read_bytes() == original, "Installing/starting an application changed settings")
         parsed = json.loads(run([installed, "--check-settings"], "new-effective-settings.json"))
-        require(subset(expected, parsed), "Effective settings changed during application upgrade")
+        # The schema marker advances when the new application migrates the file; every user value must survive.
+        require(isinstance(parsed.get("version"), int) and parsed["version"] >= expected["version"],
+                "Settings schema version regressed during application upgrade")
+        require(subset({k: v for k, v in expected.items() if k != "version"}, parsed),
+                "Effective settings changed during application upgrade")
         run([prefix / "lib/xrg-ng/uninstall.sh", "--prefix", prefix], "uninstall.log")
         require(config.read_bytes() == original, "Uninstall changed preferences")
         (results / "versions.json").write_text(json.dumps({"baseline": old[1]["version"], "baseline_revision": BASELINE,
