@@ -37,7 +37,9 @@ impl Fixture {
         // and always visible, whatever the clock does.
         let tick = NEXT.fetch_add(1, Ordering::Relaxed);
         let at = UNIX_EPOCH + Duration::from_secs(1_700_000_000 + tick);
-        fs::File::open(&path)
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_accessed(at).set_modified(at))
             .unwrap();
