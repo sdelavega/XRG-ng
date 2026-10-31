@@ -13,7 +13,7 @@ import subprocess
 import tarfile
 import tempfile
 
-BASELINE = "9f70a52c6182a6bbab38947501c97d0e64834d2f"
+BASELINE = "50ca1e54f44ed66608b069cc5483dde7f057d281"
 
 
 def require(value, message):
@@ -69,8 +69,8 @@ def smoke(args):
             require(not manifest["dirty"] and manifest["architecture"] == platform.machine(), "Invalid source/architecture")
             bundles.append((root, manifest))
         old, new = bundles
-        require(old[1]["revision"] == BASELINE and old[1]["version"] == "0.1.0", "Wrong frozen baseline")
-        require(new[1]["version"] == "0.2.0" and new[1]["revision"] != BASELINE, "Expected application 0.2.0")
+        require(old[1]["revision"] == BASELINE and old[1]["version"] == "0.2.0", "Wrong frozen baseline")
+        require(new[1]["version"] == "0.2.1" and new[1]["revision"] != BASELINE, "Expected application 0.2.1")
         require(digest(old[0] / "bin/xrg-ng-linux") != digest(new[0] / "bin/xrg-ng-linux"), "Application bytes did not change")
         env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "DYLD_"))}
         env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"),
@@ -102,7 +102,7 @@ def smoke(args):
         require(config.read_bytes() == original, "Uninstall changed preferences")
         (results / "versions.json").write_text(json.dumps({"baseline": old[1]["version"], "baseline_revision": BASELINE,
                                                          "current": new[1]["version"], "current_revision": new[1]["revision"]}, indent=2) + "\n")
-    message = "APPLICATION_UPGRADE_OK 0.1.0-to-0.2.0 distinct-binaries effective-preferences-preserved"
+    message = "APPLICATION_UPGRADE_OK 0.2.0-to-0.2.1 distinct-binaries effective-preferences-preserved"
     (results / "summary.txt").write_text(message + "\n"); print(message)
 
 

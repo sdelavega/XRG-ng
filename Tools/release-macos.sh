@@ -14,6 +14,7 @@ output="$4"
 cd "$(dirname "$0")/.."
 python3 Tools/check-macos-sensor-license.py
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected a numeric release version" >&2; exit 2; }
+python3 Tools/check-version.py --expect "$version"
 [[ "$(cat latest_version.txt)" == "$version" ]] || { echo "Update latest_version.txt first" >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit source changes before building a release" >&2; exit 1; }
 [[ "$output" == /* && ! -e "$output" ]] || { echo "Use a new absolute output directory" >&2; exit 1; }
@@ -36,6 +37,7 @@ codesign --verify --deep --strict --verbose=2 "$app" > "$output/signature-verify
 codesign --display --verbose=4 "$app" > "$output/signature.log" 2>&1
 codesign --display --entitlements :- "$app" > "$output/entitlements.plist" 2> "$output/entitlements.log"
 python3 - "$app" "$version" "$output" <<'PY'
+import importlib.util
 import json
 from pathlib import Path
 import plistlib
@@ -44,9 +46,12 @@ import subprocess
 import sys
 
 app, version, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+spec = importlib.util.spec_from_file_location("check_version", "Tools/check-version.py")
+check_version = importlib.util.module_from_spec(spec); spec.loader.exec_module(check_version)
+build = check_version.read_build(Path("."))
 info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
 assert info['CFBundleShortVersionString'] == version
-assert info['CFBundleVersion'] == '1'
+assert info['CFBundleVersion'] == build
 assert info['CFBundleIdentifier'] == 'com.sdelavega.xrg'
 assert info['LSMinimumSystemVersion'] == '26.0'
 slices = subprocess.run(['xcrun', 'lipo', '-archs', str(app / 'Contents/MacOS/XRG-ng')], check=True, capture_output=True, text=True).stdout.split()
@@ -110,11 +115,15 @@ spctl --assess --type open --context context:primary-signature --verbose=4 \
     shasum -a 256 "$stem.zip" "$stem.dmg" > SHA256SUMS.txt
 )
 python3 - "$output" "$version" "$source_commit" <<'PY'
+import importlib.util
 import json
 from pathlib import Path
 import sys
 output, version, commit = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-(output / 'release-build.json').write_text(json.dumps({'version': version, 'build': '1', 'sourceCommit': commit,
+spec = importlib.util.spec_from_file_location("check_version", "Tools/check-version.py")
+check_version = importlib.util.module_from_spec(spec); spec.loader.exec_module(check_version)
+build = check_version.read_build(Path("."))
+(output / 'release-build.json').write_text(json.dumps({'version': version, 'build': build, 'sourceCommit': commit,
     'architectures': ['arm64', 'x86_64'], 'minimumMacOS': '26.0', 'developerID': 'N5PUFD82GV',
     'appNotarized': True, 'dmgNotarized': True, 'ticketsStapled': True, 'gatekeeperAccepted': True}, indent=2) + '\n')
 PY
