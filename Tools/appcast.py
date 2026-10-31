@@ -12,12 +12,22 @@ Run from the repository root:
 The item is keyed on ``sparkle:version`` (the build number): an existing
 item with the same build is replaced in place and every other item is
 spliced through byte-identically (existing items are never re-serialized,
-so comments, attribute order and whitespace survive). A new item is
-inserted as the first ``<item>`` in the channel, above every older
-release. ``--pub-date`` defaults to the current UTC time in RFC 822
-format. ``--item-out PATH`` optionally also writes the standalone item
-XML, which the release script stores next to the DMG as
-``appcast-item.xml``.
+so comments, attribute order, whitespace and CRLF line endings survive).
+An existing item's build is resolved with namespace-aware XML parsing from
+the ``<sparkle:version>`` child element or, for legacy feeds, the
+``sparkle:version`` attribute on the ``<item>``/``<enclosure>``; an item
+with neither is preserved untouched. A new item is inserted as the first
+``<item>`` in the channel, above every older release. ``--pub-date``
+defaults to the current UTC time in RFC 822 format. ``--item-out PATH``
+optionally also writes the standalone item XML, which the release script
+stores next to the DMG as ``appcast-item.xml``.
+
+Rendered items follow the Sparkle 2 publishing format: version metadata
+(``sparkle:version``, ``sparkle:shortVersionString``,
+``sparkle:minimumSystemVersion``) is emitted as child elements of
+``<item>``, with only ``sparkle:edSignature`` (and the enclosure's own
+attributes) on the ``<enclosure>``. The file is read and written as bytes
+so unrelated items keep their original line endings.
 """
 import argparse
 from dataclasses import dataclass
@@ -29,8 +39,8 @@ import sys
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
+SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ITEM_SPAN = re.compile(r"<item\b.*?</item\s*>", re.DOTALL)
-ITEM_VERSION = re.compile(r'sparkle:version="([^"\n]*)"', re.DOTALL)
 
 
 @dataclass
@@ -70,24 +80,29 @@ def _validate(item):
         raise ValueError("url must not be empty")
 
 
-def render_item(item, indent="        "):
+def render_item(item, indent="        ", newline="\n"):
     """Return the item XML with the given indentation, as a text splice."""
     _validate(item)
     pub_date = item.pub_date or _default_pub_date()
     nested = indent + "    "
-    return "\n".join([
-        f'<item sparkle:version="{_attr(item.build)}"'
-        f' sparkle:shortVersionString="{_attr(item.version)}"'
-        f' sparkle:minimumSystemVersion="{_attr(item.min_system)}">',
+    lines = [
+        "<item>",
         f"{nested}<title>XRG-ng {escape(str(item.version))}</title>",
         f"{nested}<pubDate>{escape(str(pub_date))}</pubDate>",
+        f"{nested}<sparkle:version>{escape(str(item.build))}"
+        "</sparkle:version>",
+        f"{nested}<sparkle:shortVersionString>{escape(str(item.version))}"
+        "</sparkle:shortVersionString>",
+        f"{nested}<sparkle:minimumSystemVersion>{escape(str(item.min_system))}"
+        "</sparkle:minimumSystemVersion>",
         f"{nested}<sparkle:releaseNotesLink>{_attr(item.notes_url)}"
         "</sparkle:releaseNotesLink>",
         f'{nested}<enclosure url="{_attr(item.url)}" length="{_attr(item.length)}"'
         f' type="application/octet-stream"'
         f' sparkle:edSignature="{_attr(item.ed_signature)}"/>',
         f"{indent}</item>",
-    ])
+    ]
+    return newline.join(lines)
 
 
 def _line_indent(xml, index):
@@ -104,6 +119,38 @@ def _channel_close(xml):
     return close
 
 
+def _element_build(element):
+    """Return the item's build: Sparkle 2 element first, then legacy attributes.
+
+    ``None`` means the item carries no version information and must be
+    preserved untouched.
+    """
+    version = element.find(f"{{{SPARKLE_NS}}}version")
+    if version is not None and (version.text or "").strip():
+        return version.text.strip()
+    legacy = element.get(f"{{{SPARKLE_NS}}}version")
+    if legacy is None:
+        enclosure = element.find("enclosure")
+        if enclosure is not None:
+            legacy = enclosure.get(f"{{{SPARKLE_NS}}}version")
+    return legacy
+
+
+def _item_builds(xml):
+    """Return each channel item's build (or ``None``), in document order."""
+    root = ElementTree.fromstring(xml)
+    channel = root.find("channel")
+    if channel is None:
+        channel = root.find(".//channel")
+    if channel is None:
+        raise ValueError("appcast has no <channel>")
+    return [_element_build(element) for element in channel.findall("item")]
+
+
+def _newline_of(xml):
+    return "\r\n" if "\r\n" in xml else "\n"
+
+
 def upsert_item(xml: str, item: AppcastItem) -> str:
     """Return ``xml`` with ``item`` upserted, keyed on ``sparkle:version``.
 
@@ -113,25 +160,28 @@ def upsert_item(xml: str, item: AppcastItem) -> str:
     """
     _validate(item)
     close = _channel_close(xml)
-    rendered = None
-    for match in ITEM_SPAN.finditer(xml):
-        if match.start() > close:
-            break
-        if ITEM_VERSION.search(match.group(0)).group(1) == item.build:
+    spans = [match for match in ITEM_SPAN.finditer(xml)
+              if match.start() <= close]
+    builds = _item_builds(xml)
+    if len(builds) != len(spans):
+        raise ValueError("could not reconcile <item> boundaries with the "
+                         "parsed appcast; refusing to splice")
+    newline = _newline_of(xml)
+    for match, build in zip(spans, builds):
+        if build == item.build:
             indent = _line_indent(xml, match.start())
-            return xml[:match.start()] + render_item(item, indent) + xml[match.end():]
+            replacement = render_item(item, indent, newline)
+            return xml[:match.start()] + replacement + xml[match.end():]
     # No item carries this build: insert above the first item, or just
     # before </channel> in an empty channel, as the newest release.
-    spans = [match for match in ITEM_SPAN.finditer(xml) if match.start() <= close]
     if spans:
         first = spans[0]
         indent = _line_indent(xml, first.start())
-        block = render_item(item, indent) + "\n" + indent
+        block = render_item(item, indent, newline) + newline + indent
         return xml[:first.start()] + block + xml[first.start():]
-    indent = _line_indent(xml, close)
-    if not indent:
-        indent = "    "
-    return xml[:close] + render_item(item, indent) + "\n" + indent + xml[close:]
+    indent = _line_indent(xml, close) or "    "
+    return (xml[:close] + render_item(item, indent, newline) + newline
+            + indent + xml[close:])
 
 
 def _parse_date(value):
@@ -169,18 +219,21 @@ def main(argv=None):
                        pub_date=_parse_date(arguments.pub_date))
     path = Path(arguments.appcast)
     try:
-        xml = path.read_text(encoding="utf-8")
+        # Bytes in, bytes out: no newline translation anywhere below.
+        xml = path.read_bytes().decode("utf-8")
         ElementTree.fromstring(xml)  # refuse to splice a malformed appcast
         updated = upsert_item(xml, item)
         ElementTree.fromstring(updated)  # the splice must stay well-formed
     except (OSError, ValueError, ElementTree.ParseError) as error:
         print(f"APPCAST_UPDATE_FAILED {path}: {error}", file=sys.stderr)
         return 1
-    path.write_text(updated, encoding="utf-8")
+    path.write_bytes(updated.encode("utf-8"))
     if arguments.item_out:
-        indent = _line_indent(updated, updated.find("<item"))
-        Path(arguments.item_out).write_text(
-            render_item(item, indent) + "\n", encoding="utf-8")
+        index = updated.find("<item")
+        indent = _line_indent(updated, index) if index >= 0 else ""
+        standalone = render_item(item, indent, _newline_of(updated))
+        Path(arguments.item_out).write_bytes(
+            (standalone + _newline_of(updated)).encode("utf-8"))
     print(f"APPCAST_OK {item.build} -> {path}")
     return 0
 
