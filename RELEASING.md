@@ -76,3 +76,36 @@ them. Publish the ZIP, DMG, checksums and build metadata on the same `vX.Y.Z`
 release that carries the Linux assets. Keep build directories, certificates,
 notarization credentials and temporary submission archives out of Git and GitHub
 release assets. Retain the archive/dSYMs locally for diagnostics.
+
+# Publishing
+
+`Tools/publish-release.sh` verifies and publishes both release directories
+together. `Tools/release-macos.sh` has already updated `docs/appcast.xml` in
+the working tree; that update is committed by publishing, nothing else may be
+pending:
+
+```sh
+XRG_TAP_DIR=/absolute/path/to/homebrew-tap \
+  bash Tools/publish-release.sh X.Y.Z /absolute/mac/release /absolute/linux/release
+```
+
+The default is a dry run that prints every command it would run. `--execute`
+requires typing the version to confirm and a set `XRG_TAP_DIR`. The script
+verifies the unified version (`Tools/check-version.py --expect`), that only the
+appcast update is pending, that `HEAD` is the `sourceCommit`/revision recorded
+in both release directories' metadata, that `origin/main` matches `HEAD`, and
+the checksums of every macOS (`SHA256SUMS.txt`) and Linux (`SHA256SUMS`)
+asset. It then creates the signed annotated `vX.Y.Z` tag
+(`git tag -s vX.Y.Z -m "XRG-ng X.Y.Z"`), a `gh release` draft carrying every
+macOS asset, every Linux asset listed in `SHA256SUMS`, and
+`releases/X.Y.Z.md`, commits the updated `docs/appcast.xml` (only from
+`main`), and writes the Homebrew cask via `Tools/cask.py` into
+`$XRG_TAP_DIR/Casks/xrg-ng.rb`, committing it in the tap.
+
+Generate the cask alone with `python3 Tools/cask.py --version V --sha256 HEX
+--output Casks/xrg-ng.rb` (the sha256 is the release DMG's digest). It uses
+the Sparkle appcast for livecheck, matching the app's update feed.
+
+Pushing the tag and `main`, pushing the tap commit, and un-drafting the
+release (`gh release edit vX.Y.Z --draft=false`) are printed as manual
+commands; the script never runs them.
