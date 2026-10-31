@@ -1,22 +1,31 @@
-# XRG-ng 0.1.0
+# XRG-ng 0.2.1
 
-The first XRG-ng release brings the macOS application logic to Swift while
-retaining small native hardware interfaces and the existing graph-based UI.
+The complete release notes for 0.2.1 — including the Linux changes since
+0.2.0, Windows status, install instructions and validation limits — live in
+[releases/0.2.1.md](releases/0.2.1.md).
 
-- CPU, GPU, memory, battery, temperature, network and disk monitoring.
-- Weather, stock and multi-provider AI token monitoring.
-- Six built-in color themes: Classic, Midnight, Ocean, Dusk, Paper and Phosphor.
-- Existing custom colors and `.xtf` theme load/save remain available.
-- Accessible graph expansion/collapse actions and improved hidden-panel behavior.
-- Universal macOS app for Apple silicon and Intel, requiring macOS 26 or newer.
+macOS summary since 0.1.0: an Apple Neural Engine panel (Apple silicon),
+optional VRAM and Fans graphs, a searchable process table with live
+inspectors and confirmed process actions, persistent CPU/GPU source
+selection, per-graph presentation controls, portable JSON themes shared with
+Linux (XTF keeps working), explicit history capacities and 1–60 minute
+observation windows (AI up to 1,440 minutes), sampling that continues while
+graphs are hidden, observed AI session/daily accounting with budget alerts,
+weather history windows, and the new GPL read-only SMC sensor backend.
 
-Download the DMG and drag XRG-ng into Applications, or extract the ZIP. The release
-packages are intended to be Developer ID signed, notarized and stapled; SHA-256
-checksums and source-commit metadata accompany the downloads.
+New in 0.2.1 itself: Sparkle 2.10.1 automatic updates (**Check for
+Updates…** in the application menu; signed feed; daily once you allow
+automatic checks; 0.1.0 settings preserved), a Homebrew cask
+(`brew install --cask sdelavega/tap/xrg-ng`), and **Help → Support XRG-ng…**
+for GitHub Sponsors.
 
-Validation includes native ARM and Rosetta x86_64 tests, packaged launch/restore/
-shutdown checks, and targeted interactive UI checks. Rosetta validation does not
-replace physical Intel hardware testing. Sensor accuracy and a complete VoiceOver
-session remain separate validation work.
+Validation is stated honestly in the release notes: native ARM and Rosetta
+tests (Rosetta does not replace physical Intel hardware), CI for x86-64 Linux
+and for Windows compile checks, an ARM64 container gate plus physical
+Raspberry Pi 5 board runs for Linux ARM64 (the Pi's complete debug gate is
+not a clean pass — three log-scan unit tests need finer file-timestamp
+granularity than that board's 4 ms kernel tick), and no physical sleep/wake
+claims.
 
-Copyright and third-party license notices are included in the app and source.
+macOS 26 or newer, universal (Apple silicon and Intel). Copyright and
+third-party license notices are included in the app and source.
