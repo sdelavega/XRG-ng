@@ -187,6 +187,32 @@ xcrun stapler validate "$output/$stem.dmg" >> "$output/dmg-staple.log" 2>&1
 codesign --verify --strict "$output/$stem.dmg" >> "$output/dmg-sign.log" 2>&1
 spctl --assess --type open --context context:primary-signature --verbose=4 \
     "$output/$stem.dmg" > "$output/dmg-gatekeeper.log" 2>&1
+
+echo "Generating Sparkle appcast item"
+sign_update="$output/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+[[ -x "$sign_update" ]] || { echo "sign_update missing (resolve Sparkle in DerivedData first): $sign_update" >&2; exit 1; }
+echo "\"$sign_update\" --account XRG-ng \"$output/$stem.dmg\"" > "$output/sign_update.log"
+"$sign_update" --account XRG-ng "$output/$stem.dmg" | tee -a "$output/sign_update.log"
+IFS=$'\t' read -r ed_signature dmg_length < <(python3 - "$output/sign_update.log" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r'sparkle:edSignature="([^"]+)"\s+length="(\d+)"', text)
+assert match, f"unparsed sign_update output: {text!r}"
+print(match.group(1) + "\t" + match.group(2))
+PY
+)
+[[ -n "$ed_signature" && -n "$dmg_length" ]] || { echo "Failed to parse sign_update output" >&2; exit 1; }
+printf 'sparkle:edSignature=%s\nlength=%s\n' "$ed_signature" "$dmg_length" > "$output/ed-signature.txt"
+build=$(< "$output/verified-build.txt")
+# Reuse the verified build recorded during packaging: never re-read the project here.
+python3 Tools/appcast.py --appcast docs/appcast.xml --item-out "$output/appcast-item.xml" \
+    --version "$version" --build "$build" \
+    --url "https://github.com/sdelavega/XRG-ng/releases/download/v${version}/${stem}.dmg" \
+    --length "$dmg_length" --ed-signature "$ed_signature" \
+    --notes-url "https://github.com/sdelavega/XRG-ng/releases/tag/v${version}" \
+    --min-system 26.0
+echo "PASS: appcast item generated (docs/appcast.xml is updated in the working tree only, never committed by this script)"
 (
     cd "$output"
     shasum -a 256 "$stem.zip" "$stem.dmg" > SHA256SUMS.txt
