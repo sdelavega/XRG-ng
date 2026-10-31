@@ -17,7 +17,9 @@ import re
 import sys
 
 CASK_NAME = "Casks/xrg-ng.rb"
-APPCAST_URL = "https://github.com/sdelavega/XRG-ng/raw/main/docs/appcast.xml"
+# The public Sparkle appcast served from GitHub Pages; the app's update feed
+# and the cask's livecheck read the same URL.
+APPCAST_URL = "https://sdelavega.github.io/XRG-ng/appcast.xml"
 
 CASK_TEMPLATE = '''cask "xrg-ng" do
   version "{version}"

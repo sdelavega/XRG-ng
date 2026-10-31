@@ -38,13 +38,17 @@ packages receive binary `.sig` files. Metadata preserves the original CI hashes
 and source/run identity. Only public keys, signatures and artifacts leave the Mac.
 
 Create a signed annotated `vX.Y.Z` tag at that exact commit using the dedicated
-signing subkey and keyring. Upload the complete verified directory to the single
+signing subkey and keyring. Upload the directory's public inventory to the single
 `vX.Y.Z` GitHub draft — the same draft that carries the macOS assets — with the
-corresponding release notes. Download the draft assets into a fresh directory and
-run the public-key verification again before publishing. Never upload the private
-keyring, passphrase, revocation certificate, scratch files or test keys. This
-procedure signs standalone packages; repository metadata signing is a separate
-future task.
+corresponding release notes: every payload, `SHA256SUMS`, `SHA256SUMS.asc`,
+every payload's detached signature (`.sig` for the Arch packages) and
+`release-metadata.json`. The per-payload `.sha256` sidecars, the public key,
+the fingerprint and their signatures stay local. Download the draft assets into
+a fresh directory and verify the payloads against `SHA256SUMS` and their
+detached signatures with the pinned public key before publishing. Never upload
+the private keyring, passphrase, revocation certificate, scratch files or test
+keys. This procedure signs standalone packages; repository metadata signing is
+a separate future task.
 
 # macOS side
 
@@ -90,21 +94,51 @@ XRG_TAP_DIR=/absolute/path/to/homebrew-tap \
 ```
 
 The default is a dry run that prints every command it would run. `--execute`
-requires typing the version to confirm and a set `XRG_TAP_DIR`. The script
-verifies the unified version (`Tools/check-version.py --expect`), that only the
-appcast update is pending, that `HEAD` is the `sourceCommit`/revision recorded
-in both release directories' metadata, that `origin/main` matches `HEAD`, and
-the checksums of every macOS (`SHA256SUMS.txt`) and Linux (`SHA256SUMS`)
-asset. It then creates the signed annotated `vX.Y.Z` tag
-(`git tag -s vX.Y.Z -m "XRG-ng X.Y.Z"`), a `gh release` draft carrying every
-macOS asset, every Linux asset listed in `SHA256SUMS`, and
-`releases/X.Y.Z.md`, commits the updated `docs/appcast.xml` (only from
-`main`), and writes the Homebrew cask via `Tools/cask.py` into
-`$XRG_TAP_DIR/Casks/xrg-ng.rb`, committing it in the tap.
+requires typing the version to confirm and a set `XRG_TAP_DIR`. Every check
+runs before any side effect (tag, release, commit), and no check writes to
+git — `origin`'s `main` is compared with `HEAD` using the read-only
+`git ls-remote`, never a fetch. The script refuses the publish unless:
+
+- the unified version agrees (`Tools/check-version.py --expect`),
+  `latest_version.txt` and `releases/X.Y.Z.md` are in place and the branch
+  is `main`;
+- the working tree is clean except at most `docs/appcast.xml`, and only
+  with the unstaged-modified porcelain status (` M`): staged, deleted,
+  conflicted or additional dirt is refused. A pending appcast must parse
+  and carry the item whose `sparkle:version` is this release's build with
+  exactly the enclosure length and `sparkle:edSignature` recorded in the
+  macOS release directory's `appcast-item.xml`;
+- `origin`'s `main` is exactly `HEAD`, which is the `sourceCommit`/`revision`
+  recorded in both release directories' metadata;
+- both release directories hold the complete public asset inventory, every
+  asset a regular file (never a symlink) with a safe basename contained in
+  its release directory. macOS publishes exactly the DMG, the ZIP,
+  `SHA256SUMS.txt` and `release-build.json`. Linux publishes every payload
+  of both architectures (tarball, `.deb`, `.rpm`, `.pkg.tar.zst`,
+  AppImage), `SHA256SUMS`, `SHA256SUMS.asc`, every payload's detached
+  signature (`.asc`, or `.sig` for the Arch packages) and
+  `release-metadata.json`. Anything else found in the release directories —
+  per-payload `.sha256` sidecars, the public key, the fingerprint,
+  `verified-build.txt`, `appcast-item.xml` — is never uploaded; the public
+  appcast is the committed `docs/appcast.xml` served by GitHub Pages;
+- each checksum manifest line is well formed and unique, every payload is
+  covered by its manifest, and every listed digest matches the file
+  (`SHA256SUMS.txt` covers the DMG and ZIP; Linux `SHA256SUMS` covers every
+  payload and `release-metadata.json`);
+- with `--execute`, `XRG_TAP_DIR` is a git work tree with a clean index and
+  worktree, checked before the tag.
+
+It then creates the signed annotated `vX.Y.Z` tag
+(`git tag -s vX.Y.Z -m "XRG-ng X.Y.Z"`), a `gh release` draft carrying the
+public assets listed above plus `releases/X.Y.Z.md`, commits the pending
+`docs/appcast.xml` (only that path, only from `main`), and writes the
+Homebrew cask via `Tools/cask.py` into `$XRG_TAP_DIR/Casks/xrg-ng.rb`,
+committing only that path in the tap.
 
 Generate the cask alone with `python3 Tools/cask.py --version V --sha256 HEX
 --output Casks/xrg-ng.rb` (the sha256 is the release DMG's digest). It uses
-the Sparkle appcast for livecheck, matching the app's update feed.
+the public Sparkle appcast (`https://sdelavega.github.io/XRG-ng/appcast.xml`)
+for livecheck, matching the app's update feed.
 
 Pushing the tag and `main`, pushing the tap commit, and un-drafting the
 release (`gh release edit vX.Y.Z --draft=false`) are printed as manual
