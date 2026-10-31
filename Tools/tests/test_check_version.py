@@ -74,6 +74,17 @@ class CheckVersionTest(unittest.TestCase):
         result = self.run_checker()
         self.assertEqual(result.returncode, 1, result.stdout)
 
+    def test_combined_failures_report_all_files(self):
+        """A conflicting Xcode source must not hide other files' mismatches."""
+        self.write_fixture(marketing=("0.2.1",) * 5 + ("0.1.0",), cargo="0.2.0")
+        result = self.run_checker("--expect", "0.2.1")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.stdout.count("VERSION_CHECK_FAILED"), 2, result.stdout)
+        self.assertIn(f"{XCODE_PROJECT}: conflicting MARKETING_VERSION values: 0.1.0, 0.2.1",
+                      result.stdout)
+        self.assertIn("xrg-linux/rust/Cargo.toml carries 0.2.0, expected 0.2.1",
+                      result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

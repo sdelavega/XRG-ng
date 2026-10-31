@@ -48,10 +48,12 @@ import sys
 app, version, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 spec = importlib.util.spec_from_file_location("check_version", "Tools/check-version.py")
 check_version = importlib.util.module_from_spec(spec); spec.loader.exec_module(check_version)
-build = check_version.read_build(Path("."))
 info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
 assert info['CFBundleShortVersionString'] == version
-assert info['CFBundleVersion'] == build
+assert info['CFBundleVersion'] == check_version.read_build(Path(".")), info['CFBundleVersion']
+# Retain the verified artifact build so release-build.json always describes
+# the shipped app, even if the project changes during packaging/notarization.
+(output / 'verified-build.txt').write_text(f"{info['CFBundleVersion']}\n")
 assert info['CFBundleIdentifier'] == 'com.sdelavega.xrg'
 assert info['LSMinimumSystemVersion'] == '26.0'
 slices = subprocess.run(['xcrun', 'lipo', '-archs', str(app / 'Contents/MacOS/XRG-ng')], check=True, capture_output=True, text=True).stdout.split()
@@ -115,14 +117,11 @@ spctl --assess --type open --context context:primary-signature --verbose=4 \
     shasum -a 256 "$stem.zip" "$stem.dmg" > SHA256SUMS.txt
 )
 python3 - "$output" "$version" "$source_commit" <<'PY'
-import importlib.util
 import json
 from pathlib import Path
 import sys
 output, version, commit = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-spec = importlib.util.spec_from_file_location("check_version", "Tools/check-version.py")
-check_version = importlib.util.module_from_spec(spec); spec.loader.exec_module(check_version)
-build = check_version.read_build(Path("."))
+build = (output / 'verified-build.txt').read_text().strip()
 (output / 'release-build.json').write_text(json.dumps({'version': version, 'build': build, 'sourceCommit': commit,
     'architectures': ['arm64', 'x86_64'], 'minimumMacOS': '26.0', 'developerID': 'N5PUFD82GV',
     'appNotarized': True, 'dmgNotarized': True, 'ticketsStapled': True, 'gatekeeperAccepted': True}, indent=2) + '\n')

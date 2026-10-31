@@ -8,12 +8,15 @@ output="$1"
 baseline=50ca1e54f44ed66608b069cc5483dde7f057d281
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/xrg-upgrade-baseline.XXXXXX")
 cleanup() {
-    git worktree remove --force "$scratch/source" 2>/dev/null || true
+    du -sk "$scratch" 2>/dev/null || true
     rm -rf -- "$scratch"
 }
 trap cleanup EXIT
-git fetch --no-tags --depth=1 origin "$baseline"
-git worktree add --detach "$scratch/source" "$baseline"
+# Fetch and check out inside an isolated temporary repository so the caller's
+# checkout keeps its history boundary, worktree list and shallow state intact.
+git init --quiet "$scratch/source"
+git -C "$scratch/source" fetch --no-tags --depth=1 "$(git remote get-url origin)" "$baseline"
+git -C "$scratch/source" checkout --detach FETCH_HEAD
 # Separate targets protect the already-tested current desktop executable.
 env -u XRG_SHARED_LIB_DIR CARGO_TARGET_DIR="$scratch/target" \
     cargo build --manifest-path "$scratch/source/xrg-linux/rust/Cargo.toml" \
