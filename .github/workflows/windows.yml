@@ -17,16 +17,48 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The project's toolchain version, installed from the official
-      # swift.org release archive. The action SHA is the v0.5.1 tag commit,
-      # verified read-only with `gh api repos/compnerd/gha-setup-swift/tags`.
-      - name: Install Swift
-        uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
-        with:
-          source: swift.org
-          swift-version: swift-6.4.1-release
-          swift-build: 6.4.1-RELEASE
-          build_arch: amd64
+      # The project's toolchain version, installed from swift.org's official
+      # release archive. swift.org publishes no GPG .sig for the Windows
+      # installer (the Linux tarballs have one; the .exe does not), so the
+      # tamper check is the pinned SHA-256 below: computed from the installer
+      # served by exactly this URL and cross-checked against the
+      # InstallerSha256 that microsoft/winget-pkgs publishes for
+      # Swift.Toolchain 6.4.1 — the same Burn installer winget runs.
+      - name: Install Swift 6.4.1 from swift.org
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://download.swift.org/swift-6.4.1-release/windows10/swift-6.4.1-RELEASE/swift-6.4.1-RELEASE-windows10.exe'
+          $sha256 = '9382e14919eeae5e7b5dbfe0575452fe2154178e089a595c8b44d03960d91d59'
+          $installer = Join-Path $env:RUNNER_TEMP 'swift-6.4.1-RELEASE-windows10.exe'
+          $installLog = Join-Path $env:GITHUB_WORKSPACE 'swift-install.log'
+          curl.exe -fsSL --retry 3 --retry-delay 5 -o $installer $url
+          if ($LASTEXITCODE -ne 0) { throw "Downloading $url failed with exit code $LASTEXITCODE" }
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $sha256) { throw "Swift installer SHA-256 mismatch: expected $sha256, got $actual" }
+          # Burn quiet install, the same switches winget uses for burn
+          # bundles; 3010 is success with a pending reboot.
+          $process = Start-Process -FilePath $installer -Wait -PassThru -Verb RunAs -ArgumentList '/quiet', '/norestart', '/log', $installLog
+          if ($process.ExitCode -notin 0, 3010) { throw "Swift installer exited with $($process.ExitCode); log: $installLog" }
+          # The installer wrote Swift into the *user* environment in the
+          # registry, which this process cannot see. Mirror the new user
+          # Path entries and SDKROOT for the later steps.
+          $visible = @($env:Path -split ';' | ForEach-Object { $_.Trim().Trim('"') })
+          $entries = @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' |
+            ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ -and $_ -notin $visible })
+          if (-not ($entries | Where-Object { $_ -match 'Swift' })) {
+            throw 'The installer added no Swift directory to the user Path'
+          }
+          # GITHUB_PATH prepends each line, so emit in reverse to keep order.
+          [array]::Reverse($entries)
+          $entries | ForEach-Object { Add-Content -Path $env:GITHUB_PATH -Value $_ }
+          $sdkroot = [Environment]::GetEnvironmentVariable('SDKROOT', 'User')
+          if (-not $sdkroot) { $sdkroot = [Environment]::GetEnvironmentVariable('SDKROOT', 'Machine') }
+          if (-not $sdkroot) { throw 'The installer set no SDKROOT to export' }
+          Add-Content -Path $env:GITHUB_ENV -Value "SDKROOT=$sdkroot"
+          # Prove the export before the later steps rely on it.
+          $env:Path = "$($entries -join ';');$env:Path"
+          swift --version
+          if ($LASTEXITCODE -ne 0) { throw 'swift --version failed with the exported environment' }
       # Rust 1.99.1 comes from xrg-linux/rust/rust-toolchain.toml.
       - name: Build and test shared Swift core
         id: shared
@@ -60,6 +92,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           path: |
+            swift-install.log
             swift-build.log
             swift-test.log
             xrg-linux/rust/cargo-check.log

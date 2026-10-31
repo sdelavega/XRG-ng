@@ -863,10 +863,13 @@ fn resumable_claude_appends_keep_copy_deduplication_models_and_cache_atomic() {
     let first = format!("{}\n{}", message(10, "old"), "ignored\n".repeat(2000));
     f.put("a.jsonl", &first);
     f.put("copy.jsonl", message(10, "old"));
-    // NTFS cannot represent mtimes before 1980; shift the synthetic stamps
-    // past that floor on Windows so the ordering under test is preserved.
+    // Windows file times are 1601-epoch FILETIMEs, so NTFS itself can hold
+    // these 1970 stamps; FAT-family volumes (FAT/exFAT) cannot: their date
+    // fields start at 1980 with 2-second granularity, which would collapse
+    // the ordering this test relies on if the scratch dir sat on one. Only
+    // the ordering matters, so on Windows use a modern base date.
     #[cfg(windows)]
-    const TIME_BASE: u64 = 1_000_000_000; // 2001-09-09, well after the NTFS floor.
+    const TIME_BASE: u64 = 1_000_000_000; // 2001-09-09, past every filesystem floor.
     #[cfg(not(windows))]
     const TIME_BASE: u64 = 0;
     let set_time = |name, seconds| {

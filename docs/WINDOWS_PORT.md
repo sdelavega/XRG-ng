@@ -8,7 +8,7 @@ tracks what already builds, what each collector needs on Windows, and how the
 ## What compiles today
 
 The full shared core and the Rust collector crate build and pass their tests on
-`x86_64-unknown-windows-msvc` with Swift 6.4.1 and Rust 1.99.1:
+`x86_64-pc-windows-msvc` with Swift 6.4.1 and Rust 1.99.1:
 
 - `swift build` and `swift test` for the root `XRGSharedCore` package
   (38 tests, 9 suites). The dynamic product is `XRGSharedCore.dll` with its
