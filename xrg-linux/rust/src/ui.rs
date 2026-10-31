@@ -704,7 +704,8 @@ pub fn run(smoke_mode: bool) -> bool {
 }
 
 fn hostname() -> String {
-    #[cfg(target_os = "linux")]
+    // POSIX gethostname; every unix target reads the real host name.
+    #[cfg(unix)]
     {
         let mut bytes = [0u8; 256];
         // POSIX gethostname writes at most the supplied buffer, with no allocation.
@@ -717,9 +718,9 @@ fn hostname() -> String {
         }
         "XRG-ng".into()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
-        // No POSIX gethostname off Linux; use the same fallback the Linux
+        // No POSIX gethostname off Unix; use the same fallback the Unix
         // shell already uses when gethostname fails.
         "XRG-ng".into()
     }

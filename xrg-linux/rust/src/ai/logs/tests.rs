@@ -805,7 +805,7 @@ fn complete_provider_totals_publish_only_after_all_slices_and_then_use_the_cache
     );
 }
 #[test]
-#[cfg(all(test, target_os = "linux"))] // Asserts inode/ctime rotation identity.
+#[cfg(all(test, unix))] // Asserts inode/ctime rotation identity (POSIX metadata).
 fn replacements_truncation_and_same_size_rewrites_invalidate_inflight_work() {
     for replacement in [false, true] {
         let f = ScanFixture::new();
@@ -1060,7 +1060,7 @@ fn codex_components_replace_cumulative_snapshots_without_adding_subfields() {
 }
 
 #[test]
-#[cfg(all(test, target_os = "linux"))] // Asserts inode/ctime rotation identity.
+#[cfg(all(test, unix))] // Asserts inode/ctime rotation identity (POSIX metadata).
 fn complete_inventory_boundaries_include_import_remove_replace_truncate_and_masked_rollbacks() {
     let f = ScanFixture::new();
     f.put("rollout-a.jsonl", codex(10));

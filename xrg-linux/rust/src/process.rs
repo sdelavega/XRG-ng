@@ -167,7 +167,9 @@ pub struct Collector {
     budget: Duration,
 }
 impl Collector {
-    #[cfg(target_os = "linux")]
+    // sysconf clock/page sizes are POSIX; every unix target reads the real
+    // configuration. The procfs scan itself remains Linux-only.
+    #[cfg(unix)]
     pub fn new(root: PathBuf) -> Self {
         let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
         let pages = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -177,9 +179,9 @@ impl Collector {
             u64::try_from(pages).unwrap_or(0),
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     pub fn new(root: PathBuf) -> Self {
-        // No sysconf clock/page size off Linux; sample_at then reports the
+        // No sysconf clock/page size off Unix; sample_at then reports the
         // collector's existing "configuration unavailable" value.
         Self::with_parameters(root, 0, 0)
     }
@@ -300,10 +302,10 @@ impl Collector {
                 }
                 Err(error) => {
                     self.previous.remove(&pid);
-                    #[cfg(target_os = "linux")]
+                    #[cfg(unix)]
                     let vanished = matches!(error.raw_os_error(), Some(libc::ESRCH))
                         || error.kind() == io::ErrorKind::NotFound;
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(not(unix))]
                     let vanished = error.kind() == io::ErrorKind::NotFound;
                     if vanished {
                         report.vanished += 1;

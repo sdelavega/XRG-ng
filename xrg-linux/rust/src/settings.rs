@@ -10,7 +10,7 @@ use crate::{
     system_file,
 };
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs::{self, OpenOptions},
@@ -981,7 +981,9 @@ fn atomic_write_bounded(
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        #[cfg(target_os = "linux")]
+        // Restrictive creation permissions (0600) are POSIX; every unix target
+        // keeps the explicit private mode instead of umask-dependent defaults.
+        #[cfg(unix)]
         let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -992,7 +994,7 @@ fn atomic_write_bounded(
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e.to_string()),
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)

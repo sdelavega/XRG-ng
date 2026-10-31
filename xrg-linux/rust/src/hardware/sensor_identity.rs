@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{fs, path::Path};
 
@@ -55,16 +55,17 @@ pub(super) fn identity(
     if !input.is_file() {
         return Err("Expected a regular sensor attribute".into());
     }
-    #[cfg(target_os = "linux")]
+    // Inode incarnation metadata is POSIX; every unix target keeps it.
+    #[cfg(unix)]
     let id = format!(
         "{source}:{}:{}:{}",
         directory.dev(),
         directory.ino(),
         input.ino()
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     let id = {
-        // No device/inode incarnation metadata exists off Linux, so the
+        // No device/inode incarnation metadata exists off Unix, so the
         // history identity degrades to the saved source identity; sysfs
         // never exists there to be scanned either.
         let _ = directory;

@@ -9,7 +9,7 @@ use std::{
     fs::File,
     path::{Path, PathBuf},
 };
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::{
     fs::OpenOptions,
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
@@ -263,7 +263,8 @@ pub fn state_path() -> Option<PathBuf> {
     Some(root.join("xrg-ng/ai-usage.json"))
 }
 pub fn local_day() -> Result<String, String> {
-    #[cfg(target_os = "linux")]
+    // localtime_r is POSIX; every unix target keeps the real local calendar.
+    #[cfg(unix)]
     {
         let time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -283,9 +284,9 @@ pub fn local_day() -> Result<String, String> {
             tm.tm_mday
         ))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
-        // No libc localtime_r off Linux; report the existing "local calendar
+        // No libc localtime_r off Unix; report the existing "local calendar
         // unavailable" value rather than guessing a time zone.
         Err("Local calendar unavailable".into())
     }
@@ -297,8 +298,8 @@ struct Store {
     _lock: Option<File>,
 }
 impl Store {
-    // Off Linux the lock stub returns before the shared state-parsing tail,
-    // which reads as unreachable there; on Linux the whole body is reachable.
+    // Off Unix the lock stub returns before the shared state-parsing tail,
+    // which reads as unreachable there; on Unix the whole body is reachable.
     #[allow(unreachable_code)]
     fn open(path: Option<PathBuf>, day: &str) -> (Self, Daily) {
         let mut store = Self {
@@ -311,7 +312,9 @@ impl Store {
             let path = store.path.as_ref().ok_or("No state directory available")?;
             let parent = path.parent().ok_or("Invalid state path")?;
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            #[cfg(target_os = "linux")]
+            // flock/O_NOFOLLOW/O_NONBLOCK/0600 creation are POSIX: every unix
+            // target keeps the real exclusive state lock discipline.
+            #[cfg(unix)]
             {
                 let lock = OpenOptions::new()
                     .read(true)
@@ -331,9 +334,9 @@ impl Store {
                 }
                 store._lock = Some(lock);
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(unix))]
             {
-                // No O_NOFOLLOW/O_NONBLOCK/flock discipline exists off Linux;
+                // Windows: no flock/O_NOFOLLOW/O_NONBLOCK discipline via libc;
                 // report the store's existing "blocked by another instance"
                 // value instead of writing unprotected shared state.
                 let _ = parent;

@@ -405,7 +405,8 @@ impl Collector {
         update
     }
 }
-#[cfg(target_os = "linux")]
+// gmtime_r is POSIX; every unix target keeps the libc UTC formatting.
+#[cfg(unix)]
 fn utc(timestamp: i64) -> String {
     let epoch = timestamp as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -421,10 +422,10 @@ fn utc(timestamp: i64) -> String {
         tm.tm_min
     )
 }
-/// Off Linux there is no libc gmtime_r. The civil-from-days algorithm
+/// Off Unix there is no libc gmtime_r. The civil-from-days algorithm
 /// (Howard Hinnant, public domain) formats the same UTC date and time with
 /// plain arithmetic, including instants before the epoch.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 fn utc(timestamp: i64) -> String {
     let days = timestamp.div_euclid(86_400);
     let seconds = timestamp.rem_euclid(86_400);

@@ -39,9 +39,9 @@ pub mod process;
 pub mod sampling;
 pub mod sensor_stats;
 mod sensors;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub mod system_file;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 #[path = "system_file_stub.rs"]
 pub mod system_file;
 pub mod tpu;

@@ -117,14 +117,16 @@ impl Entry {
         matches!(self.kind, Kind::Directory | Kind::Link)
     }
     fn hidden(&self) -> bool {
-        #[cfg(target_os = "linux")]
+        // Raw OsStr bytes are POSIX; every unix target checks the same
+        // leading-dot byte instead of a lossy decode.
+        #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;
             self.name.as_os_str().as_bytes().starts_with(b".")
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
-            // No raw OsStr bytes off Linux; the same leading-dot check decodes.
+            // No raw OsStr bytes off Unix; the same leading-dot check decodes.
             self.name.as_os_str().to_string_lossy().starts_with('.')
         }
     }
@@ -331,16 +333,17 @@ fn file_name(name: &std::ffi::OsStr) -> Result<(), String> {
     if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
         return Err("Enter a filename within the selected folder".into());
     }
-    #[cfg(target_os = "linux")]
+    // Raw OsStr bytes are POSIX; every unix target rejects the same bytes.
+    #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         if name.as_bytes().contains(&0) || name.as_bytes().contains(&b'/') {
             return Err("Filename contains a path separator or NUL byte".into());
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
-        // No raw OsStr bytes off Linux; reject the same separators (plus the
+        // No raw OsStr bytes off Unix; reject the same separators (plus the
         // platform's alternate separator) through a lossy decode.
         let decoded = name.to_string_lossy();
         if decoded.contains('\0') || decoded.contains('/') || decoded.contains('\\') {
@@ -741,7 +744,7 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-#[cfg(all(test, target_os = "linux"))] // Uses Unix symlinks and OsStr byte encodings.
+#[cfg(all(test, unix))] // Uses Unix symlinks and OsStr byte encodings.
 mod tests {
     use super::*;
     use std::{

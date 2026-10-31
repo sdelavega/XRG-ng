@@ -7,8 +7,14 @@ use std::{
     path::Path,
 };
 
-/// The Linux implementation of the hardened system-file reader.
-pub const IMPLEMENTATION: &str = "linux";
+/// The hardened reader itself is POSIX (`O_NOFOLLOW`/`O_NONBLOCK`, regular-file
+/// and size enforcement), so every unix target runs the real implementation;
+/// only the platform identity below differs.
+pub const IMPLEMENTATION: &str = if cfg!(target_os = "linux") {
+    "linux"
+} else {
+    "unix"
+};
 
 /// proc files report size zero, so enforce the limit while reading. Reject FIFOs,
 /// device nodes and final-component symlinks before reading; opening cannot block.

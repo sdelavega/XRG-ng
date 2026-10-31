@@ -6,42 +6,20 @@
 pub const IMPLEMENTATION: &str = "linux";
 mod battery;
 mod fans;
+mod format;
 mod sensor_identity;
 pub(crate) mod temperature;
-pub use battery::{BatteryTime, TimeSource};
-pub use fans::{Fan, fans};
+pub use fans::fans;
+// The reading types and presentation formatting are shared with the stub twin
+// (`hardware/format`) so both platforms present identical fields.
+pub use format::{Battery, BatteryTime, Fan, Readings, Temperature, TimeSource};
+pub(crate) use format::{celsius, short_label};
 use std::{
     fs::{self, OpenOptions},
     io::{self, Read},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
-
-#[derive(Debug)]
-pub struct Readings<T> {
-    pub values: Vec<T>,
-    pub errors: Vec<String>,
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct Battery {
-    pub name: String,
-    pub percent: f64,
-    pub status: String,
-    pub watts: Option<f64>,
-    pub health_percent: Option<f64>,
-    pub condition: Option<String>,
-    pub cycles: Option<u64>,
-    pub time: Option<BatteryTime>,
-    pub notes: Vec<String>,
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct Temperature {
-    pub id: String,
-    pub source_id: String,
-    pub thermal: bool,
-    pub name: String,
-    pub celsius: f64,
-}
 
 pub(crate) fn text(path: &Path) -> Result<Option<String>, String> {
     let file = match OpenOptions::new()
@@ -91,9 +69,6 @@ pub(crate) fn directories(path: &Path) -> Result<Vec<PathBuf>, String> {
     paths.sort();
     Ok(paths)
 }
-pub(crate) fn short_label(text: &str) -> String {
-    text.chars().filter(|c| !c.is_control()).take(64).collect()
-}
 pub fn batteries(sys: &Path) -> Result<Readings<Battery>, String> {
     let mut result = Readings {
         values: Vec::new(),
@@ -129,14 +104,6 @@ pub fn batteries(sys: &Path) -> Result<Readings<Battery>, String> {
         }
     }
     Ok(result)
-}
-pub(crate) fn celsius(value: i64) -> Result<f64, String> {
-    // Reject physically impossible values/sentinels; zero and negative readings
-    // are valid. Kernel hwmon/thermal temperature inputs are millidegrees Celsius.
-    if !(-273_150..=1_000_000).contains(&value) {
-        return Err("Temperature out of range".into());
-    }
-    Ok(value as f64 / 1000.)
 }
 struct TemperatureBudget {
     start: std::time::Instant,

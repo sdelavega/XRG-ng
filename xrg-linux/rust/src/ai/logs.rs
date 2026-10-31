@@ -5,7 +5,7 @@ mod codex;
 mod stream;
 use super::{ModelUsage, models::Totals};
 use crate::shared::{self, Usage};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -38,7 +38,9 @@ struct Stamp {
     changed_nanos: i64,
 }
 impl Stamp {
-    #[cfg(target_os = "linux")]
+    // MetadataExt (device/inode/modification/change times) is POSIX; every
+    // unix target keeps the full rotation-identity stamp.
+    #[cfg(unix)]
     fn from(m: &fs::Metadata) -> Self {
         Self {
             device: m.dev(),
@@ -50,9 +52,9 @@ impl Stamp {
             changed_nanos: m.ctime_nsec(),
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     fn from(m: &fs::Metadata) -> Self {
-        // std::fs::Metadata has no device/inode/change times off Linux; size
+        // std::fs::Metadata has no device/inode/change times off Unix; size
         // and modification time still detect log rotation, best effort.
         let (seconds, nanos) = m
             .modified()
@@ -369,13 +371,15 @@ fn discover(
     Ok(())
 }
 pub(super) fn open_regular(path: &Path) -> Result<File, String> {
-    #[cfg(target_os = "linux")]
+    // Hardened no-follow/nonblocking opens are POSIX; every unix target keeps
+    // the protection instead of silently opening through symlinks.
+    #[cfg(unix)]
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .map_err(|e| e.to_string())?;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     let file = OpenOptions::new()
         .read(true)
         .open(path)

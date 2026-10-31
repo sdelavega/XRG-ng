@@ -99,9 +99,11 @@ pub fn inspect(pid: u32) -> Result<Process, String> {
     if !super::live_namespace(std::path::Path::new("/proc")) {
         return Err("Live /proc PID namespace is unavailable".into());
     }
-    #[cfg(target_os = "linux")]
+    // sysconf page size is POSIX; every unix target reads the real value.
+    // The procfs reads that follow remain Linux-only.
+    #[cfg(unix)]
     let page_size = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap_or(0);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     let page_size = 0;
     super::read_process(std::path::Path::new("/proc"), pid, page_size)
         .map_err(|e| format!("Process is no longer readable: {e}"))

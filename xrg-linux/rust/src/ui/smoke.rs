@@ -4,7 +4,7 @@
 use super::{App, file_picker_smoke, preferences};
 use crate::settings::{GraphStyle, Layout, Module, Store};
 use eframe::egui;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::{
     fs,
@@ -40,14 +40,16 @@ impl Harness {
                 .map_err(|e| e.to_string())?
                 .as_nanos()
         ));
-        #[cfg(target_os = "linux")]
+        // Restrictive directory permissions (0700) are POSIX; every unix
+        // target keeps the explicit private mode.
+        #[cfg(unix)]
         {
             fs::DirBuilder::new()
                 .mode(0o700)
                 .create(&directory)
                 .map_err(|e| e.to_string())?;
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             fs::DirBuilder::new()
                 .create(&directory)

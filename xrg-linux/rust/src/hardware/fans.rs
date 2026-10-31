@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use super::{Readings, directories, integer, sensor_identity, short_label, text};
+use super::{Fan, Readings, directories, integer, sensor_identity, short_label, text};
 use std::{
     path::Path,
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Fan {
-    pub id: String,
-    pub source_id: String,
-    pub name: String,
-    pub rpm: u64,
-    pub alarm: Option<bool>,
-    pub notes: Vec<String>,
-}
 pub fn fans(sys: &Path) -> Result<Readings<Fan>, String> {
     let start = Instant::now();
     let mut report = Readings {

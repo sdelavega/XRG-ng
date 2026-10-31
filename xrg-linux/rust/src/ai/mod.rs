@@ -1152,5 +1152,5 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))] // The state lock (flock) and local calendar are POSIX.
 mod worker_accounting_tests;

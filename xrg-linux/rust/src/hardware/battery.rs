@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-use super::{Battery, integer, short_label, text};
+use super::{
+    format::{Battery, BatteryTime, TimeSource},
+    integer, short_label, text,
+};
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TimeSource {
-    Driver,
-    EnergyPower,
-    ChargeCurrent,
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BatteryTime {
-    pub seconds: f64,
-    pub source: TimeSource,
-}
 fn pair(directory: &Path, prefix: &str) -> Result<Option<(i64, i64)>, String> {
     let now = integer(&directory.join(format!("{prefix}_now")))?;
     let full = integer(&directory.join(format!("{prefix}_full")))?;
@@ -167,49 +159,4 @@ pub(super) fn read(directory: &Path, name: String) -> Result<Battery, String> {
         time,
         notes,
     })
-}
-impl Battery {
-    pub fn description(&self) -> String {
-        let mut fields = vec![format!(
-            "{}: {:.1}% · {}",
-            self.name, self.percent, self.status
-        )];
-        if let Some(watts) = self.watts {
-            fields.push(format!("Reported power: {watts:.1} W"));
-        }
-        if let Some(health) = self.health_percent {
-            fields.push(format!("Reported full/design capacity: {health:.1}%"));
-        }
-        if let Some(condition) = &self.condition {
-            fields.push(format!("Driver health: {condition}"));
-        }
-        if let Some(cycles) = self.cycles {
-            fields.push(format!("Cycle count: {cycles}"));
-        }
-        if let Some(time) = self.time {
-            let duration = if time.seconds < 60. {
-                "<1 min".into()
-            } else {
-                let minutes = (time.seconds / 60.) as u64;
-                format!("{} h {} min", minutes / 60, minutes % 60)
-            };
-            let source = match time.source {
-                TimeSource::Driver => "driver reported",
-                TimeSource::EnergyPower => "estimate from energy/power",
-                TimeSource::ChargeCurrent => "estimate from charge/current",
-            };
-            let direction = if self.status == "Charging" {
-                "full"
-            } else {
-                "empty"
-            };
-            fields.push(format!(
-                "Time to {direction}: {duration} ({source}; changes with load/charge rate)"
-            ));
-        } else {
-            fields.push("Time estimate unavailable".into());
-        }
-        fields.extend(self.notes.clone());
-        fields.join("\n")
-    }
 }

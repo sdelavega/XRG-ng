@@ -10,7 +10,7 @@ use crate::{
 };
 pub use npu::parse_rockchip_load;
 use serde::Deserialize;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{
     collections::BTreeMap,
@@ -268,7 +268,9 @@ impl Collector {
         })
     }
 }
-#[cfg(target_os = "linux")]
+// MetadataExt (device/inode/modification/change times) is POSIX; every unix
+// target keeps the full file identity stamp.
+#[cfg(unix)]
 fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     (
         m.dev(),
@@ -280,9 +282,9 @@ fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
         m.ctime_nsec(),
     )
 }
-/// std::fs::Metadata has no device/inode/change times off Linux; size and
+/// std::fs::Metadata has no device/inode/change times off Unix; size and
 /// modification time still detect a replaced producer file.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 fn stamp(m: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     let (seconds, nanos) = m
         .modified()

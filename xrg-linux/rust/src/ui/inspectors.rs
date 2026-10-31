@@ -287,13 +287,14 @@ impl Processes {
             ui.add(egui::TextEdit::singleline(&mut view.filter).char_limit(128));
             let mut filtered = view.uid.is_some();
             if ui.checkbox(&mut filtered, "Filter UID").changed() {
-                #[cfg(target_os = "linux")]
+                // geteuid is POSIX; every unix target offers the real owner.
+                #[cfg(unix)]
                 {
-                    view.uid = filtered.then(|| unsafe { libc::geteuid() });
+                    view.uid = filtered.then(|| unsafe { libc::geteuid() } as u32);
                 }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(unix))]
                 {
-                    // No effective-UID concept is exposed off Linux; leave the
+                    // No effective-UID concept is exposed off Unix; leave the
                     // filter unset rather than inventing an owner.
                     view.uid = None;
                 }
