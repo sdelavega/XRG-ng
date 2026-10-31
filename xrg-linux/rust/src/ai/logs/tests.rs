@@ -784,7 +784,12 @@ impl ScanFixture {
             .unwrap();
     }
     fn scanner(&self) -> LogScan {
-        LogScan::new(self.0.clone(), Layout::Codex)
+        // put() pins distinct mtimes, so these scans keep exact cache-hit I/O
+        // accounting; racy_rewrites_* cover the production settle window.
+        LogScan {
+            settle: Duration::ZERO,
+            ..LogScan::new(self.0.clone(), Layout::Codex)
+        }
     }
 }
 impl Drop for ScanFixture {
@@ -1152,4 +1157,108 @@ fn unfinished_and_failed_sweeps_cannot_commit_a_draft_continuity_inventory() {
     assert_ne!(result.continuity, first.continuity);
     assert_eq!(result.usage.total, 10010);
     assert_eq!(finish(&mut scan, 0).continuity, result.continuity);
+}
+
+fn collide(scan: &mut LogScan, path: &Path) {
+    // Model a coarse-timestamp filesystem: the snapshot was read early in a
+    // tick and the rewrite landed later in that tick, so it reports the very
+    // stamp the cached snapshot recorded.
+    let stamp = Stamp::from(&fs::symlink_metadata(path).unwrap());
+    let entry = scan.cache.get_mut(path).unwrap();
+    entry.stamp = stamp;
+    entry.observed = std::time::UNIX_EPOCH + stamp.changed() + Duration::from_millis(1);
+}
+fn rewrite_keeping_mtime(f: &ScanFixture, name: &str, bytes: &str) {
+    let path = f.0.join(name);
+    let old = fs::metadata(&path).unwrap();
+    assert_eq!(old.len(), bytes.len() as u64, "rewrite must keep the size");
+    fs::write(&path, bytes).unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(old.modified().unwrap()))
+        .unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().modified().unwrap(),
+        old.modified().unwrap()
+    );
+}
+fn only_model(scan: &Scan) -> String {
+    let rows = scan.models.as_ref().unwrap();
+    assert_eq!(rows.len(), 1);
+    rows[0].model.clone().unwrap()
+}
+#[test]
+fn racy_rewrites_with_identical_size_and_mtime_publish_new_totals_models_and_continuity() {
+    for colliding in [false, true] {
+        let f = ScanFixture::new();
+        let path = f.0.join("rollout-a.jsonl");
+        // A natural, recent mtime: put() pins old ones, which would settle the
+        // snapshot at once where no ctime exists (Windows).
+        fs::write(&path, attributed("model-a", 100, 100)).unwrap();
+        let mut scan = LogScan::new(f.0.clone(), Layout::Codex);
+        let first = finish(&mut scan, IO_BUDGET);
+        assert_eq!(
+            (first.usage.total, only_model(&first)),
+            (100, "model-a".into())
+        );
+
+        rewrite_keeping_mtime(&f, "rollout-a.jsonl", &attributed("model-b", 200, 200));
+        if colliding {
+            collide(&mut scan, &path);
+        }
+        let grown = finish(&mut scan, IO_BUDGET);
+        assert_eq!(
+            (grown.usage.total, only_model(&grown)),
+            (200, "model-b".into())
+        );
+        assert_eq!(grown.continuity, first.continuity);
+
+        // Fewer tokens in the same bytes and inode is a new baseline.
+        rewrite_keeping_mtime(&f, "rollout-a.jsonl", &attributed("model-c", 100, 100));
+        if colliding {
+            collide(&mut scan, &path);
+        }
+        let reset = finish(&mut scan, IO_BUDGET);
+        assert_eq!(
+            (reset.usage.total, only_model(&reset)),
+            (100, "model-c".into())
+        );
+        assert_ne!(reset.continuity, grown.continuity);
+    }
+}
+#[test]
+fn racy_rewrites_recheck_young_snapshots_and_never_reread_settled_ones() {
+    let f = ScanFixture::new();
+    let path = f.0.join("rollout-a.jsonl");
+    fs::write(
+        &path,
+        format!("{}\n{}", codex(10), "ignored\n".repeat(20_000)),
+    )
+    .unwrap();
+    let mut scan = LogScan::new(f.0.clone(), Layout::Codex);
+    assert_eq!(finish(&mut scan, IO_BUDGET).usage.total, 10);
+    // Just written: an equal stamp is not yet proof, so the next poll reads.
+    let Err(error) = scan.scan_with_budget(0, deadline()) else {
+        panic!("A young snapshot was served without re-reading");
+    };
+    assert!(error.contains("continuing next poll"), "{error}");
+    assert_eq!(finish(&mut scan, IO_BUDGET).usage.total, 10);
+    // Once observed past the settle window, unchanged sweeps do no data I/O.
+    let entry = scan.cache.get_mut(&path).unwrap();
+    entry.observed =
+        std::time::UNIX_EPOCH + entry.stamp.changed() + SETTLE + Duration::from_secs(1);
+    for _ in 0..3 {
+        assert_eq!(
+            scan.scan_with_budget(0, deadline()).unwrap().usage.total,
+            10
+        );
+    }
+    // A settled snapshot is still dropped by any visible stamp change.
+    f.put(
+        "rollout-a.jsonl",
+        format!("{}\n{}", codex(20), "ignored\n".repeat(20_000)),
+    );
+    assert_eq!(finish(&mut scan, IO_BUDGET).usage.total, 20);
 }

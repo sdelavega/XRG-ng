@@ -8,11 +8,12 @@ use super::{CHUNK, Input};
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 pub(in super::super) struct Job {
     stamp: Stamp,
+    observed: SystemTime,
     layout: Layout,
     verify: Option<Checkpoint>,
     hash: blake3::Hasher,
@@ -45,6 +46,7 @@ impl Job {
             .cloned();
         Ok(Self {
             stamp,
+            observed: SystemTime::now(),
             layout,
             verify,
             hash: blake3::Hasher::new(),
@@ -163,6 +165,7 @@ impl Job {
                 }
                 return Ok(Some(Entry {
                     stamp: self.stamp,
+                    observed: self.observed,
                     parsed,
                     checkpoint: Some(checkpoint),
                 }));

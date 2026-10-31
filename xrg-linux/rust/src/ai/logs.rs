@@ -12,7 +12,7 @@ use std::{
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 const IO_BUDGET: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
@@ -20,6 +20,11 @@ const RECORD_LIMIT: usize = 8 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 20_000;
 const USAGE_LIMIT: usize = 100_000;
 const TIME_BUDGET_ERROR: &str = "Log scan time budget reached; continuing next poll";
+// A same-size rewrite inside one timestamp tick (4 ms on Raspberry Pi 5, 2 s
+// on FAT) leaves the stamp unchanged. A snapshot is trusted only once it was
+// taken this long after the file's last change, so any later write must land
+// on a new tick; younger snapshots are re-read, once per 5 s poll at most.
+const SETTLE: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Layout {
@@ -72,6 +77,16 @@ impl Stamp {
             changed_nanos: 0,
         }
     }
+    /// The later of the modification and change times; ctime cannot be set
+    /// back by writers, unlike mtime.
+    fn changed(&self) -> Duration {
+        let at = |seconds: i64, nanos: i64| {
+            u64::try_from(seconds).map_or(Duration::ZERO, |seconds| {
+                Duration::new(seconds, nanos.clamp(0, 999_999_999) as u32)
+            })
+        };
+        at(self.seconds, self.nanos).max(at(self.changed_seconds, self.changed_nanos))
+    }
 }
 #[derive(Clone)]
 struct Recorded {
@@ -93,8 +108,20 @@ struct Checkpoint {
 }
 struct Entry {
     stamp: Stamp,
+    // Wall-clock time before the first byte of this snapshot was read.
+    observed: SystemTime,
     parsed: Arc<Parsed>,
     checkpoint: Option<Checkpoint>,
+}
+impl Entry {
+    /// Whether an equal stamp proves the file still holds these bytes.
+    fn settled(&self, stamp: Stamp, settle: Duration) -> bool {
+        self.stamp == stamp
+            && self
+                .observed
+                .duration_since(std::time::UNIX_EPOCH)
+                .is_ok_and(|observed| stamp.changed() + settle < observed)
+    }
 }
 pub struct Scan {
     pub continuity: u64,
@@ -108,6 +135,7 @@ pub struct LogScan {
     pending: Option<(PathBuf, stream::Job)>,
     published: Option<BTreeMap<PathBuf, shared::LogFileState>>,
     continuity: u64,
+    settle: Duration,
 }
 impl LogScan {
     pub fn new(root: PathBuf, layout: Layout) -> Self {
@@ -118,6 +146,7 @@ impl LogScan {
             pending: None,
             published: None,
             continuity: 0,
+            settle: SETTLE,
         }
     }
     pub fn scan(&mut self) -> Result<Usage, String> {
@@ -158,7 +187,11 @@ impl LogScan {
                 return Err("Log changed type during scan".into());
             }
             let stamp = Stamp::from(&before);
-            if self.cache.get(path).is_some_and(|old| old.stamp == stamp) {
+            if self
+                .cache
+                .get(path)
+                .is_some_and(|old| old.settled(stamp, self.settle))
+            {
                 if self
                     .pending
                     .as_ref()
