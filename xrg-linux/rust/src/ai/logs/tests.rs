@@ -863,14 +863,27 @@ fn resumable_claude_appends_keep_copy_deduplication_models_and_cache_atomic() {
     let first = format!("{}\n{}", message(10, "old"), "ignored\n".repeat(2000));
     f.put("a.jsonl", &first);
     f.put("copy.jsonl", message(10, "old"));
+    // NTFS cannot represent mtimes before 1980; shift the synthetic stamps
+    // past that floor on Windows so the ordering under test is preserved.
+    #[cfg(windows)]
+    const TIME_BASE: u64 = 1_000_000_000; // 2001-09-09, well after the NTFS floor.
+    #[cfg(not(windows))]
+    const TIME_BASE: u64 = 0;
     let set_time = |name, seconds| {
-        File::open(f.0.join(name))
-            .unwrap()
-            .set_times(
-                fs::FileTimes::new()
-                    .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(seconds)),
-            )
-            .unwrap()
+        // Windows SetFileTime needs FILE_WRITE_ATTRIBUTES, which a read-only
+        // File::open handle lacks; a write handle carries it everywhere.
+        #[cfg(windows)]
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(f.0.join(name))
+            .unwrap();
+        #[cfg(not(windows))]
+        let file = File::open(f.0.join(name)).unwrap();
+        file.set_times(
+            fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(TIME_BASE + seconds)),
+        )
+        .unwrap()
     };
     set_time("a.jsonl", 100);
     set_time("copy.jsonl", 200);

@@ -1,0 +1,66 @@
+name: Windows Swift and Rust
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-compile:
+    name: Windows compile checks
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The project's toolchain version, installed from the official
+      # swift.org release archive. The action SHA is the v0.5.1 tag commit,
+      # verified read-only with `gh api repos/compnerd/gha-setup-swift/tags`.
+      - name: Install Swift
+        uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
+        with:
+          source: swift.org
+          swift-version: swift-6.4.1-release
+          swift-build: 6.4.1-RELEASE
+          build_arch: amd64
+      # Rust 1.99.1 comes from xrg-linux/rust/rust-toolchain.toml.
+      - name: Build and test shared Swift core
+        id: shared
+        run: |
+          swift build *> swift-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content swift-build.log; exit $LASTEXITCODE }
+          swift test *> swift-test.log
+          if ($LASTEXITCODE -ne 0) { Get-Content swift-test.log; exit $LASTEXITCODE }
+          Get-Content swift-test.log -Tail 3
+          $bin = (swift build --show-bin-path | Select-Object -Last 1).Trim()
+          "shared-lib-dir=$bin" >> $env:GITHUB_OUTPUT
+      - name: Check and test Rust collectors
+        working-directory: xrg-linux/rust
+        env:
+          XRG_SHARED_LIB_DIR: ${{ steps.shared.outputs.shared-lib-dir }}
+        run: |
+          # The test binaries resolve XRGSharedCore.dll from the Swift build
+          # directory, so it must be on PATH alongside XRG_SHARED_LIB_DIR.
+          $env:Path = "$env:XRG_SHARED_LIB_DIR;$env:Path"
+          cargo check --locked --features egui-ui *> cargo-check.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-check.log; exit $LASTEXITCODE }
+          Get-Content cargo-check.log -Tail 3
+          cargo test --locked --lib *> cargo-test.log
+          if ($LASTEXITCODE -ne 0) { Get-Content cargo-test.log; exit $LASTEXITCODE }
+          Get-Content cargo-test.log -Tail 5
+      - name: Upload build and test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-compile-logs
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            swift-build.log
+            swift-test.log
+            xrg-linux/rust/cargo-check.log
+            xrg-linux/rust/cargo-test.log
