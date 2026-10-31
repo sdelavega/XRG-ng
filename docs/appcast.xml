@@ -4,5 +4,14 @@
         <title>XRG-ng</title>
         <link>https://github.com/sdelavega/XRG-ng</link>
         <description>XRG-ng release feed</description>
+    <item>
+        <title>XRG-ng 0.2.1</title>
+        <pubDate>Sat, 31 Oct 2026 13:41:02 +0000</pubDate>
+        <sparkle:version>2</sparkle:version>
+        <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
+        <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+        <sparkle:releaseNotesLink>https://github.com/sdelavega/XRG-ng/releases/tag/v0.2.1</sparkle:releaseNotesLink>
+        <enclosure url="https://github.com/sdelavega/XRG-ng/releases/download/v0.2.1/XRG-ng-0.2.1-macOS-universal.dmg" length="4227508" type="application/octet-stream" sparkle:edSignature="X+yRccjK7OS7GiWmWSfmuFkchpzBJXogv7OyfpwZHU9QMjv95N2njpABzFcoJnvVSFK1DZv0IcX9KISaVawmAg=="/>
+    </item>
     </channel>
 </rss>
