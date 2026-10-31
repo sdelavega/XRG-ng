@@ -1194,7 +1194,9 @@ fn racy_rewrites_with_identical_size_and_mtime_publish_new_totals_models_and_con
     for colliding in [false, true] {
         let f = ScanFixture::new();
         let path = f.0.join("rollout-a.jsonl");
-        f.put("rollout-a.jsonl", attributed("model-a", 100, 100));
+        // A natural, recent mtime: put() pins old ones, which would settle the
+        // snapshot at once where no ctime exists (Windows).
+        fs::write(&path, attributed("model-a", 100, 100)).unwrap();
         let mut scan = LogScan::new(f.0.clone(), Layout::Codex);
         let first = finish(&mut scan, IO_BUDGET);
         assert_eq!(
@@ -1230,10 +1232,11 @@ fn racy_rewrites_with_identical_size_and_mtime_publish_new_totals_models_and_con
 fn racy_rewrites_recheck_young_snapshots_and_never_reread_settled_ones() {
     let f = ScanFixture::new();
     let path = f.0.join("rollout-a.jsonl");
-    f.put(
-        "rollout-a.jsonl",
+    fs::write(
+        &path,
         format!("{}\n{}", codex(10), "ignored\n".repeat(20_000)),
-    );
+    )
+    .unwrap();
     let mut scan = LogScan::new(f.0.clone(), Layout::Codex);
     assert_eq!(finish(&mut scan, IO_BUDGET).usage.total, 10);
     // Just written: an equal stamp is not yet proof, so the next poll reads.
