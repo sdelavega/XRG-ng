@@ -427,15 +427,13 @@ class PublishScriptTests(unittest.TestCase):
         self.assert_refused_before_side_effects(
             self.publish(execute=True), "Commit source changes")
 
-    def test_dry_run_skips_appcast_commit_on_clean_tree(self):
-        self.build_fixture(pending_appcast=False)
-        # Local-only outputs are not required when no appcast update pends.
-        (self.mac / "verified-build.txt").unlink()
-        (self.mac / "appcast-item.xml").unlink()
-        result = self.publish()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("nothing to commit", result.stdout + result.stderr)
-        self.assert_no_side_effects(result)
+    def test_refuses_clean_tree_with_no_matching_appcast_item(self):
+        # Important 2: a clean checkout whose committed feed carries no item
+        # for this release must refuse, not skip feed validation.
+        self.build_fixture()
+        self.git("checkout", "--", "docs/appcast.xml")
+        self.assert_refused_before_side_effects(
+            self.publish(execute=True), "carries no item for build")
 
     def test_execute_refuses_pending_appcast_mismatch(self):
         self.build_fixture()
@@ -485,6 +483,64 @@ class PublishScriptTests(unittest.TestCase):
         manifest.write_text("".join(rows))
         self.assert_refused_before_side_effects(
             self.publish(execute=True), "not this checkout")
+
+    # --- Important 3: the three build numbers must agree before side effects ---
+
+    def test_refuses_metadata_build_mismatch(self):
+        self.build_fixture()
+        (self.mac / "release-build.json").write_text(json.dumps(
+            {"version": VERSION, "build": "3", "sourceCommit":
+             json.loads((self.mac / "release-build.json").read_text())["sourceCommit"]}) + "\n")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("the build numbers disagree", combined)
+        self.assertIn(f"project build {BUILD}", combined)
+        self.assertIn("macOS release metadata build 3", combined)
+        self.assertIn(f"appcast item build {BUILD}", combined)
+        self.assert_no_side_effects(result)
+
+    def test_refuses_appcast_build_mismatch(self):
+        self.build_fixture()
+        appcast_path = self.repo / "docs" / "appcast.xml"
+        appcast_path.write_text(appcast_path.read_text(
+            encoding="utf-8").replace(
+            f'<sparkle:version>{BUILD}</sparkle:version>',
+            '<sparkle:version>3</sparkle:version>'),
+            encoding="utf-8")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("carries no item for build", combined)
+        self.assertIn(f"build {BUILD}", combined)
+        self.assertIn("feed builds: 3", combined)
+        self.assert_no_side_effects(result)
+
+    def test_refuses_missing_metadata_build(self):
+        self.build_fixture()
+        metadata = json.loads((self.mac / "release-build.json").read_text())
+        del metadata["build"]
+        (self.mac / "release-build.json").write_text(
+            json.dumps(metadata) + "\n")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("does not record the build number", combined)
+        self.assertIn(f"project build {BUILD}", combined)
+        self.assert_no_side_effects(result)
+
+    def test_refuses_conflicting_project_build(self):
+        self.build_fixture()
+        project = self.repo / "XRG-ng.xcodeproj" / "project.pbxproj"
+        project.write_text(project.read_text() +
+                          "\t\t\tCURRENT_PROJECT_VERSION = 3;\n")
+        result = self.publish(execute=True)
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("conflicting CURRENT_PROJECT_VERSION", combined)
+        self.assert_no_side_effects(result)
+
+    # --- More --execute refusals ---
 
     def test_execute_refuses_linux_checksum_mismatch(self):
         self.build_fixture()

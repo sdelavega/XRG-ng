@@ -59,6 +59,15 @@ python3 Tools/check-version.py --expect "$version"
 [[ "$(cat latest_version.txt)" == "$version" ]] || { echo "Update latest_version.txt first" >&2; exit 1; }
 [[ -f "releases/$version.md" ]] || { echo "Missing releases/$version.md release notes" >&2; exit 1; }
 
+# The unified project build number (Tools/check-version.py, read_build) is
+# the third value every side effect requires to agree (Important 3).
+if ! project_build=$(python3 Tools/check-version.py --expect "$version" \
+        | sed -n 's/^VERSION_OK .* build \(.*\)$/\1/p'); then
+    echo "Could not read the unified project build number" >&2
+    exit 1
+fi
+[[ -n "$project_build" ]] || { echo "The project records no build number" >&2; exit 1; }
+
 branch=$(git branch --show-current)
 [[ "$branch" == "main" ]] || { echo "Publish only from main, currently on '$branch'" >&2; exit 1; }
 
@@ -78,7 +87,6 @@ if [[ -n "$dirty" ]]; then
         exit 1
     fi
 fi
-
 
 head=$(git rev-parse HEAD)
 tag="v$version"
@@ -139,7 +147,7 @@ fi
 # the build numbers and the appcast feed before anything is created. The
 # ASSET lines list exactly the files the release draft carries; anything
 # else in the release directories is ignored and never uploaded.
-preflight=$(python3 - "$version" "$mac_dir" "$linux_dir" "$release_commit" "$appcast_pending" <<'PYVERIFY'
+preflight=$(python3 - "$version" "$mac_dir" "$linux_dir" "$release_commit" "$appcast_pending" "$project_build" <<'PYVERIFY'
 import hashlib
 import json
 from pathlib import Path
@@ -152,7 +160,7 @@ SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.+~\-]+")
 MANIFEST_ROW = re.compile(r"([0-9a-f]{64})  ([A-Za-z0-9_.+~\-]+)")
 
-version, mac_dir, linux_dir, release_commit, appcast_pending = sys.argv[1:6]
+version, mac_dir, linux_dir, release_commit, appcast_pending, project_build = sys.argv[1:7]
 mac_dir, linux_dir = Path(mac_dir), Path(linux_dir)
 appcast_pending = appcast_pending == "true"
 
@@ -229,6 +237,10 @@ if mac_build.get("version") != version or mac_build.get("sourceCommit") != relea
     refuse(f"the macOS release was built from {mac_build.get('sourceCommit')} "
            f"(version {mac_build.get('version')}), not this checkout "
            f"({release_commit}) of {version}")
+mac_build_number = mac_build.get("build")
+mac_build_number = mac_build_number.strip() \
+    if isinstance(mac_build_number, str) and mac_build_number.strip() else None
+
 # Linux publishes the payloads, SHA256SUMS(+.asc), every payload signature
 # and release-metadata.json, exactly as Tools/release-linux.py and
 # Tools/release-signing.py produce them; sidecar checksums, the public key
@@ -258,59 +270,68 @@ if linux_build.get("version") != version or linux_build.get("revision") != relea
            f"(version {linux_build.get('version')}), not this checkout "
            f"({release_commit}) of {version}")
 
-# The pending appcast must be exactly this release's Sparkle item: it
-# parses, carries the item whose sparkle:version is the release build, and
-# that item's enclosure length and sparkle:edSignature match the item the
-# macOS release recorded in appcast-item.xml.
-if appcast_pending:
-    item_file = checked_file(mac_dir, "appcast-item.xml", "macOS")
-    build = mac_build.get("build")
-    if not isinstance(build, str) or not build.strip():
-        refuse("the macOS release metadata does not record the build number")
-    item_text = item_file.read_text(encoding="utf-8").strip()
-    item_text = re.sub(r"^<\?xml[^>]*\?>", "", item_text).strip()
-    try:
-        item_root = ElementTree.fromstring(
-            f'<root xmlns:sparkle="{SPARKLE_NS}">{item_text}</root>')
-    except ElementTree.ParseError as error:
-        refuse(f"the macOS appcast-item.xml does not parse: {error}")
-    items = item_root.findall("item")
-    if len(items) != 1:
-        refuse("the macOS appcast-item.xml must hold exactly one item")
-    item_enclosure = items[0].find("enclosure")
-    if item_enclosure is None:
-        refuse("the macOS appcast-item.xml item has no enclosure")
-    expected_length = item_enclosure.get("length")
-    expected_signature = item_enclosure.get(f"{{{SPARKLE_NS}}}edSignature")
-    if expected_length is None or expected_signature is None:
-        refuse("the macOS appcast-item.xml enclosure lacks length or sparkle:edSignature")
-    try:
-        channel = ElementTree.parse("docs/appcast.xml").getroot().find("channel")
-    except ElementTree.ParseError as error:
-        refuse(f"the docs/appcast.xml feed does not parse: {error}")
-    if channel is None:
-        refuse("the docs/appcast.xml feed has no channel")
-    pending = None
-    for element in channel.findall("item"):
-        candidate = element.find(f"{{{SPARKLE_NS}}}version")
-        value = candidate.text.strip() if candidate is not None and candidate.text else None
+# The appcast feed must always carry this release's Sparkle item (Important
+# 2): it parses, holds the item whose sparkle:version is the project build,
+# and that item's enclosure length and sparkle:edSignature match the item
+# the macOS release recorded in appcast-item.xml. The three build numbers
+# must agree before any side effect (Important 3): the project build, the
+# macOS release metadata build and the appcast item's sparkle:version.
+item_file = checked_file(mac_dir, "appcast-item.xml", "macOS")
+if mac_build_number is None:
+    refuse(f"the macOS release metadata does not record the build number "
+           f"(project build {project_build})")
+item_text = item_file.read_text(encoding="utf-8").strip()
+item_text = re.sub(r"^<\?xml[^>]*\?>", "", item_text).strip()
+try:
+    item_root = ElementTree.fromstring(
+        f'<root xmlns:sparkle="{SPARKLE_NS}">{item_text}</root>')
+except ElementTree.ParseError as error:
+    refuse(f"the macOS appcast-item.xml does not parse: {error}")
+items = item_root.findall("item")
+if len(items) != 1:
+    refuse("the macOS appcast-item.xml must hold exactly one item")
+item_enclosure = items[0].find("enclosure")
+if item_enclosure is None:
+    refuse("the macOS appcast-item.xml item has no enclosure")
+expected_length = item_enclosure.get("length")
+expected_signature = item_enclosure.get(f"{{{SPARKLE_NS}}}edSignature")
+if expected_length is None or expected_signature is None:
+    refuse("the macOS appcast-item.xml enclosure lacks length or sparkle:edSignature")
+try:
+    channel = ElementTree.parse("docs/appcast.xml").getroot().find("channel")
+except ElementTree.ParseError as error:
+    refuse(f"the docs/appcast.xml feed does not parse: {error}")
+if channel is None:
+    refuse("the docs/appcast.xml feed has no channel")
+feed_builds = []
+pending = None
+for element in channel.findall("item"):
+    candidate = element.find(f"{{{SPARKLE_NS}}}version")
+    value = candidate.text.strip() if candidate is not None and candidate.text else None
+    if value is None:
+        value = element.get(f"{{{SPARKLE_NS}}}version")
         if value is None:
-            value = element.get(f"{{{SPARKLE_NS}}}version")
-            if value is None:
-                nested = element.find("enclosure")
-                if nested is not None:
-                    value = nested.get(f"{{{SPARKLE_NS}}}version")
-        if value == build.strip():
+            nested = element.find("enclosure")
+            if nested is not None:
+                value = nested.get(f"{{{SPARKLE_NS}}}version")
+    if value is not None:
+        feed_builds.append(value)
+        if value == project_build:
             pending = element
-            break
-    if pending is None:
-        refuse(f"the docs/appcast.xml feed carries no item for build {build.strip()}")
-    enclosure = pending.find("enclosure")
-    if enclosure is None or enclosure.get("length") != expected_length \
-            or enclosure.get(f"{{{SPARKLE_NS}}}edSignature") != expected_signature:
-        refuse("the docs/appcast.xml item does not match the release appcast item "
-               "(enclosure length or sparkle:edSignature)")
-    note("Pending docs/appcast.xml verified: it carries this release's Sparkle item")
+if pending is None:
+    refuse(f"the docs/appcast.xml feed carries no item for build {project_build} "
+           f"(macOS release metadata build {mac_build_number}; feed builds: "
+           f"{', '.join(feed_builds) if feed_builds else 'none'})")
+enclosure = pending.find("enclosure")
+if enclosure is None or enclosure.get("length") != expected_length \
+        or enclosure.get(f"{{{SPARKLE_NS}}}edSignature") != expected_signature:
+    refuse("the docs/appcast.xml item does not match the release appcast item "
+           "(enclosure length or sparkle:edSignature)")
+if mac_build_number != project_build:
+    refuse(f"the build numbers disagree: project build {project_build}, "
+           f"macOS release metadata build {mac_build_number}, "
+           f"appcast item build {project_build}")
+note(f"Appcast feed verified: it carries this release's Sparkle item for build {project_build}")
 
 note(f"Verified the macOS public asset inventory ({len(mac_assets)} assets) and checksums")
 note(f"Verified the Linux public asset inventory ({len(linux_assets)} assets) and checksums")

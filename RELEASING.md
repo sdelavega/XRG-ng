@@ -109,10 +109,15 @@ refuses the publish unless:
   is `main`;
 - the working tree is clean except at most `docs/appcast.xml`, and only
   with the unstaged-modified porcelain status (` M`): staged, deleted,
-  conflicted or additional dirt is refused. A pending appcast must parse
-  and carry the item whose `sparkle:version` is this release's build with
+  conflicted or additional dirt is refused. The appcast feed itself is
+  always validated, whether dirty or already committed: it must parse and
+  carry the item whose `sparkle:version` is this release's build with
   exactly the enclosure length and `sparkle:edSignature` recorded in the
-  macOS release directory's `appcast-item.xml`;
+  macOS release directory's `appcast-item.xml`. The dirty status only
+  decides whether the local phase commits the appcast;
+- the unified project build number (`Tools/check-version.py`), the macOS
+  release metadata's `build` (`release-build.json`) and the appcast item's
+  `sparkle:version` are all present and equal;
 - `origin`'s `main` is `HEAD`, or differs by exactly one unpushed local
   commit — the appcast publish commit `--execute` wrote (main is pushed
   only in the final manual step); the release directories' metadata must
