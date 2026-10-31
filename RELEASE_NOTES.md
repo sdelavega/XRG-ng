@@ -19,13 +19,16 @@ automatic checks; 0.1.0 settings preserved), a Homebrew cask
 (`brew install --cask sdelavega/tap/xrg-ng`), and **Help → Support XRG-ng…**
 for GitHub Sponsors.
 
-Validation is stated honestly in the release notes: native ARM and Rosetta
-tests (Rosetta does not replace physical Intel hardware), CI for x86-64 Linux
-and for Windows compile checks, an ARM64 container gate plus physical
-Raspberry Pi 5 board runs for Linux ARM64 (the Pi's complete debug gate is
-not a clean pass — three log-scan unit tests need finer file-timestamp
-granularity than that board's 4 ms kernel tick), and no physical sleep/wake
-claims.
+Validation is stated honestly in the release notes: the macOS Release gate
+ran natively on ARM and under Rosetta (Rosetta does not replace physical Intel
+hardware), the full Linux gate ran in an ARM64 container and on physical
+Raspberry Pi 5 and Orange Pi 5 Plus boards (both complete debug gates pass
+for this release), Windows compile and unit-test checks ran manually on a
+Windows 11 machine, x86-64 Linux and Windows CI are pending on the release
+commit, and no physical sleep/wake claims are made. A known limitation of the
+pre-existing AI log scanner is documented: a same-size rewrite within the
+filesystem's timestamp granularity can go unnoticed on coarse-timestamp
+filesystems (observed on Raspberry Pi 5); a fix is planned after 0.2.1.
 
 macOS 26 or newer, universal (Apple silicon and Intel). Copyright and
 third-party license notices are included in the app and source.
