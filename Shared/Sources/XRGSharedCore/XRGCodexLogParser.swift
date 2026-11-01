@@ -82,22 +82,50 @@ public final class XRGCodexLogParser: NSObject {
         public let modelTotals: [String: UInt64]
     }
 
+    /// Largest log the parser reads; records stay limited to 8 MiB each.
+    public static let fileLimit: UInt64 = 1024 * 1024 * 1024
+
+    /// Where a parse stopped: just after the last complete (LF-terminated) record,
+    /// with the parser state at that point and the bytes before it for verification.
+    public struct Checkpoint: Sendable {
+        public let offset: UInt64
+        fileprivate let ledger: Attribution
+        fileprivate let usage: XRGTokenUsage
+        fileprivate let tail: Data
+    }
+
+    public struct Progress: Sendable {
+        public let snapshot: Snapshot
+        public let checkpoint: Checkpoint
+    }
+
     /// Complete bounded file snapshot. I/O/size failures throw so callers can
     /// retain their last complete snapshot instead of publishing a false zero.
     public static func snapshot(atPath path: String) throws -> Snapshot {
+        try progress(atPath: path, resuming: nil).snapshot
+    }
+
+    /// Parses only what was appended since `checkpoint` when the bytes before it
+    /// are unchanged; otherwise parses the whole file. Both give the same snapshot.
+    public static func progress(atPath path: String, resuming checkpoint: Checkpoint?) throws -> Progress {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         defer { try? handle.close() }
         // Reject an oversized log before reading it; the read loop below still
         // enforces the limit if the file grows while it is being read.
-        guard try handle.seekToEnd() <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-        try handle.seek(toOffset: 0)
-        var ledger = Attribution(), usage = XRGTokenUsage(total: 0)
-        var line = Data(), bytesRead = 0
+        let size = try handle.seekToEnd()
+        guard size <= fileLimit else { throw CocoaError(.fileReadTooLarge) }
+        var ledger = Attribution(), usage = XRGTokenUsage(total: 0), start: UInt64 = 0
+        if let checkpoint {
+            start = XRGAppendVerifier.start(handle, offset: checkpoint.offset, tail: checkpoint.tail)
+            if start > 0 { ledger = checkpoint.ledger; usage = checkpoint.usage }
+        }
+        try handle.seek(toOffset: start)
+        var line = Data(), position = start, complete = start
         while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
             try Task.checkCancellation()
-            bytesRead += chunk.count
-            guard bytesRead <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            guard position + UInt64(chunk.count) <= fileLimit else { throw CocoaError(.fileReadTooLarge) }
             for byte in chunk {
+                position += 1
                 if byte == 10 {
                     if !line.isEmpty {
                         let sample = self.usage(inLine: line)
@@ -105,23 +133,27 @@ public final class XRGCodexLogParser: NSObject {
                         if let sample { usage = sample }
                     }
                     line.removeAll(keepingCapacity: true)
+                    complete = position
                 } else {
                     guard line.count < 8 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
                     line.append(byte)
                 }
             }
         }
+        let saved = Checkpoint(offset: complete, ledger: ledger, usage: usage,
+                               tail: XRGAppendVerifier.tail(handle, before: complete))
         // A complete final record without LF is valid. A partially written one
-        // cannot change totals or donate a model to the next complete scan.
+        // cannot change totals or donate a model to the next complete scan. It
+        // counts now but stays out of the checkpoint, so it is never counted twice.
         if !line.isEmpty {
             let sample = self.usage(inLine: line)
             ledger.consume(line, usage: sample)
             if let sample { usage = sample }
         }
-        return Snapshot(usage: usage, modelTotals: ledger.models)
+        return Progress(snapshot: Snapshot(usage: usage, modelTotals: ledger.models), checkpoint: saved)
     }
 
-    private struct Attribution {
+    fileprivate struct Attribution: Sendable {
         private struct Metadata: Decodable {
             let type: String
             let payload: Payload?

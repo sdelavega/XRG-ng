@@ -56,4 +56,75 @@ struct CodexUsageTests {
         }
         #expect(throws:(any Error).self) { try XRGCodexLogParser.snapshot(atPath:"/nonexistent-xrg-codex-fixture") }
     }
+
+    /// Resuming after an append must equal one full parse at every split point,
+    /// including a split inside a record that is still being written.
+    @Test func resumingAfterAnAppendMatchesAFullParseAtEverySplit() throws {
+        let url = try #require(Bundle.module.url(forResource:"codex-attribution-cases",withExtension:"json",subdirectory:"Fixtures"))
+        let cases = try JSONDecoder().decode([Case].self,from:Data(contentsOf:url))
+        for test in cases {
+            let whole = Data(test.lines.joined(separator:"\n").utf8)
+            try file { path in
+                try whole.write(to:path)
+                let full = try XRGCodexLogParser.snapshot(atPath:path.path)
+                for split in 1..<whole.count {
+                    try whole.prefix(split).write(to:path)
+                    let first = try XRGCodexLogParser.progress(atPath:path.path, resuming:nil)
+                    try whole.write(to:path)
+                    let resumed = try XRGCodexLogParser.progress(atPath:path.path, resuming:first.checkpoint)
+                    #expect(resumed.snapshot == full, "\(test.name) split \(split)")
+                    #expect(resumed.checkpoint.offset <= UInt64(whole.count))
+                }
+            }
+        }
+    }
+
+    @Test func checkpointStopsAtTheLastCompleteRecord() throws {
+        try file { path in
+            let complete = count(10,10) + "\n"
+            try Data((complete + count(20,10)).utf8).write(to:path)
+            let progress = try XRGCodexLogParser.progress(atPath:path.path, resuming:nil)
+            // The unterminated record counts now but is not saved in the checkpoint.
+            #expect(progress.snapshot.usage.total == 20)
+            #expect(progress.checkpoint.offset == UInt64(complete.utf8.count))
+        }
+    }
+
+    @Test func logsOverTheOldLimitAreCounted() throws {
+        try file { path in
+            FileManager.default.createFile(atPath:path.path, contents:nil)
+            let handle = try FileHandle(forWritingTo:path)
+            let filler = Data(("{\"type\":\"noise\",\"pad\":\"" + String(repeating:"x", count:1000) + "\"}\n").utf8)
+            var block = Data(); for _ in 0..<1024 { block.append(filler) }
+            try handle.write(contentsOf:Data((count(5,5)+"\n").utf8))
+            for _ in 0..<70 { try handle.write(contentsOf:block) }
+            try handle.write(contentsOf:Data((count(9,4)+"\n").utf8))
+            try handle.close()
+            #expect(try XRGCodexLogParser.snapshot(atPath:path.path).usage.total == 9)
+        }
+    }
+
+    @Test func resumeReadsOnlyAppendedBytesAndRewritesFallBackToAFullParse() throws {
+        try file { path in
+            let noise = "{\"type\":\"noise\",\"pad\":\"" + String(repeating:"x", count:6000) + "\"}\n"
+            func log(_ model: String, _ tail: String) -> Data {
+                Data(("{\"type\":\"turn_context\",\"payload\":{\"model\":\"\(model)\"}}\n" + count(10,10) + "\n" + noise + tail).utf8)
+            }
+            try log("a", "").write(to:path)
+            let first = try XRGCodexLogParser.progress(atPath:path.path, resuming:nil)
+            #expect(first.snapshot.modelTotals == ["a": 10])
+            // Change an early byte outside the verified window, then append: a
+            // resume keeps the earlier state, which proves it did not re-read.
+            let appended = "{\"type\":\"turn_context\",\"payload\":{\"model\":\"c\"}}\n" + count(15,5) + "\n"
+            try log("b", appended).write(to:path)
+            let resumed = try XRGCodexLogParser.progress(atPath:path.path, resuming:first.checkpoint)
+            #expect(resumed.snapshot.modelTotals == ["a": 10, "c": 5])
+            #expect(try XRGCodexLogParser.snapshot(atPath:path.path).modelTotals == ["b": 10, "c": 5])
+            // A change inside the verified window, or a shorter file, is a rewrite.
+            try Data((count(7,7) + "\n").utf8).write(to:path)
+            let rewritten = try XRGCodexLogParser.progress(atPath:path.path, resuming:resumed.checkpoint)
+            #expect(rewritten.snapshot == (try XRGCodexLogParser.snapshot(atPath:path.path)))
+            #expect(rewritten.snapshot.usage.total == 7)
+        }
+    }
 }
