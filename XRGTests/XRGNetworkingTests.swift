@@ -139,18 +139,14 @@ struct XRGCodexLogParserTests {
         #expect(XRGCodexLogParser.totalTokens(atPath: file.path) == 72)
     }
 
-    @Test func oversizedLogIsRejectedWithoutReadingIt() throws {
+    @Test func oversizedLogIsRejectedBeforeItIsRead() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rollout-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: url) }
-        let line = Data((String(repeating: "x", count: 1023) + "\n").utf8)
-        var block = Data(); for _ in 0..<1024 { block.append(line) }
+        // A sparse file just over the limit, so the test writes almost nothing.
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
-        for _ in 0..<65 { try handle.write(contentsOf: block) }
+        try handle.truncate(atOffset: 64 * 1024 * 1024 + 1)
         try handle.close()
-        let start = ContinuousClock.now
-        #expect(throws: CocoaError.self) { _ = try XRGCodexLogParser.snapshot(atPath: url.path) }
-        // Parsing 64 MiB line by line takes seconds; the size check is immediate.
-        #expect(ContinuousClock.now - start < .milliseconds(250))
+        #expect(throws: CocoaError(.fileReadTooLarge)) { _ = try XRGCodexLogParser.snapshot(atPath: url.path) }
     }
 }
