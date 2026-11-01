@@ -15,8 +15,8 @@ regular version.
    the sources. Dispatch Linux CI with release package naming:
    `gh workflow run linux.yml --ref main -f release_candidate=true`.
 2. All ten build/desktop/runtime jobs must succeed on that exact commit. The
-   workflow also builds the frozen 0.2.0 application in a separate target directory
-   and tests a real 0.2.0-to-0.2.1 archive upgrade with custom preferences, in
+   workflow also builds the frozen 0.2.1 application in a separate target directory
+   and tests a real 0.2.1-to-0.2.2 archive upgrade with custom preferences, in
    addition to native packaging revision upgrades.
 3. On the signing Mac, install GnuPG and RPM tools, and use the dedicated protected
    identity described in [signing/README.md](signing/README.md). First-time setup
@@ -57,7 +57,7 @@ described in THIRD_PARTY_NOTICES.md. Preserve the original notices in the app.
 
 1. The unified version bump above covers the app/framework/test marketing
    versions in the Xcode project, `latest_version.txt` and the Cargo manifest;
-   0.2.1 ships as build 2.
+   0.2.2 ships as build 3.
 2. Run `bash Tools/ci-macos.sh Release`. Both native and Rosetta suites and packaged
    checks must pass on an ARM host. Commit the release sources before packaging.
 3. Use a valid Developer ID Application identity and an existing notarytool

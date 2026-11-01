@@ -140,7 +140,7 @@ jobs:
           python3 Tools/deb-smoke-linux.py --disposable-system
           --package /tmp/xrg-preview-download/*.deb
           --results /tmp/xrg-preview-results/native
-      - name: Upgrade application 0.2.0 to 0.2.1 and verify effective preferences
+      - name: Upgrade application 0.2.1 to 0.2.2 and verify effective preferences
         run: >-
           runuser -u xrg-preview -- python3 Tools/application-upgrade-linux.py
           --baseline /tmp/xrg-upgrade-baseline/*.tar.gz
