@@ -47,4 +47,31 @@ struct XRGClaudeResumeTests {
             #expect(resumed.cost == full.cost && resumed.modelTotals == full.modelTotals, "split \(split)")
         }
     }
+
+    /// A file rewritten (same length) while its sweep runs fails that sweep; the
+    /// retry must notice the new bytes and publish a full parse of them.
+    @Test func aRewriteDuringASweepNeverReusesTheStaleCheckpoint() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("p/a.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let before = record("claude-opus-4", 1000, 300) + "\n" + record("claude-opus-4", 2, 2) + "\n"
+        let after = record("claude-opus-4", 9000, 300) + "\n" + record("claude-opus-4", 2, 2) + "\n"
+        #expect(before.utf8.count == after.utf8.count)
+        try Data(before.utf8).write(to: file)
+        let scan = XRGScanCache(interval: 0, settle: .zero)
+        scan.refreshResumable(root: root.path, layout: 0) { path, state in
+            let result = XRGAIPricing.parseClaude(path, resuming: state as? XRGAIPricing.ClaudeResume)
+            try? Data(after.utf8).write(to: URL(fileURLWithPath: path))
+            return result
+        }
+        while scan.isScanning { try await Task.sleep(for: .milliseconds(1)) }
+        #expect(scan.lastScanFailed)
+        scan.refreshResumable(root: root.path, layout: 0) { path, state in
+            XRGAIPricing.parseClaude(path, resuming: state as? XRGAIPricing.ClaudeResume)
+        }
+        while scan.isScanning { try await Task.sleep(for: .milliseconds(1)) }
+        let full = XRGAIPricing.parse(file.path, gemini: false)
+        #expect(!scan.lastScanFailed && scan.completedSnapshot?.tokens == full.tokens && scan.completedSnapshot?.cost == full.cost)
+    }
 }

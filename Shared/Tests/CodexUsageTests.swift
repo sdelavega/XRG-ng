@@ -104,7 +104,7 @@ struct CodexUsageTests {
         }
     }
 
-    @Test func resumeReadsOnlyAppendedBytesAndRewritesFallBackToAFullParse() throws {
+    @Test func appendsResumeAndAnyPrefixChangeFallsBackToAFullParse() throws {
         try file { path in
             let noise = "{\"type\":\"noise\",\"pad\":\"" + String(repeating:"x", count:6000) + "\"}\n"
             func log(_ model: String, _ tail: String) -> Data {
@@ -112,19 +112,21 @@ struct CodexUsageTests {
             }
             try log("a", "").write(to:path)
             let first = try XRGCodexLogParser.progress(atPath:path.path, resuming:nil)
-            #expect(first.snapshot.modelTotals == ["a": 10])
-            // Change an early byte outside the verified window, then append: a
-            // resume keeps the earlier state, which proves it did not re-read.
             let appended = "{\"type\":\"turn_context\",\"payload\":{\"model\":\"c\"}}\n" + count(15,5) + "\n"
-            try log("b", appended).write(to:path)
+            try log("a", appended).write(to:path)
             let resumed = try XRGCodexLogParser.progress(atPath:path.path, resuming:first.checkpoint)
+            let full = try XRGCodexLogParser.snapshot(atPath:path.path)
+            #expect(resumed.resumed && resumed.snapshot == full)
             #expect(resumed.snapshot.modelTotals == ["a": 10, "c": 5])
-            #expect(try XRGCodexLogParser.snapshot(atPath:path.path).modelTotals == ["b": 10, "c": 5])
-            // A change inside the verified window, or a shorter file, is a rewrite.
+            // The same length with one early byte changed: every prefix byte is
+            // verified, so this parses from the start.
+            try log("b", appended).write(to:path)
+            let edited = try XRGCodexLogParser.progress(atPath:path.path, resuming:resumed.checkpoint)
+            #expect(!edited.resumed && edited.snapshot.modelTotals == ["b": 10, "c": 5])
+            // A shorter file is a rewrite too.
             try Data((count(7,7) + "\n").utf8).write(to:path)
-            let rewritten = try XRGCodexLogParser.progress(atPath:path.path, resuming:resumed.checkpoint)
-            #expect(rewritten.snapshot == (try XRGCodexLogParser.snapshot(atPath:path.path)))
-            #expect(rewritten.snapshot.usage.total == 7)
+            let rewritten = try XRGCodexLogParser.progress(atPath:path.path, resuming:edited.checkpoint)
+            #expect(!rewritten.resumed && rewritten.snapshot.usage.total == 7)
         }
     }
 }
