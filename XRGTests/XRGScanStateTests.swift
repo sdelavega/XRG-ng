@@ -284,8 +284,8 @@ struct XRGScanStateTests {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("p/a.jsonl")
         try write("10", to: file)
-        let scan = XRGScanCache(interval: 5), attempts = ParseProbe(), clock = ScanClock()
-        scan.uptime = { clock.now }
+        let attempts = ParseProbe(), clock = ScanClock()
+        let scan = XRGScanCache(interval: 5, uptime: { clock.now })
         let parse: @Sendable (String) throws -> XRGScanTotals = { path in
             _ = attempts.read(path); throw CocoaError(.fileReadTooLarge)
         }
@@ -309,8 +309,8 @@ struct XRGScanStateTests {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("p/a.jsonl"), aside = root.appendingPathComponent("aside")
         try write("10", to: file)
-        let scan = XRGScanCache(interval: 5), probe = ParseProbe(), clock = ScanClock()
-        scan.uptime = { clock.now }
+        let probe = ParseProbe(), clock = ScanClock()
+        let scan = XRGScanCache(interval: 5, uptime: { clock.now })
         // Moving the file away after parsing makes the post-read stat fail; a
         // rename keeps the stamp, so moving it back restores the same file.
         scan.refreshChecked(root: root.path, layout: 0, force: true) { path in

@@ -139,7 +139,7 @@ struct XRGCodexLogParserTests {
         #expect(XRGCodexLogParser.totalTokens(atPath: file.path) == 72)
     }
 
-    @Test func oversizedLogIsRejectedBeforeItIsRead() throws {
+    @Test func oversizedLogIsRejected() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rollout-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: url) }
         // A sparse file just over the limit, so the test writes almost nothing.

@@ -81,8 +81,8 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     // force every other file to be parsed again on the next sweep.
     private var parsed: [String: Entry] = [:]
     private var failures: [String: Failure] = [:]
-    /// Monotonic seconds for scheduling and failure back-off; tests replace it.
-    @nonobjc var uptime: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    /// Monotonic seconds for scheduling and failure back-off.
+    private let uptime: @Sendable () -> TimeInterval
     private var value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     private var published = false
     private var failed = false
@@ -93,8 +93,13 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private var sourceLayout = -1
 
     public override convenience init() { self.init(interval: 30) }
-    public init(interval: TimeInterval) {
+    public convenience init(interval: TimeInterval) {
+        self.init(interval: interval, uptime: { ProcessInfo.processInfo.systemUptime })
+    }
+    /// Tests pass a controlled clock.
+    @nonobjc init(interval: TimeInterval, uptime: @escaping @Sendable () -> TimeInterval) {
         self.interval = interval.isFinite ? max(0, interval) : 30
+        self.uptime = uptime
         super.init()
     }
     deinit { task?.cancel() }
