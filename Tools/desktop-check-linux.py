@@ -107,19 +107,43 @@ class Desktop:
         self.processes.append(process)
         return process
 
+    def describe(self, process, name):
+        """Exit status, or the kernel wait channel while running, and the log tail."""
+        if process.poll() is None:
+            try:
+                state = "still running in " + (Path(f"/proc/{process.pid}/wchan").read_text() or "userspace")
+            except OSError:
+                state = "still running"
+        else:
+            state = f"exit status {process.returncode}"
+        log = (self.output / f"{name}.log").read_text(errors="replace").splitlines()
+        tail = [line for line in log if not line.startswith(("Failed to read:", "Setting default value"))][-20:]
+        return f"{name} {state}; log tail:\n" + ("\n".join(tail) or "(empty)")
+
     def boot(self):
         self.env.update(HOME=str(self.root / "desktop-home"), LIBGL_ALWAYS_SOFTWARE="1",
                         WINIT_X11_SCALE_FACTOR=str(self.native_scale))
-        Path(self.env["HOME"]).mkdir()
-        keys = self.root / "keys"
-        # Let Weston, rather than the host WM, receive its native close shortcut.
-        keys.write_text("Mod4 F12 :Nop\n" if self.backend == "wayland" else "Mod1 F4 :Close\n")
-        rc = self.root / "fluxbox.rc"
-        rc.write_text(f"session.keyFile: {keys}\n")
-        wm = self.start("fluxbox", ["fluxbox", "-rc", rc, "-no-toolbar", "-no-slit"])
-        wait_for(lambda: "window id" in run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], self.env, False),
-                 "Fluxbox did not become the window manager")
-        require(wm.poll() is None, "Fluxbox exited during startup")
+        # Without ~/.fluxbox, Fluxbox 1.3.7 copies its stock files there (and its
+        # init over -rc), then calls sync(2) before opening the display. Behind a
+        # large unflushed build that sync blocks for seconds, so seed the same
+        # files ourselves. Stock keys already bind Mod1 F4 to Close.
+        config = Path(self.env["HOME"]) / ".fluxbox"
+        config.mkdir(parents=True)
+        stock = Path("/etc/X11/fluxbox")
+        for source, name in [("init", "init"), ("keys", "keys"), ("fluxbox.menu-user", "menu"),
+                             ("apps", "apps"), ("overlay", "overlay"), ("window.menu", "windowmenu")]:
+            # An init without the current configVersion would run fluxbox-update_configs.
+            text = (stock / source).read_text() if (stock / source).exists() else ""
+            (config / name).write_text(text if name != "init" or "session.configVersion" in text
+                                       else text + "\nsession.configVersion: 13\n")
+        wm = self.start("fluxbox", ["fluxbox", "-rc", config / "init", "-no-toolbar", "-no-slit"])
+        try:
+            wait_for(lambda: wm.poll() is not None or
+                     "window id" in run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], self.env, False),
+                     "Fluxbox did not become the window manager")
+            require(wm.poll() is None, "Fluxbox exited during startup")
+        except RuntimeError as error:
+            raise RuntimeError(f"{error}: {self.describe(wm, 'fluxbox')}") from None
         picom = self.start("picom", ["picom", "--backend", "xrender", "--config", "/dev/null"])
         time.sleep(.3)
         require(picom.poll() is None, "X11 compositing could not start")
@@ -333,7 +357,10 @@ class Desktop:
                     process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    process.wait(timeout=3)
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        pass  # Uninterruptible (e.g. in sync); keep the original error.
         for stream in self.files:
             stream.close()
 
