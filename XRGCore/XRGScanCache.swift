@@ -77,10 +77,20 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         let stamp: Stamp?
         let time: TimeInterval
     }
+    /// A parser's opaque state for resuming a file, tied to the file's identity.
+    /// The parser itself verifies the bytes before resuming from it.
+    private struct Resume: Sendable {
+        let inode: UInt64
+        let device: UInt64
+        let state: any Sendable
+    }
+    /// Resumable parsers get the state they returned for this file last time.
+    public typealias ResumableParse = @Sendable (String, (any Sendable)?) throws -> (XRGScanTotals, (any Sendable)?)
     /// One sweep's per-file results; `totals` is nil unless every file parsed.
     private struct Sweep: Sendable {
         let parsed: [String: Entry]
         let failures: [String: Failure]
+        let resumes: [String: Resume]
         let complete: ([String: Entry], XRGScanTotals)?
     }
     struct Observation: Sendable {
@@ -97,6 +107,8 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     // force every other file to be parsed again on the next sweep.
     private var parsed: [String: Entry] = [:]
     private var failures: [String: Failure] = [:]
+    // Kept apart from `parsed`: a file that failed this sweep still resumes next time.
+    private var resumes: [String: Resume] = [:]
     /// Monotonic seconds for scheduling and failure back-off.
     private let uptime: @Sendable () -> TimeInterval
     private var value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
@@ -146,6 +158,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         entries = [:]
         parsed = [:]
         failures = [:]
+        resumes = [:]
         value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     }
 
@@ -160,6 +173,13 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     /// Checked parsers may reject incomplete I/O without replacing a good snapshot.
     @nonobjc public func refreshChecked(root: String, layout: Int, force: Bool = false,
                         parse: @escaping @Sendable (String) throws -> XRGScanTotals) {
+        refreshResumable(root: root, layout: layout, force: force) { path, _ in (try parse(path), nil) }
+    }
+
+    /// Like refreshChecked, for parsers that can continue a file from their own
+    /// checkpoint instead of reading it again.
+    @nonobjc public func refreshResumable(root: String, layout: Int, force: Bool = false,
+                                          parse: @escaping ResumableParse) {
         lock.withLock {
             if source != root || sourceLayout != layout {
                 clear()
@@ -170,13 +190,13 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             guard task == nil, force || (lastStart.map({ now - $0 >= interval }) ?? true) else { return }
             lastStart = now
             let id = generation
-            let previous = parsed, knownFailures = failures, settle = settle
+            let previous = parsed, knownFailures = failures, settle = settle, knownResumes = resumes
             // An unchanged file that failed is retried only after this back-off.
             let retry = interval * 12
             task = Task.detached(priority: .utility) { [weak self] in
                 let sweep = try? Self.scan(root: root, layout: layout, previous: previous,
-                                           failures: knownFailures, now: now, retryAfter: retry,
-                                           settle: settle, parse: parse)
+                                           failures: knownFailures, resumes: knownResumes, now: now,
+                                           retryAfter: retry, settle: settle, parse: parse)
                 self?.finish(id: id, sweep: sweep)
             }
         }
@@ -188,6 +208,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             if let sweep {
                 parsed = sweep.parsed
                 failures = sweep.failures
+                resumes = sweep.resumes
             }
             if let result = sweep?.complete {
                 func inventory(_ rows: [String: Entry]) -> [String: XRGLogFileState] {
@@ -276,17 +297,22 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     }
 
     private static func scan(root: String, layout: Int, previous: [String: Entry],
-                             failures previousFailures: [String: Failure], now: TimeInterval,
+                             failures previousFailures: [String: Failure],
+                             resumes previousResumes: [String: Resume], now: TimeInterval,
                              retryAfter: TimeInterval, settle: Duration,
-                             parse: @Sendable (String) throws -> XRGScanTotals) throws -> Sweep {
+                             parse: ResumableParse) throws -> Sweep {
         var next: [String: Entry] = [:]
         var failures: [String: Failure] = [:]
+        var resumes: [String: Resume] = [:]
         for path in try files(root: root, layout: layout) {
             try Task.checkCancellation()
             guard let before = try? stamp(path) else {
                 failures[path] = Failure(stamp: nil, time: now)
                 continue
             }
+            // A resume state only ever belongs to the same file (inode and device).
+            let resume = previousResumes[path].flatMap { $0.inode == before.inode && $0.device == before.device ? $0 : nil }
+            if let resume { resumes[path] = resume }
             if let old = previous[path], old.settled(before, settle) {
                 next[path] = old
                 continue
@@ -301,7 +327,12 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             let totals: XRGScanTotals
             do {
                 guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
-                totals = try parse(path)
+                let (parsedTotals, state) = try parse(path, resume?.state)
+                totals = parsedTotals
+                // The parser's checkpoint is byte-verified, so it stays usable even
+                // if the file changed while it was read; the totals do not.
+                if let state { resumes[path] = Resume(inode: before.inode, device: before.device, state: state) }
+                else { resumes[path] = nil }
                 try Task.checkCancellation()
             } catch is CancellationError {
                 throw CancellationError()
@@ -324,9 +355,9 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             next[path] = Entry(stamp: after, observed: observed, totals: totals)
         }
         guard failures.isEmpty, let totals = try? totals(next, layout: layout) else {
-            return Sweep(parsed: next, failures: failures, complete: nil)
+            return Sweep(parsed: next, failures: failures, resumes: resumes, complete: nil)
         }
-        return Sweep(parsed: next, failures: [:], complete: (next, totals))
+        return Sweep(parsed: next, failures: [:], resumes: resumes, complete: (next, totals))
     }
 
     private static func totals(_ next: [String: Entry], layout: Int) throws -> XRGScanTotals {

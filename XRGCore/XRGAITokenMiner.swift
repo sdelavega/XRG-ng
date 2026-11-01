@@ -54,10 +54,11 @@ enum XRGAIPricing {
         let input = tokens / 10 * 7 + tokens % 10 * 7 / 10
         return Double(input) / 1_000_000 * inputPrice + Double(tokens - input) / 1_000_000 * outputPrice
     }
-    static func parse(_ path: String, gemini: Bool) -> XRGScanTotals {
+    /// Cost and model counts of a priced log, accumulated record by record.
+    struct Priced: Sendable {
         var cost = 0.0
         var models: [String: UInt64] = [:]
-        let consume: (String?, UInt64, UInt64) -> Void = { model, input, output in
+        mutating func add(model: String?, input: UInt64, output: UInt64, gemini: Bool) {
             if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                model.utf8.count <= 1024, model.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 let (tokens, badTokens) = input.addingReportingOverflow(output)
@@ -67,9 +68,36 @@ enum XRGAIPricing {
             let (i, o) = prices(model: model, gemini: gemini)
             cost += Double(input) / 1_000_000 * i + Double(output) / 1_000_000 * o
         }
+    }
+    /// A Claude log's checkpoint together with the priced state at that point.
+    struct ClaudeResume: Sendable {
+        let checkpoint: XRGAppendCheckpoint
+        let priced: Priced
+    }
+
+    static func parse(_ path: String, gemini: Bool) -> XRGScanTotals {
+        var priced = Priced()
+        let consume: (String?, UInt64, UInt64) -> Void = { priced.add(model: $0, input: $1, output: $2, gemini: gemini) }
         let totals = gemini ? XRGProviderLogParser.parseGemini(atPath: path, consume: consume)
             : XRGProviderLogParser.parseClaude(atPath: path, consume: consume)
-        return XRGScanTotals(tokens: totals.total, input: totals.input, output: totals.output, cost: cost, modelTotals: models)
+        return XRGScanTotals(tokens: totals.total, input: totals.input, output: totals.output, cost: priced.cost,
+                             modelTotals: priced.models)
+    }
+
+    /// Claude parse that continues from `resume` after an append. Records are
+    /// priced in file order either way, so the totals equal a full parse.
+    static func parseClaude(_ path: String, resuming resume: ClaudeResume?) -> (XRGScanTotals, ClaudeResume) {
+        var committed = Priced(), latest = Priced()
+        let progress = XRGProviderLogParser.parseClaude(atPath: path, resuming: resume?.checkpoint, begin: { resumed in
+            if resumed, let resume { committed = resume.priced; latest = resume.priced }
+        }) { model, input, output, isCommitted in
+            latest.add(model: model, input: input, output: output, gemini: false)
+            if isCommitted { committed = latest }
+        }
+        let totals = progress.totals
+        return (XRGScanTotals(tokens: totals.total, input: totals.input, output: totals.output, cost: latest.cost,
+                              modelTotals: latest.models),
+                ClaudeResume(checkpoint: progress.checkpoint, priced: committed))
     }
 }
 
@@ -379,7 +407,9 @@ public final class XRGAITokenMiner: NSObject {
     }
     @objc public func updateJSONLCacheInBackground() { refreshClaude(force: false) }
     private func refreshClaude(force: Bool) {
-        claudeScan.refreshChecked(root: path(".claude/projects"), layout: 0, force: force) { XRGAIPricing.parse($0, gemini: false) }
+        claudeScan.refreshResumable(root: path(".claude/projects"), layout: 0, force: force) { path, state in
+            XRGAIPricing.parseClaude(path, resuming: state as? XRGAIPricing.ClaudeResume)
+        }
     }
     private func consumeCodexLogSnapshot() {
         let observation = codexScan.completedObservation
@@ -403,10 +433,11 @@ public final class XRGAITokenMiner: NSObject {
     var codexRecordedModels: [String: UInt64] { codexHasSnapshot ? codexModels : [:] }
     @objc public func updateCodexCacheInBackground() { refreshCodex(force: false) }
     private func refreshCodex(force: Bool) {
-        codexScan.refreshChecked(root: path(".codex/sessions"), layout: 1, force: force) {
-            let snapshot = try XRGCodexLogParser.snapshot(atPath: $0)
-            return XRGScanTotals(tokens: snapshot.usage.total, input: snapshot.usage.input,
-                output: snapshot.usage.output, cost: 0, modelTotals: snapshot.modelTotals)
+        codexScan.refreshResumable(root: path(".codex/sessions"), layout: 1, force: force) { path, state in
+            let progress = try XRGCodexLogParser.progress(atPath: path, resuming: state as? XRGCodexLogParser.Checkpoint)
+            let snapshot = progress.snapshot
+            return (XRGScanTotals(tokens: snapshot.usage.total, input: snapshot.usage.input,
+                output: snapshot.usage.output, cost: 0, modelTotals: snapshot.modelTotals), progress.checkpoint)
         }
     }
     private func consumeGeminiLogSnapshot() {

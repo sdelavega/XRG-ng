@@ -214,15 +214,19 @@ public final class XRGProviderLogParser: NSObject {
     /// `committed` is false only for an unfinished final record, which stays out
     /// of the returned checkpoint so it is never counted twice.
     public static func parseClaude(atPath path: String, resuming checkpoint: XRGAppendCheckpoint?,
+                                   begin: (_ resumed: Bool) -> Void = { _ in },
                                    consume: (String?, UInt64, UInt64, _ committed: Bool) -> Void) -> XRGClaudeProgress {
         let decoder = JSONDecoder()
         var committed = XRGTokenCounts(), provisional = XRGTokenCounts()
         guard let handle = FileHandle(forReadingAtPath: path) else {
+            begin(false)
             return XRGClaudeProgress(totals: committed, checkpoint: XRGAppendCheckpoint(), resumed: false)
         }
         defer { try? handle.close() }
         let start = XRGAppendVerifier.start(handle, checkpoint: checkpoint)
         if start > 0, let checkpoint { committed = checkpoint.counts }
+        // Callers that carry their own per-record state start from it only on a resume.
+        begin(start > 0)
         let complete = XRGJSONLines.read(handle, from: start) { line, isCommitted in
             guard let record = try? decoder.decode(ClaudeRecord.self, from: line),
                   let message = record.message, let usage = message.usage,
