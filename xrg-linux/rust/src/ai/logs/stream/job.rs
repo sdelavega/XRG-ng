@@ -33,7 +33,7 @@ impl Job {
         old: Option<&Entry>,
     ) -> Result<Self, String> {
         if stamp.size > FILE_LIMIT {
-            return Err("Log exceeds the 64 MiB per-file limit".into());
+            return Err("Log exceeds the 1 GiB per-file limit".into());
         }
         let verify = old
             .filter(|old| {

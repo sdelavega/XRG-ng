@@ -150,7 +150,7 @@ pub(super) fn parse<R: Read + Seek>(
 ) -> Result<Entry, String> {
     check(deadline)?;
     if stamp.size > FILE_LIMIT {
-        return Err("Log exceeds the 64 MiB per-file limit".into());
+        return Err("Log exceeds the 1 GiB per-file limit".into());
     }
     if matches!(layout, Layout::Gemini) && session {
         let observed = SystemTime::now();

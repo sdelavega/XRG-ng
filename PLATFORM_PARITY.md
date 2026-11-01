@@ -278,7 +278,9 @@ Implemented in this pass:
   component decoder and a common attribution corpus; unknown/synthetic usage stays
   unclassified. Mac checked Codex scans retain the last complete snapshot on I/O
   or size failures; resets still invalidate pre-reset scans. Files are limited to
-  64 MiB with 8 MiB records and 255 named models; excess metadata never adds tokens.
+  1 GiB with 8 MiB records and 255 named models; excess metadata never adds tokens.
+  Both platforms resume an appended Claude or Codex log from a byte-verified
+  checkpoint instead of reading it again.
 
 - Log accounting and rates now rebaseline on complete-inventory additions/removals,
   renames, device/inode replacements, shorter files and per-file counter rollbacks,
