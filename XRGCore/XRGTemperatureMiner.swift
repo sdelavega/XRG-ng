@@ -76,6 +76,7 @@ public final class XRGTemperatureMiner: NSObject {
     @objc(sensorForLocation:)
     public func sensor(forLocation location: String) -> XRGSensorData? { state.sensor(forLocation: location) }
     public func regenerateLocationKeyOrder() { state.regenerateLocationKeyOrder() }
+    @nonobjc var orderGenerationCount: Int { state.orderGenerationCount }
 
     private func names(for keys: [String]) -> [String: String] {
         keys.reduce(into: [:]) { result, key in result[key] = reader?.name(forKey: key) ?? key }

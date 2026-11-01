@@ -87,6 +87,10 @@ public final class XRGCodexLogParser: NSObject {
     public static func snapshot(atPath path: String) throws -> Snapshot {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         defer { try? handle.close() }
+        // Reject an oversized log before reading it; the read loop below still
+        // enforces the limit if the file grows while it is being read.
+        guard try handle.seekToEnd() <= 64 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+        try handle.seek(toOffset: 0)
         var ledger = Attribution(), usage = XRGTokenUsage(total: 0)
         var line = Data(), bytesRead = 0
         while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {

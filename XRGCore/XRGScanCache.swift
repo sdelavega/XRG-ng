@@ -72,6 +72,17 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             self.stamp == stamp && stamp.latest + settle < observed
         }
     }
+    /// A file that could not be parsed at this stamp (nil: not even statted), and when.
+    private struct Failure: Sendable {
+        let stamp: Stamp?
+        let time: TimeInterval
+    }
+    /// One sweep's per-file results; `totals` is nil unless every file parsed.
+    private struct Sweep: Sendable {
+        let parsed: [String: Entry]
+        let failures: [String: Failure]
+        let complete: ([String: Entry], XRGScanTotals)?
+    }
     struct Observation: Sendable {
         let totals: XRGScanTotals
         let source: String
@@ -82,6 +93,12 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private let interval: TimeInterval
     private let settle: Duration
     private var entries: [String: Entry] = [:]
+    // Per-file parse cache, kept across failed sweeps so one bad file does not
+    // force every other file to be parsed again on the next sweep.
+    private var parsed: [String: Entry] = [:]
+    private var failures: [String: Failure] = [:]
+    /// Monotonic seconds for scheduling and failure back-off.
+    private let uptime: @Sendable () -> TimeInterval
     private var value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     private var published = false
     private var failed = false
@@ -92,9 +109,17 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private var sourceLayout = -1
 
     public override convenience init() { self.init(interval: 30) }
-    public convenience init(interval: TimeInterval) { self.init(interval: interval, settle: Self.settle) }
-    @nonobjc init(interval: TimeInterval, settle: Duration) {
+    public convenience init(interval: TimeInterval) {
+        self.init(interval: interval, uptime: { ProcessInfo.processInfo.systemUptime })
+    }
+    @nonobjc convenience init(interval: TimeInterval, settle: Duration) {
+        self.init(interval: interval, uptime: { ProcessInfo.processInfo.systemUptime }, settle: settle)
+    }
+    /// Tests pass a controlled clock and settle window.
+    @nonobjc init(interval: TimeInterval, uptime: @escaping @Sendable () -> TimeInterval,
+                  settle: Duration = XRGScanCache.settle) {
         self.interval = interval.isFinite ? max(0, interval) : 30
+        self.uptime = uptime
         self.settle = settle
         super.init()
     }
@@ -119,6 +144,8 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         published = false
         failed = false
         entries = [:]
+        parsed = [:]
+        failures = [:]
         value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     }
 
@@ -139,22 +166,30 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 source = root
                 sourceLayout = layout
             }
-            let now = ProcessInfo.processInfo.systemUptime
+            let now = uptime()
             guard task == nil, force || (lastStart.map({ now - $0 >= interval }) ?? true) else { return }
             lastStart = now
             let id = generation
-            let previous = entries, settle = settle
+            let previous = parsed, knownFailures = failures, settle = settle
+            // An unchanged file that failed is retried only after this back-off.
+            let retry = interval * 12
             task = Task.detached(priority: .utility) { [weak self] in
-                let result = try? Self.scan(root: root, layout: layout, previous: previous, settle: settle, parse: parse)
-                self?.finish(id: id, result: result)
+                let sweep = try? Self.scan(root: root, layout: layout, previous: previous,
+                                           failures: knownFailures, now: now, retryAfter: retry,
+                                           settle: settle, parse: parse)
+                self?.finish(id: id, sweep: sweep)
             }
         }
     }
 
-    private func finish(id: UUID, result: ([String: Entry], XRGScanTotals)?) {
+    private func finish(id: UUID, sweep: Sweep?) {
         lock.withLock {
             guard generation == id else { return }
-            if let result {
+            if let sweep {
+                parsed = sweep.parsed
+                failures = sweep.failures
+            }
+            if let result = sweep?.complete {
                 func inventory(_ rows: [String: Entry]) -> [String: XRGLogFileState] {
                     rows.mapValues { XRGLogFileState(device: $0.stamp.device, inode: $0.stamp.inode,
                         bytes: $0.stamp.size, tokens: $0.totals.tokens) }
@@ -170,7 +205,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 // success completes before the UI consumes the failed status.
                 continuity = UUID()
             }
-            failed = result == nil
+            failed = sweep?.complete == nil
             task = nil
         }
     }
@@ -187,9 +222,9 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                      size: UInt64(info.st_size), inode: info.st_ino, device: UInt64(UInt32(bitPattern: info.st_dev)))
     }
 
-    /// Test seam: model a stamp collision on one cached snapshot.
+    /// Test seam: model a stamp collision on one snapshot the next sweep reuses.
     @nonobjc func withEntry(_ path: String, _ body: (inout Entry) -> Void) {
-        lock.withLock { if var entry = entries[path] { body(&entry); entries[path] = entry } }
+        lock.withLock { if var entry = parsed[path] { body(&entry); parsed[path] = entry } }
     }
 
     private static func files(root: String, layout: Int) throws -> [String] {
@@ -240,28 +275,61 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         return paths
     }
 
-    private static func scan(root: String, layout: Int, previous: [String: Entry], settle: Duration,
-                             parse: @Sendable (String) throws -> XRGScanTotals) throws -> ([String: Entry], XRGScanTotals) {
+    private static func scan(root: String, layout: Int, previous: [String: Entry],
+                             failures previousFailures: [String: Failure], now: TimeInterval,
+                             retryAfter: TimeInterval, settle: Duration,
+                             parse: @Sendable (String) throws -> XRGScanTotals) throws -> Sweep {
         var next: [String: Entry] = [:]
+        var failures: [String: Failure] = [:]
         for path in try files(root: root, layout: layout) {
             try Task.checkCancellation()
-            let before = try stamp(path)
+            guard let before = try? stamp(path) else {
+                failures[path] = Failure(stamp: nil, time: now)
+                continue
+            }
             if let old = previous[path], old.settled(before, settle) {
                 next[path] = old
-            } else {
-                guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
-                var now = timespec()
-                clock_gettime(CLOCK_REALTIME, &now)
-                let observed = since1970(now)
-                let totals = try parse(path)
-                try Task.checkCancellation()
-                let after = try stamp(path)
-                // Retry concurrently changing files on the next scan; do not
-                // cache a partially read sample under a newer modification date.
-                guard before == after else { throw CocoaError(.fileReadUnknown) }
-                next[path] = Entry(stamp: after, observed: observed, totals: totals)
+                continue
             }
+            if let failure = previousFailures[path], failure.stamp == before, now - failure.time < retryAfter {
+                failures[path] = failure
+                continue
+            }
+            var clock = timespec()
+            clock_gettime(CLOCK_REALTIME, &clock)
+            let observed = since1970(clock)
+            let totals: XRGScanTotals
+            do {
+                guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
+                totals = try parse(path)
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Only a parser that rejects this exact stamp is backed off.
+                failures[path] = Failure(stamp: before, time: now)
+                continue
+            }
+            // Retry concurrently changing files on the next scan; do not
+            // cache a partially read sample under a newer modification date.
+            // A stat failure here is not the file's fault, so it is not backed off.
+            guard let after = try? stamp(path) else {
+                failures[path] = Failure(stamp: nil, time: now)
+                continue
+            }
+            guard before == after else {
+                failures[path] = Failure(stamp: before, time: now)
+                continue
+            }
+            next[path] = Entry(stamp: after, observed: observed, totals: totals)
         }
+        guard failures.isEmpty, let totals = try? totals(next, layout: layout) else {
+            return Sweep(parsed: next, failures: failures, complete: nil)
+        }
+        return Sweep(parsed: next, failures: [:], complete: (next, totals))
+    }
+
+    private static func totals(_ next: [String: Entry], layout: Int) throws -> XRGScanTotals {
         var tokens: UInt64 = 0
         var input: UInt64 = 0
         var output: UInt64 = 0
@@ -289,6 +357,6 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             output = newOutput
             cost = newCost
         }
-        return (next, XRGScanTotals(tokens: tokens, input: input, output: output, cost: cost, modelTotals: models))
+        return XRGScanTotals(tokens: tokens, input: input, output: output, cost: cost, modelTotals: models)
     }
 }

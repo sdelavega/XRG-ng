@@ -32,6 +32,15 @@ private final class ScanSignal: @unchecked Sendable {
     }
 }
 
+private final class ScanClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+    var now: TimeInterval {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}
+
 private func waitForScan(_ scan: XRGScanCache) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(3)
     while scan.isScanning && ContinuousClock.now < deadline {
@@ -255,6 +264,70 @@ struct XRGScanStateTests {
         scan.refresh(root: root.path, layout: 0, parse: probe.read)
         #expect(await waitForScan(scan))
         #expect(!scan.hasSnapshot && scan.snapshot.tokens == 0)
+    }
+
+    @Test func failingFileDoesNotForceReparsingTheRestOfTheInventory() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c"] { try write("10", to: root.appendingPathComponent("p/\(name).jsonl")) }
+        let scan = XRGScanCache(interval: 0, settle: .zero), probe = ParseProbe()
+        let parse: @Sendable (String) throws -> XRGScanTotals = { path in
+            if path.hasSuffix("b.jsonl") { throw CocoaError(.fileReadTooLarge) }
+            return probe.read(path)
+        }
+        scan.refreshChecked(root: root.path, layout: 0, parse: parse); try #require(await waitForScan(scan))
+        // The sweep still fails, but it parsed the files on both sides of the bad one.
+        #expect(scan.lastScanFailed && probe.count == 2)
+        scan.refreshChecked(root: root.path, layout: 0, parse: parse); try #require(await waitForScan(scan))
+        #expect(scan.lastScanFailed && probe.count == 2)
+        scan.refreshChecked(root: root.path, layout: 0, parse: probe.read); try #require(await waitForScan(scan))
+        #expect(!scan.lastScanFailed && scan.completedSnapshot?.tokens == 30 && probe.count == 3)
+    }
+
+    @Test func unchangedFailingFileBacksOffBeforeItIsReadAgain() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("p/a.jsonl")
+        try write("10", to: file)
+        let attempts = ParseProbe(), clock = ScanClock()
+        let scan = XRGScanCache(interval: 5, uptime: { clock.now })
+        let parse: @Sendable (String) throws -> XRGScanTotals = { path in
+            _ = attempts.read(path); throw CocoaError(.fileReadTooLarge)
+        }
+        func sweep() async throws {
+            scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse)
+            try #require(await waitForScan(scan))
+        }
+        try await sweep()
+        clock.now = 59; try await sweep()
+        // Within twelve intervals the same failing stamp fails without being read again.
+        #expect(scan.lastScanFailed && attempts.count == 1)
+        clock.now = 60; try await sweep()
+        #expect(scan.lastScanFailed && attempts.count == 2)
+        // A changed file is retried at once, back-off or not.
+        try write("20", to: file)
+        clock.now = 61; try await sweep()
+        #expect(attempts.count == 3)
+    }
+
+    @Test func statFailureAfterParsingIsRetriedWithoutBackOff() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("p/a.jsonl"), aside = root.appendingPathComponent("aside")
+        try write("10", to: file)
+        let probe = ParseProbe(), clock = ScanClock()
+        let scan = XRGScanCache(interval: 5, uptime: { clock.now })
+        // Moving the file away after parsing makes the post-read stat fail; a
+        // rename keeps the stamp, so moving it back restores the same file.
+        scan.refreshChecked(root: root.path, layout: 0, force: true) { path in
+            let totals = probe.read(path)
+            try? FileManager.default.moveItem(atPath: path, toPath: aside.path)
+            return totals
+        }
+        try #require(await waitForScan(scan))
+        #expect(scan.lastScanFailed)
+        try FileManager.default.moveItem(at: aside, to: file)
+        clock.now = 1
+        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: probe.read)
+        try #require(await waitForScan(scan))
+        #expect(!scan.lastScanFailed && scan.completedSnapshot?.tokens == 10 && probe.count == 2)
     }
 
     // Rewrites in place with the same size and restores the exact mtime.
