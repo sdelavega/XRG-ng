@@ -38,8 +38,11 @@ struct ClaudeResumeTests {
                 try whole.write(to: path)
                 let resumed = parse(path, first.progress.checkpoint)
                 // Committed records before the split plus everything reported after
-                // it equal one full parse: nothing is lost or counted twice.
-                #expect(first.committed + resumed.seen == full.seen, "split \(split)")
+                // it equal one full parse: nothing is lost or counted twice. Builds
+                // that cannot verify a checkpoint parse from the start instead.
+                let reported = resumed.progress.resumed ? first.committed + resumed.seen : resumed.seen
+                #expect(resumed.progress.resumed == (XRGLogReader.canResume && first.progress.checkpoint.offset > 0), "split \(split)")
+                #expect(reported == full.seen, "split \(split)")
                 #expect(resumed.progress.totals == full.progress.totals, "split \(split)")
             }
         }
@@ -63,8 +66,13 @@ struct ClaudeResumeTests {
             let first = parse(path, nil)
             try Data((record("a", 10, 3) + "\n" + noise + record("c", 1, 1) + "\n").utf8).write(to: path)
             let resumed = parse(path, first.progress.checkpoint)
-            // Only the appended record is decoded and reported.
-            #expect(resumed.progress.resumed && resumed.seen == [Seen(model: "c", input: 2, output: 1)])
+            // Only the appended record is decoded and reported, where a checkpoint
+            // can be verified; otherwise everything is parsed again.
+            if XRGLogReader.canResume {
+                #expect(resumed.progress.resumed && resumed.seen == [Seen(model: "c", input: 2, output: 1)])
+            } else {
+                #expect(!resumed.progress.resumed && resumed.seen.map(\.model) == ["a", "c"])
+            }
             // One early byte changed at the same length: a full parse, every record again.
             try Data((record("b", 10, 3) + "\n" + noise + record("c", 1, 1) + "\n").utf8).write(to: path)
             let edited = parse(path, resumed.progress.checkpoint)

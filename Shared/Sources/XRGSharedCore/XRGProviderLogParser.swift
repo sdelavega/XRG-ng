@@ -341,6 +341,15 @@ enum XRGLogReader {
 
     static let recordLimit = 8 * 1024 * 1024
 
+    /// Whether this build can verify a checkpoint (CryptoKit is available).
+    static var canResume: Bool {
+        #if canImport(CryptoKit)
+        true
+        #else
+        false
+        #endif
+    }
+
     /// - Parameters:
     ///   - limit: largest file size accepted; nil for none.
     ///   - dropOversized: skip a record over the record limit instead of failing.
