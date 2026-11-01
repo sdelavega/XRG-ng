@@ -56,18 +56,22 @@ struct ClaudeResumeTests {
         }
     }
 
-    @Test func resumeReadsOnlyAppendedBytesAndRewritesFallBackToAFullParse() throws {
+    @Test func appendsResumeAndAnyPrefixChangeFallsBackToAFullParse() throws {
         try file { path in
             let noise = String(repeating: "x", count: 6000) + "\n"
             try Data((record("a", 10, 3) + "\n" + noise).utf8).write(to: path)
             let first = parse(path, nil)
-            // An early change outside the verified window is not re-read on resume.
-            try Data((record("b", 10, 3) + "\n" + noise + record("c", 1, 1) + "\n").utf8).write(to: path)
+            try Data((record("a", 10, 3) + "\n" + noise + record("c", 1, 1) + "\n").utf8).write(to: path)
             let resumed = parse(path, first.progress.checkpoint)
-            #expect(resumed.seen == [Seen(model: "c", input: 2, output: 1)] && resumed.progress.resumed)
-            // A shorter or changed file inside the window parses from the start.
+            // Only the appended record is decoded and reported.
+            #expect(resumed.progress.resumed && resumed.seen == [Seen(model: "c", input: 2, output: 1)])
+            // One early byte changed at the same length: a full parse, every record again.
+            try Data((record("b", 10, 3) + "\n" + noise + record("c", 1, 1) + "\n").utf8).write(to: path)
+            let edited = parse(path, resumed.progress.checkpoint)
+            #expect(!edited.progress.resumed && edited.seen.map(\.model) == ["b", "c"])
+            // A shorter file parses from the start.
             try Data((record("d", 1, 1) + "\n").utf8).write(to: path)
-            let rewritten = parse(path, resumed.progress.checkpoint)
+            let rewritten = parse(path, edited.progress.checkpoint)
             #expect(!rewritten.progress.resumed && rewritten.seen == [Seen(model: "d", input: 2, output: 1)])
         }
     }

@@ -22,6 +22,9 @@
  */
 
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 #if canImport(ObjectiveC)
 @objc(XRGTokenTotals)
@@ -223,11 +226,12 @@ public final class XRGProviderLogParser: NSObject {
             return XRGClaudeProgress(totals: committed, checkpoint: XRGAppendCheckpoint(), resumed: false)
         }
         defer { try? handle.close() }
-        let start = XRGAppendVerifier.start(handle, checkpoint: checkpoint)
-        if start > 0, let checkpoint { committed = checkpoint.counts }
-        // Callers that carry their own per-record state start from it only on a resume.
-        begin(start > 0)
-        let complete = XRGJSONLines.read(handle, from: start) { line, isCommitted in
+        let read = XRGLogReader.read(handle, resuming: checkpoint.map { ($0.offset, $0.digest) },
+                                     limit: nil, dropOversized: true, begin: { resumed in
+            if resumed, let checkpoint { committed = checkpoint.counts }
+            // Callers that carry their own per-record state start from it only on a resume.
+            begin(resumed)
+        }) { line, isCommitted in
             guard let record = try? decoder.decode(ClaudeRecord.self, from: line),
                   let message = record.message, let usage = message.usage,
                   let input = sum(usage.input ?? 0, usage.cacheCreation ?? 0, usage.cacheRead ?? 0),
@@ -237,9 +241,9 @@ public final class XRGProviderLogParser: NSObject {
             if isCommitted { committed = next } else { provisional = counts }
             consume(message.model, input, usage.output ?? 0, isCommitted)
         }
-        let saved = XRGAppendCheckpoint(offset: complete, tail: XRGAppendVerifier.tail(handle, before: complete),
-                                        counts: committed)
-        return XRGClaudeProgress(totals: committed.adding(provisional) ?? committed, checkpoint: saved, resumed: start > 0)
+        // A read error keeps the complete records already read, matching the legacy scanner.
+        let saved = XRGAppendCheckpoint(offset: read.complete, digest: read.digest, counts: committed)
+        return XRGClaudeProgress(totals: committed.adding(provisional) ?? committed, checkpoint: saved, resumed: read.resumed)
     }
 
     #if canImport(ObjectiveC)
@@ -294,14 +298,14 @@ public struct XRGTokenCounts: Equatable, Sendable {
 }
 
 /// Where an additive log parse stopped: just after the last complete record,
-/// with the counts up to there and the bytes before it for verification.
+/// with the counts up to there and a digest of every byte before it.
 public struct XRGAppendCheckpoint: Sendable {
     public let offset: UInt64
-    let tail: Data
+    let digest: Data?
     let counts: XRGTokenCounts
     public var input: UInt64 { counts.input }
-    init(offset: UInt64 = 0, tail: Data = Data(), counts: XRGTokenCounts = XRGTokenCounts()) {
-        self.offset = offset; self.tail = tail; self.counts = counts
+    init(offset: UInt64 = 0, digest: Data? = nil, counts: XRGTokenCounts = XRGTokenCounts()) {
+        self.offset = offset; self.digest = digest; self.counts = counts
     }
 }
 
@@ -312,77 +316,113 @@ public struct XRGClaudeProgress: Sendable {
     public let resumed: Bool
 }
 
-/// Decides whether a log can be resumed: the bytes just before the checkpoint
-/// must be unchanged and the file no shorter. Anything else starts from zero.
-enum XRGAppendVerifier {
-    static let window = 4096
-
-    static func start(_ handle: FileHandle, offset: UInt64, tail: Data) -> UInt64 {
-        guard offset > 0, let size = try? handle.seekToEnd(), offset <= size,
-              // A short window would skip verification; treat it as no checkpoint.
-              tail.count == Int(min(offset, UInt64(window))),
-              (try? handle.seek(toOffset: offset - UInt64(tail.count))) != nil,
-              let before = try? handle.read(upToCount: tail.count) ?? Data(), before == tail else { return 0 }
-        return offset
+/// Streams a log once, line by line, hashing every byte it reads. A resume
+/// re-hashes the saved prefix and continues only if every byte still matches;
+/// the checkpoint digest comes from the same bytes that were parsed. Without
+/// CryptoKit (Linux and Windows builds of the shared core) nothing resumes.
+enum XRGLogReader {
+    struct Result {
+        var complete: UInt64 = 0
+        var digest: Data?
+        var resumed = false
+        var error: (any Error)?
     }
 
-    static func start(_ handle: FileHandle, checkpoint: XRGAppendCheckpoint?) -> UInt64 {
-        guard let checkpoint else { return 0 }
-        return start(handle, offset: checkpoint.offset, tail: checkpoint.tail)
+    private struct Hasher {
+        #if canImport(CryptoKit)
+        var sha = SHA256()
+        mutating func update(_ bytes: Data) { sha.update(data: bytes) }
+        func digest() -> Data? { Data(sha.finalize()) }
+        #else
+        mutating func update(_ bytes: Data) {}
+        func digest() -> Data? { nil }
+        #endif
     }
 
-    /// The bytes just before `offset`, kept to detect a rewrite on the next parse.
-    static func tail(_ handle: FileHandle, before offset: UInt64) -> Data {
-        let keep = Int(min(offset, UInt64(window)))
-        guard keep > 0, (try? handle.seek(toOffset: offset - UInt64(keep))) != nil,
-              let bytes = try? handle.read(upToCount: keep), bytes.count == keep else { return Data() }
-        return bytes
-    }
-}
+    static let recordLimit = 8 * 1024 * 1024
 
-/// Shared bounded JSONL reader. Invalid JSON is handled by each typed decoder.
-enum XRGJSONLines {
-    /// Reads records from `start`, reporting whether each ended with LF, and
-    /// returns the offset just after the last complete record.
-    static func read(_ handle: FileHandle, from start: UInt64, consume: (Data, Bool) -> Void) -> UInt64 {
-        var line = Data()
-        var dropping = false
-        let limit = 8 * 1024 * 1024
-        var base = start, complete = start
+    /// - Parameters:
+    ///   - limit: largest file size accepted; nil for none.
+    ///   - dropOversized: skip a record over the record limit instead of failing.
+    ///   - begin: told once, before any record, whether the parse resumed.
+    ///   - consume: each record, and whether it ended with LF (an unfinished
+    ///     final record is reported last with `false`).
+    static func read(_ handle: FileHandle, resuming checkpoint: (offset: UInt64, digest: Data?)?,
+                     limit: UInt64?, dropOversized: Bool, begin: (Bool) -> Void,
+                     consume: (Data, Bool) throws -> Void) -> Result {
+        var result = Result()
+        var hasher = Hasher(), committed = Hasher()
+        var line = Data(), dropping = false
         do {
+            let size = try handle.seekToEnd()
+            if let limit, size > limit { throw CocoaError(.fileReadTooLarge) }
+            var start: UInt64 = 0
+            if let checkpoint, let expected = checkpoint.digest, checkpoint.offset > 0, checkpoint.offset <= size {
+                try handle.seek(toOffset: 0)
+                var remaining = checkpoint.offset
+                while remaining > 0, let chunk = try handle.read(upToCount: Int(min(remaining, 1024 * 1024))),
+                      !chunk.isEmpty {
+                    try Task.checkCancellation()
+                    hasher.update(chunk)
+                    remaining -= UInt64(chunk.count)
+                }
+                if remaining == 0, hasher.digest() == expected {
+                    start = checkpoint.offset
+                    committed = hasher
+                } else {
+                    hasher = Hasher()
+                }
+            }
+            result.resumed = start > 0
+            result.complete = start
+            result.digest = start > 0 ? committed.digest() : nil
+            begin(result.resumed)
             try handle.seek(toOffset: start)
+            var base = start
             while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                try Task.checkCancellation()
+                if let limit, base + UInt64(chunk.count) > limit { throw CocoaError(.fileReadTooLarge) }
                 var index = chunk.startIndex
                 while index < chunk.endIndex {
                     let newline = chunk[index...].firstIndex(of: 10)
                     let end = newline ?? chunk.endIndex
                     if !dropping {
-                        if line.count + end - index <= limit {
+                        if line.count + (end - index) <= recordLimit {
                             line.append(contentsOf: chunk[index..<end])
-                        } else {
+                        } else if dropOversized {
                             line.removeAll(keepingCapacity: true)
                             dropping = true
+                        } else {
+                            throw CocoaError(.fileReadTooLarge)
                         }
                     }
-                    if let newline {
-                        if !dropping { consume(line, true) }
+                    let next = newline.map { $0 + 1 } ?? chunk.endIndex
+                    hasher.update(chunk[index..<next])
+                    if newline != nil {
+                        if !dropping, !line.isEmpty { try consume(line, true) }
                         line.removeAll(keepingCapacity: true)
                         dropping = false
-                        index = newline + 1
-                        complete = base + UInt64(index - chunk.startIndex)
-                    } else {
-                        index = chunk.endIndex
+                        committed = hasher
+                        result.complete = base + UInt64(next - chunk.startIndex)
+                        result.digest = committed.digest()
                     }
+                    index = next
                 }
                 base += UInt64(chunk.count)
             }
         } catch {
-            // Keep complete records already read, matching the legacy scanner.
+            result.error = error
+            return result
         }
-        if !dropping, !line.isEmpty { consume(line, false) }
-        return complete
+        if !dropping, !line.isEmpty {
+            do { try consume(line, false) } catch { result.error = error }
+        }
+        return result
     }
+}
 
+/// Shared bounded JSONL reader. Invalid JSON is handled by each typed decoder.
+enum XRGJSONLines {
     static func read(atPath path: String, consume: (Data) -> Void) {
         guard let handle = FileHandle(forReadingAtPath: path) else { return }
         defer { try? handle.close() }

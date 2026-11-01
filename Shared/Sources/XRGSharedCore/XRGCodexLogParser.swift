@@ -86,17 +86,19 @@ public final class XRGCodexLogParser: NSObject {
     public static let fileLimit: UInt64 = 1024 * 1024 * 1024
 
     /// Where a parse stopped: just after the last complete (LF-terminated) record,
-    /// with the parser state at that point and the bytes before it for verification.
+    /// with the parser state at that point and a digest of every byte before it.
     public struct Checkpoint: Sendable {
         public let offset: UInt64
         fileprivate let ledger: Attribution
         fileprivate let usage: XRGTokenUsage
-        fileprivate let tail: Data
+        fileprivate let digest: Data?
     }
 
     public struct Progress: Sendable {
         public let snapshot: Snapshot
         public let checkpoint: Checkpoint
+        /// True when the parse continued from the checkpoint instead of the start.
+        public let resumed: Bool
     }
 
     /// Complete bounded file snapshot. I/O/size failures throw so callers can
@@ -105,52 +107,35 @@ public final class XRGCodexLogParser: NSObject {
         try progress(atPath: path, resuming: nil).snapshot
     }
 
-    /// Parses only what was appended since `checkpoint` when the bytes before it
-    /// are unchanged; otherwise parses the whole file. Both give the same snapshot.
+    /// Parses only what was appended since `checkpoint` when every byte before it
+    /// is unchanged; otherwise parses the whole file. Both give the same snapshot.
     public static func progress(atPath path: String, resuming checkpoint: Checkpoint?) throws -> Progress {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         defer { try? handle.close() }
-        // Reject an oversized log before reading it; the read loop below still
-        // enforces the limit if the file grows while it is being read.
-        let size = try handle.seekToEnd()
-        guard size <= fileLimit else { throw CocoaError(.fileReadTooLarge) }
-        var ledger = Attribution(), usage = XRGTokenUsage(total: 0), start: UInt64 = 0
-        if let checkpoint {
-            start = XRGAppendVerifier.start(handle, offset: checkpoint.offset, tail: checkpoint.tail)
-            if start > 0 { ledger = checkpoint.ledger; usage = checkpoint.usage }
-        }
-        try handle.seek(toOffset: start)
-        var line = Data(), position = start, complete = start
-        while let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
-            try Task.checkCancellation()
-            guard position + UInt64(chunk.count) <= fileLimit else { throw CocoaError(.fileReadTooLarge) }
-            for byte in chunk {
-                position += 1
-                if byte == 10 {
-                    if !line.isEmpty {
-                        let sample = self.usage(inLine: line)
-                        ledger.consume(line, usage: sample)
-                        if let sample { usage = sample }
-                    }
-                    line.removeAll(keepingCapacity: true)
-                    complete = position
-                } else {
-                    guard line.count < 8 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
-                    line.append(byte)
-                }
+        var ledger = Attribution(), usage = XRGTokenUsage(total: 0)
+        var provisionalLedger: Attribution?, provisionalUsage: XRGTokenUsage?
+        let read = XRGLogReader.read(handle, resuming: checkpoint.map { ($0.offset, $0.digest) },
+                                     limit: fileLimit, dropOversized: false, begin: { resumed in
+            if resumed, let checkpoint { ledger = checkpoint.ledger; usage = checkpoint.usage }
+        }) { line, isCommitted in
+            let sample = self.usage(inLine: line)
+            if isCommitted {
+                ledger.consume(line, usage: sample)
+                if let sample { usage = sample }
+            } else {
+                // A complete final record without LF is valid. A partially written
+                // one cannot change totals or donate a model to the next scan. It
+                // counts now but stays out of the checkpoint, so it is never counted twice.
+                var tail = ledger
+                tail.consume(line, usage: sample)
+                provisionalLedger = tail
+                provisionalUsage = sample ?? usage
             }
         }
-        let saved = Checkpoint(offset: complete, ledger: ledger, usage: usage,
-                               tail: XRGAppendVerifier.tail(handle, before: complete))
-        // A complete final record without LF is valid. A partially written one
-        // cannot change totals or donate a model to the next complete scan. It
-        // counts now but stays out of the checkpoint, so it is never counted twice.
-        if !line.isEmpty {
-            let sample = self.usage(inLine: line)
-            ledger.consume(line, usage: sample)
-            if let sample { usage = sample }
-        }
-        return Progress(snapshot: Snapshot(usage: usage, modelTotals: ledger.models), checkpoint: saved)
+        if let error = read.error { throw error }
+        let saved = Checkpoint(offset: read.complete, ledger: ledger, usage: usage, digest: read.digest)
+        let snapshot = Snapshot(usage: provisionalUsage ?? usage, modelTotals: (provisionalLedger ?? ledger).models)
+        return Progress(snapshot: snapshot, checkpoint: saved, resumed: read.resumed)
     }
 
     fileprivate struct Attribution: Sendable {
