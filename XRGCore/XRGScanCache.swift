@@ -57,6 +57,17 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         let stamp: Stamp
         let totals: XRGScanTotals
     }
+    /// A file that could not be parsed at this stamp (nil: not even statted), and when.
+    private struct Failure: Sendable {
+        let stamp: Stamp?
+        let time: TimeInterval
+    }
+    /// One sweep's per-file results; `totals` is nil unless every file parsed.
+    private struct Sweep: Sendable {
+        let parsed: [String: Entry]
+        let failures: [String: Failure]
+        let complete: ([String: Entry], XRGScanTotals)?
+    }
     struct Observation: Sendable {
         let totals: XRGScanTotals
         let source: String
@@ -66,6 +77,10 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     private let lock = NSLock()
     private let interval: TimeInterval
     private var entries: [String: Entry] = [:]
+    // Per-file parse cache, kept across failed sweeps so one bad file does not
+    // force every other file to be parsed again on the next sweep.
+    private var parsed: [String: Entry] = [:]
+    private var failures: [String: Failure] = [:]
     private var value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     private var published = false
     private var failed = false
@@ -101,6 +116,8 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
         published = false
         failed = false
         entries = [:]
+        parsed = [:]
+        failures = [:]
         value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     }
 
@@ -125,18 +142,25 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             guard task == nil, force || (lastStart.map({ now - $0 >= interval }) ?? true) else { return }
             lastStart = now
             let id = generation
-            let previous = entries
+            let previous = parsed, knownFailures = failures
+            // An unchanged file that failed is retried only after this back-off.
+            let retry = interval * 12
             task = Task.detached(priority: .utility) { [weak self] in
-                let result = try? Self.scan(root: root, layout: layout, previous: previous, parse: parse)
-                self?.finish(id: id, result: result)
+                let sweep = try? Self.scan(root: root, layout: layout, previous: previous,
+                                           failures: knownFailures, now: now, retryAfter: retry, parse: parse)
+                self?.finish(id: id, sweep: sweep)
             }
         }
     }
 
-    private func finish(id: UUID, result: ([String: Entry], XRGScanTotals)?) {
+    private func finish(id: UUID, sweep: Sweep?) {
         lock.withLock {
             guard generation == id else { return }
-            if let result {
+            if let sweep {
+                parsed = sweep.parsed
+                failures = sweep.failures
+            }
+            if let result = sweep?.complete {
                 func inventory(_ rows: [String: Entry]) -> [String: XRGLogFileState] {
                     rows.mapValues { XRGLogFileState(device: $0.stamp.device, inode: $0.stamp.inode,
                         bytes: $0.stamp.size, tokens: $0.totals.tokens) }
@@ -152,7 +176,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 // success completes before the UI consumes the failed status.
                 continuity = UUID()
             }
-            failed = result == nil
+            failed = sweep?.complete == nil
             task = nil
         }
     }
@@ -216,14 +240,26 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     }
 
     private static func scan(root: String, layout: Int, previous: [String: Entry],
-                             parse: @Sendable (String) throws -> XRGScanTotals) throws -> ([String: Entry], XRGScanTotals) {
+                             failures previousFailures: [String: Failure], now: TimeInterval,
+                             retryAfter: TimeInterval,
+                             parse: @Sendable (String) throws -> XRGScanTotals) throws -> Sweep {
         var next: [String: Entry] = [:]
+        var failures: [String: Failure] = [:]
         for path in try files(root: root, layout: layout) {
             try Task.checkCancellation()
-            let before = try stamp(path)
+            guard let before = try? stamp(path) else {
+                failures[path] = Failure(stamp: nil, time: now)
+                continue
+            }
             if let old = previous[path], old.stamp == before {
                 next[path] = old
-            } else {
+                continue
+            }
+            if let failure = previousFailures[path], failure.stamp == before, now - failure.time < retryAfter {
+                failures[path] = failure
+                continue
+            }
+            do {
                 guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
                 let totals = try parse(path)
                 try Task.checkCancellation()
@@ -232,8 +268,19 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 // cache a partially read sample under a newer modification date.
                 guard before == after else { throw CocoaError(.fileReadUnknown) }
                 next[path] = Entry(stamp: after, totals: totals)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failures[path] = Failure(stamp: before, time: now)
             }
         }
+        guard failures.isEmpty, let totals = try? totals(next, layout: layout) else {
+            return Sweep(parsed: next, failures: failures, complete: nil)
+        }
+        return Sweep(parsed: next, failures: [:], complete: (next, totals))
+    }
+
+    private static func totals(_ next: [String: Entry], layout: Int) throws -> XRGScanTotals {
         var tokens: UInt64 = 0
         var input: UInt64 = 0
         var output: UInt64 = 0
@@ -261,6 +308,6 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
             output = newOutput
             cost = newCost
         }
-        return (next, XRGScanTotals(tokens: tokens, input: input, output: output, cost: cost, modelTotals: models))
+        return XRGScanTotals(tokens: tokens, input: input, output: output, cost: cost, modelTotals: models)
     }
 }

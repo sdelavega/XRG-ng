@@ -62,6 +62,8 @@ public final class XRGTemperatureState: NSObject {
     private var lastUpdate: TimeInterval?
     private var lastIncludeUnknown: Bool?
     private var orderedKeys: [String] = []
+    /// How many times the sensor order was rebuilt; tests use it to keep that work per batch.
+    @nonobjc private(set) var orderGenerationCount = 0
 
     public func shouldUpdate(at time: TimeInterval, includeUnknown: Bool) -> Bool {
         guard time.isFinite else { return false }
@@ -108,7 +110,8 @@ public final class XRGTemperatureState: NSObject {
         sensor.dataSet.setNextValue(value)
         if !isUpdating { sensor.timedHistory.append(time: historyClock(), values: [value]) }
         XRGStatsManager.shared.observeStat(value, forKey: location, inModule: .nameTemperature)
-        regenerateLocationKeyOrder()
+        // A batch orders its sensors once, in finishUpdate().
+        if !isUpdating { regenerateLocationKeyOrder() }
     }
 
     public func ingestTemperatures(_ values: [String: Any], names: [String: String]) {
@@ -169,6 +172,7 @@ public final class XRGTemperatureState: NSObject {
         for sensor in sensors.values { sensor.dataSet.reset(); sensor.timedHistory.clear() }
     }
     public func regenerateLocationKeyOrder() {
+        orderGenerationCount += 1
         func rank(_ sensor: XRGSensorData) -> (Int, Int) {
             let unit = ["°C", " rpm", "%"].firstIndex(of: sensor.units ?? "") ?? 3
             guard let name = sensor.humanReadableName, name != sensor.key else { return (unit, 10) }
@@ -184,9 +188,10 @@ public final class XRGTemperatureState: NSObject {
             else { group = 8 }
             return (unit, group)
         }
-        orderedKeys = sensors.values.sorted {
-            let a = rank($0), b = rank($1)
-            return a == b ? $0.key < $1.key : a < b
+        // Rank each sensor once; the string tests are too costly per comparison.
+        let ranked: [(rank: (Int, Int), key: String)] = sensors.values.map { (rank($0), $0.key) }
+        orderedKeys = ranked.sorted { a, b in
+            a.rank == b.rank ? a.key < b.key : a.rank < b.rank
         }.map(\.key)
     }
 }

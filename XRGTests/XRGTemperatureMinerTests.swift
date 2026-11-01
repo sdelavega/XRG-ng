@@ -206,4 +206,20 @@ struct XRGTemperatureMinerTests {
         #expect(miner.fanValues().count == 2)
         #expect(miner.sensor(forLocation: "F0Ac")?.currentValue == 1000)
     }
+
+    @Test func batchedUpdateOrdersSensorsOnceNotPerSensor() {
+        let reader = TemperatureReader()
+        for index in 0..<300 {
+            reader.smc["T\(index)"] = 40 + index % 50
+            reader.labels["T\(index)"] = index.isMultiple(of: 3) ? "CPU Core \(index)" : "Sensor \(index)"
+        }
+        let miner = XRGTemperatureMiner(reader: reader, clock: { 0 })
+        miner.updateCurrentTemperatures(true)
+        // One batch of 300 readings sorts the sensor list once, not 300 times.
+        #expect(miner.orderGenerationCount == 1)
+        let keys = miner.locationKeys(includingUnknown: true)
+        #expect(keys.count == 300 && keys.first == "T0")
+        miner.setCurrentValue(42, andUnits: "°C", forLocation: "manual")
+        #expect(miner.orderGenerationCount == 2)
+    }
 }

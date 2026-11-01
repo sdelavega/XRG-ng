@@ -253,6 +253,39 @@ struct XRGScanStateTests {
         #expect(await waitForScan(scan))
         #expect(!scan.hasSnapshot && scan.snapshot.tokens == 0)
     }
+
+    @Test func failingFileDoesNotForceReparsingTheRestOfTheInventory() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c"] { try write("10", to: root.appendingPathComponent("p/\(name).jsonl")) }
+        let scan = XRGScanCache(interval: 0), probe = ParseProbe()
+        let parse: @Sendable (String) throws -> XRGScanTotals = { path in
+            if path.hasSuffix("b.jsonl") { throw CocoaError(.fileReadTooLarge) }
+            return probe.read(path)
+        }
+        scan.refreshChecked(root: root.path, layout: 0, parse: parse); try #require(await waitForScan(scan))
+        // The sweep still fails, but it parsed the files on both sides of the bad one.
+        #expect(scan.lastScanFailed && probe.count == 2)
+        scan.refreshChecked(root: root.path, layout: 0, parse: parse); try #require(await waitForScan(scan))
+        #expect(scan.lastScanFailed && probe.count == 2)
+        scan.refreshChecked(root: root.path, layout: 0, parse: probe.read); try #require(await waitForScan(scan))
+        #expect(!scan.lastScanFailed && scan.completedSnapshot?.tokens == 30 && probe.count == 3)
+    }
+
+    @Test func unchangedFailingFileBacksOffBeforeItIsReadAgain() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        try write("10", to: root.appendingPathComponent("p/a.jsonl"))
+        let scan = XRGScanCache(interval: 0.05), attempts = ParseProbe()
+        let parse: @Sendable (String) throws -> XRGScanTotals = { path in
+            _ = attempts.read(path); throw CocoaError(.fileReadTooLarge)
+        }
+        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse); try #require(await waitForScan(scan))
+        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse); try #require(await waitForScan(scan))
+        // Within the back-off the same failing stamp fails without being read again.
+        #expect(scan.lastScanFailed && attempts.count == 1)
+        try await Task.sleep(for: .milliseconds(700))
+        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse); try #require(await waitForScan(scan))
+        #expect(scan.lastScanFailed && attempts.count == 2)
+    }
 }
 
 struct XRGRateTrackerTests {
