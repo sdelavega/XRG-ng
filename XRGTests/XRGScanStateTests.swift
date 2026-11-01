@@ -32,6 +32,15 @@ private final class ScanSignal: @unchecked Sendable {
     }
 }
 
+private final class ScanClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+    var now: TimeInterval {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}
+
 private func waitForScan(_ scan: XRGScanCache) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(3)
     while scan.isScanning && ContinuousClock.now < deadline {
@@ -273,18 +282,49 @@ struct XRGScanStateTests {
 
     @Test func unchangedFailingFileBacksOffBeforeItIsReadAgain() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
-        try write("10", to: root.appendingPathComponent("p/a.jsonl"))
-        let scan = XRGScanCache(interval: 0.05), attempts = ParseProbe()
+        let file = root.appendingPathComponent("p/a.jsonl")
+        try write("10", to: file)
+        let scan = XRGScanCache(interval: 5), attempts = ParseProbe(), clock = ScanClock()
+        scan.uptime = { clock.now }
         let parse: @Sendable (String) throws -> XRGScanTotals = { path in
             _ = attempts.read(path); throw CocoaError(.fileReadTooLarge)
         }
-        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse); try #require(await waitForScan(scan))
-        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse); try #require(await waitForScan(scan))
-        // Within the back-off the same failing stamp fails without being read again.
+        func sweep() async throws {
+            scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse)
+            try #require(await waitForScan(scan))
+        }
+        try await sweep()
+        clock.now = 59; try await sweep()
+        // Within twelve intervals the same failing stamp fails without being read again.
         #expect(scan.lastScanFailed && attempts.count == 1)
-        try await Task.sleep(for: .milliseconds(700))
-        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: parse); try #require(await waitForScan(scan))
+        clock.now = 60; try await sweep()
         #expect(scan.lastScanFailed && attempts.count == 2)
+        // A changed file is retried at once, back-off or not.
+        try write("20", to: file)
+        clock.now = 61; try await sweep()
+        #expect(attempts.count == 3)
+    }
+
+    @Test func statFailureAfterParsingIsRetriedWithoutBackOff() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("p/a.jsonl"), aside = root.appendingPathComponent("aside")
+        try write("10", to: file)
+        let scan = XRGScanCache(interval: 5), probe = ParseProbe(), clock = ScanClock()
+        scan.uptime = { clock.now }
+        // Moving the file away after parsing makes the post-read stat fail; a
+        // rename keeps the stamp, so moving it back restores the same file.
+        scan.refreshChecked(root: root.path, layout: 0, force: true) { path in
+            let totals = probe.read(path)
+            try? FileManager.default.moveItem(atPath: path, toPath: aside.path)
+            return totals
+        }
+        try #require(await waitForScan(scan))
+        #expect(scan.lastScanFailed)
+        try FileManager.default.moveItem(at: aside, to: file)
+        clock.now = 1
+        scan.refreshChecked(root: root.path, layout: 0, force: true, parse: probe.read)
+        try #require(await waitForScan(scan))
+        #expect(!scan.lastScanFailed && scan.completedSnapshot?.tokens == 10 && probe.count == 2)
     }
 }
 

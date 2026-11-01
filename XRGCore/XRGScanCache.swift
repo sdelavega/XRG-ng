@@ -81,6 +81,8 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
     // force every other file to be parsed again on the next sweep.
     private var parsed: [String: Entry] = [:]
     private var failures: [String: Failure] = [:]
+    /// Monotonic seconds for scheduling and failure back-off; tests replace it.
+    @nonobjc var uptime: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     private var value = XRGScanTotals(tokens: 0, input: 0, output: 0, cost: 0)
     private var published = false
     private var failed = false
@@ -138,7 +140,7 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 source = root
                 sourceLayout = layout
             }
-            let now = ProcessInfo.processInfo.systemUptime
+            let now = uptime()
             guard task == nil, force || (lastStart.map({ now - $0 >= interval }) ?? true) else { return }
             lastStart = now
             let id = generation
@@ -259,20 +261,30 @@ public final class XRGScanCache: NSObject, @unchecked Sendable {
                 failures[path] = failure
                 continue
             }
+            let totals: XRGScanTotals
             do {
                 guard FileManager.default.isReadableFile(atPath: path) else { throw CocoaError(.fileReadNoPermission) }
-                let totals = try parse(path)
+                totals = try parse(path)
                 try Task.checkCancellation()
-                let after = try stamp(path)
-                // Retry concurrently changing files on the next scan; do not
-                // cache a partially read sample under a newer modification date.
-                guard before == after else { throw CocoaError(.fileReadUnknown) }
-                next[path] = Entry(stamp: after, totals: totals)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                // Only a parser that rejects this exact stamp is backed off.
                 failures[path] = Failure(stamp: before, time: now)
+                continue
             }
+            // Retry concurrently changing files on the next scan; do not
+            // cache a partially read sample under a newer modification date.
+            // A stat failure here is not the file's fault, so it is not backed off.
+            guard let after = try? stamp(path) else {
+                failures[path] = Failure(stamp: nil, time: now)
+                continue
+            }
+            guard before == after else {
+                failures[path] = Failure(stamp: before, time: now)
+                continue
+            }
+            next[path] = Entry(stamp: after, totals: totals)
         }
         guard failures.isEmpty, let totals = try? totals(next, layout: layout) else {
             return Sweep(parsed: next, failures: failures, complete: nil)
