@@ -41,6 +41,13 @@ private final class ScanClock: @unchecked Sendable {
     }
 }
 
+private final class ResumeLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var log: [String?] = []
+    var values: [String?] { lock.withLock { log } }
+    func add(_ value: String?) { lock.withLock { log.append(value) } }
+}
+
 private func waitForScan(_ scan: XRGScanCache) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(3)
     while scan.isScanning && ContinuousClock.now < deadline {
@@ -411,6 +418,54 @@ struct XRGScanStateTests {
         // A settled snapshot is still dropped by any visible stamp change.
         try write("200", to: file)
         #expect(try await sweep() == 200 && probe.count == 3)
+    }
+
+    @Test func appendedFilesGetTheirParserStateBackAndReplacedFilesDoNot() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("p/a.jsonl")
+        try write("1", to: file)
+        let scan = XRGScanCache(interval: 0, settle: .zero)
+        let received = ResumeLog()
+        func sweep() async throws {
+            scan.refreshResumable(root: root.path, layout: 0) { path, state in
+                received.add(state as? String)
+                let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+                return (XRGScanTotals(tokens: UInt64(text.count), input: 0, output: 0, cost: 0), "state-\(text.count)")
+            }
+            try #require(await waitForScan(scan))
+        }
+        try await sweep()
+        try write("12", to: file); try await sweep()
+        // Same inode, grown: the parser is handed the state it returned last time.
+        #expect(received.values == [nil, "state-1"])
+        let replacement = root.appendingPathComponent("p/b.tmp")
+        try write("123", to: replacement)
+        _ = try FileManager.default.replaceItemAt(file, withItemAt: replacement)
+        try await sweep()
+        // A replaced file (new inode) must be parsed from the start.
+        #expect(received.values.last == .some(nil))
+        #expect(scan.completedSnapshot?.tokens == 3)
+    }
+
+    @Test func aFileChangingDuringItsParseKeepsItsStateForTheRetry() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("p/a.jsonl")
+        try write("1", to: file)
+        let scan = XRGScanCache(interval: 0, settle: .zero)
+        let received = ResumeLog()
+        scan.refreshResumable(root: root.path, layout: 0) { path, state in
+            received.add(state as? String)
+            try? Data("12".utf8).write(to: URL(fileURLWithPath: path))
+            return (XRGScanTotals(tokens: 1, input: 0, output: 0, cost: 0), "partial")
+        }
+        try #require(await waitForScan(scan))
+        #expect(scan.lastScanFailed)
+        scan.refreshResumable(root: root.path, layout: 0) { _, state in
+            received.add(state as? String)
+            return (XRGScanTotals(tokens: 2, input: 0, output: 0, cost: 0), "complete")
+        }
+        try #require(await waitForScan(scan))
+        #expect(received.values == [nil, "partial"] && !scan.lastScanFailed && scan.completedSnapshot?.tokens == 2)
     }
 }
 
