@@ -116,7 +116,7 @@ struct CodexUsageTests {
             try log("a", appended).write(to:path)
             let resumed = try XRGCodexLogParser.progress(atPath:path.path, resuming:first.checkpoint)
             let full = try XRGCodexLogParser.snapshot(atPath:path.path)
-            #expect(resumed.resumed && resumed.snapshot == full)
+            #expect(resumed.resumed == XRGLogReader.canResume && resumed.snapshot == full)
             #expect(resumed.snapshot.modelTotals == ["a": 10, "c": 5])
             // The same length with one early byte changed: every prefix byte is
             // verified, so this parses from the start.
