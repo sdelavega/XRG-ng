@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 const IO_BUDGET: u64 = 128 * 1024 * 1024;
-const FILE_LIMIT: u64 = 64 * 1024 * 1024;
+const FILE_LIMIT: u64 = 1024 * 1024 * 1024;
 const RECORD_LIMIT: usize = 8 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 20_000;
 const USAGE_LIMIT: usize = 100_000;
@@ -202,7 +202,7 @@ impl LogScan {
                 continue;
             }
             if stamp.size > FILE_LIMIT {
-                return Err("Log exceeds the 64 MiB per-file limit".into());
+                return Err("Log exceeds the 1 GiB per-file limit".into());
             }
             let mut file = open_regular(path)?;
             if Stamp::from(&file.metadata().map_err(|e| e.to_string())?) != stamp {

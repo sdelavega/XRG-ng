@@ -180,9 +180,9 @@ fn failures_never_publish_a_partial_total_and_recover() {
     f.put("logs/p/a.jsonl", claude("a", 30, 0));
     fs::File::create(f.0.join("logs/p/b.jsonl"))
         .unwrap()
-        .set_len(64 * 1024 * 1024 + 1)
+        .set_len(1024 * 1024 * 1024 + 1)
         .unwrap();
-    assert!(scan.scan().unwrap_err().contains("64 MiB"));
+    assert!(scan.scan().unwrap_err().contains("1 GiB"));
     f.put("logs/p/b.jsonl", claude("b", 40, 0));
     assert_eq!(scan.scan().unwrap().total, 70);
 }

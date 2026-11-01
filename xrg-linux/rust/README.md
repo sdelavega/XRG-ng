@@ -812,7 +812,7 @@ the file. This saves restart work when a scan yields; it does not turn prefix
 verification into tail-only I/O. Complete records without a final newline remain
 visible and are replayed safely if more bytes arrive.
 
-The existing limits remain: 64 MiB per file, 8 MiB per record or whole Gemini JSON
+The limits are 1 GiB per file (64 MiB before 0.2.2), 8 MiB per record or whole Gemini JSON
 session, 20,000 discovery entries, 100,000 cached message identities per provider
 and 256 model groups. Legacy Gemini JSON documents still use whole-document
 decoding. A file that keeps changing during every unfinished read can delay a
