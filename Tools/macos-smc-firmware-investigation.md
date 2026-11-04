@@ -3,8 +3,60 @@
 Investigated 2026-11-04 for the MacBook Air M5 (`j815ap`) and Havana Mac mini
 M4 Pro (`j773sap`). This resolves firmware acquisition and reconstruction, and
 partially resolves key-to-input lookup and establishes the configured j815
-Ts/Ta provider path.
-It does not establish new physical sensor labels.
+Ts/Ta provider path. The j773s trace now identifies twelve Ta keys as six
+Neural Engine thermal channels and their adjusted readings. The j815 identities
+remain under investigation.
+
+## Resolved j773s Neural Engine channels
+
+Havana's current PMP device metadata names range 29 `ANE-TO-SMC`, with start
+`0x2a4` and count eight. The j773s SMC channel-14 record at `0x74da8` has
+the exact same start and count. Its configured transport base is
+`0x5003c0000`; the initialized read callback at `0x5ec0` reads 16-byte
+entries from that window. The main polling path at `0x2b19c` reads six
+entries from channel 14, differences their counters and publishes the results
+under numeric source IDs `0x2001` through `0x2006`. The counter decoder at
+`0x4a270` computes `(high32(delta) / 64) / low32(delta)`, with status,
+zero-delta and upper-bound handling.
+
+The source table at `0x72458` joins each source ID to two distinct sensor
+inputs: the raw reading and a reading with a fixed `8.199999809265137` degree
+offset. Independently decoded SMC key leaves join those inputs to these keys:
+
+| Stream ordinal | Raw key | Adjusted key |
+| --- | --- | --- |
+| 1 | `Ta00` | `Ta01` |
+| 2 | `Ta04` | `Ta05` |
+| 3 | `Ta08` | `Ta09` |
+| 4 | `Ta0K` | `Ta0L` |
+| 5 | `Ta0O` | `Ta0P` |
+| 6 | `Ta0R` | `Ta0S` |
+
+XRG labels these as Neural Engine temperature channels on the validated
+`Mac16,11` model only. Ordinals describe stream order; neither core numbers
+nor physical locations are established. Adjusted keys remain separate
+readings and retain their raw key identities. No rule is inferred for the
+entire Ta family or other Mac models. Native Havana enumeration has 1,728
+keys but provides no `RBr ` value, so this mapping does not depend on the
+optional legacy branch catalogue.
+
+The SMC source SHA-256 is
+`07ae163c3b86cf565dc2cca7057f1c3266dc395895521a8820e473ea0bf4dc55`.
+Ignored `dist/havana-smc-artifact-discovery/` retains scoped live metadata,
+the original cross-link decoder, `verify_j773s_ane_bridge.py`, its passing
+`j773s-ane-provider-proof.json` output and focused LLVM disassembly. This
+establishes a named provider route, not exclusive ownership: a separate
+generic incoming-message route can also update numeric source IDs. The
+firmware's physical sensor sites and executing bytes were not read back.
+
+The application change passed `Tools/ci-macos.sh Debug` on both hosts:
+644 tests on each architecture, universal builds, isolated AppKit smoke and
+native / Rosetta packaged entry-point checks. A fresh linked native probe
+confirmed all twelve labels on Havana and the existing six generic Ta labels
+on the M5. Havana's six raw readings were zero and all six adjusted readings
+were `8.199999809265137`; these idle values confirm the paired offsets, not
+temperature accuracy under load. Logs and scoped name/value snapshots are in
+ignored `dist/ane-sensor-name-validation/`.
 
 ## Source identity
 
@@ -218,6 +270,24 @@ The input-buffer read maps inspected at objects `0x8e478`, `0x8e4a0` and
 Its numeric export record `0x470` is also insufficient: the traced routines
 use that record array for selection/statistics, which does not establish
 the producer of its underlying value pointer.
+
+The subsequent j815 writer audit enumerated direct calls to the common writer
+and its wrappers, decoded their static destination maps and reconstructed six
+BSS-backed map initializers. None of those destinations is group-one input
+197. Alternate backing-pair writer APIs use groups two and three, with no
+static alias to `Tz11`'s backing address. The apparent full-backing-range
+route at `0x3f5d8` is a diagnostic key-selection reader.
+
+Typed descriptor ownership also distinguishes two uses of the number 197.
+Object `0x868f0`, invoked at `0x3bc18`, consumes sensor input 197 and writes
+float parameter 165 (`0xa9dec`). Object `0x86cf0`, invoked at `0x3adc4`,
+consumes group-two input 50 and writes float parameter 197 (`0xa9e6c`).
+That latter parameter is not `Tz11`'s backing address `0xa8624`.
+Ignored `dist/tz-producer-validation/` retains the reproducible writer audit,
+constructor decoder and `typed-tz197-reference-ownership.json`.
+These bounded exclusions do not establish that the channel is reserved:
+runtime descriptor changes, indirect computation and other processor or
+private interfaces remain outside the demonstrated direct writer paths.
 
 Independent static checks of all nine `Tz1*` leaf flags and the standard
 write-gate instructions passed; they are retained in

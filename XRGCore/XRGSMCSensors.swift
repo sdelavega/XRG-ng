@@ -17,12 +17,14 @@ import Darwin
 @objc(XRGSMCSensors) public final class XRGSMCSensors: NSObject, XRGSMCSensorValuesProvider {
     private let transport: (any XRGSMCTransport)?
     private let branchNameSource: (String) -> [String: String]
+    private let systemModel: String?
     private var inventory: [String: UInt32] = [:]
     private var branchNames: [String: String] = [:]
     public private(set) var knownTemperatureKeys: Set<String> = []
     @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader()) }
-    init(transport: (any XRGSMCTransport)?, branchNameSource: @escaping (String) -> [String: String] = XRGSMCBranchNames.load) {
-        self.transport = transport; self.branchNameSource = branchNameSource
+    init(transport: (any XRGSMCTransport)?, branchNameSource: @escaping (String) -> [String: String] = XRGSMCBranchNames.load,
+         systemModel: String? = XRGCPUMiner.systemModelIdentifier()) {
+        self.transport = transport; self.branchNameSource = branchNameSource; self.systemModel = systemModel
         super.init(); reloadInventory()
     }
     static func code(_ key: String) -> UInt32? {
@@ -78,11 +80,26 @@ import Darwin
     }
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
         if knownTemperatureKeys.contains(key) {
+            if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return "\(name) · \(key)" }
             if let name = branchNames[key] { return "\(name) · \(key)" }
             return Self.temperatureName(forKey: key)
         }
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
         return Self.hidName(forKey: key)
+    }
+    static func verifiedTemperatureName(forKey key: String, systemModel: String?) -> String? {
+        // The j773s firmware joins these exact keys to six ANE-TO-SMC
+        // streams. Channel numbers describe stream order, not core position.
+        // Other boards use different providers for the same Ta keys.
+        // See Tools/macos-smc-firmware-investigation.md for the trace.
+        guard systemModel == "Mac16,11" else { return nil }
+        let channels = [("Ta00", "Ta01"), ("Ta04", "Ta05"), ("Ta08", "Ta09"),
+                        ("Ta0K", "Ta0L"), ("Ta0O", "Ta0P"), ("Ta0R", "Ta0S")]
+        for (index, pair) in channels.enumerated() {
+            if key == pair.0 { return "Neural Engine temperature channel \(index + 1)" }
+            if key == pair.1 { return "Neural Engine temperature channel \(index + 1) (adjusted)" }
+        }
+        return nil
     }
     // Family names follow driver product names and the published SMC key
     // reference linked in Tools/macos-sensor-names.md. Case is significant.
