@@ -110,6 +110,23 @@ arithmetic must not be used as a Ts/Ta mapping without establishing the
 cross-window source relationship. Different configured addresses alone do
 not prove distinct physical sources or an address-space alias.
 
+The current M5 device tree now supplies an independently checked address
+bridge. Its `/arm-io/ranges` maps child `0x0` to parent `0x210000000`
+over `0x3f0000000` bytes. All four `aon-ptd` child register windows translate
+uniquely to the addresses published by its `AppleARMIODevice` provider:
+`0x38c840000`, `0x38c850000`, `0x38c858000` and `0x38c860000`, each
+`0x4000` bytes long. The calculated Ts00, Ta00 and Ta04 source slots
+(`0x38c861500`, `0x38c861520`, `0x38c861522`) fall inside the fourth
+published window. This establishes the configured AON address relationship;
+it does not identify the sensor producing each slot. It also does not join
+the separate PMP packet window to those producers.
+
+Ignored `dist/aon-source-routing-validation/` retains scoped DT properties,
+published provider memory metadata and `aon-address-translation-checks.json`.
+The checks compare static 26B123 SMC addresses with current 26C5035r device
+metadata; they do not establish the executing firmware image's identity.
+Only registry properties were read, with no MMIO access.
+
 The selected local restore kernel collection contains additional named
 host-driver paths. Standalone analysis copies retain their original VM
 coordinates and segment bytes while relocating Mach-O file offsets:
