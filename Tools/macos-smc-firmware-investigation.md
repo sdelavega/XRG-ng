@@ -90,11 +90,17 @@ native reads. Current and averaged readings remain independent: one native
 sample reported 61.90625°C current and 60.41609191894531°C average on channel
 one. No minimum/maximum semantics or averaging interval is inferred.
 
-XRG uses Die temperature channel labels for these 26 keys on `Mac16,11`
-only, preserving current, average and adjusted-average roles. The trace names
-the MTR die-temperature provider but does not identify physical cores,
-clusters, GPU sites or a matching named DeviceTree register node. Ordinals
-follow firmware stream order.
+XRG uses SoC die temperature channel labels for these 26 keys on `Mac16,11`
+only, preserving current, average and adjusted-average roles. The decoded
+j773s LLB independently names the exact `0x500400000` register block
+`SOC_SubSystem5.SouthBridge.PMS.PMS_DEVC_TOP.MTR_TOP_SOC.MTR`, with eight
+channels. This strengthens the die-temperature module identification to a
+named SoC block; the special ninth reading also uses that block. It does not
+identify physical cores, clusters, GPU sites or a matching named DeviceTree
+register node. Ordinals follow firmware stream order. The decoded LLB SHA-256
+is `2eefa46853c433e5bfd51581397e1a2819c16d0a7fdc0fa0c6487073303296b8`;
+`j773s-mtr-soc-label-proof.json` retains the independently decoded name,
+descriptor and address facts.
 
 Ignored `dist/havana-smc-artifact-discovery/` retains
 `verify_j773s_ts_roles.py`, its passing `j773s-ts-role-proof.json`, focused
@@ -150,6 +156,52 @@ and inverse decoders, focused instructions, `td-identities.json` and
 Fresh linked probes verified all 24 M5 names and readable temperature values,
 and verified that the aliases/maxima labels do not apply on Havana. Logs and
 snapshots are in ignored `dist/pmu-alias-name-validation/`.
+
+## Resolved j815 PMU device streams
+
+Eleven further stream keys share exact HAL/ADC identities with published PMU
+device-temperature sources. Both stream mode one and canonical reads call
+the same engineering converter with the same reference ADC. The primary
+provider's device ADC range is `0x93..0x9a`, with reference `0x92`; the
+secondary provider uses `0x8b..0x8f`, with reference `0x8a`.
+
+| Stream key | Published source | Identity |
+| --- | --- | --- |
+| `Tm0B` | `TP2d` | PMU device 2 |
+| `TIOP` | `TP3d` | PMU device 3 |
+| `TW0P` | `TP4d` | PMU device 4 |
+| `TPMP` | `TP5d` | PMU device 5 |
+| `T5SP` | `TP6d` | PMU device 6 |
+| `TCHP` | `TP7d` | PMU device 7 |
+| `TMVR` | `TP8d` | PMU device 8 |
+| `TH0T` | `TR2d` | PMU2 device 2 |
+| `TSDD` | `TR3d` | PMU2 device 3 |
+| `TSCD` | `TR4d` | PMU2 device 4 |
+| `TPSP` | `TR5d` | PMU2 device 5 |
+
+These names require `Mac17,4` and each exact qualified live source label.
+The generic CPU, memory and drive interpretations of `TCHP`, `TMVR` and
+`TH0T` are therefore incorrect on this model. If the required metadata is
+unavailable, these verified aliases use a generic fallback instead of those
+misleading families. Source metadata does not add keys to the inventory.
+
+`TRD8` and `TRD9` are bound to the same PMU2 HAL as the other F1TD channels
+and use its temperature converter. They are labeled Power management 2
+temperature channel 9 and 10. These numbers identify stream descriptor
+positions; no accepted canonical die/device key maps to their ADC IDs
+`0x52` / `0x53`, so they are not labeled PMU2 die 9/10 or given board locations.
+
+Ignored `dist/tz-producer-validation/td-source/tv-identities.json` retains
+the eleven exact device aliases. The SL streams were checked separately:
+their 42 destinations contain current/voltage values and do not intersect
+the temperature-key map. No temperature labels are inferred for them.
+
+This batch passed the full Debug gate on both hosts: 650 tests per
+architecture, universal builds and native / Rosetta packaged smoke checks.
+Linked native probes verified all 37 combined M5 stream/maximum names with
+readable values, the other-model fallback on Havana, and all 38 Havana
+Neural Engine / SoC die names. Ignored `dist/pmu-device-name-validation/`
+retains gate logs and snapshots.
 
 ## Source identity
 
