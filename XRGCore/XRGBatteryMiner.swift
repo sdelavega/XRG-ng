@@ -126,9 +126,14 @@ public final class XRGBatteryMiner: NSObject {
             timedHistory.append(time: historyClock(), values: [.nan, .nan]); return
         }
         let sample = reported.filter(\.isInstalled)
-        if sample.count != batteries.count { timedHistory.clear() }
+        if sample.count != batteries.count || sample.isEmpty {
+            chargeWatts.setAllValues(XRGGraphRenderer.missingValue)
+            dischargeWatts.setAllValues(XRGGraphRenderer.missingValue)
+            timedHistory.clear()
+        }
         batteries = sample
         hasSample = true
+        guard !sample.isEmpty else { return }
         var charging: CGFloat = 0
         var discharging: CGFloat = 0
         for battery in sample {
@@ -139,8 +144,7 @@ public final class XRGBatteryMiner: NSObject {
         }
         chargeWatts.setNextValue(charging)
         dischargeWatts.setNextValue(discharging)
-        if sample.isEmpty { timedHistory.clear() }
-        else { timedHistory.append(time: historyClock(), values: [charging.isFinite ? Double(charging) : .nan, discharging.isFinite ? Double(discharging) : .nan]) }
+        timedHistory.append(time: historyClock(), values: [charging.isFinite ? Double(charging) : .nan, discharging.isFinite ? Double(discharging) : .nan])
     }
     @nonobjc func resizeHistory(_ count: Int) {
         guard (1...XRGSamplingSettings.maximumHistorySamples).contains(count) else { return }
