@@ -102,6 +102,22 @@ The UI therefore leaves the direct percentage unavailable on this machine.
 Active-residency math, independent power failures, idle/busy transitions,
 timestamps and compact labels are covered with deterministic fixtures.
 
+## Current M5 recheck (2026-11-04)
+
+The production reader was sampled ten times on the local **Apple M5 / macOS 27.3
+(26C5035r)** using the read-only diagnostic below. It found one 16-core ANE
+endpoint. All ten samples left active percentage unavailable. After initial
+warmup, eight traffic intervals had positive reports and one was quiet. The ANE
+energy counter did not change, giving zero watts across the nine energy intervals.
+
+This was an uncontrolled background observation, not an idle control or a known
+ANE workload. It confirms that traffic remains readable on this build; it does
+not validate compute occupancy, under-load power, or workload attribution. The
+UI continues to distinguish unavailable percentage from observed quiet traffic.
+Raw records and host metadata are retained locally under
+`dist/npu-current-host-validation/`. The records' SHA-256 is
+`737f79cc281af53cedf33fecbc7bcad2c2e0fb40872c93922dc22855e8b33833`.
+
 ## M4 Pro comparison and observed ANE execution
 
 A second physical machine, **Mac mini M4 Pro (14 CPU / 20 GPU cores)**, was checked
