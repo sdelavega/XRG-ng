@@ -47,6 +47,28 @@ struct XRGProcessBatteryTests {
         #expect(result?.contains { $0.pid == Int(ProcessInfo.processInfo.processIdentifier) } == true)
     }
 
+    @Test func explicitlyAbsentDesktopBatteryDoesNotBecomeAnOnHoldBattery() {
+        // AppleSmartBattery on the M4 Pro Mac mini publishes a power source even
+        // though there is no installed battery.
+        let absent = XRGBatteryInfo(dictionary: ["BatteryInstalled": false,
+            "CurrentCapacity": 0, "MaxCapacity": 0,
+            "ExternalConnected": true, "IsCharging": false])
+        var samples = [absent]
+        let miner = XRGBatteryMiner(source: { samples })
+        miner.graphUpdate(nil)
+        #expect(miner.batteries.isEmpty)
+        #expect(miner.batteryStatus() == .noBattery)
+        #expect(!miner.hasRawCapacity && miner.totalCapacity() == 0)
+        let empty = XRGBatteryInfo(dictionary: ["BatteryInstalled": true,
+            "AppleRawCurrentCapacity": 0, "AppleRawMaxCapacity": 5000])
+        let legacy = XRGBatteryInfo(dictionary: [
+            "AppleRawCurrentCapacity": 1000, "AppleRawMaxCapacity": 4000])
+        samples = [absent, empty, legacy]
+        miner.graphUpdate(nil)
+        #expect(miner.batteries.count == 2)
+        #expect(miner.hasRawCapacity && miner.totalCapacity() == 9000 && miner.totalCharge() == 1000)
+    }
+
     @Test func normalizedBatteryCapacityFallback() {
         let battery = XRGBatteryInfo(dictionary: [
             "CurrentCapacity": 100, "MaxCapacity": 100, "FullyCharged": 1

@@ -30,6 +30,7 @@ import IOKit
 
 @objcMembers
 public final class XRGBatteryInfo: NSObject {
+    @nonobjc let isInstalled: Bool
     public let hasRawCapacity: Bool
     private let chargeFraction: Double
     public let currentCharge: Int
@@ -42,6 +43,14 @@ public final class XRGBatteryInfo: NSObject {
     public let isPluggedIn: Bool
 
     public init(dictionary: [String: Any]) {
+        // Desktop AppleSmartBattery services can exist without a battery.
+        // Older power-source dictionaries omit this flag, so retain them.
+        if let installed = dictionary["BatteryInstalled"] as? NSNumber,
+           CFGetTypeID(installed) == CFBooleanGetTypeID() {
+            isInstalled = installed.boolValue
+        } else {
+            isInstalled = true
+        }
         func number(_ key: String) -> NSNumber { dictionary[key] as? NSNumber ?? 0 }
         func capacities(_ values: [String: Any]) -> (NSNumber, NSNumber)? {
             guard let current = values["AppleRawCurrentCapacity"] as? NSNumber,
@@ -110,9 +119,10 @@ public final class XRGBatteryMiner: NSObject {
     }
 
     @objc public func graphUpdate(_ timer: Timer?) {
-        guard let sample = source() else {
+        guard let reported = source() else {
             timedHistory.append(time: historyClock(), values: [.nan, .nan]); return
         }
+        let sample = reported.filter(\.isInstalled)
         if sample.count != batteries.count { timedHistory.clear() }
         batteries = sample
         hasSample = true
