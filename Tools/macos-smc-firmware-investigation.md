@@ -3,9 +3,10 @@
 Investigated 2026-11-04 for the MacBook Air M5 (`j815ap`) and Havana Mac mini
 M4 Pro (`j773sap`). This resolves firmware acquisition and reconstruction, and
 partially resolves key-to-input lookup and establishes the configured j815
-Ts/Ta provider path. The j773s trace now identifies twelve Ta keys as six
-Neural Engine thermal channels and their adjusted readings. The j815 identities
-remain under investigation.
+Ts/Ta provider path. The j773s trace identifies twelve Ta keys as six
+Neural Engine thermal channels and their adjusted readings, plus 26 Ts keys
+as nine die-temperature channels with separate current and averaged outputs.
+The j815 identities remain under investigation.
 
 ## Resolved j773s Neural Engine channels
 
@@ -57,6 +58,56 @@ on the M5. Havana's six raw readings were zero and all six adjusted readings
 were `8.199999809265137`; these idle values confirm the paired offsets, not
 temperature accuracy under load. Logs and scoped name/value snapshots are in
 ignored `dist/ane-sensor-name-validation/`.
+
+## Resolved j773s die-temperature channels
+
+The j773s producer at `0xbc50` dispatches kind one through pointer
+`0x65160` to configuration table `0x66c08`. It reads eight MTR die-temperature
+channels at base `0x500400000`, with three distinct output roles per channel.
+The calibration helper at `0xbb68` references the original module name
+`platform/t6041/device_mtr_die_temps.cpp`. A ninth channel uses kind four,
+configuration `0x796b8`, at the same base.
+
+| Channel | Current | Average | Adjusted average |
+| --- | --- | --- | --- |
+| 1 | `Ts02` | `Ts00` | `Ts01` |
+| 2 | `Ts06` | `Ts04` | `Ts05` |
+| 3 | `Ts0A` | `Ts08` | `Ts09` |
+| 4 | `Ts0E` | `Ts0C` | `Ts0D` |
+| 5 | `Ts0I` | `Ts0G` | `Ts0H` |
+| 6 | `Ts0M` | `Ts0K` | `Ts0L` |
+| 7 | `Ts0R` | `Ts0O` | `Ts0Q` |
+| 8 | `Ts0W` | `Ts0T` | `Ts0U` |
+| 9 | `Tsx1` | `Tsx0` | — |
+
+The current output comes from the separately decoded hardware sample at
+runtime record+`0x20`. Helper `0x48724` computes the averaged value from
+a signed counter ratio divided by 64, applies a 130°C cap and stores it at
+record+`0x1c`. The two kind-one average outputs apply separate calibration
+expressions: `average - c2` and `average + c0 - c2`. The stored coefficients
+are zero for these channels, and all eight paired averages agreed in fresh
+native reads. Current and averaged readings remain independent: one native
+sample reported 61.90625°C current and 60.41609191894531°C average on channel
+one. No minimum/maximum semantics or averaging interval is inferred.
+
+XRG uses Die temperature channel labels for these 26 keys on `Mac16,11`
+only, preserving current, average and adjusted-average roles. The trace names
+the MTR die-temperature provider but does not identify physical cores,
+clusters, GPU sites or a matching named DeviceTree register node. Ordinals
+follow firmware stream order.
+
+Ignored `dist/havana-smc-artifact-discovery/` retains
+`verify_j773s_ts_roles.py`, its passing `j773s-ts-role-proof.json`, focused
+assembly and `havana-ts-native-check.json`. An earlier provisional kind-one
+table address `0x66608` was a jump-table interpretation error; the corrected
+dispatch and all 26 key-to-role links are checked by the reproducer.
+
+The die-label application change passed the full Debug gate on both Macs,
+including 645 tests per architecture and the native / Rosetta packaged smoke
+checks. A freshly linked native probe confirmed all 38 combined Ta/Ts names
+on Havana and retained generic names for the 14 matching keys on the M5.
+Ignored `dist/die-sensor-name-validation/` retains both gate logs and native
+name/value snapshots.
 
 ## Source identity
 

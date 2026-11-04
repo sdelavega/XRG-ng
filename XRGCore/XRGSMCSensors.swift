@@ -99,6 +99,19 @@ import Darwin
             if key == pair.0 { return "Neural Engine temperature channel \(index + 1)" }
             if key == pair.1 { return "Neural Engine temperature channel \(index + 1) (adjusted)" }
         }
+        // MTR die-temperature streams expose current and two averaged outputs.
+        // Their ordinal does not identify a CPU/GPU core or a physical site.
+        let dieChannels = [("Ts02", "Ts00", "Ts01"), ("Ts06", "Ts04", "Ts05"),
+                           ("Ts0A", "Ts08", "Ts09"), ("Ts0E", "Ts0C", "Ts0D"),
+                           ("Ts0I", "Ts0G", "Ts0H"), ("Ts0M", "Ts0K", "Ts0L"),
+                           ("Ts0R", "Ts0O", "Ts0Q"), ("Ts0W", "Ts0T", "Ts0U")]
+        for (index, keys) in dieChannels.enumerated() {
+            if key == keys.0 { return "Die temperature channel \(index + 1)" }
+            if key == keys.1 { return "Die temperature channel \(index + 1) (average)" }
+            if key == keys.2 { return "Die temperature channel \(index + 1) (adjusted average)" }
+        }
+        if key == "Tsx1" { return "Die temperature channel 9" }
+        if key == "Tsx0" { return "Die temperature channel 9 (average)" }
         return nil
     }
     // Family names follow driver product names and the published SMC key
