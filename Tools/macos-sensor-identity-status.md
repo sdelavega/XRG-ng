@@ -9,6 +9,10 @@ The detailed [firmware investigation](macos-smc-firmware-investigation.md) and
 artifact hashes, addresses and bounded exclusions. Proprietary input images and
 derived binary evidence remain in ignored `dist/` directories.
 
+The latest native probes leave 26 readable generically labeled fields on M5
+and 17 on M4. The tables below account for those fields and also retain unit
+questions for named computations. A full identity resolution is not claimed.
+
 ## Remaining M5 boundaries
 
 | Keys / inputs | Demonstrated identity | Remaining edge |
@@ -54,13 +58,15 @@ change was used to bridge it.
 | --- | --- | --- |
 | `TPDF`, `TRDF`, `TTDF` | Group-two inputs omitted by the selected PMU stream maps but included in their maxima | Actual producers; no extrapolated die label |
 | `TfC0`–`TfC4` | Sample averages from PTD packets `p0t1`, `g0t1`, `p1t1`, `g1t1`, `s0t1`, respectively | Named physical owners and packet-field meaning; a measured value versus limit is not established |
-| `TVA0`, `TVN0`, `TVS0`, `TVS1` | Exported values under active investigation | Exact computation/source roles |
 | `Tz11`–`Tz18`, `Tz1j` | Separate j773s group-one inputs | Actual producers and physical sources; no M5 producer assumption |
 
 The M4 `TVmd` input is demonstrably consumed as a categorical control, but its
 assignment producer is not identified. Its separate step-map output `TVMD`
 has a proven normal categorical producer. Both controls are excluded from
 Celsius readings on the validated M4 model.
+The four remaining `TV` computation roles are fixed affine models, now named
+by role. Their identities as computations do not establish physical sensor
+sites or resolve every upstream feature's sender-side unit contract.
 
 ## Evidence needed to close these boundaries
 
