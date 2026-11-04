@@ -22,7 +22,7 @@ questions for named computations. A full identity resolution is not claimed.
 | `Ts00`, `Ts04`, `Ts08`, `Ts0C`, `Ts0G`, `Ts0K`, `Ts0O`, `Ts0R` | Eight mapped channels of the `s0va` AON PTD source | Named physical publisher to AON destination `0x150` |
 | `TPDD`, `TPDE`, `TPDF` | Registered group-one inputs 114–116 | Actual producer and physical source |
 | `Tz11`–`Tz18`, `Tz1j` | Registered group-one inputs 197–205 | Actual producer and physical source |
-| `SDN0`, `SDN3` | Indexed NAND-engine temperature inputs 0/1, signed quarter-degrees Celsius | Exact physical sensor sites; individual HID equality is not established |
+| `SDN0`, `SDN3` | Logical MSP0/MSP1 storage temperature channels, signed quarter-degrees Celsius | Exact physical sensor sites; individual HID equality is not established |
 | `TAOL` | Sensor input: float at offset four in writable packet `zEAO` | Actual writer, physical source and unit contract |
 | `TB1T`, `TB2T` | Battery provider command `0x6c`, two tenths-scaled fields | Sender-side unit contract for those fields |
 
