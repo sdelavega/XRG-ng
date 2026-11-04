@@ -302,9 +302,9 @@ callback `0x2eeec`; its class-four messages enter queue `0xa4a38`; worker
 `0x2f2b8` dispatches subtype 14 to `0x2f5d8`. That handler writes two six-byte
 records to `0xa43d0`, selected by payload bit 45. The reader at `0x30980`
 extracts signed bits 30..44 divided by four, exposing `SDN0` and `SDN3`.
-This identifies ANS as the producer. The native NAND HID path independently
-converts SMART Kelvin to Celsius, but no equivalence between that SMART field
-and the ANS message field has been demonstrated.
+This identifies the asynchronous ANS transport. The later current-build
+synchronous path and NAND-engine/SMART unit join are documented below;
+individual SDN-to-HID sensor equality remains unproved.
 
 `TAOL` reads its float from the `zEAO` host-input blob at `0xa3578 + 4`, through
 object `0x8e478` and record `0x89454`. This positive packet join does not identify
@@ -515,8 +515,9 @@ explicitly recorded, rather than treated as recovered source bytes.
 The ANS mailbox dispatcher contains a record with the same fifteen-bit field
 positions as the SMC storage reader, but its demonstrated query response has
 wire class 3 / subtype 17. The exact SDN receiver requires raw class 4 /
-subtype 14. Those headers are not interchangeable; a translation or a separate
-sender must be demonstrated before claiming an exact field/unit join.
+subtype 14. Those headers are not interchangeable. A later current-build audit found
+the separate synchronous response path described below; the earlier
+asynchronous-only investigation did not cover it.
 Acquisition, layout and bounded protocol evidence are retained under ignored
 `dist/aon-source-routing-validation/ans-sender/`.
 
@@ -597,6 +598,128 @@ These are board-specific images from **26B123**. The M5 currently runs **26C5035
 matching its key inventory does not prove that it is running these firmware
 bytes. Havana runs 26B123, but its active first-stage firmware bytes were not
 read back or compared either.
+
+## Matching current M5 firmware
+
+Bounded range requests to Apple's
+[27.3 / 26C5035r restore archive](https://updates.cdn-apple.com/2026FallSeed/53df7654-4865-4259-8dae-30177b76f104/UniversalMac_27.3_26C5035r_Restore.ipsw)
+retrieved the j815 LLB and t8142 ANS images using 4,871,732 transferred bytes.
+The BuildManifest explicitly selects Mac17,4 / j815ap, chip `0x8142`, board
+`0x26`; both components match its SHA-384 digests for Erase and Upgrade.
+The public beta index was a URL lead; the Apple manifest and archive provide
+the component provenance.
+
+| Current component | SHA-256 |
+| --- | --- |
+| `LLB.j815.RELEASE.im4p` | `018a35e04082f8ac40a7423b9eadcf74ca0bf34e820f144451a4411ba10e2677` |
+| `ansf.t8142.release.im4p` | `4fff18b32651cf1f37eb386bb18dd270c5828ef1c3084a8c01ec57c0ce4cd780` |
+| Extracted SMC | `51762345c0af0dc6cb1776386a766453f7b6908e2bb2f682ec6bb0d79b90716c` |
+| Decoded ANS | `9a875928ed657d7e65b7bb0ea73315cb306bd614f43fa76548417fa0ab8b326e` |
+
+The SMC reports `AppleSMCFirmware_H17_6-7372.60.63.j815.REL` and ANS reports
+`AppleStorageFirmwareASP3-241.60.3~407`. All 2,431 SMC key records, all 148
+T-key records and all 291 group-input associations match the old inventory.
+Backing addresses move by eight bytes; code and table relocations are checked
+explicitly. Inventory equality alone does not establish producer equivalence.
+The current LLB comparison also preserves seven named MTR hardware records,
+617 MTR operations and five DPE operations after dereferencing relocated
+pointers. It does not add an AON source-to-destination route.
+
+Ignored `dist/havana-smc-artifact-discovery/current-26C5035r/` retains the
+manifest, acquisition/extraction metadata, independent inventory comparisons
+and current producer checks. Current ANS evidence resides under
+`dist/aon-source-routing-validation/ans-current/`. This acquisition supersedes
+the earlier local/preboot acquisition limit. It remains archive evidence;
+active first-stage bytes were not read back or compared.
+
+## Current ANS synchronous SDN producer and units
+
+The current SMC at `0x2faa0..0x2fab8` sends query `0x0211` and waits for the
+ANS `0x0311` response. Its success/payload guards lead to a six-byte copy at
+`0x2faf0/0x2faf4` into `0xa43d8 + 6 * index`. The current group-input reader
+extracts signed bits 30..44 divided by four, joining indices 0/1 to inputs
+132/133 and exact keys `SDN0`/`SDN3`. The earlier class-four / subtype-14
+handler is an additional asynchronous writer, not the only buffer writer.
+No header translation is needed for this synchronous route.
+
+The current ANS producer at native prologue `0x196d74` identifies its source
+file as `post_nand_eng.c`. Command byte `0x7a` selects enum 43 and case
+`0x196fe4`; its normal response path stores into the queried array
+`0x6a123c + 2 * sensorIndex` at `0x197a24`. A forced-value path sign-extends a
+byte and shifts it left two before writing the same array. The refresh
+routine at `0x76f5c` builds that exact command/type/index namespace.
+
+The unit join is separate and positive: `0x77884..0x77894` reads that same
+array as signed 16-bit values and divides by four toward zero. The maximum
+is saved at `0x6852f4`; `0x1a793c..0x1a7944` loads it, adds 273 and stores a
+16-bit value at offset one in the 512-byte NVMe health log. The caller selects
+log page two, and the adjacent fields match Apple's packed `NVMeSMARTData`
+SDK structure. The standard defines bytes 1–2 as Kelvin composite temperature.
+Thus quarter-degrees Celsius for the input array follows from an explicit
+conversion into a unit-defined field, rather than a plausible value range.
+See [NVM Express 2.0e, section 5.16.1.3 / Figure 212](https://nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-2.0e-2024.07.29-Ratified.pdf).
+
+This resolves the SDN engineering unit and indexed NAND-engine producer role.
+It does not identify physical die/controller placement. The SMART value is an
+aggregate maximum, so equality with an individual SDN input or the host NAND
+HID sensor is not claimed. `MSP%u` parameter registrations also return that
+global maximum and cannot be used as individual-sensor aliases.
+
+Ignored `dist/aon-source-routing-validation/ans-current/` retains three passing
+reproducers: `verify_sync_sdn_route.py`, `verify_ans_temperature_writer.py`
+and `verify_temperature_unit_contract.py`, with source hashes and native
+instruction excerpts. Root-owned Hopper dossiers use explicitly synthetic
+analysis entry seeds; native instructions control where merged pseudocode
+loses function boundaries.
+
+## Official diagnostic catalogue cross-check
+
+The public Apple diagnostic asset service returned model-specific images after
+an HTTPS JSON POST to
+`https://diagnostics.apple.com/api/v1/ast2-companion/public/services/assets`.
+Requests used only generic `boardID`, `chipID` and `OSVersion` selectors:
+M5 `{"boardID":38,"chipID":33090,"OSVersion":"27.3"}` and
+M4 `{"boardID":2,"chipID":24640,"OSVersion":"27.2"}`. No serial number,
+device ECID or diagnostic session was supplied. An initial GET returned 500;
+the model-selector POSTs returned 200. Local DNS resolution failed, so the
+requests used independently resolved public DNS records with HTTPS hostname
+verification retained. Temporary signed download URL queries were removed
+from retained response files after acquisition.
+
+| Returned asset | SHA-256 |
+| --- | --- |
+| M5 `FieldServiceDiskImageCryptexFizz2_19f7f1ee.dmg` | `19f7f1ee777648deb407f82205b89b824682a111ea7e11004c31640fa1df1dc4` |
+| M4 `FieldServiceDiskImageCryptexFizz1_5f9e44dc.dmg` | `5f9e44dc28c2de7417d1495b1c2764bcde49064b7243f3a95528e23b5715e299` |
+| Shared `FieldServiceRepairDiskImageCryptexFizz1_e88b0a8c.dmg` | `e88b0a8cd71a2175c70305a6714ec23dfc68e6732f058720f3a5a4db28762712` |
+
+The downloads match declared content lengths and server ETag MD5 values.
+That is a transport/content check, not independent Apple signature validation.
+Outer and inner disk images were extracted offline as regular files only,
+excluding links. No diagnostic executable was run and no volume was mounted.
+
+Native `/chosen` selectors choose the exact resource profiles:
+
+| Host | Chip / board | Product profile | Explicit `TemperatureSensor` identifiers |
+| --- | --- | --- | --- |
+| `Mac17,4` / `J815` | `0x8142` / `0x26` | 5089 | `TB0T`, `TB1T`, `TB2T`, `TW0P`, `TH0x`, `Ts0P`, `Ts1P`, `TCMb` |
+| `Mac16,11` / `J773s` | `0x6040` / `0x02` | 5076 | `TCMb`, `TW0P`, `TH0x` |
+
+Every selected sensor description is its raw key. These catalogues provide
+no physical names for the remaining AON, `TfC` or `Tz` inputs. Havana's
+`arm-io,t6041` compatibility string must not substitute for its chosen chip ID
+`0x6040`: that would incorrectly select profile 5081. Catalogue absence also
+does not establish that an input is unavailable or reserved. The shared repair
+image supplies no additional thermal mapping.
+
+Ignored `dist/diagnostics-asset-discovery/` retains model requests, sanitized
+responses, download hashes, regular-file extraction receipts, selected live
+board identities and the passing `inspect_m5_catalogue.py` check of 2,625 files
+and 69 profiles. The M4 and repair checks are under
+`dist/havana-smc-artifact-discovery/apple-diagnostics/`, including
+`inspect_m4_official_catalogue.py` and `inspect_repair_official.py`. The M4
+asset contains 2,453 regular files / 59 profiles; the repair image has 832
+regular files. The native ACSensor consumer reads `Devices.json`; its retained
+Hopper dossier provides a separate check of the catalogue's input role.
 
 ## Reconstruction and reusable inspector
 
