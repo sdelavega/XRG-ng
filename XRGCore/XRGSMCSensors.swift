@@ -122,8 +122,17 @@ import IOKit
         if systemModel == "Mac17,4" {
             if key == "TRD8" { return "Power management 2 temperature channel 9" }
             if key == "TRD9" { return "Power management 2 temperature channel 10" }
+            if key == "TDBP" { return "Temperature monitor 1 channel 1" }
+            if key == "TDeL" { return "Temperature monitor 1 channel 2" }
+            if key == "Ts0P" { return "Temperature monitor 2 channel 1" }
+            if key == "Ts1P" { return "Temperature monitor 2 channel 2" }
             if key == "TPDX" || key == "TRDX" { return "Temperature maximum (selected channels)" }
             if key == "TCMb" { return "Adjusted temperature maximum" }
+            if key == "TVD0" || key == "TVDA" { return "Adjusted temperature maximum" }
+            if key == "TVDG" { return "GPU temperature maximum (adjusted)" }
+            if key == "TVDP" { return "CPU temperature maximum (adjusted)" }
+            if key == "TVDE" { return "CPU efficiency temperature maximum (adjusted)" }
+            if key == "TVV0" { return "Temperature maximum (selected channels)" }
             return nil
         }
         // The j773s firmware joins these exact keys to six ANE-TO-SMC
