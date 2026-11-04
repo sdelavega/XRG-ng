@@ -260,7 +260,7 @@ import Testing
         #expect(view.labels.rightLabel.stringValue == "n/a\nn/a%")
         now=3;sample=reading(3,0)
         sample.traffic = .init(start:2,end:3,channels:[.init(id:"a",states:["1GB/s":0])]);view.graphUpdate(nil)
-        #expect(view.labels.leftLabel.stringValue == "NPU\nNo bus")
+        #expect(view.labels.leftLabel.stringValue == "NPU\nQuiet")
         #expect(view.labels.rightLabel.stringValue == "0.0W\nn/a%")
         now=9;sample=reading(.nan,nil);view.graphUpdate(nil)
         #expect(miner.trafficObserved == nil)

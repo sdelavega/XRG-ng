@@ -33,6 +33,23 @@ private final class SMCSensorFixture: NSObject, XRGSMCTransport {
     func set(_ name:String,_ value:Any) {values[XRGSMCSensors.code(name)!]=value}
 }
 struct XRGSMCReaderTests {
+    @Test func friendlyNamesPreserveCaseSensitiveSourceIdentityAndUnknownChannels() {
+        let source = SMCSensorFixture(["TC0P", "Tp01", "Tg0U", "Tzzz", "F0Ac", "FAAc"])
+        let sensors = XRGSMCSensors(transport: source)
+        #expect(sensors.humanReadableName(forKey: "TC0P") == "CPU proximity · TC0P")
+        #expect(sensors.humanReadableName(forKey: "Tp01") == "CPU temperature · Tp01")
+        #expect(sensors.humanReadableName(forKey: "Tg0U") == "GPU temperature · Tg0U")
+        #expect(sensors.humanReadableName(forKey: "Tzzz") == "Temperature sensor · Tzzz")
+        #expect(sensors.humanReadableName(forKey: "F0Ac") == "Fan 1 · F0Ac")
+        #expect(sensors.humanReadableName(forKey: "FAAc") == "Fan 11 · FAAc")
+        #expect(sensors.humanReadableName(forKey: "PMU2 tdie4") == "Power management 2 die 4 · PMU2 tdie4")
+        #expect(sensors.humanReadableName(forKey: "PMU tdev8") == "Power management device 8 · PMU tdev8")
+        #expect(sensors.humanReadableName(forKey: "PMU tcal") == "Power management calibration · PMU tcal")
+        #expect(sensors.humanReadableName(forKey: "NAND CH0 temp") == "Storage temperature channel 0 · NAND CH0 temp")
+        #expect(sensors.humanReadableName(forKey: "als-temp") == "Ambient light sensor temperature · als-temp")
+        #expect(sensors.humanReadableName(forKey: "gas gauge battery") == "Battery temperature · gas gauge battery")
+        #expect(!sensors.isKnownKey("Tzzz2") && sensors.knownTemperatureKeys.contains("Tzzz"))
+    }
     struct Sample:Sendable {let type:UInt32;let bytes:[UInt8];let value:Double}
     static let numbers:[Sample] = [
         .init(type:0x75693820,bytes:[255],value:255),.init(type:0x75693136,bytes:[0x12,0x34],value:4660),

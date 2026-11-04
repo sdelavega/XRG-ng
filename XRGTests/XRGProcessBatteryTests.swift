@@ -64,6 +64,43 @@ struct XRGProcessBatteryTests {
         ]).percentCharged() == 0)
     }
 
+    @Test func nestedBatteryDataUsesMAhWithoutConfusingNormalizedPercentages() {
+        let battery = XRGBatteryInfo(dictionary: [
+            "CurrentCapacity": 50, "MaxCapacity": 100,
+            "BatteryData": ["AppleRawCurrentCapacity": 2679, "AppleRawMaxCapacity": 5358]
+        ])
+        let miner = XRGBatteryMiner(source: { [battery] })
+        miner.graphUpdate(nil)
+        #expect(miner.hasRawCapacity && miner.totalCharge() == 2679 && miner.totalCapacity() == 5358)
+        #expect(miner.chargePercent() == 50)
+        let preferred = XRGBatteryInfo(dictionary: [
+            "AppleRawCurrentCapacity": 2000, "AppleRawMaxCapacity": 4000,
+            "BatteryData": ["AppleRawCurrentCapacity": 5358, "AppleRawMaxCapacity": 5358]
+        ])
+        #expect(preferred.currentCharge == 2000 && preferred.totalCapacity == 4000)
+    }
+
+    @Test func invalidOrPartialRawCapacityPairsNeverBecomeMAhOrMixSources() {
+        for value: Any in [true, -1, Double.nan, Double.infinity, UInt64.max] {
+            let battery = XRGBatteryInfo(dictionary: [
+                "AppleRawCurrentCapacity": value, "AppleRawMaxCapacity": 5000,
+                "CurrentCapacity": 75, "MaxCapacity": 100
+            ])
+            #expect(!battery.hasRawCapacity && battery.currentCharge == 0 && battery.totalCapacity == 0)
+            #expect(battery.percentCharged() == 0.75)
+        }
+        let partial = XRGBatteryInfo(dictionary: [
+            "AppleRawCurrentCapacity": 2500,
+            "BatteryData": ["AppleRawMaxCapacity": 5000]
+        ])
+        #expect(!partial.hasRawCapacity)
+        let recovered = XRGBatteryInfo(dictionary: [
+            "AppleRawCurrentCapacity": 2500, "AppleRawMaxCapacity": 0,
+            "BatteryData": ["AppleRawCurrentCapacity": 0, "AppleRawMaxCapacity": 5000]
+        ])
+        #expect(recovered.hasRawCapacity && recovered.currentCharge == 0 && recovered.totalCapacity == 5000)
+    }
+
     @Test func batteryStatesAndFailure() {
         var next: [XRGBatteryInfo]? = nil
         let miner = XRGBatteryMiner(source: { next })
