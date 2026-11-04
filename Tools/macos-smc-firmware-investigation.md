@@ -518,6 +518,29 @@ neither the active PMU variant nor the physical owner/unit of the `t1` packet
 field. The transport indices are shared PTD slots, not PMU register addresses.
 All inspection remains static; none of these firmware images was executed.
 
+The additional controller investigations retain their own proof boundaries:
+
+- `dist/aon-source-routing-validation/fastdie-output/` follows the M5 averaging
+  timer through signed-Q6 sum/count packing and conditional publication to
+  PMP `0x3803d0000`. All 25 current native source selectors are zero, and the
+  code skips those outputs. M4's independent scheduled-loop check finds the
+  same guard for all ten native records under
+  `dist/tz-producer-validation/m4-other/fastdie-output/`.
+- `dist/havana-smc-artifact-discovery/aop-aon/` reconstructs current AOP/AOP2
+  components from typed bundle metadata. The AON address belongs to a kernel
+  MMIO permission range. The application has a generic SMC write-capable
+  service, with runtime-supplied keys; no specific sensor publication follows.
+  A root-owned Hopper dossier is retained under `dist/aop-service-analysis/`.
+- `dist/tz-producer-validation/pmc-aon/` and
+  `dist/aon-source-routing-validation/msr-tmu/` retain exact image hashes,
+  manifest verification where acquired, native architecture/source identities
+  and bounded marker/address checks. Numeric or remapped routes are not
+  excluded by those checks.
+- `dist/havana-smc-artifact-discovery/m4-computed/tz/` retains the complete
+  selected writer-family and fixed/private-reference audits. No value producer
+  is identified for inputs 305..313; runtime pointers and bulk writes remain
+  separate limitations, rather than evidence of unavailable sensors.
+
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded
 in the first-stage image; see the [Asahi firmware overview](https://asahilinux.org/docs/platform/introduction/#firmware-overview).
 The separate local `iBootData` payloads did not establish an SMC image.
