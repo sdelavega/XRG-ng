@@ -89,10 +89,13 @@ import IOKit
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
         if knownTemperatureKeys.contains(key) {
             if let name = publishedNames[key] { return "\(name) · \(key)" }
-            if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel),
-               let name = publishedNames[source],
-               name.hasPrefix(source.hasPrefix("TP") ? "Power management die " : "Power management 2 die ") {
-                return "\(name) · \(key)"
+            if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel) {
+                let unit = source.hasPrefix("TP") ? "Power management " : "Power management 2 "
+                let role = source.hasSuffix("d") ? "device " : "die "
+                if let name = publishedNames[source], name.hasPrefix(unit + role) { return "\(name) · \(key)" }
+                // The verified provider supersedes misleading generic TC/TM/TH
+                // families even when its exact published channel name is absent.
+                return "Temperature sensor · \(key)"
             }
             if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return "\(name) · \(key)" }
             if let name = branchNames[key] { return "\(name) · \(key)" }
@@ -109,11 +112,16 @@ import IOKit
                        "TPD4": "TP5b", "TPD5": "TP6b", "TPD6": "TP7b", "TPD7": "TP8b",
                        "TPD8": "TP9b", "TPD9": "TPab", "TPDA": "TPbl", "TPDB": "TPcl", "TPDC": "TPdl",
                        "TRD0": "TR1b", "TRD1": "TR2b", "TRD2": "TR3b", "TRD3": "TR4b",
-                       "TRD4": "TR5b", "TRD5": "TR6b", "TRD6": "TR7b", "TRD7": "TR8l"]
+                       "TRD4": "TR5b", "TRD5": "TR6b", "TRD6": "TR7b", "TRD7": "TR8l",
+                       "Tm0B": "TP2d", "TIOP": "TP3d", "TW0P": "TP4d", "TPMP": "TP5d",
+                       "T5SP": "TP6d", "TCHP": "TP7d", "TMVR": "TP8d",
+                       "TH0T": "TR2d", "TSDD": "TR3d", "TSCD": "TR4d", "TPSP": "TR5d"]
         return sources[key]
     }
     static func verifiedTemperatureName(forKey key: String, systemModel: String?) -> String? {
         if systemModel == "Mac17,4" {
+            if key == "TRD8" { return "Power management 2 temperature channel 9" }
+            if key == "TRD9" { return "Power management 2 temperature channel 10" }
             if key == "TPDX" || key == "TRDX" { return "Temperature maximum (selected channels)" }
             if key == "TCMb" { return "Adjusted temperature maximum" }
             return nil
@@ -136,12 +144,12 @@ import IOKit
                            ("Ts0I", "Ts0G", "Ts0H"), ("Ts0M", "Ts0K", "Ts0L"),
                            ("Ts0R", "Ts0O", "Ts0Q"), ("Ts0W", "Ts0T", "Ts0U")]
         for (index, keys) in dieChannels.enumerated() {
-            if key == keys.0 { return "Die temperature channel \(index + 1)" }
-            if key == keys.1 { return "Die temperature channel \(index + 1) (average)" }
-            if key == keys.2 { return "Die temperature channel \(index + 1) (adjusted average)" }
+            if key == keys.0 { return "SoC die temperature channel \(index + 1)" }
+            if key == keys.1 { return "SoC die temperature channel \(index + 1) (average)" }
+            if key == keys.2 { return "SoC die temperature channel \(index + 1) (adjusted average)" }
         }
-        if key == "Tsx1" { return "Die temperature channel 9" }
-        if key == "Tsx0" { return "Die temperature channel 9 (average)" }
+        if key == "Tsx1" { return "SoC die temperature channel 9" }
+        if key == "Tsx0" { return "SoC die temperature channel 9 (average)" }
         return nil
     }
     // Family names follow driver product names and the published SMC key
