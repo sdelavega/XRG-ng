@@ -22,7 +22,7 @@ questions for named computations. A full identity resolution is not claimed.
 | `Ts00`, `Ts04`, `Ts08`, `Ts0C`, `Ts0G`, `Ts0K`, `Ts0O`, `Ts0R` | Eight mapped channels of the `s0va` AON PTD source | Named physical publisher to AON destination `0x150` |
 | `TPDD`, `TPDE`, `TPDF` | Registered group-one inputs 114–116 | Actual producer and physical source |
 | `Tz11`–`Tz18`, `Tz1j` | Registered group-one inputs 197–205 | Actual producer and physical source |
-| `SDN0`, `SDN3` | Two fields received from `ans_to_smc`, message subtype 14 | Sender-side unit and field semantics; SMART/HID equivalence unproved |
+| `SDN0`, `SDN3` | Indexed NAND-engine temperature inputs 0/1, signed quarter-degrees Celsius | Exact physical sensor sites; individual HID equality is not established |
 | `TAOL` | Sensor input: float at offset four in writable packet `zEAO` | Actual writer, physical source and unit contract |
 | `TB1T`, `TB2T` | Battery provider command `0x6c`, two tenths-scaled fields | Sender-side unit contract for those fields |
 
@@ -42,16 +42,23 @@ remaining source contracts. Their labels do not turn model outputs into direct
 physical sensor measurements. `TVMD` is a categorical selector, excluded from
 Celsius readings on the validated M5 model.
 
-## Firmware acquisition boundary
+## Firmware acquisition and build checks
 
-The inspected j815 SMC image comes from Apple's 26B123 restore archive; the
-local M5 runs 26C5035r. The local selected restore tree contains current iBoot,
-PMP and other components, but no matching j815 LLB was found in the bounded
-firmware/preboot locations. The two local MacSoftwareUpdate catalogs contained
-no assets, and the attempted official metadata endpoint returned HTTP 403.
-That is an acquisition limit, not proof that a matching image cannot exist.
-No full restore archive, raw flash read, firmware execution or device-state
-change was used to bridge it.
+Matching-build M5 firmware is now available from Apple's 27.3 / 26C5035r
+restore archive. Bounded ZIP range requests retrieved the j815 LLB and t8142
+ANS components; both match the exact board/chip BuildManifest SHA-384 digests.
+The extracted SMC reports `AppleSMCFirmware_H17_6-7372.60.63.j815.REL`.
+
+All 2,431 SMC key records, 148 temperature-key records and 291 group-input
+associations match the earlier 26B123 inventory. Addresses changed, including
+an eight-byte shift in temperature backings; producer equivalence is checked
+separately rather than inferred from inventory equality. Current LLB MTR
+configuration checks also preserve all seven named hardware records and the
+617 MTR / five DPE operations after pointer normalization. They still do not
+supply the missing AON publication edge.
+
+These are archive/build provenance checks. Active first-stage firmware bytes
+were not read back. No firmware execution or device-state change was used.
 
 ## Remaining M4 boundaries
 
@@ -78,8 +85,18 @@ configuration or private writers.
 Sender-side ANS and embedded PMU firmware are now available for static analysis;
 their hashes and acquisition/extraction proofs are recorded in the firmware
 investigation. Their acquisition does not by itself close the packet contracts
-listed above. In particular, the similar ANS query-response record uses a
-different wire class/subtype from the exact SDN receiver.
+listed above. A newly verified synchronous SMC query path accepts the ANS class-three /
+subtype-17 response and copies it into the same SDN buffer. The earlier
+class-four / subtype-14 audit covered only the asynchronous path and did not
+exclude this synchronous producer.
+
+The current ANS query array now has a positive writer: NAND-engine command
+`0x7a` supplies the indexed temperature values. Its signed `/4` consumer takes
+a maximum, then adds 273 when filling the standard NVMe health log's Kelvin
+field. This establishes the engineering Celsius contract by an explicit
+producer/consumer conversion. The composite maximum is distinct from either
+individual SDN channel; it does not identify a physical die or prove equality
+with the host's NAND HID reading.
 
 The current OS shared-cache scan found no `zEAO` writer candidate across 84
 system cache/support files (7.23 GB), using checked ASCII, UTF16 and split
