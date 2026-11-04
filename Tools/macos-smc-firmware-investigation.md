@@ -385,6 +385,47 @@ the categorical exclusions. Evidence is retained under ignored
 [identity status ledger](macos-sensor-identity-status.md) records the remaining
 source and unit boundaries separately from these demonstrated roles.
 
+The subsequent complete device-stream decode covers all eighteen selected
+group-one inputs 0..17. Seven primary inputs join live published device names:
+`TMIA` → `TP1d`, `Ta0p` → `TP3d`, `TMIB` → `TP4d`, `Tm0p` → `TP5d`,
+`TH0p` → `TP6d`, `TUVR` → `TP7d`, `TPMP` → `TP8d`.
+Stream two's device channels 1..7 are `TPCP`, `TW0P`, `TPSP`, `TNwC`,
+`TUVS`, `TPSD`, `TMVR`; stream three's channels 1..4 are `TIED`, `Tm1p`,
+`TSCE`, `TSCW`. These are current engineering temperatures from the exact
+owning HAL and reference-ratio thermistor converter. They receive no average
+suffix. The stream-qualified labels replace misleading generic component
+families without inventing published canonical identities for other providers.
+
+## Resolved j773s fixed-model roles
+
+Four active objects `0x79bc8`, `0x79be0`, `0x79bf8`, `0x79c10` publish
+`TVS0`, `TVS1`, `TVA0`, `TVN0` through fixed affine routine `0x4c74`.
+They are labeled **Fixed thermal model 1** through **4**, in this board's
+object order. These are different formulas and source vectors from the M5
+models; a shared raw key does not establish an identical computation.
+The labels describe calculation roles, with physical placement and unproved
+upstream unit contracts remaining separate questions.
+
+For example, `TVS0` uses intercept 4.92 and coefficients
+`[-1.65, 2.17, -0.75, 0.19, 0.8]` over the filtered generic float parameters
+`ft03`, `ft04`, `ft07`, `ft01`, `ft00`. `TVS1` uses the same feature vector
+with different coefficients and intercept. `TVA0` and `TVN0` use separate
+five- and three-feature vectors. These source IDs belong to the generic float
+parameter namespace, not hardware input indices.
+
+`verify_fixed_models.py` and `verify_model_features.py` under ignored
+`dist/havana-smc-artifact-discovery/m4-computed/` independently verify the
+active producers, coefficient vectors, filters and known source transforms.
+The remaining feature contracts include `fc0T`'s assignment and a group-three
+`PH2R` source; no temperature-only feature vector is claimed.
+
+The complete M4 device/model checkpoint passed both hosts' full Debug gates
+with 657 tests per architecture, universal builds and native / Rosetta packaged
+checks. Native probes verified 76 selected M4 labels and 57 selected M5 labels.
+The remaining readable generic fields number 17 on M4 and 26 on M5; these
+are recorded separately from the named computations' unresolved unit contracts.
+Ignored `dist/m4-device-model-name-validation/` retains the logs and snapshots.
+
 ## Source identity
 
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded

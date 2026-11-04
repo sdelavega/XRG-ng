@@ -145,11 +145,14 @@ On `Mac16,11`, 48 PMU die-stream labels include **(average)** because their
 exported backings contain accumulated averages. The maps explicitly skip
 `TPDF`, `TRDF` and `TTDF`; those keys retain generic labels. Primary published
 PMU identities are used where proven, while the other labels identify firmware
-stream and die-channel numbers without assigning package positions. Three
-device inputs and six computed maxima also have verified roles. See the
+stream and die-channel numbers without assigning package positions. All
+eighteen selected device inputs and six computed maxima also have verified roles. See the
 [M4 PMU trace](macos-smc-firmware-investigation.md#resolved-j773s-pmu-streams).
 Its case-sensitive `TVmd` input and `TVMD` selector are categorical controls,
 excluded from Celsius readings on this exact model; see the
 [control and maximum proof](macos-smc-firmware-investigation.md#resolved-j773s-categorical-controls-and-computed-maxima).
+Four other M4 outputs have verified fixed-model role labels, with formulas
+independently decoded for this board; see the
+[M4 model trace](macos-smc-firmware-investigation.md#resolved-j773s-fixed-model-roles).
 
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).

@@ -120,7 +120,8 @@ import IOKit
             for (index, source) in dieKeys.enumerated() {
                 if key == "TPD" + String(index, radix: 16).uppercased() { return source }
             }
-            return ["Ta0p": "TP3d", "Tm0p": "TP5d"][key]
+            return ["TMIA": "TP1d", "Ta0p": "TP3d", "TMIB": "TP4d", "Tm0p": "TP5d",
+                    "TH0p": "TP6d", "TUVR": "TP7d", "TPMP": "TP8d"][key]
         }
         guard systemModel == "Mac17,4" else { return nil }
         // These streams and canonical keys select the same HAL and ADC ID.
@@ -181,7 +182,12 @@ import IOKit
                 return "Power management stream \(stream) die channel \(channel) (average)"
             }
         }
-        if key == "Tm1p" { return "Power management stream 3 device channel 2" }
+        for (index, keys) in [["TPCP", "TW0P", "TPSP", "TNwC", "TUVS", "TPSD", "TMVR"],
+                              ["TIED", "Tm1p", "TSCE", "TSCW"]].enumerated() {
+            if let channel = keys.firstIndex(of: key) { return "Power management stream \(index + 2) device channel \(channel + 1)" }
+        }
+        let models = ["TVS0", "TVS1", "TVA0", "TVN0"]
+        if let index = models.firstIndex(of: key) { return "Fixed thermal model \(index + 1)" }
         let channels = [("Ta00", "Ta01"), ("Ta04", "Ta05"), ("Ta08", "Ta09"),
                         ("Ta0K", "Ta0L"), ("Ta0O", "Ta0P"), ("Ta0R", "Ta0S")]
         for (index, pair) in channels.enumerated() {
