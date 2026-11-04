@@ -168,6 +168,25 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
     XCTAssertEqual(CFGetRetainCount(fixtureHIDClient), clientsBefore);
     XCTAssertEqual(CFGetRetainCount(fixtureHIDEvent), eventsBefore);
 }
+- (void)testNativeHIDLocationIDsAreOptionalTypedAndExceptionContained {
+    Class<XRGHIDTemperatureTransportFactory> factory = (Class)NSClassFromString(@"XRGAppleHIDTransport");
+    id<XRGHIDTemperatureTransport> transport = [factory makeHIDTransport];
+    XCTAssertNotNil(transport);
+    NSDictionary *service = @{@"Product": @"battery", @"LocationID": @0x54473042};
+    CFIndex before = CFGetRetainCount((__bridge CFTypeRef)service[@"LocationID"]);
+    @autoreleasepool {
+        XCTAssertEqualObjects([transport locationIDForService:service], @0x54473042);
+        XCTAssertNil([transport locationIDForService:@{@"Product": @"battery"}]);
+        XCTAssertNil([transport locationIDForService:@{@"LocationID": @"not a number"}]);
+        XCTAssertNil([transport locationIDForService:@"not a service"]);
+    }
+    XCTAssertEqual(CFGetRetainCount((__bridge CFTypeRef)service[@"LocationID"]), before);
+    throwProduct = YES;
+    XCTAssertNoThrow([transport locationIDForService:service]);
+    XCTAssertNil([transport locationIDForService:service]);
+    throwProduct = NO;
+    XCTAssertEqualObjects([transport locationIDForService:service], @0x54473042);
+}
 - (void)testNativeHIDExceptionsAreContainedBeforeSwiftAndReleaseOwnedObjects {
     for (int phase = 0; phase < 6; phase++) {
         throwHIDCreate = phase == 0; throwMatching = phase == 1; throwHID = phase == 2;
