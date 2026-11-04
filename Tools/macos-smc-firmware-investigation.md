@@ -665,6 +665,14 @@ Thus quarter-degrees Celsius for the input array follows from an explicit
 conversion into a unit-defined field, rather than a plausible value range.
 See [NVM Express 2.0e, section 5.16.1.3 / Figure 212](https://nvmexpress.org/wp-content/uploads/NVM-Express-Base-Specification-2.0e-2024.07.29-Ratified.pdf).
 
+The request ordinal is also the native MSP group namespace: the refresh
+routine's `0..<0x6a11d0` loop supplies request offset eight, and the completion
+path uses the same ordinal. Independent `MSP%u` registrations iterate that
+same count. Cached controller metadata reports `bus-to-msp = [0, 0, 1, 1]`,
+corroborating two logical MSP groups across four buses. Thus `SDN0` and `SDN3`
+are logical MSP0/MSP1 storage temperature channels. This does not assign a
+physical package or die.
+
 This resolves the SDN engineering unit and indexed NAND-engine producer role.
 It does not identify physical die/controller placement. The SMART value is an
 aggregate maximum, so equality with an individual SDN input or the host NAND
