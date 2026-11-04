@@ -94,4 +94,11 @@ The nested path was reproduced on the local AppleSmartBattery driver, which
 reported 5,358 mAh current and maximum while its top-level normalized fields
 reported 100/100.
 
+On the validated M4 Pro Mac mini (`Mac16,11`), twelve `Ta` keys now have
+Neural Engine channel labels. Six raw channels each have a distinct adjusted
+reading with a firmware-defined +8.2°C offset. These labels require that exact
+model; stream order does not imply physical core placement. The named
+`ANE-TO-SMC` provider trace is recorded in
+[the firmware investigation](macos-smc-firmware-investigation.md#resolved-j773s-neural-engine-channels).
+
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).
