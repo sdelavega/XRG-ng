@@ -98,6 +98,13 @@ import Darwin
         return "Temperature sensor · \(key)"
     }
     static func hidName(forKey key: String) -> String {
+        if let identity = XRGAppleSiliconSensorMiner.parseIdentity(key) {
+            let label = hidName(forKey: identity.product)
+            let suffix = " · \(identity.product)"
+            let friendly = label.hasSuffix(suffix) ? String(label.dropLast(suffix.count)) : label
+            let source = Self.name(identity.location) ?? String(format: "%08X", identity.location)
+            return "\(friendly) · HID \(source)"
+        }
         func groups(_ pattern: String) -> [String]? {
             guard let expression = try? NSRegularExpression(pattern: pattern),
                   let match = expression.firstMatch(in: key, range: NSRange(key.startIndex..., in: key)) else { return nil }

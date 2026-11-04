@@ -10,6 +10,21 @@ temperature channel 0”, `als-temp` is “Ambient light sensor temperature” a
 `gas gauge battery` is “Battery temperature”. PMU die/device numbers are driver
 channel numbers, not CPU core numbers or a claim about physical board placement.
 
+Duplicate HID products use the driver's `LocationID` to keep their channels
+separate. For example, six `gas gauge battery` services on the local M5 become
+distinct `Battery temperature · HID TG0B` / `TG0C` / `TG0H` / `TG0V` / `TG1B` /
+`TG2B` channels. These FourCCs are source IDs, not GPU labels or an inferred
+assignment to battery cells. The persisted identity includes the HID namespace,
+numeric LocationID and original product. Unknown/non-FourCC IDs remain hexadecimal.
+
+Unique products retain their existing IDs. Once a duplicate product is observed
+in a process, it stays disambiguated through transient event failures or service
+removal. Missing/invalid/duplicate LocationIDs suppress an ambiguous product;
+iteration order never chooses a winner. An old saved duplicate-product selection
+(such as `gas gauge battery`) becomes unavailable and requires selecting one of
+the distinct channels. That old key did not reliably identify a physical source,
+so it is not silently redirected. Sensor histories/settings are not reassigned.
+
 SMC labels optionally use descriptions from the installed system `libSMC`, only
 when its catalogue has an exact match for the driver's `RBr ` hardware branch.
 The optional reader uses bounded, checked memory copies and disables itself on
