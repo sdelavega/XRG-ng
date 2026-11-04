@@ -32,6 +32,15 @@ An actual zero fan reading remains zero. The disabled sensor's legacy current
 scalar remains zero for compatibility; availability is determined by `isEnabled`,
 and current labels remain `n/a`. Recovery retains the selected source and history.
 
+Discovered HID channels appear in normal sensor lists and pickers without enabling
+“Show Unknown Sensors”. Their identities come from the HID temperature transport,
+independently of the SMC key inventory. The reader remembers discovered HID IDs
+through transient missing events, so a selected channel shows `n/a` instead of
+vanishing from the list. Friendly HID names also work when SMC initialization or
+metadata lookup fails. Merely resembling a HID product or encoded ID does not
+make an unobserved key known. The SMC inventory count and unknown-SMC policy are
+unchanged.
+
 SMC labels optionally use descriptions from the installed system `libSMC`, only
 when its catalogue has an exact match for the driver's `RBr ` hardware branch.
 The optional reader uses bounded, checked memory copies and disables itself on
