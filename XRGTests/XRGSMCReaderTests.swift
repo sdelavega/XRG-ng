@@ -186,7 +186,7 @@ struct XRGSMCReaderTests {
         #expect(!sensors.knownTemperatureKeys.contains("TP1b"))
         #expect(sensors.humanReadableName(forKey: "TP1b") == "Temperature sensor · TP1b")
         #expect(sensors.temperatureValues(includingUnknown: true)["TPD0"] as? Double == 36.5)
-        for model: String? in [nil, "Mac16,11", "mac17,4"] {
+        for model: String? in [nil, "Mac16,10", "mac17,4"] {
             let other = XRGSMCSensors(transport: source, systemModel: model, publishedNameSource: { names })
             #expect(other.humanReadableName(forKey: "TPD0") == "Temperature sensor · TPD0")
         }
@@ -203,7 +203,7 @@ struct XRGSMCReaderTests {
         #expect(sensors.humanReadableName(forKey: "TCMb") == "Adjusted temperature maximum · TCMb")
         #expect(sensors.humanReadableName(forKey: "TPDX") == "Temperature maximum (selected channels) · TPDX")
         #expect(sensors.humanReadableName(forKey: "TRDX") == "Temperature maximum (selected channels) · TRDX")
-        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TCMb", systemModel: "Mac16,11") == nil)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TCMb", systemModel: "Mac16,11") == "Temperature maximum (selected channels)")
     }
 
     @Test func verifiedDeviceStreamsReplaceMisleadingGenericFamiliesAndFailClosedWithoutMetadata() {
@@ -225,7 +225,7 @@ struct XRGSMCReaderTests {
     }
 
     @Test func categoricalThermalSelectorIsNotExposedAsCelsiusOnVerifiedModel() {
-        let source = SMCSensorFixture(["TVMD", "TVMR", "Tz11"])
+        let source = SMCSensorFixture(["TVMD", "TVmd", "TVMR", "Tz11"])
         source.set("TVMD", 1.0); source.set("TVMR", 40.0); source.set("Tz11", 0.0)
         let sensors = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { [:] })
         #expect(!sensors.knownTemperatureKeys.contains("TVMD"))
@@ -234,7 +234,14 @@ struct XRGSMCReaderTests {
         #expect(sensors.temperatureValues(includingUnknown: true)["TVMR"] as? Double == 40.0)
         #expect(sensors.temperatureValues(includingUnknown: true)["Tz11"] as? Double == 0.0)
         #expect(sensors.humanReadableName(forKey: "TVMD") == "Thermal control selector · TVMD")
-        for model in [nil, "Mac16,11", "Mac17,3"] {
+        let havana = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { [:] })
+        #expect(!havana.knownTemperatureKeys.contains("TVMD"))
+        #expect(havana.temperatureValues(includingUnknown: true)["TVMD"] == nil)
+        #expect(havana.humanReadableName(forKey: "TVMD") == "Thermal control selector · TVMD")
+        #expect(!havana.knownTemperatureKeys.contains("TVmd"))
+        #expect(havana.humanReadableName(forKey: "TVmd") == "Thermal control input · TVmd")
+        #expect(sensors.knownTemperatureKeys.contains("TVmd"))
+        for model in [nil, "Mac17,3"] {
             let other = XRGSMCSensors(transport: source, systemModel: model, publishedNameSource: { [:] })
             #expect(other.knownTemperatureKeys.contains("TVMD"))
             #expect(other.temperatureValues(includingUnknown: true)["TVMD"] as? Double == 1.0)
@@ -249,7 +256,7 @@ struct XRGSMCReaderTests {
         #expect(sensors.humanReadableName(forKey: "TRD9") == "Power management 2 temperature channel 10 · TRD9")
         #expect(XRGSMCSensors.verifiedPublishedAlias(forKey: "TRD8", systemModel: "Mac17,4") == nil)
         let other = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { names })
-        #expect(other.humanReadableName(forKey: "TRD8") == "Temperature sensor · TRD8")
+        #expect(other.humanReadableName(forKey: "TRD8") == "Power management stream 2 die channel 9 (average) · TRD8")
     }
 
     @Test func serialTemperatureMonitorsUseVerifiedProducerAndChannelOrdinals() {
@@ -279,6 +286,63 @@ struct XRGSMCReaderTests {
         #expect(sensors.humanReadableName(forKey: "TVV0") == "Temperature maximum (selected channels) · TVV0")
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TVDA", systemModel: nil) == nil)
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TVDG", systemModel: "Mac16,11") == nil)
+    }
+
+    @Test func computedModelLabelsDescribeRolesWithoutInventingPhysicalLocations() {
+        let models = ["TVS1", "TVS0", "TVA0", "TVAC", "TVN0", "TVN1"]
+        let source = SMCSensorFixture(models + ["TVMR", "TVmS", "TVNS"])
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { [:] })
+        for (index, key) in models.enumerated() {
+            #expect(sensors.humanReadableName(forKey: key) == "Fixed thermal model \(index + 1) · \(key)")
+        }
+        #expect(sensors.humanReadableName(forKey: "TVMR") == "Adaptive thermal model · TVMR")
+        #expect(sensors.humanReadableName(forKey: "TVmS") == "Bounded thermal model output · TVmS")
+        #expect(sensors.humanReadableName(forKey: "TVNS") == "Thermal model maximum · TVNS")
+        for key in models + ["TVMR", "TVmS", "TVNS"] {
+            #expect(XRGSMCSensors.verifiedTemperatureName(forKey: key, systemModel: "Mac16,11") == nil)
+        }
+    }
+
+    @Test func m4MaximaDoNotInheritCPUOnlyOrM5AdjustedRoles() {
+        let source = SMCSensorFixture(["TCMb", "TCMz", "TVD0"])
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { [:] })
+        for key in ["TCMb", "TCMz", "TVD0"] {
+            #expect(sensors.humanReadableName(forKey: key) == "Temperature maximum (selected channels) · \(key)")
+        }
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TCMb", systemModel: "Mac17,4") == "Adjusted temperature maximum")
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TCMz", systemModel: nil) == nil)
+    }
+
+    @Test func m4PMUStreamsKeepTheirAverageRolesAndSkippedChannels() {
+        let suffixes = Array("0123456789ABCDEG")
+        let keys = ["TPD", "TRD", "TTD"].flatMap { prefix in suffixes.map { prefix + String($0) } }
+        let source = SMCSensorFixture(keys + ["TPDF", "TRDF", "TTDF", "Ta0p", "Tm0p", "Tm1p", "TPDX", "TRDX", "TTDX"])
+        let canonical = ["TP1b", "TP2b", "TP3b", "TP4b", "TP5b", "TP6b", "TP7b", "TP8b", "TP9b", "TPab", "TPbl", "TPcl", "TPdl", "TPel"]
+        var names = Dictionary(uniqueKeysWithValues: canonical.enumerated().map { ($0.element, "Power management die \($0.offset + 1)") })
+        names["TP3d"] = "Power management device 3"; names["TP5d"] = "Power management device 5"
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { names })
+        for (index, suffix) in suffixes.enumerated() {
+            let channel = index == 15 ? 17 : index + 1
+            for (stream, prefix) in ["TPD", "TRD", "TTD"].enumerated() {
+                let key = prefix + String(suffix)
+                let label = stream == 0 && index < 14 ? "Power management die \(channel) (average)" : "Power management stream \(stream + 1) die channel \(channel) (average)"
+                #expect(sensors.humanReadableName(forKey: key) == "\(label) · \(key)")
+            }
+        }
+        for key in ["TPDF", "TRDF", "TTDF"] {
+            #expect(sensors.humanReadableName(forKey: key) == "Temperature sensor · \(key)")
+        }
+        #expect(sensors.humanReadableName(forKey: "Ta0p") == "Power management device 3 · Ta0p")
+        #expect(sensors.humanReadableName(forKey: "Tm0p") == "Power management device 5 · Tm0p")
+        #expect(sensors.humanReadableName(forKey: "Tm1p") == "Power management stream 3 device channel 2 · Tm1p")
+        for key in ["TPDX", "TRDX", "TTDX"] {
+            #expect(sensors.humanReadableName(forKey: key) == "Temperature maximum (selected channels) · \(key)")
+        }
+        names = [:]; sensors.reloadInventory()
+        #expect(sensors.humanReadableName(forKey: "TPD0") == "Temperature sensor · TPD0")
+        #expect(sensors.humanReadableName(forKey: "Ta0p") == "Temperature sensor · Ta0p")
+        #expect(XRGSMCSensors.verifiedPublishedAlias(forKey: "TPDD", systemModel: "Mac17,4") == nil)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TTDG", systemModel: "Mac17,4") == nil)
     }
 
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
