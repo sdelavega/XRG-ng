@@ -158,9 +158,11 @@ The M4 `TH0a` and `TH0b` labels describe two calibrated channels, and `TH0x`
 describes their maximum. Their earlier Drive family labels had no established
 physical-source join; see the
 [calibrated-channel proof](macos-smc-firmware-investigation.md#resolved-j773s-calibrated-channels-and-their-maximum).
-On M5, `TAOL` is labeled **Sensor input** because its demonstrated source is
-the writable `zEAO` input buffer. The Ambient family label lacked a physical
-source join; its actual writer, source and units remain under investigation.
+On M5, `TAOL` is labeled **Ambient light sensor temperature**. Matching-build
+AOP firmware binds the exact `als-temp` provider to slot zero of the writable
+`zEAO` packet, which current SMC code maps to `TAOL`. This names the sensor
+component, without claiming ambient-air temperature or a physical die site.
+The independent upstream unit contract remains recorded in the investigation.
 M4 `TfC0`–`TfC4` use **Telemetry input N (average)** labels for their verified
 arithmetic sample-average role. These names make no CPU/GPU/site or unit
 assignment. The firmware exports zero for an empty averaging window; these

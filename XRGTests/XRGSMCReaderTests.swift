@@ -382,12 +382,12 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TH0b", systemModel: "Mac17,4") == nil)
     }
 
-    @Test func m5SuppliedInputDoesNotAcquireAnUnprovedAmbientSource() {
+    @Test func m5SuppliedInputUsesVerifiedAmbientLightSensorSource() {
         let source = SMCSensorFixture(["TAOL", "RBr "])
         source.set("TAOL", 0.0); source.set("RBr ", Data("m87".utf8))
         let sensors = XRGSMCSensors(transport: source, branchNameSource: { _ in ["TAOL": "Ambient temperature"] },
                                    systemModel: "Mac17,4", publishedNameSource: { [:] })
-        #expect(sensors.humanReadableName(forKey: "TAOL") == "Sensor input · TAOL")
+        #expect(sensors.humanReadableName(forKey: "TAOL") == "Ambient light sensor temperature · TAOL")
         #expect(sensors.temperatureValues(includingUnknown: true)["TAOL"] as? Double == 0.0)
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TAOL", systemModel: "Mac16,11") == nil)
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TAOL", systemModel: nil) == nil)
