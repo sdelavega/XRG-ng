@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Stephen de la Vega.
 import Foundation
 import Darwin
+import IOKit
 
 @objc public protocol XRGSMCSensorValuesProvider: NSObjectProtocol {
     var knownTemperatureKeys: Set<String> { get }
@@ -18,13 +19,17 @@ import Darwin
     private let transport: (any XRGSMCTransport)?
     private let branchNameSource: (String) -> [String: String]
     private let systemModel: String?
+    private let publishedNameSource: () -> [String: String]
     private var inventory: [String: UInt32] = [:]
     private var branchNames: [String: String] = [:]
+    private var publishedNames: [String: String] = [:]
     public private(set) var knownTemperatureKeys: Set<String> = []
     @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader()) }
     init(transport: (any XRGSMCTransport)?, branchNameSource: @escaping (String) -> [String: String] = XRGSMCBranchNames.load,
-         systemModel: String? = XRGCPUMiner.systemModelIdentifier()) {
+         systemModel: String? = XRGCPUMiner.systemModelIdentifier(),
+         publishedNameSource: @escaping () -> [String: String] = XRGSMCPublishedNames.load) {
         self.transport = transport; self.branchNameSource = branchNameSource; self.systemModel = systemModel
+        self.publishedNameSource = publishedNameSource
         super.init(); reloadInventory()
     }
     static func code(_ key: String) -> UInt32? {
@@ -56,6 +61,7 @@ import Darwin
         }
         // These legacy channels report distance from a limit, not absolute C.
         knownTemperatureKeys = Set(found.keys.filter { $0.hasPrefix("T") && $0 != "TCAC" && $0 != "TCBC" })
+        publishedNames = publishedNameSource().filter { knownTemperatureKeys.contains($0.key) }
     }
     @objc(temperatureValuesIncludingUnknown:) public func temperatureValues(includingUnknown: Bool) -> [String: Any] {
         var values: [String: Any] = [:]
@@ -80,6 +86,7 @@ import Darwin
     }
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
         if knownTemperatureKeys.contains(key) {
+            if let name = publishedNames[key] { return "\(name) · \(key)" }
             if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return "\(name) · \(key)" }
             if let name = branchNames[key] { return "\(name) · \(key)" }
             return Self.temperatureName(forKey: key)
@@ -158,6 +165,56 @@ import Darwin
         return "\(label ?? "Temperature sensor") · \(key)"
     }
     @objc public func isKnownKey(_ key: String) -> Bool { knownTemperatureKeys.contains(key) || inventory[key] != nil && key.hasPrefix("F") && key.hasSuffix("Ac") }
+}
+
+/// These driver services publish the exact SMC read key as LocationID.
+/// Only direct AppleSMCKeysEndpoint children and recognized temperature products count.
+enum XRGSMCPublishedNames {
+    static func load() -> [String: String] {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AppleARMPMUTempSensor"), &iterator) == KERN_SUCCESS else { return [:] }
+        defer { IOObjectRelease(iterator) }
+        var records: [[String: Any]] = []
+        while true {
+            let service = IOIteratorNext(iterator)
+            guard service != 0 else { break }
+            defer { IOObjectRelease(service) }
+            var parent: io_registry_entry_t = 0
+            guard IORegistryEntryGetParentEntry(service, kIOServicePlane, &parent) == KERN_SUCCESS else { continue }
+            defer { IOObjectRelease(parent) }
+            var providerID: UInt64 = 0
+            guard IOObjectConformsTo(parent, "AppleSMCKeysEndpoint") != 0,
+                  IORegistryEntryGetRegistryEntryID(parent, &providerID) == KERN_SUCCESS, providerID != 0,
+                  let product = IORegistryEntryCreateCFProperty(service, "Product" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue(),
+                  let location = IORegistryEntryCreateCFProperty(service, "LocationID" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() else { continue }
+            records.append(["Product": product, "LocationID": location, "ProviderID": NSNumber(value: providerID)])
+        }
+        return decode(records)
+    }
+
+    static func decode(_ records: [[String: Any]]) -> [String: String] {
+        var names: [String: String] = [:], providers: [String: UInt64] = [:], ambiguous = Set<String>()
+        for record in records {
+            guard let product = record["Product"] as? String, product.utf8.count <= 128,
+                  !product.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+                  let provider = record["ProviderID"] as? NSNumber, CFGetTypeID(provider) != CFBooleanGetTypeID(),
+                  let providerID = UInt64(provider.stringValue), providerID != 0,
+                  let number = record["LocationID"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  let code = UInt32(number.stringValue), let key = XRGSMCSensors.name(code), key.hasPrefix("T") else { continue }
+            let label = XRGSMCSensors.hidName(forKey: product)
+            let suffix = " · \(product)"
+            guard label.hasPrefix("Power management") || product == "gas gauge battery",
+                  label.hasSuffix(suffix) else { continue }
+            let name = String(label.dropLast(suffix.count))
+            if let previous = names[key] {
+                if previous != name || providers[key] != providerID { ambiguous.insert(key) }
+            } else {
+                names[key] = name; providers[key] = providerID
+            }
+        }
+        for key in ambiguous { names.removeValue(forKey: key) }
+        return names
+    }
 }
 
 /// Optional descriptions from the installed system library, matched to the
