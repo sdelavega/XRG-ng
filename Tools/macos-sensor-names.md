@@ -10,12 +10,22 @@ temperature channel 0”, `als-temp` is “Ambient light sensor temperature” a
 `gas gauge battery` is “Battery temperature”. PMU die/device numbers are driver
 channel numbers, not CPU core numbers or a claim about physical board placement.
 
-SMC labels use established descriptions for a small set of unambiguous legacy
-keys and broader CPU/GPU/memory/battery family names. Undocumented channels have
+SMC labels optionally use descriptions from the installed system `libSMC`, only
+when its catalogue has an exact match for the driver's `RBr ` hardware branch.
+The optional reader uses bounded, checked memory copies and disables itself on
+unreadable data, an unexpected layout or ambiguous branch records. No system
+description catalogue is bundled with XRG. Without matching metadata, labels use
+conservative families; precise diode/heatsink/board locations are not inferred
+from a shared FourCC. `Tm0P` and `TG0H`, for example, have incompatible meanings
+across documented branches. Undocumented channels have
 the explicit fallback “Temperature sensor” plus their original key. The same
 Apple Silicon key can identify different cores across chip generations; these
 labels deliberately avoid assigning core numbers from another chip's layout.
-`Tp0P` on Intel retains its power-board meaning.
+Apple Silicon CPU/GPU prefix rules are not applied to Intel hardware.
+
+The installed catalogue does not cover the local M5. Unknown channels therefore
+remain generic. See [the identification investigation](macos-sensor-identification.md)
+for the evidence and remaining limits.
 
 References checked 2026-11-04:
 
