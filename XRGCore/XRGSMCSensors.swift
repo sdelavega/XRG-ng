@@ -172,6 +172,9 @@ import IOKit
         // Other boards use different providers for the same Ta keys.
         // See Tools/macos-smc-firmware-investigation.md for the trace.
         guard systemModel == "Mac16,11" else { return nil }
+        if let index = ["TfC0", "TfC1", "TfC2", "TfC3", "TfC4"].firstIndex(of: key) {
+            return "Telemetry input \(index + 1) (average)"
+        }
         if key == "TH0a" { return "Calibrated temperature channel 1" }
         if key == "TH0b" { return "Calibrated temperature channel 2" }
         if key == "TH0x" { return "Temperature maximum (calibrated channels)" }
