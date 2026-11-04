@@ -29,12 +29,36 @@ struct XRGTemperatureTests {
         state.finishUpdate()
         #expect(sensor?.isEnabled == false)
         #expect(sensor?.currentValue == 0)
-        #expect(sensor?.dataSet.orderedValues == [50, 50, 0])
+        #expect(sensor?.dataSet.orderedValues == [50, 50, XRGGraphRenderer.missingValue])
         state.beginUpdate()
         state.ingestTemperatures(["cpu": 60], names: ["cpu": "CPU"])
         state.finishUpdate()
         #expect(sensor?.isEnabled == true)
         #expect(sensor?.currentValue == 60)
+    }
+
+    @Test func missingSamplesAreGapsWhileStoppedFansRemainRealZero() throws {
+        let state = XRGTemperatureState()
+        state.resizeHistory(3)
+        var time = 100.0; state.historyClock = { time }
+        let stopped = XRGFan(); stopped.key = "F0Ac"; stopped.actualSpeed = 0
+        state.beginUpdate()
+        state.ingestTemperatures(["cpu": 50], names: ["cpu": "CPU"])
+        state.ingestFans([stopped], names: ["F0Ac": "Fan 1"])
+        state.finishUpdate()
+        let cpu = try #require(state.sensor(forLocation: "cpu"))
+        let fan = try #require(state.sensor(forLocation: "F0Ac"))
+        time = 105; state.beginUpdate(); state.finishUpdate()
+        #expect(!cpu.isEnabled && !fan.isEnabled)
+        #expect(cpu.dataSet.currentValue == XRGGraphRenderer.missingValue && fan.dataSet.currentValue == XRGGraphRenderer.missingValue)
+        time = 110; state.beginUpdate()
+        state.ingestTemperatures(["cpu": 55], names: ["cpu": "CPU"])
+        state.ingestFans([stopped], names: ["F0Ac": "Fan 1"])
+        state.finishUpdate()
+        #expect(cpu.isEnabled && fan.isEnabled && fan.currentValue == 0)
+        #expect(cpu.dataSet.orderedValues == [50, XRGGraphRenderer.missingValue, 55])
+        #expect(fan.dataSet.orderedValues == [0, XRGGraphRenderer.missingValue, 0])
+        #expect(cpu.timedHistory.observationCount == 3 && fan.timedHistory.observationCount == 3)
     }
 
     @Test func boundedFanDecoding() {
