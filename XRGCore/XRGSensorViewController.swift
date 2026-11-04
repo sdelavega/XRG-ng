@@ -42,6 +42,7 @@ public final class XRGSensorViewController: NSViewController {
 
     @nonobjc var statsManager = XRGStatsManager.shared
     @nonobjc private(set) var refreshTimer: Timer?
+    @nonobjc private var fittedInitialNames = false
 
     public override func viewDidLoad() {
         super.viewDidLoad()
@@ -108,6 +109,28 @@ public final class XRGSensorViewController: NSViewController {
             label.sizeToFit()
             statsWidthConstraint?.constant = max(20, label.frame.width)
         }
+        fitInitialNames(names)
+    }
+
+    private func fitInitialNames(_ names: [String]) {
+        guard !fittedInitialNames, !names.isEmpty,
+              let label = nameValuesLabel, let window = view.window else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let font = label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let textWidth = names.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        // Fit once after attachment and discovery. Subsequent polls must respect
+        // the user's window size, including an intentionally narrower column.
+        fittedInitialNames = true
+        let extraWidth = max(0, ceil(textWidth + 4 - label.bounds.width))
+        guard extraWidth > 0 else { return }
+        var frame = window.frame
+        frame.size.width += extraWidth
+        if let screen = window.screen ?? NSScreen.main {
+            let visible = screen.visibleFrame
+            frame.size.width = max(window.frame.width, min(frame.width, visible.width))
+            frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
+        }
+        window.setFrame(frame, display: window.isVisible)
     }
 
     @IBAction public func exportAction(_ sender: Any?) {

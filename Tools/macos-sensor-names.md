@@ -38,8 +38,9 @@ independently of the SMC key inventory. The reader remembers discovered HID IDs
 through transient missing events, so a selected channel shows `n/a` instead of
 vanishing from the list. Friendly HID names also work when SMC initialization or
 metadata lookup fails. Merely resembling a HID product or encoded ID does not
-make an unobserved key known. The SMC inventory count and unknown-SMC policy are
-unchanged.
+make an unobserved key known. The Sensors window fits its initial friendly names
+within the current screen once, then preserves manual resizing on later polls.
+The SMC inventory count and unknown-SMC policy are unchanged.
 
 SMC labels optionally use descriptions from the installed system `libSMC`, only
 when its catalogue has an exact match for the driver's `RBr ` hardware branch.
