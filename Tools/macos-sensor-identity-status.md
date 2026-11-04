@@ -10,7 +10,8 @@ artifact hashes, addresses and bounded exclusions. Proprietary input images and
 derived binary evidence remain in ignored `dist/` directories.
 
 The latest native probes leave 26 readable generically labeled fields on M5
-and 17 on M4. The tables below account for those fields and also retain unit
+and 12 on M4. The five M4 `TfC` readings now have verified sample-average
+role labels. The tables below account for generic fields and also retain unit
 questions for named computations. A full identity resolution is not claimed.
 
 ## Remaining M5 boundaries
@@ -57,7 +58,7 @@ change was used to bridge it.
 | Keys / inputs | Demonstrated identity | Remaining edge |
 | --- | --- | --- |
 | `TPDF`, `TRDF`, `TTDF` | Group-two inputs omitted by the selected PMU stream maps but included in their maxima | Actual producers; no extrapolated die label |
-| `TfC0`–`TfC4` | Sample averages from PTD packets `p0t1`, `g0t1`, `p1t1`, `g1t1`, `s0t1`, respectively | Named physical owners and packet-field meaning; a measured value versus limit is not established |
+| `TfC0`–`TfC4` | Telemetry input 1–5 (average), from PTD packets `p0t1`, `g0t1`, `p1t1`, `g1t1`, `s0t1`, respectively | Named physical owners and packet-field meaning; a measured value versus limit is not established |
 | `Tz11`–`Tz18`, `Tz1j` | Separate j773s group-one inputs | Actual producers and physical sources; no M5 producer assumption |
 
 The M4 `TVmd` input is demonstrably consumed as a categorical control, but its
@@ -106,6 +107,14 @@ find the known state/pair/key-descriptor references, with no identified value
 writer. Runtime-loaded/indexed pointers, private configuration and bulk memory
 operations remain outside that closure. This still does not justify calling
 these inputs unavailable, unassigned or reserved.
+
+The official diagnostic assets are now available and checked, superseding the
+initial local-DNS acquisition failure. Exact native board/chip selectors choose
+M5 profile 5089 and Havana profile 5076. Their temperature descriptions are raw
+SMC keys; they provide no remaining AON/TfC/Tz physical map. The paired repair
+image also supplies no such catalogue. This is a catalogue boundary, not proof
+that uncatalogued inputs are unavailable. See the firmware investigation for
+the acquired image hashes and exact profile-selection checks.
 
 ## Evidence needed to close these boundaries
 

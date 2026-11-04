@@ -393,6 +393,21 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TAOL", systemModel: nil) == nil)
     }
 
+    @Test func m4TelemetryInputLabelsPreserveProvenSampleAverageRoles() {
+        let keys = ["TfC0", "TfC1", "TfC2", "TfC3", "TfC4"]
+        let source = SMCSensorFixture(keys + ["TfC5", "TFC0"])
+        source.set("TfC0", 0.0)
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { [:] })
+        for (index, key) in keys.enumerated() {
+            #expect(sensors.humanReadableName(forKey: key) == "Telemetry input \(index + 1) (average) · \(key)")
+            #expect(XRGSMCSensors.verifiedTemperatureName(forKey: key, systemModel: "Mac17,4") == nil)
+        }
+        #expect(sensors.temperatureValues(includingUnknown: true)["TfC0"] as? Double == 0.0)
+        #expect(sensors.humanReadableName(forKey: "TfC5") == "Temperature sensor · TfC5")
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TFC0", systemModel: "Mac16,11") == nil)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TfC0", systemModel: nil) == nil)
+    }
+
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
         func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
             for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }

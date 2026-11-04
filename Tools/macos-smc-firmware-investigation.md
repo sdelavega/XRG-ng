@@ -466,6 +466,41 @@ all 79 selected M4 labels and the 57 selected M5 labels, including the distinct
 board-specific `TH0x` identities. Ignored
 `dist/m4-calibrated-name-validation/` retains the logs and snapshots.
 
+## Resolved j773s telemetry-average roles
+
+The five `TfC` exports point to the second group-two value backings for inputs
+71..75. Their exact packet joins are:
+
+| Key | PTD source | Group-two input |
+| --- | --- | ---: |
+| `TfC0` | `p0t1` | 72 |
+| `TfC1` | `g0t1` | 73 |
+| `TfC2` | `p1t1` | 71 |
+| `TfC3` | `g1t1` | 75 |
+| `TfC4` | `s0t1` | 74 |
+
+All five active updater objects select format four, decoding a signed sixteen-bit
+field at packet offset two divided by 64. Successful reads contribute that
+sample and denominator one through `0x26a8c` / `0x26f6c`. Flush `0x26f24`
+divides accumulated numerator by denominator and exports the arithmetic mean;
+an empty window exports zero. A disabled flush flag can defer publication.
+These are sample averages, without a claimed time weighting or interval.
+
+Labels **Telemetry input 1 (average)** through **5** follow `TfC0`..`TfC4`
+key order. They identify proven processing roles, not physical owners or
+temperature-versus-limit field semantics. The separate PMP fast-die input
+and disabled output paths do not establish an alias to these packet fields.
+Ignored `dist/tz-producer-validation/m4-other/` retains the hash-checked
+`collect_tfc_proof.py`, exact packet and backing joins, and the independent
+`fastdie-input/` and `fastdie-output/` follow-ups.
+
+Both hosts passed the complete Debug gate with 660 tests per architecture,
+universal builds and native / Rosetta packaged checks. Native probes verified
+84 selected M4 labels and 58 selected M5 labels. The remaining readable
+generic names number twelve on M4 and twenty-six on M5; physical and unit
+questions for named telemetry inputs remain separately documented. Logs and
+snapshots are under ignored `dist/m4-telemetry-average-name-validation/`.
+
 ## Source identity
 
 The later sender-side acquisition retrieved `Firmware/ansf.t8142.release.im4p`
