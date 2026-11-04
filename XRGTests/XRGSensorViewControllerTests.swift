@@ -179,6 +179,38 @@ struct XRGSensorViewControllerTests {
         }
     }
 
+    @Test func nativeSensorWindowFitsFriendlyNamesOnceAndPreservesUserResize() throws {
+        try withSource { source in
+            _ = NSApplication.shared
+            let owner = SensorNibOwner()
+            let nib = try #require(NSNib(nibNamed: "Sensors", bundle: Bundle(for: SensorNibOwner.self)))
+            var topLevel: NSArray?
+            #expect(nib.instantiate(withOwner: owner, topLevelObjects: &topLevel))
+            let window = try #require(owner.sensorWindow)
+            defer { window.orderOut(nil); window.close(); withExtendedLifetime(topLevel) {} }
+            let controller = try #require(owner.sensorViewController)
+            controller.dataSource = source
+            let name = "Power management device 8 · PMU tdev8"
+            source.sensors = [sensor("PMU tdev8", name: name)]
+            _ = controller.view
+            let originalWidth = window.frame.width
+            controller.refresh()
+            window.contentView?.layoutSubtreeIfNeeded()
+            let label = try #require(controller.nameValuesLabel)
+            let textWidth = (name as NSString).size(withAttributes: [.font: try #require(label.font)]).width
+            #expect(label.bounds.width >= textWidth)
+            #expect(window.frame.width > originalWidth)
+            if let screen = window.screen {
+                #expect(window.frame.maxX <= screen.visibleFrame.maxX + 1)
+            }
+            var frame = window.frame
+            frame.size.width = originalWidth
+            window.setFrame(frame, display: false)
+            controller.refresh()
+            #expect(abs(window.frame.width - originalWidth) < 1)
+        }
+    }
+
     @Test func compiledSensorNibRestoresSwiftClassesOutletsAndAction() throws {
         try withSource { source in
             _ = NSApplication.shared
