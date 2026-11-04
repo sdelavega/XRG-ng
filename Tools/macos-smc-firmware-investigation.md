@@ -2,8 +2,9 @@
 
 Investigated 2026-11-04 for the MacBook Air M5 (`j815ap`) and Havana Mac mini
 M4 Pro (`j773sap`). This resolves firmware acquisition and reconstruction, and
-partially resolves key-to-input lookup. It does not establish new physical
-sensor labels.
+partially resolves key-to-input lookup and establishes the configured j815
+Ts/Ta provider path.
+It does not establish new physical sensor labels.
 
 ## Source identity
 
@@ -100,10 +101,105 @@ keys rooted at `0x4c7e0`, including 273 temperature keys (270 `flt ` and three
 complete 273-key inventory and the 270 float-key set, with no differences.
 The j815 input-buffer indices above do not establish j773s input mappings.
 
+## Verified j815 Ts/Ta provider path
+
+The configured polling path at image-relative `0x30608..0x30650` calls
+`0x3aab0` with objects `0x8e1f0` (Ts) and `0x8e210` (Ta), subject to runtime
+enable flags. Each object supplies an input manager, a 12-byte-record map and
+a numeric source ID. Successful reads decode signed 15-bit values with six
+fractional bits and write the mapped group-one inputs through `0x3d988`.
+
+| Key | Input | Source ID / canonical FourCC | PTD start | Register / 16-bit slot |
+| --- | ---: | --- | --- | --- |
+| `Ts00` | 134 | `0x73307661` / `s0va` | `0x150` | 0 / 0 |
+| `Ta00` | 142 | `0x61307661` / `a0va` | `0x152` | 0 / 0 |
+| `Ta04` | 143 | `0x61307661` / `a0va` | `0x152` | 0 / 1 |
+
+These are integer FourCCs: their stored little-endian bytes are `av0s` and
+`av0a`. Neither spelling establishes a physical component name.
+
+Initialization at `0x6f08..0x6f28` registers the source table at `0x90610`
+with provider `0x8f078`, operation 20 and a runtime record count. Vtable
+method `0x4c420` stores and sorts the records. Read method `0x4c590` selects
+mode one, then `0x4cb74` looks up the source through `0x4ca5c`, checks the
+requested range and loads the first 64 bits of each 16-byte slot. The stored
+base is `0x38c840000`; the slot formula is
+`base + 0x20000 + (ptd_start + requested_offset) * 16`.
+The calculated first values for `Ts00`, `Ta00` and `Ta04` are therefore
+`0x38c861500`, `0x38c861520` and `0x38c861522`. These are static calculations;
+no register was read to validate an executing path.
+
+The current M5 DeviceTree's `/Root/device-tree/arm-io/aon-ptd` provides a
+1,056-byte `ptd_data_table`: 88 unique 12-byte records, SHA-256
+`76336fd0ae6b26630fff6f91ff0833620494c9084d03707749f890f5a55a002f`.
+ApplePTD publishes the decoded fields in `ptd-data-table-dict`. Independent
+decoding of **all 88 records** agrees with those fields:
+
+| Offset | Bytes | Published field |
+| --- | ---: | --- |
+| 0 | 4 | `ptd_id` |
+| 4 | 2 | `ptd_vers` |
+| 6 | 2 | `ptd_start` |
+| 8 | 1 | `ptd_size` |
+| 9 | 1 | `ptd_irq_num` |
+| 10 | 1 | `ptd_entry_irq` |
+| 11 | 1 | `ptd_features` |
+
+All **20 records** in the SMC table at `0x90610` occur byte-for-byte in this
+live 88-record table. In particular, `s0va` has start `0x150`, size 2, and
+`a0va` has start `0x152`, size 3. This explicitly connects the configured
+Ts/Ta reader to the ApplePTD registry. The records contain no physical
+location, component label or named unit field. The DeviceTree register base
+`0x17c840000` differs from the SMC object's base; their address-space
+translation has not been established.
+
+The original source maps, registration call, backend instructions, input
+pointer pairs and key leaves were checked independently of Hopper's
+decompiler. See ignored `J815_TS_TA_PRODUCERS.md`,
+`j815-ts-ta-provider-chain.json`, `J815_PTD_REGISTRY.md` and
+`j815-ptd-registry-comparison.json` under
+`dist/havana-smc-artifact-discovery/`. The comparison concerns a 20-record
+subset, not equality of the entire live table and the following firmware
+bytes.
+
 ## Remaining boundary and evidence
 
-The next specific task is to trace the provider/registration path that populates
-group-one inputs 134, 142 and 197, then establish an explicit source identity.
+The Ts/Ta provider/registration path is established through opaque PTD source
+IDs. Its connection to named physical components remains unresolved. The
+producer of group-one input 197 (`Tz11`) is also unresolved; numeric descriptor
+`0x470` and references in consumer tables do not establish who writes it.
+
+A bounded follow-up acquired `Firmware/pmp/t8142pmp.im4p` from the same
+26B123 restore archive. Its SHA-256 is
+`081d5ec0cf30429d8c5cf8fa39e9c8494a110160178c3c6b16ce08f84f613fd2`;
+the decoded Mach-O is
+`6c669ae08e0a58db7f0c10795ba2edda23c59196ee08e1636fd6f3938ebc6fa5`.
+This keeps the two static firmware analyses on one restore build, while the
+live M5 metadata remains from 26C5035r.
+
+PMP's `temp-sensor` consumer at `0x100a788` resolves each record's device ID
+against 124-byte `soc-device` records. The selected live metadata names device
+6 `ANE0`, device 4 `PACC0`, device 3 `EACC0`, and device 5 `AGX`. However,
+this establishes meanings for the long PMP labels, not for four-character
+SMC keys. Type-eight temperature records call `0x10237a8` with the resolved
+device object and bank. That method registers callback `0x1023904` through
+the device's provider object. The callback obtains its channel number from
+runtime-built per-bank configuration; it does not directly supply the SMC
+source ID or the `0x150`/`0x152` PTD starts.
+
+The live `ptd-range` record named `SOC-DEV-PKT` starts at `0xa8` and spans
+`0x180` entries, containing both starts. Membership in that interval does
+not connect either source ID to ANE or another component. The next specific
+boundary is construction of the device/bank configuration consumed by
+`0x10237a8` and `0x1023904`, including its PTD output-channel assignment.
+Initialization near `0x10133fc` is a lead, with indirect calls and merged
+decompiler boundaries still requiring instruction-level checks.
+
+The current `thermalmonitord` constant-dictionary decoder checked all 4,551
+dictionaries without a parse error and found no literal `Ts00`, `Ta00` or
+`Tz11`. Computed names and other providers remain possible. This bounded
+negative result does not establish that `Tz11` is host-written or virtual.
+
 Do not strip PMP label suffixes, assign physical locations from table order,
 or generalize a mapping to a different board/build without evidence.
 
@@ -111,5 +207,10 @@ Ignored local artifacts are under `dist/smc-firmware-discovery/`,
 `dist/havana-smc-artifact-discovery/` and `dist/smc-container-tool-validation/`:
 range manifests, input/derived hashes, independent reconstruction and trie
 decoders, selected runtime metadata, table crosslinks and retained REA snapshots.
-Both root-owned Hopper sessions were closed with snapshots. No firmware was
+The follow-up also retains `dist/smc-provider-validation/`, including scoped
+PTD metadata, matching-build PMP provenance, the thermal constant scan and
+`j815-provider-trace.rea.json` / `pmp-provider-trace.rea.json` snapshots.
+The independent Ts/Ta pointer/slot checks and 88-record published-field /
+20-record firmware-subset checks passed again at this checkpoint.
+All root-owned Hopper sessions were closed with snapshots. No firmware was
 executed or flashed, and no device power state was changed for this investigation.
