@@ -105,6 +105,26 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "ta00", systemModel: "Mac16,11") == nil)
     }
 
+    @Test func verifiedDieTemperatureNamesDistinguishCurrentAndAverageChannels() {
+        let source = SMCSensorFixture(["Ts00", "Ts01", "Ts02", "Ts0U", "Ts0W", "Tsx0", "Tsx1", "Ts03"])
+        source.set("Ts00", 60.4); source.set("Ts02", 61.9)
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11")
+        #expect(sensors.humanReadableName(forKey: "Ts00") == "Die temperature channel 1 (average) · Ts00")
+        #expect(sensors.humanReadableName(forKey: "Ts01") == "Die temperature channel 1 (adjusted average) · Ts01")
+        #expect(sensors.humanReadableName(forKey: "Ts02") == "Die temperature channel 1 · Ts02")
+        #expect(sensors.humanReadableName(forKey: "Ts0U") == "Die temperature channel 8 (adjusted average) · Ts0U")
+        #expect(sensors.humanReadableName(forKey: "Ts0W") == "Die temperature channel 8 · Ts0W")
+        #expect(sensors.humanReadableName(forKey: "Tsx0") == "Die temperature channel 9 (average) · Tsx0")
+        #expect(sensors.humanReadableName(forKey: "Tsx1") == "Die temperature channel 9 · Tsx1")
+        #expect(sensors.humanReadableName(forKey: "Ts03") == "Temperature sensor · Ts03")
+        #expect(sensors.temperatureValues(includingUnknown: true)["Ts00"] as? Double == 60.4)
+        #expect(sensors.temperatureValues(includingUnknown: true)["Ts02"] as? Double == 61.9)
+        for model: String? in [nil, "Mac17,4", "Mac16,10"] {
+            let other = XRGSMCSensors(transport: source, systemModel: model)
+            #expect(other.humanReadableName(forKey: "Ts00") == "Temperature sensor · Ts00")
+        }
+    }
+
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
         func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
             for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }
