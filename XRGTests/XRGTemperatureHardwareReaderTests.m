@@ -155,6 +155,24 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
     XCTAssertEqual([reader fanValues].count, 0);
     XCTAssertEqualObjects([reader siliconTemperatureValues][@"hid"], @60);
 }
+- (void)testDiscoveredHIDChannelsRemainKnownWhenSMCMetadataOrCurrentEventsAreUnavailable {
+    id<XRGTemperatureReader> reader = [XRGTemperatureHardwareReader makeTemperatureReader];
+    [(NSObject *)reader setValue:nil forKey:@"smcSensors"];
+    fixtureHIDServices = @[@{@"Product": @"PMU tdie1", @"LocationID": @0x54503162}];
+    XCTAssertFalse([reader isKnownKey:@"PMU tdie1"]);
+    XCTAssertEqualObjects([reader siliconTemperatureValues][@"PMU tdie1"], @60);
+    XCTAssertTrue([reader isKnownKey:@"PMU tdie1"]);
+    XCTAssertEqualObjects([reader humanReadableNameForKey:@"PMU tdie1"], @"Power management die 1 · PMU tdie1");
+    XCTAssertFalse([reader isKnownKey:@"PMU tdie2"]);
+    XCTAssertFalse([reader isKnownKey:@"HID:54473042:gas gauge battery"]);
+    missingServices = YES;
+    XCTAssertEqual([reader siliconTemperatureValues].count, 0);
+    XCTAssertTrue([reader isKnownKey:@"PMU tdie1"]);
+    missingServices = NO;
+    throwKnown = YES;
+    XCTAssertTrue([reader isKnownKey:@"PMU tdie1"]);
+    throwKnown = NO;
+}
 
 - (void)testNativeHIDMatchingAndEventABIAndBalancedOwnership {
     CFIndex clientsBefore = CFGetRetainCount(fixtureHIDClient), eventsBefore = CFGetRetainCount(fixtureHIDEvent);

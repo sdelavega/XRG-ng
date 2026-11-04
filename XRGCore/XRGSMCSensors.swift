@@ -97,7 +97,7 @@ import Darwin
         if let family = families[String(key.prefix(2))] { return "\(family) temperature · \(key)" }
         return "Temperature sensor · \(key)"
     }
-    static func hidName(forKey key: String) -> String {
+    @objc(humanReadableHIDNameForKey:) public static func hidName(forKey key: String) -> String {
         if let identity = XRGAppleSiliconSensorMiner.parseIdentity(key) {
             let label = hidName(forKey: identity.product)
             let suffix = " · \(identity.product)"
