@@ -686,6 +686,41 @@ instruction excerpts. Root-owned Hopper dossiers use explicitly synthetic
 analysis entry seeds; native instructions control where merged pseudocode
 loses function boundaries.
 
+## Resolved current M5 ambient light sensor source
+
+Matching-build AOP firmware provides the missing `TAOL` writer and source.
+The actual client constructor at `0x1118fac..0x1119034` installs configuration
+`0x10b7560`: one source record, destination slot zero, type one, exact native
+provider name `als-temp`. Initialization resolves that service and registers
+callback `0x100b39c`. Its type-one branch reads a signed Q16 event field,
+rejects sentinel `0x7fffffff`, and caches the float plus its validity flag.
+
+The client at `0x100b538..0x100b630` constructs a 128-byte SMC service request
+with operation kind one, key `zEAO`, size 32 and that cached float in slot zero.
+The generic AOP service emits ordinary SMC command `0x11`; the current SMC
+reader joins that exact buffer/slot to input 99 and `TAOL`. The M5 label is
+therefore **Ambient light sensor temperature**. It describes the demonstrated
+provider, without claiming ambient-air temperature or transducer placement.
+The independent sender-side Celsius contract remains a separate question;
+this naming change does not change value decoding.
+
+The earlier AOP instruction-pattern scan missed the real constructor because
+a size-setting instruction separates the two instructions assembling the key.
+Its apparent zero result was not a valid exclusion of an AOP writer. This
+positive native call/configuration trace supersedes that result. The separate
+host shared-cache scan retains only its stated cache scope.
+
+Ignored `dist/taol-aop-client/verify_taol_aop_source.py` reproduces the complete
+join, including comparisons against original decoded AOP segment bytes.
+Decoded AOP SHA-256 is
+`7fc59b50eaf8b5e4306c6034883f82ddda990fa04cfc10328854391ad66beff4`.
+The source, validity, constructor and SMC packet proofs are retained alongside
+it. No firmware was executed and no sensor data was written during validation. The
+label change passed both machines' full Debug gates: 660 tests per architecture,
+universal builds, isolated AppKit checks and native/Rosetta packaged-entry
+checks. Native probes verified 58 selected M5 labels and 84 selected M4 labels;
+logs and snapshots are under ignored `dist/taol-als-source-name-validation/`.
+
 ## Matching MSP responder and temperature hardware path
 
 Read-only cached controller metadata reports MSP version `62.10.4.0.7.0`,

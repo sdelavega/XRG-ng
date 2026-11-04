@@ -23,7 +23,7 @@ questions for named computations. A full identity resolution is not claimed.
 | `TPDD`, `TPDE`, `TPDF` | Registered group-one inputs 114–116 | Actual producer and physical source |
 | `Tz11`–`Tz18`, `Tz1j` | Registered group-one inputs 197–205 | Actual producer and physical source |
 | `SDN0`, `SDN3` | Logical MSP0/MSP1 storage temperature channels, signed quarter-degrees Celsius | Exact physical sensor sites; individual HID equality is not established |
-| `TAOL` | Sensor input: float at offset four in writable packet `zEAO` | Actual writer, physical source and unit contract |
+| `TAOL` | Ambient light sensor temperature: exact AOP `als-temp` provider through `zEAO` slot zero | Independent upstream unit contract; exact transducer placement |
 | `TB1T`, `TB2T` | Battery provider command `0x6c`, two tenths-scaled fields | Sender-side unit contract for those fields |
 
 The named ANE0/SNE MTR hardware has the same noncontiguous channel layout as
@@ -105,8 +105,9 @@ equality with the host's NAND HID reading.
 The current OS shared-cache scan found no `zEAO` writer candidate across 84
 system cache/support files (7.23 GB), using checked ASCII, UTF16 and split
 instruction patterns. This is a bounded negative search on 26C5035r; dynamic
-key construction and writers outside that cache remain open. It does not
-identify the writer or justify an ambient-light temperature label.
+key construction and writers outside that cache were outside its scope. The
+later AOP client/configuration proof now identifies the exact `als-temp` writer
+and supports the ambient light sensor provider label.
 
 The fast-die timing lead has also been followed through its output guard.
 Its implementation can publish packed temperature sum/count records to the
@@ -116,9 +117,10 @@ records. This conditional capability therefore does not identify the current
 AON or `TfC` producers.
 
 Current AOP/AOP2 bundles were reconstructed from explicit component metadata.
-The AOP reference to `0x38c840000` is an MMIO permission range, and its SMC
-service supports generic key requests with runtime-provided keys. Neither is
-a concrete `a0va`, `s0va` or `zEAO` publication. PMC, MSR and TMU candidate
+The AOP reference to `0x38c840000` is an MMIO permission range, which does
+not establish an AON publication. A later actual-client trace positively joins
+`als-temp` to `zEAO` and `TAOL`, superseding the earlier AOP constructor scan
+that missed an intervening instruction. PMC, MSR and TMU candidate
 images were inspected with their exact build/provenance boundaries; none
 provided a positive routing join in the bounded checks.
 
