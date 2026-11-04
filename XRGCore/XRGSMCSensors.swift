@@ -171,6 +171,9 @@ import IOKit
         // Other boards use different providers for the same Ta keys.
         // See Tools/macos-smc-firmware-investigation.md for the trace.
         guard systemModel == "Mac16,11" else { return nil }
+        if key == "TH0a" { return "Calibrated temperature channel 1" }
+        if key == "TH0b" { return "Calibrated temperature channel 2" }
+        if key == "TH0x" { return "Temperature maximum (calibrated channels)" }
         if ["TCMb", "TCMz", "TVD0", "TPDX", "TRDX", "TTDX"].contains(key) { return "Temperature maximum (selected channels)" }
         // j773s maps sixteen ADCs per stream, skipping channel 16 (suffix F).
         // The remaining die-channel IDs are explicit ADC selectors, not sites.

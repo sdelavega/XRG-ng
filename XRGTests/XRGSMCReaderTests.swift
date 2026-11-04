@@ -368,6 +368,20 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TSCW", systemModel: "Mac17,4") == nil)
     }
 
+    @Test func m4CalibratedChannelsAndMaximumDoNotAcquireUnprovedDriveLocations() {
+        let source = SMCSensorFixture(["TH0a", "TH0b", "TH0x"])
+        source.set("TH0a", 0.0); source.set("TH0b", 40.0); source.set("TH0x", 40.0)
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { [:] })
+        #expect(sensors.humanReadableName(forKey: "TH0a") == "Calibrated temperature channel 1 · TH0a")
+        #expect(sensors.humanReadableName(forKey: "TH0b") == "Calibrated temperature channel 2 · TH0b")
+        #expect(sensors.humanReadableName(forKey: "TH0x") == "Temperature maximum (calibrated channels) · TH0x")
+        #expect(sensors.temperatureValues(includingUnknown: true)["TH0a"] as? Double == 0.0)
+        let m5 = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { ["TR2d": "Power management 2 device 2"] })
+        #expect(m5.humanReadableName(forKey: "TH0x") == "Power management 2 device 2 · TH0x")
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TH0a", systemModel: nil) == nil)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TH0b", systemModel: "Mac17,4") == nil)
+    }
+
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
         func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
             for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }

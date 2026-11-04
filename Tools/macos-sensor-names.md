@@ -154,5 +154,9 @@ excluded from Celsius readings on this exact model; see the
 Four other M4 outputs have verified fixed-model role labels, with formulas
 independently decoded for this board; see the
 [M4 model trace](macos-smc-firmware-investigation.md#resolved-j773s-fixed-model-roles).
+The M4 `TH0a` and `TH0b` labels describe two calibrated channels, and `TH0x`
+describes their maximum. Their earlier Drive family labels had no established
+physical-source join; see the
+[calibrated-channel proof](macos-smc-firmware-investigation.md#resolved-j773s-calibrated-channels-and-their-maximum).
 
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).

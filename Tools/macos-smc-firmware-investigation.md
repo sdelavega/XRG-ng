@@ -426,6 +426,33 @@ The remaining readable generic fields number 17 on M4 and 26 on M5; these
 are recorded separately from the named computations' unresolved unit contracts.
 Ignored `dist/m4-device-model-name-validation/` retains the logs and snapshots.
 
+## Resolved j773s calibrated channels and their maximum
+
+`TH0a` and `TH0b` are two calibrated channels read by a serial-device
+transaction at `0x2a050`, not demonstrated Drive/SSD/HDD locations. The
+transaction receives six bytes containing three twelve-bit values. One is a
+common reference; the other two are scaled by `1651 / reference` and passed
+through six piecewise-affine calibration segments at `0x4f828`, via `0xaf20`.
+The resulting group-one inputs 18 and 19 are labeled **Calibrated temperature
+channel 1** and **2**. This identifies their processing roles without guessing
+the chip, thermistor family or mounting location.
+
+`TH0x` is group-one input 20. The exact sequence `0x2bf80..0x2bfb4` reads
+inputs 18 and 19 in the group-one namespace, selects the larger, rereads that
+source and publishes it unchanged. It is labeled **Temperature maximum
+(calibrated channels)**. No explicit source-status filter is present in this
+selection. The M5 `TH0x` PMU copy retains its different verified identity.
+
+Ignored `dist/tz-producer-validation/m4-other/th-drive/` retains the independent
+hash-checked `inspect_th_roles.py`, exact calibration coefficients, byte decode,
+input/backing joins and original instruction excerpts.
+
+Both hosts passed the complete Debug gate with 658 tests per architecture,
+universal builds and native / Rosetta packaged checks. Native probes verified
+all 79 selected M4 labels and the 57 selected M5 labels, including the distinct
+board-specific `TH0x` identities. Ignored
+`dist/m4-calibrated-name-validation/` retains the logs and snapshots.
+
 ## Source identity
 
 The later sender-side acquisition retrieved `Firmware/ansf.t8142.release.im4p`
