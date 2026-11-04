@@ -25,6 +25,13 @@ iteration order never chooses a winner. An old saved duplicate-product selection
 the distinct channels. That old key did not reliably identify a physical source,
 so it is not silently redirected. Sensor histories/settings are not reassigned.
 
+Missing or invalid sensor readings produce missing markers in both sample-count
+and timestamp-window history. They never become plotted zero temperatures or
+zero-RPM observations and do not pull the automatic thermal axis toward zero.
+An actual zero fan reading remains zero. The disabled sensor's legacy current
+scalar remains zero for compatibility; availability is determined by `isEnabled`,
+and current labels remain `n/a`. Recovery retains the selected source and history.
+
 SMC labels optionally use descriptions from the installed system `libSMC`, only
 when its catalogue has an exact match for the driver's `RBr ` hardware branch.
 The optional reader uses bounded, checked memory copies and disables itself on

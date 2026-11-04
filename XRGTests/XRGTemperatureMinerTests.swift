@@ -142,7 +142,7 @@ struct XRGTemperatureMinerTests {
         miner.updateCurrentTemperatures(true)
         #expect(!cpu.isEnabled && !fan.isEnabled)
         #expect(cpu.currentValue == 0)
-        #expect(cpu.dataSet.orderedValues == [50, 50, 0])
+        #expect(cpu.dataSet.orderedValues == [50, 50, XRGGraphRenderer.missingValue])
         #expect(miner.sensor(forLocation: "gpu")?.isEnabled == true)
         reader.smc = ["cpu": 55]; reader.silicon = [:]
         reader.fans = ["Fan #0": ["F0Ac": 0]]
@@ -150,7 +150,7 @@ struct XRGTemperatureMinerTests {
         miner.updateCurrentTemperatures(true)
         #expect(cpu.isEnabled && fan.isEnabled)
         #expect(fan.currentValue == 0)
-        #expect(cpu.dataSet.orderedValues == [50, 0, 55])
+        #expect(cpu.dataSet.orderedValues == [50, XRGGraphRenderer.missingValue, 55])
         #expect(miner.sensor(forLocation: "gpu")?.isEnabled == false)
     }
 

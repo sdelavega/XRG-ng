@@ -79,7 +79,7 @@ public final class XRGTemperatureState: NSObject {
     public func finishUpdate() {
         for sensor in sensors.values where !sensor.isEnabled {
             sensor.currentValue = 0
-            sensor.dataSet.setNextValue(0)
+            sensor.dataSet.setNextValue(XRGGraphRenderer.missingValue)
         }
         let observed = historyClock()
         for sensor in sensors.values { sensor.timedHistory.append(time: observed, values: [sensor.isEnabled ? sensor.currentValue : .nan]) }
