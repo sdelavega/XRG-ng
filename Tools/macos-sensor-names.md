@@ -71,6 +71,11 @@ References checked 2026-11-04:
   storage, ambient-light and battery naming rules.
 
 Battery capacities are mAh only when a valid raw current/maximum pair is present.
+An `AppleSmartBattery` service reporting `BatteryInstalled=false` is excluded:
+desktop Macs can expose this service without a physical battery. The battery
+panel then shows “No Battery Found”, rather than “On Hold” and unavailable
+capacity fields. Missing installation flags retain legacy power-source behavior;
+an installed battery at zero charge is still a real battery.
 The collector prefers the top-level `AppleRawCurrentCapacity` /
 `AppleRawMaxCapacity` pair, then the same pair inside `BatteryData`. It never
 combines halves from different dictionaries or labels normalized 0–100 capacity
