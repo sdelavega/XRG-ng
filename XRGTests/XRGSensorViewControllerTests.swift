@@ -179,6 +179,24 @@ struct XRGSensorViewControllerTests {
         }
     }
 
+    @Test func copiedReportDistinguishesUnavailableSensorsFromRealZeroReadings() throws {
+        try withSource { source in
+            source.appSettings?.tempUnits = .f
+            source.sensors = [sensor("missing", name: "Battery temperature · HID TG0B", value: 0, enabled: false),
+                              sensor("stale", value: 55, enabled: false),
+                              sensor("nan", value: .nan), sensor("infinite", value: .infinity),
+                              sensor("fan", name: "Fan", units: " rpm", value: 0),
+                              sensor("cpu", name: "CPU", value: 25)]
+            let controller = controller(source)
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.releaseGlobally() }
+            #expect(controller.copySensorReport(to: pasteboard, version: "test",
+                model: "TestMac", operatingSystem: "Test OS"))
+            #expect(pasteboard.string(forType: .string) == "XRG-ng test\nMac model: TestMac\nRunning macOS Test OS\n\nDiscovered Sensors:\n\tBattery temperature · HID TG0B:  n/a\n\tstale:  n/a\n\tnan:  n/a\n\tinfinite:  n/a\n\tFan:  0.0\n\tCPU:  25.0\n")
+            #expect(source.requests == [true])
+        }
+    }
+
     @Test func nativeSensorWindowFitsFriendlyNamesOnceAndPreservesUserResize() throws {
         try withSource { source in
             _ = NSApplication.shared
