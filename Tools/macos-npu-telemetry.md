@@ -44,6 +44,27 @@ Raw states are checked for identity changes, resets and overflow before the
 library reduces the interval. Empty denominators, stale samples, duplicates,
 unknown names and overlapping intervals are unavailable, not zero activity.
 
+## Sleep, wake and shutdown
+
+The graph window suspends NPU collection at sleep and shutdown. Current power,
+active-time and traffic readings become unavailable immediately; delayed worker
+completions from that collection generation are ignored. Wake is a new generation
+even if the sleep notification was missed. The worker replaces its IOReport
+reader on its serial queue, and energy needs two fresh snapshots before reporting
+watts. Activity/traffic intervals must begin at or after the wake boundary.
+
+Previously measured history is retained with missing boundary markers. The first
+post-wake reader warmup does not erase that history. A device/source change or
+invalid telemetry still follows its existing quantity-specific reset policy.
+The last-activity age marker is retired across sleep because uptime excludes
+sleep and would understate its wall-clock age. A hidden panel's collection policy
+is unchanged by this lifecycle correction; it does not implement a global Pause.
+
+Regression tests exercise actual graph-window sleep/wake/shutdown entry points,
+delayed completions, missed sleep notifications, crossing intervals, baseline
+warmup and history retention. These are deterministic lifecycle fixtures, not
+physical sleep/wake validation or proof of hardware occupancy telemetry.
+
 ## Investigation and current limits (2026-10-27)
 
 Apple's shipped `/usr/bin/powermetrics` was examined with **Ghidra 12.1** using

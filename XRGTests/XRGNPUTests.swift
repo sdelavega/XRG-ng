@@ -22,6 +22,80 @@ import Testing
 }
 
 @Suite(.serialized) @MainActor struct XRGNPUTests {
+    @Test func delayedCompletionsCannotCrossSleepWakeAndFreshIntervalsRetainEarlierHistory() {
+        var now = 1.0, wall = 100.0, resets = 0, publications = 0
+        var pending: [@MainActor @Sendable (XRGNPUReading) -> Void] = []
+        let miner = XRGNPUMiner(request: { pending.append($0) }, reset: { resets += 1 },
+                                clock: { now }, historyClock: { wall })
+        miner.setDataSize(20); miner.onUpdate = { publications += 1 }
+        func sample(_ time: Double, _ energy: Int64, start: Double?) -> XRGNPUReading {
+            var value = reading(time, energy)
+            if let start {
+                value.activity = .init(start: start, end: time, clusters: [.init(id: "ANE", states: ["ACT": 25, "IDLE": 75])])
+                value.traffic = .init(start: start, end: time, channels: [.init(id: "bus", states: ["1GB/s": 2])])
+            }
+            return value
+        }
+        pending.removeFirst()(sample(1, 1000, start: 0))
+        now = 2; wall = 101; miner.getLatestNPUInfo()
+        pending.removeFirst()(sample(2, 2000, start: 1))
+        #expect(miner.powerWatts == 1 && miner.activeFraction == 0.25 && miner.trafficObserved == true)
+        let powerHistory = miner.timedPower.observationCount
+        now = 3; wall = 102; miner.getLatestNPUInfo()
+        let delayed = pending.removeFirst()
+        miner.suspendCollection()
+        #expect(miner.powerWatts == nil && miner.activeFraction == nil && miner.trafficObserved == nil)
+        #expect(miner.lastActivityTime == nil)
+        let suspendedPublications = publications
+        delayed(sample(3, 900_000, start: 2))
+        miner.getLatestNPUInfo()
+        #expect(pending.isEmpty && publications == suspendedPublications)
+        now = 4; wall = 103; miner.samplingDidWake()
+        #expect(resets == 1 && miner.fullReading().contains("after wake"))
+        miner.getLatestNPUInfo()
+        let resumedPublications = publications
+        delayed(sample(4, 900_000, start: 3))
+        #expect(publications == resumedPublications && miner.powerWatts == nil)
+        // Even a newly delivered frame cannot include a pre-wake interval.
+        pending.removeFirst()(sample(4, 4000, start: 2))
+        #expect(miner.powerWatts == nil && miner.activeFraction == nil && miner.trafficObserved == nil)
+        #expect(miner.powerDataSet.orderedValues.contains(1))
+        #expect(miner.activityDataSet.orderedValues.contains(25))
+        #expect(miner.trafficDataSet.orderedValues.contains(2))
+        #expect(miner.timedPower.observationCount >= powerHistory + 2)
+        now = 5; wall = 104; miner.getLatestNPUInfo()
+        pending.removeFirst()(sample(5, 5000, start: 4))
+        #expect(miner.powerWatts == 1 && miner.activeFraction == 0.25 && miner.trafficReportsPerSecond == 2)
+        #expect(miner.lastActivityTime == 5)
+        now = 6; wall = 105; miner.getLatestNPUInfo()
+        let beforeMissedSleep = pending.removeFirst()
+        miner.samplingDidWake()
+        #expect(resets == 2 && miner.powerWatts == nil && miner.activeFraction == nil)
+        beforeMissedSleep(sample(6, 6000, start: 5))
+        #expect(miner.powerWatts == nil && miner.activeFraction == nil && miner.lastActivityTime == nil)
+        miner.suspendCollection(); miner.getLatestNPUInfo()
+        #expect(pending.isEmpty)
+    }
+
+    @Test func freshReaderWarmupAfterWakeDoesNotEraseMeasuredHistory() {
+        var now = 1.0, wall = 100.0, value = reading(1, 1000)
+        value.activity = .init(start: 0, end: 1, clusters: [.init(id: "ANE", states: ["ACT": 1, "IDLE": 1])])
+        value.traffic = .init(start: 0, end: 1, channels: [.init(id: "bus", states: ["1GB/s": 1])])
+        let miner = XRGNPUMiner(source: { value }, clock: { now }, historyClock: { wall })
+        miner.setDataSize(10)
+        now = 2; wall = 101; value = reading(2, 2000)
+        value.activity = .init(start: 1, end: 2, clusters: [.init(id: "ANE", states: ["ACT": 1, "IDLE": 1])])
+        value.traffic = .init(start: 1, end: 2, channels: [.init(id: "bus", states: ["1GB/s": 1])])
+        miner.getLatestNPUInfo()
+        now = 3; wall = 102; miner.suspendCollection()
+        now = 4; wall = 103; miner.samplingDidWake()
+        value = reading(4, 4000); miner.getLatestNPUInfo()
+        #expect(miner.powerWatts == nil && miner.activeFraction == nil && miner.trafficObserved == nil)
+        #expect(miner.powerDataSet.orderedValues.contains(1) && miner.activityDataSet.orderedValues.contains(50) && miner.trafficDataSet.orderedValues.contains(1))
+        #expect(miner.timedPower.observationCount >= 4 && miner.timedActivity.observationCount >= 4 && miner.timedTraffic.observationCount >= 4)
+        now = 5; wall = 104; value = reading(5, 5000); miner.getLatestNPUInfo()
+        #expect(miner.powerWatts == 1)
+    }
     @Test func retentionResizesAllQuantitiesWithoutPollingOrRebasingEnergy() throws {
         _ = NSApplication.shared
         let domain = "XRG.npu-history.\(UUID().uuidString)"

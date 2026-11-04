@@ -182,12 +182,14 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public func systemJustWokeUp() -> Bool { woke }
     public func setSystemJustWokeUp(_ value: Bool) { woke = value }
     public func systemWillSleep(_ notification: Notification) {
+        npuView?.samplingWillSleep()
         graphicsSleeping = true
         moduleVisibilityChanged()
     }
     public func systemDidWake(_ notification: Notification) {
         woke = true
         netView?.samplingDidWake(); diskView?.samplingDidWake()
+        npuView?.samplingDidWake()
         // Invalidate even if the sleep notification was missed. A read begun
         // before wake cannot repopulate current values or either history.
         gpuView?.setCollectionActive(false)
@@ -451,6 +453,7 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
     public func windowDidResize(_ notification: Notification) { moduleManager?.windowChanged(to: frame.size) }
     public func cleanupBeforeExiting() {
+        npuView?.samplingWillSleep()
         gpuView?.setCollectionActive(false)
         let wasMinimized = defaults.bool(forKey: "windowIsMinimized")
         backgroundView?.expandWindow(); defaults.set(wasMinimized, forKey: "windowIsMinimized")
