@@ -146,7 +146,9 @@ public final class XRGSensorViewController: NSViewController {
         var text = "XRG-ng \(version)\nMac model: \(model)\nRunning macOS \(operatingSystem)\n\nDiscovered Sensors:\n"
         // Diagnostic exports include unknown sensors and retain raw sensor units.
         for sensor in dataSource?.sensorWindowSensors(includingUnknown: true) ?? [] {
-            text += "\t\(sensor.label()):  \(String(format: "%.1f", sensor.currentValue))\n"
+            let value = sensor.isEnabled && sensor.currentValue.isFinite
+                ? String(format: "%.1f", sensor.currentValue) : "n/a"
+            text += "\t\(sensor.label()):  \(value)\n"
         }
         pasteboard.clearContents()
         return pasteboard.setString(text, forType: .string)

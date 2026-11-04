@@ -30,7 +30,9 @@ and timestamp-window history. They never become plotted zero temperatures or
 zero-RPM observations and do not pull the automatic thermal axis toward zero.
 An actual zero fan reading remains zero. The disabled sensor's legacy current
 scalar remains zero for compatibility; availability is determined by `isEnabled`,
-and current labels remain `n/a`. Recovery retains the selected source and history.
+and current labels remain `n/a`. Copied diagnostic reports also use `n/a` for
+disabled or nonfinite readings and preserve genuine zero readings. Recovery
+retains the selected source and history.
 
 Discovered HID channels appear in normal sensor lists and pickers without enabling
 “Show Unknown Sensors”. Their identities come from the HID temperature transport,
