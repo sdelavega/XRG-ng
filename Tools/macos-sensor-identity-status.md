@@ -51,8 +51,10 @@ The extracted SMC reports `AppleSMCFirmware_H17_6-7372.60.63.j815.REL`.
 
 All 2,431 SMC key records, 148 temperature-key records and 291 group-input
 associations match the earlier 26B123 inventory. Addresses changed, including
-an eight-byte shift in temperature backings; producer equivalence is checked
-separately rather than inferred from inventory equality. Current LLB MTR
+an eight-byte shift in temperature backings; producer checks independently rederive the selected PMU and serial-monitor
+bindings, 47 adjustments, seven maxima, six fixed models, adaptive-model
+bindings, eight categorical consumers, TAOL and the TH0x copy. They preserve
+those logical bindings, rather than inferring them from inventory equality. Current LLB MTR
 configuration checks also preserve all seven named hardware records and the
 617 MTR / five DPE operations after pointer normalization. They still do not
 supply the missing AON publication edge.
