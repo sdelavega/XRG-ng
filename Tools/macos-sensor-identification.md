@@ -9,6 +9,54 @@ Use branch-specific system descriptions when available, with the driver's exact
 and as the persisted identity. Reject unreadable/malformed metadata and ambiguous
 matches. Never use a different model's description to fill a missing branch.
 
+Exact live temperature-driver metadata takes precedence over a historical
+branch description. `AppleARMPMUTempSensor` services directly below
+`AppleSMCKeysEndpoint` publish the SMC source key as `LocationID`; their
+recognized PMU and battery `Product` names can therefore label independently
+enumerated SMC temperature keys. The implementation reads these two registry
+properties without opening a HID client or sampling a second temperature.
+Identical records for the same source key, provider and name collapse into one
+identity. Conflicting names/providers, malformed IDs and unrecognized products
+do not supply labels.
+The identity relation is specific to this class/provider path; arbitrary HID
+LocationIDs are not interpreted as SMC read keys.
+
+The native M5 snapshot contains 45 unique services in this scope: 23 PMU,
+16 PMU2 and six gas-gauge battery readings. Exact products preserve irregular
+numbering such as `TPab` → PMU die 10, `TPbl` → PMU die 11 and `TR8l` →
+PMU2 die 8. `TG0H` explicitly identifies a gas-gauge battery reading on this
+host, so the native identity supersedes older northbridge/GPU interpretations.
+Only keys actually present in the current SMC temperature inventory acquire
+these names; no key is fabricated from metadata.
+
+The independently verified driver argument chain is retained under ignored
+`dist/tz-producer-validation/hid-source/`. `AppleSMC::_createSensor` passes
+the same source key into the sensor factory's key and callback-context
+arguments. `AppleARMPMUSensor::initWithProvider` stores these at object+`0xe0`
+and +`0xd8`; `getLocationID` returns the former, while temperature `copyEvent`
+passes the latter to the SMC read callback. LLVM instructions verify each
+argument step, including the alternate `aDCR` path when direct key metadata
+is unavailable. The known-temperature-key intersection avoids assuming that
+every published source ID supports direct SMC reads.
+
+Both hosts passed the full Debug gate for this metadata join: 646 tests per
+architecture plus universal builds and native / Rosetta packaged smoke checks.
+Independent registry snapshots and freshly linked native probes are retained
+in ignored `dist/published-sensor-name-validation/`. The M5 has 45 qualified
+unique published IDs, twelve of which occur in the ordinary SMC temperature-key
+inventory. Those twelve use custom types excluded by the Celsius reader; names
+do not make them new readable temperatures. Havana has 69 records representing
+23 identities under one provider, with three identical records per identity;
+none intersects its ordinary temperature-key inventory. The probes verify
+both naming and this fallback boundary. These published identities can also
+support independently proven firmware aliases; matching letters alone is
+insufficient.
+
+Firmware tracing also resolves 38 exact-model readings on the M4 Pro Mac mini:
+twelve Neural Engine readings and 26 MTR die-temperature readings. See
+[the firmware investigation](macos-smc-firmware-investigation.md) for their
+provider routes, averaging/calibration roles and validation.
+
 The runtime parser reads only its own process's mapped `libSMC` data using
 `mach_vm_read_overwrite`. It resolves one named exported data symbol; it does not
 search memory for replacement tables, dereference unvalidated pointers, open a
