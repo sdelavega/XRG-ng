@@ -189,7 +189,10 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     struct Readings { let left: String; let center: String?; let right: String }
     @nonobjc func readings() -> Readings {
         let status = batteryMiner.batteryStatus()
-        guard status != .unknown && status != .noBattery else {
+        if status == .unknown {
+            return Readings(left: "Battery unavailable", center: nil, right: "")
+        }
+        if status == .noBattery {
             return Readings(left: "No Battery Found", center: nil, right: "")
         }
         let width = XRGGraphLabels.paddedTextRect(for: bounds).width
