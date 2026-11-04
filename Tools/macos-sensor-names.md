@@ -100,5 +100,10 @@ reading with a firmware-defined +8.2°C offset. These labels require that exact
 model; stream order does not imply physical core placement. The named
 `ANE-TO-SMC` provider trace is recorded in
 [the firmware investigation](macos-smc-firmware-investigation.md#resolved-j773s-neural-engine-channels).
+The same validated model has 26 `Ts` readings from nine MTR die-temperature
+channels, labeled by current, average and adjusted-average role. Channel
+ordinals identify firmware streams, without claiming CPU/GPU core locations.
+The [die-temperature trace](macos-smc-firmware-investigation.md#resolved-j773s-die-temperature-channels)
+records the configuration dispatch, counter calculation and native checks.
 
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).
