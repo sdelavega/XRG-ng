@@ -86,6 +86,27 @@ instruction patterns. This is a bounded negative search on 26C5035r; dynamic
 key construction and writers outside that cache remain open. It does not
 identify the writer or justify an ambient-light temperature label.
 
+The fast-die timing lead has also been followed through its output guard.
+Its implementation can publish packed temperature sum/count records to the
+PMP plane, but all 25 current M5 and all ten current M4 source records have
+output selector zero. The native code skips accumulation/publication for those
+records. This conditional capability therefore does not identify the current
+AON or `TfC` producers.
+
+Current AOP/AOP2 bundles were reconstructed from explicit component metadata.
+The AOP reference to `0x38c840000` is an MMIO permission range, and its SMC
+service supports generic key requests with runtime-provided keys. Neither is
+a concrete `a0va`, `s0va` or `zEAO` publication. PMC, MSR and TMU candidate
+images were inspected with their exact build/provenance boundaries; none
+provided a positive routing join in the bounded checks.
+
+For M4 `Tz`, the selected normal writer families are now classified across
+MTR, cache, protocol, PMU, fallback and outlined calls. Fixed-reference checks
+find the known state/pair/key-descriptor references, with no identified value
+writer. Runtime-loaded/indexed pointers, private configuration and bulk memory
+operations remain outside that closure. This still does not justify calling
+these inputs unavailable, unassigned or reserved.
+
 ## Evidence needed to close these boundaries
 
 An exact named producer-to-destination configuration or packet contract can
