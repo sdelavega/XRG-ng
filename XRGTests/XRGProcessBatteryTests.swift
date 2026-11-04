@@ -139,7 +139,7 @@ struct XRGProcessBatteryTests {
         }
         next = nil
         miner.graphUpdate(nil)
-        #expect(miner.batteryStatus() == .charged)
+        #expect(miner.batteryStatus() == .unknown)
         next = []
         miner.graphUpdate(nil)
         #expect(miner.batteryStatus() == .noBattery)

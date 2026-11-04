@@ -56,6 +56,38 @@ private final class BatteryNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGBatteryViewTests {
+    @Test(arguments: [0, 1])
+    func failedBatteryPollHidesStaleReadingsAndRecoveryKeepsHistory(windowMinutes: Int) throws {
+        try withFixture { settings, defaults in
+            defaults.set(4, forKey: XRGBatteryView.historyKey)
+            defaults.set(windowMinutes, forKey: XRGBatteryView.windowKey)
+            var wall = 100.0
+            let source = BatterySource([battery()])
+            let miner = XRGBatteryMiner(source: { source.samples }, historyClock: { wall })
+            let view = XRGBatteryView(frame: NSRect(x: 0, y: 0, width: 200, height: 100),
+                miner: miner, settings: settings, defaults: defaults)
+            #expect(miner.batteryStatus() == .runningOnBattery && view.currentWatts == -12)
+            wall = 110; source.samples = nil; miner.graphUpdate(nil)
+            view.setFrameSize(view.frame.size)
+            #expect(miner.batteryStatus() == .unknown)
+            #expect(view.readings().left == "Battery unavailable" && view.readings().right.isEmpty)
+            #expect(view.graphLabels.leftLabel.accessibilityValue() == "Battery unavailable")
+            #expect(view.currentWatts == 0)
+            #expect(miner.chargeWatts.currentValue == XRGGraphRenderer.missingValue)
+            #expect(miner.dischargeWatts.currentValue == XRGGraphRenderer.missingValue)
+            #expect(view.historyData()[1].currentValue == XRGGraphRenderer.missingValue)
+            // Compatibility accessors retain the cached capacity, but the UI is unavailable.
+            #expect(miner.chargePercent() == 50 && miner.totalCapacity() == 4000)
+            #expect(miner.timedHistory.observationCount == 2)
+            wall = 120; source.samples = [battery(current: 1000, amperage: -500)]; miner.graphUpdate(nil)
+            view.setFrameSize(view.frame.size)
+            #expect(miner.batteryStatus() == .runningOnBattery && view.currentWatts == -6)
+            #expect(view.readings().left.hasPrefix("25%") && !view.readings().right.isEmpty)
+            #expect(Array(miner.dischargeWatts.orderedValues.suffix(3)) == [12, XRGGraphRenderer.missingValue, 6])
+            #expect(miner.timedHistory.observationCount == 3)
+        }
+    }
+
     @Test func nestedBatteryCapacityReachesBothVisibleColumns() throws {
         try withFixture { settings, defaults in
             let source = BatterySource([XRGBatteryInfo(dictionary: [
@@ -123,7 +155,7 @@ struct XRGBatteryViewTests {
             settings.graphRefresh=0.2;#expect(view.historyData()[0].numValues==301 && view.historyWattScale==120)
             let menu=try #require(view.makeMenu().items.first { $0.title=="Battery Time Window" }?.submenu);#expect(menu.items.allSatisfy { $0.target===view })
             option.tag=61;view.selectHistoryWindow(option);#expect(view.historyMinutes==1)
-            wall=126;source.samples=nil;miner.graphUpdate(nil);#expect(view.historyData()[0].currentValue==XRGGraphRenderer.missingValue && view.currentWatts==24)
+            wall=126;source.samples=nil;miner.graphUpdate(nil);#expect(view.historyData()[0].currentValue==XRGGraphRenderer.missingValue && view.currentWatts==0)
             wall=127;source.samples=[];miner.graphUpdate(nil);#expect(miner.batteryStatus() == .noBattery && view.historyData()[0].orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue })
             wall=128;source.samples=[battery()];miner.graphUpdate(nil);#expect(view.historyData()[1].orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
             wall=129;source.samples=[battery(),battery()];miner.graphUpdate(nil);#expect(view.historyData()[1].currentValue==24 && view.historyData()[1].orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
@@ -228,7 +260,7 @@ struct XRGBatteryViewTests {
             #expect(module.isDisplayed && source.reads == 3 && miner.timedHistory.observationCount == 3)
             manager.setModule("Battery", isDisplayed: false)
             elapsed = 33; wall = 133; source.samples = nil; manager.graphUpdate()
-            #expect(source.reads == 4 && miner.timedHistory.observationCount == 4 && view.currentWatts == 24)
+            #expect(source.reads == 4 && miner.timedHistory.observationCount == 4 && view.currentWatts == 0)
             #expect(view.historyData()[0].currentValue == XRGGraphRenderer.missingValue)
             view.removeFromSuperview(); elapsed = 44; manager.graphUpdate(); manager.fastUpdate()
             #expect(source.reads == 4 && manager.moduleList().isEmpty)
@@ -310,7 +342,7 @@ struct XRGBatteryViewTests {
         }
     }
 
-    @Test func invalidIntervalsAndFailedPollsPreserveTheLastReading() throws {
+    @Test func invalidIntervalsAvoidPollingButFailedPollsMakeReadingsUnavailable() throws {
         try withFixture { settings, defaults in
             let source = BatterySource([battery()])
             let view = panel(source, settings, defaults)
@@ -319,8 +351,8 @@ struct XRGBatteryViewTests {
             }
             #expect(source.reads == 1 && view.currentWatts == -12)
             source.samples = nil; settings.graphRefresh = 11; view.graphUpdate(nil)
-            #expect(source.reads == 2 && view.currentWatts == -12)
-            #expect(view.readings().left == "50% Charged\n2000mAh\nPower:")
+            #expect(source.reads == 2 && view.currentWatts == 0)
+            #expect(view.readings().left == "Battery unavailable" && view.readings().right.isEmpty)
         }
     }
 
@@ -336,8 +368,9 @@ struct XRGBatteryViewTests {
             let view = panel(BatterySource(sample), settings, defaults)
             let reading = view.readings()
             if state == "unknown" || state == "absent" {
-                #expect(reading.left == "No Battery Found" && reading.right.isEmpty)
-                #expect(view.graphLabels.leftLabel.accessibilityValue() == "No Battery Found")
+                let message = state == "unknown" ? "Battery unavailable" : "No Battery Found"
+                #expect(reading.left == message && reading.right.isEmpty)
+                #expect(view.graphLabels.leftLabel.accessibilityValue() == message)
             } else {
                 let status = state == "charged" ? "Charged" : state == "hold" ? "On Hold" : "1:35 Left"
                 #expect(reading.right == status + "\n4000mAh\n-12.0W")

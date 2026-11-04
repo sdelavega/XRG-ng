@@ -120,6 +120,9 @@ public final class XRGBatteryMiner: NSObject {
 
     @objc public func graphUpdate(_ timer: Timer?) {
         guard let reported = source() else {
+            hasSample = false
+            chargeWatts.setNextValue(XRGGraphRenderer.missingValue)
+            dischargeWatts.setNextValue(XRGGraphRenderer.missingValue)
             timedHistory.append(time: historyClock(), values: [.nan, .nan]); return
         }
         let sample = reported.filter(\.isInstalled)
