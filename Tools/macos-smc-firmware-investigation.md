@@ -278,6 +278,113 @@ exclusion (147 temperature keys), while Havana retained its 273 temperature
 keys. Logs and snapshots are retained under ignored
 `dist/selector-alias-name-validation/`.
 
+## Resolved j815 thermal computation roles
+
+Nine further `TV` labels describe verified computations rather than physical
+sensor sites. Six affine-model objects published by `0x613c`, in object order
+`0x908f8..0x90970`, produce `TVS1`, `TVS0`, `TVA0`, `TVAC`, `TVN0`, `TVN1`.
+They are labeled **Fixed thermal model 1** through **6**. These ordinals are
+model identities, not component or sensor positions. Their upstream filters
+consume PMU device inputs, battery-provider channels, `TAOL`, and ANS telemetry;
+the two final models also consume a sum of power-model inputs.
+
+`TVMR` is the weighted scalar result of the adaptive computation at
+`0x3b0d4..0x3b3ec`, labeled **Adaptive thermal model**. Its seven `iaw*`
+outputs are coefficients, not seven temperatures. `TVmS` clamps that result
+against selected bounds and the outer interval 0..200, labeled **Bounded
+thermal model output**. `TVNS` takes the maximum of `TVN0` and `TVN1`, labeled
+**Thermal model maximum**. None of these names assigns a physical location.
+The labels distinguish calculations from direct sensor readings; they do
+not close the remaining sender-side unit contracts or change value decoding.
+
+The storage source has a positive transport identity: `ans_to_smc` registers
+callback `0x2eeec`; its class-four messages enter queue `0xa4a38`; worker
+`0x2f2b8` dispatches subtype 14 to `0x2f5d8`. That handler writes two six-byte
+records to `0xa43d0`, selected by payload bit 45. The reader at `0x30980`
+extracts signed bits 30..44 divided by four, exposing `SDN0` and `SDN3`.
+This identifies ANS as the producer. The native NAND HID path independently
+converts SMART Kelvin to Celsius, but no equivalence between that SMART field
+and the ANS message field has been demonstrated.
+
+`TAOL` reads its float from the `zEAO` host-input blob at `0xa3578 + 4`, through
+object `0x8e478` and record `0x89454`. This positive packet join does not identify
+the host writer or a physical ambient-light temperature sensor. Neither
+similar spelling nor a matching instantaneous reading establishes that source.
+
+Ignored proof artifacts include `tv-fixed-model-producers.json` and
+`tv-model-initializer-proof.json` under `dist/aon-source-routing-validation/`,
+the clamp and maximum proofs under `dist/havana-smc-artifact-discovery/`, and
+`ANS_SDN_PRODUCER.md` / `ans-sdn-producer-route.json` under
+`dist/tz-producer-validation/other-source/`.
+
+## Resolved j773s categorical controls and computed maxima
+
+The M4 proof is independent of the M5 table. An active call at `0x29250`
+uses object `0x7b6a0` / configuration `0x6ab58` to map `TVmd` (generic float
+parameter 304) through an eight-point step table to `TVMD` (parameter 13).
+The input grid is 0..7 and outputs are `[0, 2, 3, 2, 1, 1, 1, 1]`.
+The producer selects a table entry rather than interpolating. `TVMD` is
+therefore labeled **Thermal control selector**; the case-sensitive `TVmd`
+input is labeled **Thermal control input**. Both are excluded from Celsius
+readings on `Mac16,11`. The input's assignment producer remains unresolved.
+
+`TVD0` takes the maximum of 45 transformed inputs through object `0x78c68`
+and routine `0x3ae0`. All 45 transforms have zero additive offset and no clamp:
+32 CPU-family channels, seven GPU-family channels and six adjusted ANE
+channels. `TCMb` and `TCMz`, group-one inputs 314 and 315 respectively, each
+take a nonnegative-seeded maximum over a separate set of 66 inputs. Those
+sets also include SoC and additional channels. They are not CPU-only maxima,
+and neither should be described as equivalent to the smaller `TVD0` set.
+All three receive **Temperature maximum (selected channels)** labels, with
+raw keys distinguishing the computations.
+
+The hash-checked reproducer and exact source sets are retained under ignored
+`dist/havana-smc-artifact-discovery/m4-computed/`: `verify_computed_roles.py`,
+`computed-role-proof.json` and `FINDINGS.md`.
+
+## Resolved j773s PMU streams
+
+Three exact named streams, `L1TD`, `L2TD` and `F2TD`, bind distinct PMU HAL
+objects `0x77428`, `0x774a8` and `0x77528`. Their 16-entry maps publish
+`TPD0..TPDE` / `TPDG`, `TRD0..TRDE` / `TRDG`, and `TTD0..TTDE` / `TTDG`.
+The `F` suffix in each family is skipped by these maps; it must not receive
+an extrapolated PMU label. ADC selectors identify die channels 1..15 and 17.
+The shared PMU engineering-temperature converter produces signed 16.16 values
+before conversion to float.
+
+These public keys point to the second value backing in group two, not group
+one. Their producer accumulates value × 1000 and weight 1000; the periodic
+flush divides accumulated numerator by denominator and writes that backing.
+All 48 individual labels therefore include **(average)**, without claiming
+an averaging interval. This is distinct from M5's current-value aliases.
+
+The first fourteen primary stream channels select exactly the same HAL and
+ADC IDs as live published `TP1b..TPab`, `TPbl..TPel`, and use those PMU die
+labels with the average suffix. The remaining channels use **Power management
+stream N die channel M (average)**. Stream ordinals identify firmware provider
+instances; they do not assign package positions. `Ta0p` and `Tm0p` select the
+primary published `TP3d` and `TP5d` device channels. `Tm1p` selects stream
+three's device channel two, with no invented primary published alias.
+
+`TPDX`, `TRDX`, `TTDX` each take the latest maximum over seventeen current
+group-two inputs in their family, including the skipped `F` input. Their
+writer replaces the accumulator and sets denominator one, so these maxima
+are not temporal averages. They use **Temperature maximum (selected channels)**
+labels. The missing `F` producer remains a limitation of those source sets.
+
+Ignored `dist/aon-source-routing-validation/m4-pmu/` retains the passing
+`verify_m4_pmu_aliases.py` hash-checked reproducer, `m4-pmu-alias-proof.json`,
+original assembly excerpts and `FINDINGS.md`.
+
+The combined model-role / M4 PMU checkpoint passed the full Debug gate on
+both hosts with 656 tests per architecture, universal builds and native /
+Rosetta packaged smoke checks. Native probes verified all 57 selected names
+on each host, with 147 M5 temperature keys and 271 M4 temperature keys after
+the categorical exclusions. Evidence is retained under ignored
+`dist/model-m4-pmu-name-validation/`. The
+[identity status ledger](macos-sensor-identity-status.md) records the remaining
+source and unit boundaries separately from these demonstrated roles.
+
 ## Source identity
 
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded

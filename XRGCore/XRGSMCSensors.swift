@@ -98,7 +98,10 @@ import IOKit
             if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel) {
                 let unit = source.hasPrefix("TP") ? "Power management " : "Power management 2 "
                 let role = source.hasSuffix("d") ? "device " : "die "
-                if let name = publishedNames[source], name.hasPrefix(unit + role) { return "\(name) · \(key)" }
+                if let name = publishedNames[source], name.hasPrefix(unit + role) {
+                    let suffix = systemModel == "Mac16,11" && key.hasPrefix("TPD") ? " (average)" : ""
+                    return "\(name)\(suffix) · \(key)"
+                }
                 // The verified provider supersedes misleading generic TC/TM/TH
                 // families even when its exact published channel name is absent.
                 return "Temperature sensor · \(key)"
@@ -111,6 +114,14 @@ import IOKit
         return Self.hidName(forKey: key)
     }
     static func verifiedPublishedAlias(forKey key: String, systemModel: String?) -> String? {
+        if systemModel == "Mac16,11" {
+            let dieKeys = ["TP1b", "TP2b", "TP3b", "TP4b", "TP5b", "TP6b", "TP7b",
+                           "TP8b", "TP9b", "TPab", "TPbl", "TPcl", "TPdl", "TPel"]
+            for (index, source) in dieKeys.enumerated() {
+                if key == "TPD" + String(index, radix: 16).uppercased() { return source }
+            }
+            return ["Ta0p": "TP3d", "Tm0p": "TP5d"][key]
+        }
         guard systemModel == "Mac17,4" else { return nil }
         // These streams and canonical keys select the same HAL and ADC ID.
         // Require the canonical key's live published label at the call site.
@@ -125,9 +136,11 @@ import IOKit
         return sources[key]
     }
     static func nonTemperatureName(forKey key: String, systemModel: String?) -> String? {
-        // j815's TVMD selects discrete thermal-policy lookup rows. Its T prefix
+        // j815/j773s TVMD selects discrete thermal-policy lookup rows. Its T prefix
         // and floating-point transport do not make it an absolute temperature.
-        systemModel == "Mac17,4" && key == "TVMD" ? "Thermal control selector" : nil
+        if ["Mac17,4", "Mac16,11"].contains(systemModel ?? ""), key == "TVMD" { return "Thermal control selector" }
+        if systemModel == "Mac16,11", key == "TVmd" { return "Thermal control input" }
+        return nil
     }
     static func verifiedTemperatureName(forKey key: String, systemModel: String?) -> String? {
         if systemModel == "Mac17,4" {
@@ -144,6 +157,12 @@ import IOKit
             if key == "TVDP" { return "CPU temperature maximum (adjusted)" }
             if key == "TVDE" { return "CPU efficiency temperature maximum (adjusted)" }
             if key == "TVV0" { return "Temperature maximum (selected channels)" }
+            // These are computation roles, not physical sensor locations.
+            let models = ["TVS1", "TVS0", "TVA0", "TVAC", "TVN0", "TVN1"]
+            if let index = models.firstIndex(of: key) { return "Fixed thermal model \(index + 1)" }
+            if key == "TVMR" { return "Adaptive thermal model" }
+            if key == "TVmS" { return "Bounded thermal model output" }
+            if key == "TVNS" { return "Thermal model maximum" }
             return nil
         }
         // The j773s firmware joins these exact keys to six ANE-TO-SMC
@@ -151,6 +170,18 @@ import IOKit
         // Other boards use different providers for the same Ta keys.
         // See Tools/macos-smc-firmware-investigation.md for the trace.
         guard systemModel == "Mac16,11" else { return nil }
+        if ["TCMb", "TCMz", "TVD0", "TPDX", "TRDX", "TTDX"].contains(key) { return "Temperature maximum (selected channels)" }
+        // j773s maps sixteen ADCs per stream, skipping channel 16 (suffix F).
+        // The remaining die-channel IDs are explicit ADC selectors, not sites.
+        let dieSuffixes = Array("0123456789ABCDEG")
+        if key.count == 4, let suffix = key.last, let index = dieSuffixes.firstIndex(of: suffix) {
+            let stream = ["TPD": 1, "TRD": 2, "TTD": 3][String(key.prefix(3))]
+            if let stream, stream != 1 || index >= 14 {
+                let channel = index == 15 ? 17 : index + 1
+                return "Power management stream \(stream) die channel \(channel) (average)"
+            }
+        }
+        if key == "Tm1p" { return "Power management stream 3 device channel 2" }
         let channels = [("Ta00", "Ta01"), ("Ta04", "Ta05"), ("Ta08", "Ta09"),
                         ("Ta0K", "Ta0L"), ("Ta0O", "Ta0P"), ("Ta0R", "Ta0S")]
         for (index, pair) in channels.enumerated() {
