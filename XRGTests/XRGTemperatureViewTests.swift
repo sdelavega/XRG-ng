@@ -142,7 +142,7 @@ struct XRGTemperatureViewTests {
             view.clearData(nil);#expect(view.historyData(sensor).orderedValues.allSatisfy { $0==XRGGraphRenderer.missingValue } && sensor.currentValue==60)
             reader.time=10;wall=50;reader.smc["cpu"]=70;view.graphUpdate(nil);#expect(view.historyData(sensor).currentValue==70 && view.historyData(sensor).orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
             reader.time=15;wall=55;reader.smc.removeValue(forKey:"cpu");view.graphUpdate(nil)
-            #expect(!sensor.isEnabled && sensor.dataSet.currentValue==0 && view.historyData(sensor).currentValue==XRGGraphRenderer.missingValue)
+            #expect(!sensor.isEnabled && sensor.dataSet.currentValue==XRGGraphRenderer.missingValue && view.historyData(sensor).currentValue==XRGGraphRenderer.missingValue)
             reader.time=20;wall=60;reader.smc["cpu"]=80;view.graphUpdate(nil);#expect(view.historyData(sensor).currentValue==80)
             miner.setCurrentValue(40,andUnits:"%",forLocation:"cpu");#expect(view.historyData(sensor).currentValue==40 && view.historyData(sensor).orderedValues.dropLast().allSatisfy { $0==XRGGraphRenderer.missingValue })
             miner.setCurrentValue(-10,andUnits:"°C",forLocation:"cpu");#expect(view.historyData(sensor).currentValue == -10)
@@ -263,8 +263,12 @@ struct XRGTemperatureViewTests {
         try withFixture { settings, defaults, reader in
             let miner = reader.miner(), view = panel(miner, settings, defaults)
             view.graphUpdate(nil)
+            let originalScale = view.rows().first.map { [$0.lower, $0.upper] }
             reader.smc.removeValue(forKey: "cpu"); reader.time = 5; view.graphUpdate(nil)
             #expect(view.rows().first?.value == "n/a" && view.headerBarRects(in: view.bounds)[0].isEmpty)
+            let sensor = try #require(miner.sensor(forLocation: "cpu"))
+            #expect(view.historyData(sensor).currentValue == XRGGraphRenderer.missingValue)
+            #expect(view.rows().first.map { [$0.lower, $0.upper] } == originalScale)
             #expect(settings.tempFG1Location == "cpu")
             #expect(view.makeMenu().items.contains { $0.title == "CPU Core: n/a" })
             reader.smc["cpu"] = 60; reader.time = 10; view.graphUpdate(nil)
