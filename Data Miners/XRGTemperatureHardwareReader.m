@@ -26,6 +26,7 @@
 
 @interface XRGTemperatureHardwareReader ()
 @property (nonatomic) id<XRGSMCSensorValuesProvider> smcSensors;
+@property (nonatomic) NSMutableSet<NSString *> *knownHIDKeys;
 @end
 
 @implementation XRGTemperatureHardwareReader
@@ -36,6 +37,7 @@
 
 - (instancetype)init {
     if ((self = [super init])) {
+        _knownHIDKeys = [NSMutableSet set];
         @try {
             _smcSensors = [[XRGSMCSensors alloc] init];
         } @catch (NSException *exception) {
@@ -51,7 +53,13 @@
 }
 
 - (NSDictionary<NSString *, id> *)siliconTemperatureValues {
-    @try { return [XRGAppleSiliconSensorMiner sensorData] ?: @{}; }
+    @try {
+        NSDictionary<NSString *, NSNumber *> *values = [XRGAppleSiliconSensorMiner sensorData] ?: @{};
+        for (NSString *key in values) {
+            if ([key isKindOfClass:[NSString class]] && key.length > 0) [self.knownHIDKeys addObject:key];
+        }
+        return values;
+    }
     @catch (NSException *exception) { return @{}; }
 }
 
@@ -61,11 +69,16 @@
 }
 
 - (NSString *)humanReadableNameForKey:(NSString *)key {
-    @try { return [self.smcSensors humanReadableNameForKey:key] ?: key; }
-    @catch (NSException *exception) { return key; }
+    @try {
+        NSString *name = [self.smcSensors humanReadableNameForKey:key];
+        if (name && ![name isEqualToString:key]) return name;
+    } @catch (NSException *exception) {}
+    if ([self.knownHIDKeys containsObject:key]) return [XRGSMCSensors humanReadableHIDNameForKey:key];
+    return key;
 }
 
 - (BOOL)isKnownKey:(NSString *)key {
+    if ([self.knownHIDKeys containsObject:key]) return YES;
     @try { return [self.smcSensors isKnownKey:key]; }
     @catch (NSException *exception) { return NO; }
 }
