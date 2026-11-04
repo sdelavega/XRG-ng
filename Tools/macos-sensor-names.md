@@ -130,4 +130,10 @@ ordinals identify firmware streams, without claiming CPU/GPU core locations.
 The [die-temperature trace](macos-smc-firmware-investigation.md#resolved-j773s-die-temperature-channels)
 records the configuration dispatch, counter calculation and native checks.
 
+On `Mac17,4`, `TH0x` uses the same verified PMU2 device 2 source as `TH0T`.
+`TVMD` is a thermal-control selector and is excluded from Celsius readings;
+its categorical lookup consumers are documented in the
+[firmware investigation](macos-smc-firmware-investigation.md#resolved-j815-copied-pmu-channel-and-categorical-selector).
+This exact exclusion does not remove zero-valued temperature readings.
+
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).
