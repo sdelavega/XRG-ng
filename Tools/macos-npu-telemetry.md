@@ -120,6 +120,13 @@ Raw records and host metadata are retained locally under
 
 ## M4 Pro comparison and observed ANE execution
 
+The fresh [Havana validation](macos-havana-validation.md) on 2026-11-04 checks
+macOS 27.2 / `26B123`. Its CPU-only control produced no ANE calls or positive
+traffic reports; an ANE-enabled workload produced 19,767 successful dispatches
+and positive traffic throughout the contained sample intervals. Energy still
+did not increase and direct percentage remained unavailable. The comparison
+below retains the earlier `26B118` observations separately.
+
 A second physical machine, **Mac mini M4 Pro (14 CPU / 20 GPU cores)**, was checked
 over SSH on the same macOS **27.2 / 26B118** build. It exposes a 16-core `h16g` ANE
 endpoint with firmware loaded; the M5 exposes `h17`. The M5 registry entry advertises
