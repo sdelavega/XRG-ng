@@ -203,6 +203,48 @@ readable values, the other-model fallback on Havana, and all 38 Havana
 Neural Engine / SoC die names. Ignored `dist/pmu-device-name-validation/`
 retains gate logs and snapshots.
 
+## Resolved j815 serial monitors and further maxima
+
+Four keys come from two separate register temperature-monitor objects, not
+from the similarly spelled SoC/PMU families. Object `0x8ea20` uses controller
+argument two and address `0x90`; registers zero and one feed `TDBP` and `TDeL`.
+Object `0x8ea50` uses controller three and address `0x98`; its first two
+registers feed `Ts0P` and `Ts1P`. The successful producer at `0x10900` decodes
+signed big-endian samples and publishes engineering temperatures through the
+common writer, using divisors 128 and 256 respectively. Read/init failures
+publish invalid status instead of a new value.
+
+On `Mac17,4`, these are Temperature monitor 1 channel 1/2 and Temperature
+monitor 2 channel 1/2. Monitor ordinals follow the two producer objects in
+address order, and channel ordinals follow their register maps. Exact chip
+models, local/remote roles and board placements are not established. Disabled
+register slots are not promoted to sensors. Original source-bound evidence
+and protocol-family references are retained in ignored
+`dist/tz-producer-validation/other-source/`.
+
+Six more computed fields have verified maximum operations:
+
+| Key | Exact inputs | Label |
+| --- | --- | --- |
+| `TVDA` | adjusted parameters 204–209 | Adjusted temperature maximum |
+| `TVDG` | adjusted parameters 210–232, from the Tg family | GPU temperature maximum (adjusted) |
+| `TVDP` | adjusted parameters 233–246, from the Tp family | CPU temperature maximum (adjusted) |
+| `TVDE` | adjusted parameters 247–250, from the Te family | CPU efficiency temperature maximum (adjusted) |
+| `TVD0` | maxima `TVDA`, `TVDG`, `TVDP`, `TVDE` | Adjusted temperature maximum |
+| `TVV0` | direct transforms of `TPDX` and `TRDX` | Temperature maximum (selected channels) |
+
+These labels use the existing validated temperature families without assigning
+core numbers or interpreting the unidentified Ta source as ANE. `TVD0` and
+the nonnegative-seeded `TCMb` retain separate keys and values. The original
+`verify_j815_tv_max.py` reproducer and `j815-tv-max-proof.json` retain the
+direct publication calls, source descriptors and maximum algorithm.
+
+The full Debug gate passed on both hosts with 652 tests per architecture,
+universal builds and native / Rosetta packaged smoke checks. Native probes
+verified all 47 combined M5 names with readable values, and verified that
+these model-specific names do not apply to Havana. Ignored
+`dist/monitor-maximum-name-validation/` retains logs and snapshots.
+
 ## Source identity
 
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded
