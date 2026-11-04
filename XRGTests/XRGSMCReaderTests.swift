@@ -85,6 +85,26 @@ struct XRGSMCReaderTests {
         }
     }
 
+    @Test func verifiedNeuralEngineNamesRequireTheValidatedModelAndKeepSeparateReadings() {
+        let source = SMCSensorFixture(["Ta00", "Ta01", "Ta0R", "Ta0S", "Ta02", "Tz11"])
+        source.set("Ta00", 35.0); source.set("Ta01", 43.2)
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11")
+        #expect(sensors.humanReadableName(forKey: "Ta00") == "Neural Engine temperature channel 1 · Ta00")
+        #expect(sensors.humanReadableName(forKey: "Ta01") == "Neural Engine temperature channel 1 (adjusted) · Ta01")
+        #expect(sensors.humanReadableName(forKey: "Ta0R") == "Neural Engine temperature channel 6 · Ta0R")
+        #expect(sensors.humanReadableName(forKey: "Ta0S") == "Neural Engine temperature channel 6 (adjusted) · Ta0S")
+        #expect(sensors.humanReadableName(forKey: "Ta02") == "Temperature sensor · Ta02")
+        #expect(sensors.humanReadableName(forKey: "Tz11") == "Temperature sensor · Tz11")
+        #expect(sensors.temperatureValues(includingUnknown: true)["Ta00"] as? Double == 35.0)
+        #expect(sensors.temperatureValues(includingUnknown: true)["Ta01"] as? Double == 43.2)
+        for model: String? in [nil, "Mac17,4", "Mac16,10", "mac16,11"] {
+            let other = XRGSMCSensors(transport: source, systemModel: model)
+            #expect(other.humanReadableName(forKey: "Ta00") == "Temperature sensor · Ta00")
+            #expect(other.humanReadableName(forKey: "Ta01") == "Temperature sensor · Ta01")
+        }
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "ta00", systemModel: "Mac16,11") == nil)
+    }
+
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
         func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
             for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }
