@@ -24,6 +24,15 @@ shows “No Battery Found”. The local M5 still reports one installed battery w
 a valid raw pair: 5,357 mAh current and maximum in the final check. Havana's
 desktop hardware cannot validate real laptop capacity measurements.
 
+A follow-up checks read failure and recovery using a real sample from each
+machine, with an injected failure in a separate miner. The M5 transitions from
+its charged 5,357 mAh reading to “Battery unavailable” and back. Havana transitions
+from “No Battery Found” to “Battery unavailable” and back. Failed polls retire
+the current status and insert gaps in both power histories; cached capacities
+remain available to compatibility accessors. Recovery with the same battery
+count retains the history and gap. This is fault injection, not an induced
+physical battery or IOKit failure.
+
 ## Sensor inventory and presentation
 
 The final live M4 Pro sample contained 270 raw SMC temperature entries and 173
@@ -64,7 +73,7 @@ not system-wide hardware occupancy or a conversion of reports to utilization.
 ## Gates and retained evidence
 
 `bash Tools/ci-macos.sh Debug` passed on both hosts after the battery correction:
-641 tests per architecture, universal app checks, AppKit restoration, and native
+642 tests per architecture, universal app checks, AppKit restoration, and native
 and Rosetta packaged app smoke checks. The isolated private preferences were
 removed by successful probes; no installed-app preferences were used.
 
@@ -73,6 +82,9 @@ probe sources, source/record hashes, sensor inventory and report, inspected nati
 UI images, workload phase markers, telemetry records, and separate local/remote
 gate logs and summaries. The remote gate's result bundles and smoke artifacts
 were also copied locally.
+
+Failure/recovery probes, inspected images and both hosts' gate results from the
+follow-up are under `dist/battery-availability-validation/`.
 
 Physical sleep/wake, macOS 26, other chips and direct NPU compute utilization
 remain outside this validation. See [NPU telemetry semantics](macos-npu-telemetry.md)
