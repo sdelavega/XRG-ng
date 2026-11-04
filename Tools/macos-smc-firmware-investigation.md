@@ -344,7 +344,7 @@ The hash-checked reproducer and exact source sets are retained under ignored
 
 ## Resolved j773s PMU streams
 
-Three exact named streams, `L1TD`, `L2TD` and `F2TD`, bind distinct PMU HAL
+Three exact named streams, `L1TD`, `F1TD` and `F2TD`, bind distinct PMU HAL
 objects `0x77428`, `0x774a8` and `0x77528`. Their 16-entry maps publish
 `TPD0..TPDE` / `TPDG`, `TRD0..TRDE` / `TRDG`, and `TTD0..TTDE` / `TTDG`.
 The `F` suffix in each family is skipped by these maps; it must not receive
@@ -427,6 +427,56 @@ are recorded separately from the named computations' unresolved unit contracts.
 Ignored `dist/m4-device-model-name-validation/` retains the logs and snapshots.
 
 ## Source identity
+
+The later sender-side acquisition retrieved `Firmware/ansf.t8142.release.im4p`
+and `Firmware/rans.t8142.release.im4p` from the same Apple 26B123 archive.
+Both match their exact BuildManifest SHA-384 digests and decode to identical
+ANS payloads, `AppleStorageFirmwareASP3-241.40.4~1099`, SHA-256
+`1b091af7ef7e20541a15fdf0141da78e671ac3f91ce2e00f694f8db4a7d461e3`.
+All declared section bytes are present. A derived analysis carrier adds only
+1,232 missing bytes of trailing segment alignment; that synthetic padding is
+explicitly recorded, rather than treated as recovered source bytes.
+
+The ANS mailbox dispatcher contains a record with the same fifteen-bit field
+positions as the SMC storage reader, but its demonstrated query response has
+wire class 3 / subtype 17. The exact SDN receiver requires raw class 4 /
+subtype 14. Those headers are not interchangeable; a translation or a separate
+sender must be demonstrated before claiming an exact field/unit join.
+Acquisition, layout and bounded protocol evidence are retained under ignored
+`dist/aon-source-routing-validation/ans-sender/`.
+
+The direct-call audit covers nine wrapper call sites and 37 primitive branch /
+call sites, including tail branches and dynamic headers. None demonstrates the
+required class 4 / subtype 14 send. The firmware's three Apple-format pointer
+chains decode to 1,297 rebases using the SDK ABI; none targets those send
+routines or the inspected mailbox region. Computed references, another send
+primitive/component, and protocol compatibility remain outside that boundary.
+
+The original ANS `MH_PRELOAD` has no symbol or entry-point commands. A separate
+Hopper analysis carrier adds a synthetic thread PC at the independently found
+mailbox prologue `0x1f3ad0`, preserving every payload byte and section mapping.
+Its `EntryPoint` label is an analysis seed, not the firmware's real boot entry.
+The retained dossier is `ans-mailbox-seeded-evidence.json`; native instructions
+remain authoritative where Hopper merges paths or loses bit-field semantics.
+
+The j773s LLB also contains two independently bounded PMU firmware resources.
+Native pointer/length getters and their paired callers identify file spans
+`0x2b1780..0x2b7b74` and `0x2b7b74..0x2bd490`. Both report
+`ApplePMUFirmware-743.40.11~951.release`. They contain Thumb code: their reset
+vectors and startup routines establish vector VM `0x20002800`, including the
+explicit write of that value to the SCB VTOR register `0xe000ed08`.
+
+| PMU resource | Bytes | SHA-256 |
+| --- | ---: | --- |
+| 1 | 25,588 | `2968499f5b9fc90c991b351193650ea3fda1ee6aaf269ad44393b259ef7147e3` |
+| 2 | 22,812 | `85d2ab93a6a8874b4aa31433f06c0298ced8f2173389acd1735a40265791460f` |
+
+The exact component slices, native getter/VTOR proof, synthetic ELF carriers
+and independent extraction reproducer are retained under ignored
+`dist/tz-producer-validation/m4-other/`. Recovering these resources establishes
+neither the active PMU variant nor the physical owner/unit of the `t1` packet
+field. The transport indices are shared PTD slots, not PMU register addresses.
+All inspection remains static; none of these firmware images was executed.
 
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded
 in the first-stage image; see the [Asahi firmware overview](https://asahilinux.org/docs/platform/introduction/#firmware-overview).
