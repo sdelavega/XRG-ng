@@ -92,3 +92,67 @@ final mask-method evidence is
 `ev_1e8e08e23162c2131df2890836062b1eb6a31fda9897f079ab05479fb5251c31`.
 Decompiler output has merged procedure boundaries and register-recovery
 errors; raw LLVM instructions determine the arguments and offsets above.
+
+## Follow-up: packet-address and host-driver boundaries
+
+The PMP packet reader's configured address comes from descriptor `0x1048708`:
+base `0x3803c0000`, extent `0x40000`. This follows the constructor's separate
+descriptor argument copied to object+`0x1a0`; object+`0x1c8` is not the
+provider-container pointer at object+`0x188`. The distinction matters when
+tracing `0x10222f0` through its two pointer loads to the packet window.
+PMP initialization at `0x101d2c4` maps the descriptor through `0x1013008`.
+The final reader at `0x101d33c` loads 16 bytes at `window + index*16`.
+
+The j815 SMC image also contains a descriptor with base `0x3803c0000`, at
+`0x8cf88` with its base at +8. Its named Ts/Ta reader instead uses the
+separately configured base `0x38c840000` at `0x8f078`. Thus PMP range-index
+arithmetic must not be used as a Ts/Ta mapping without establishing the
+cross-window source relationship. Different configured addresses alone do
+not prove distinct physical sources or an address-space alias.
+
+The selected local restore kernel collection contains additional named
+host-driver paths. Standalone analysis copies retain their original VM
+coordinates and segment bytes while relocating Mach-O file offsets:
+
+| Fileset entry | Derived SHA-256 |
+| --- | --- |
+| `AppleH16ANEInterface` | `fb55a3890aa3ae8f03464f12b6c94d9ec2fa4a99e294f70d580ad137bc511ada` |
+| `AppleT8142ANEHAL` | `4e1926a702675d9ba188d6f6131c12f343e72b089677cbe2ff7dd17965a41399` |
+| `ApplePTD` | `7e9b9a1a4d0ebd806cdf0c587d4d23ff718345bb81e479b6872e74407a2b9cd9` |
+| `AGXG17G` | `d9de40da7983bd3519f228da2af8718885ec5ebdb8ba9421eac50a8003cd96ce` |
+
+The collection SHA-256 is
+`313fa26bfed80317cd94725640013d08a80a9c629ba0efb1ac13eee359bde3f6`.
+Kernel-collection chained fixups remain unmaterialized in the standalone
+copies. They support named-function and instruction inspection, with limited
+indirect-reference coverage. They were not loaded, and their identity with
+executing kernel code has not been established.
+
+`ANEHWDevice::ThermalPTDTimerTimeOut_gated` at
+`0xfffffe0009669a48` samples configured thermal registers and conditionally
+writes through `ANERegisterControl::write64`. Its setup is variant-dependent
+in `ANEHWDeviceConfig::initializeANESoCConfig` at `0xfffffe0009679e78`.
+The selected live `/arm-io/ane` metadata has `ane-type = 0x210` and
+`pmp-virt-notify = 1`. The corresponding static switch branch selects
+`AppleT8142ANEHAL`; offsets from other hardware branches cannot establish
+this host's SMC mapping. This pass establishes the named driver path, but
+no alias from it to `a0va`, `s0va` or a compact SMC key.
+
+The GPU driver's concrete `populateAONPTDIdentifiers` override at
+`0xfffffe0008c08c28` supplies identifier `g0TR`. It does not by itself join
+the separate `g0va` bank to a physical sensor location. Two generic
+implementations inspected at `0xfffffe0008b7d620` and
+`0xfffffe0008c031f4` simply return an unsupported result.
+
+These findings narrow further work to actual source routing or a driver /
+firmware path that explicitly identifies an AV source. The earlier generic
+PMP callback cannot provide that identity.
+
+Ignored `dist/smc-ptd-driver-validation/` retains the original extraction
+script, per-image segment manifests, scoped hardware properties and closed
+REA snapshots `ane-driver-ptd.rea.json` / `agx-driver-ptd.rea.json`.
+`source-boundary-checks.json` independently checks the configured bases and
+live ANE selector. ANE setup evidence is
+`ev_0954628a629da02f7733ea2ac2a38628993d8fa35e63d7feb74e203902e87c3e`;
+thermal sampling evidence is
+`ev_16abb7832f126ee3060b76f568c6ac656716aaa2fd4dec9c2fdafd7052269b2c`.

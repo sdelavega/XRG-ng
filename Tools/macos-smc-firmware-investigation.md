@@ -207,6 +207,24 @@ dictionaries without a parse error and found no literal `Ts00`, `Ta00` or
 `Tz11`. Computed names and other providers remain possible. This bounded
 negative result does not establish that `Tz11` is host-written or virtual.
 
+A further static check rules out the ordinary key-write path as its producer
+in this j815 image. `Tz11` and all eight other `Tz1*` leaves have metadata
+flags `0xc5`. The command-`0x11` write branch at `0x2b71c..0x2b72c` requires
+`(flags & 0x41) == 0x40`; these leaves fail that condition. No write command
+was sent to a device. This excludes that standard path, not private
+interfaces, internal firmware writes or a different firmware image.
+The input-buffer read maps inspected at objects `0x8e478`, `0x8e4a0` and
+`0x8e4c8` populate group-one inputs 97 through 100, not `Tz11` input 197.
+Its numeric export record `0x470` is also insufficient: the traced routines
+use that record array for selection/statistics, which does not establish
+the producer of its underlying value pointer.
+
+Independent static checks of all nine `Tz1*` leaf flags and the standard
+write-gate instructions passed; they are retained in
+`dist/smc-ptd-driver-validation/source-boundary-checks.json`.
+The [packet/host-driver follow-up](macos-pmp-bank-investigation.md) records
+the separate configured PTD windows and variant-dependent ANE thermal path.
+
 Do not strip PMP label suffixes, assign physical locations from table order,
 or generalize a mapping to a different board/build without evidence.
 
