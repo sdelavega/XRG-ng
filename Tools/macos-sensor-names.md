@@ -10,6 +10,14 @@ temperature channel 0”, `als-temp` is “Ambient light sensor temperature” a
 `gas gauge battery` is “Battery temperature”. PMU die/device numbers are driver
 channel numbers, not CPU core numbers or a claim about physical board placement.
 
+For the temperature services directly published by `AppleSMCKeysEndpoint`,
+the driver uses `LocationID` as its SMC source key. XRG applies their recognized
+PMU/battery names to that exact key when it is present in the SMC temperature
+inventory. This metadata takes precedence over older branch descriptions.
+Other HID providers are excluded from this join, and ambiguous or malformed
+records retain the existing fallback label. The source-key argument proof is
+recorded in [the identification investigation](macos-sensor-identification.md).
+
 Duplicate HID products use the driver's `LocationID` to keep their channels
 separate. For example, six `gas gauge battery` services on the local M5 become
 distinct `Battery temperature · HID TG0B` / `TG0C` / `TG0H` / `TG0V` / `TG1B` /

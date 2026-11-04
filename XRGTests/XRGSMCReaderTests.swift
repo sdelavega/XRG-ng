@@ -57,7 +57,7 @@ struct XRGSMCReaderTests {
         let sensors = XRGSMCSensors(transport: source, branchNameSource: { branch in
             branches.append(branch)
             return branch == "m87" ? ["Tm0P": "Charger proximity", "TG0H": "Northbridge proximity"] : [:]
-        })
+        }, publishedNameSource: { [:] })
         #expect(branches == ["m87"])
         #expect(sensors.humanReadableName(forKey: "Tm0P") == "Charger proximity · Tm0P")
         #expect(sensors.humanReadableName(forKey: "TG0H") == "Northbridge proximity · TG0H")
@@ -123,6 +123,48 @@ struct XRGSMCReaderTests {
             let other = XRGSMCSensors(transport: source, systemModel: model)
             #expect(other.humanReadableName(forKey: "Ts00") == "Temperature sensor · Ts00")
         }
+    }
+
+    @Test func publishedPMUNamesRequireExactKeysAndRejectAmbiguousOrMalformedMetadata() {
+        func record(_ key: String, _ product: String) -> [String: Any] {
+            ["LocationID": NSNumber(value: XRGSMCSensors.code(key)!), "Product": product, "ProviderID": 1]
+        }
+        let records = [record("TP1b", "PMU tdie1"), record("TR1b", "PMU2 tdie1"),
+                       record("TP1d", "PMU tdev1"), record("TP0Z", "PMU tcal"),
+                       record("TG0H", "gas gauge battery")]
+        let names = XRGSMCPublishedNames.decode(records)
+        #expect(names["TP1b"] == "Power management die 1")
+        #expect(names["TR1b"] == "Power management 2 die 1")
+        #expect(names["TP1d"] == "Power management device 1")
+        #expect(names["TP0Z"] == "Power management calibration")
+        #expect(names["TG0H"] == "Battery temperature")
+        #expect(XRGSMCPublishedNames.decode(records + [record("TP1b", "PMU tdie1")])["TP1b"] == names["TP1b"])
+        #expect(XRGSMCPublishedNames.decode(records + [record("TP1b", "PMU2 tdie2")])["TP1b"] == nil)
+        var otherProvider = record("TP1b", "PMU tdie1"); otherProvider["ProviderID"] = 2
+        #expect(XRGSMCPublishedNames.decode(records + [otherProvider])["TP1b"] == nil)
+        var invalidProvider = record("TP1b", "PMU tdie1"); invalidProvider["ProviderID"] = true
+        #expect(XRGSMCPublishedNames.decode([invalidProvider]).isEmpty)
+        let malformed: [[String: Any]] = [
+            ["LocationID": true, "Product": "PMU tdie1"],
+            ["LocationID": -1, "Product": "PMU tdie1"],
+            ["LocationID": 1.5, "Product": "PMU tdie1"],
+            ["LocationID": UInt64.max, "Product": "PMU tdie1"],
+            record("TP2b", "PMU tdie2\n"), record("TP3b", "unrecognized"),
+            record("VP1b", "PMU tdie1")]
+        #expect(XRGSMCPublishedNames.decode(malformed.map { item in
+            var item = item; item["ProviderID"] = 1; return item
+        }).isEmpty)
+        let source = SMCSensorFixture(["RBr ", "TP1b", "TG0H", "Tzzz"])
+        source.set("RBr ", Data("m87".utf8))
+        var current = names
+        let sensors = XRGSMCSensors(transport: source, branchNameSource: { _ in ["TG0H": "Northbridge proximity"] },
+                                   publishedNameSource: { current })
+        #expect(sensors.humanReadableName(forKey: "TP1b") == "Power management die 1 · TP1b")
+        #expect(sensors.humanReadableName(forKey: "TG0H") == "Battery temperature · TG0H")
+        #expect(sensors.humanReadableName(forKey: "TR1b") == "Temperature sensor · TR1b")
+        #expect(sensors.knownTemperatureKeys == ["TP1b", "TG0H", "Tzzz"])
+        current = [:]; sensors.reloadInventory()
+        #expect(sensors.humanReadableName(forKey: "TP1b") == "Temperature sensor · TP1b")
     }
 
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
