@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 import Foundation
+import Darwin
 
 @objc public protocol XRGSMCSensorValuesProvider: NSObjectProtocol {
     var knownTemperatureKeys: Set<String> { get }
@@ -15,11 +16,14 @@ import Foundation
 /// undocumented channels never acquire an invented physical location/core number.
 @objc(XRGSMCSensors) public final class XRGSMCSensors: NSObject, XRGSMCSensorValuesProvider {
     private let transport: (any XRGSMCTransport)?
+    private let branchNameSource: (String) -> [String: String]
     private var inventory: [String: UInt32] = [:]
+    private var branchNames: [String: String] = [:]
     public private(set) var knownTemperatureKeys: Set<String> = []
     @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader()) }
-    init(transport: (any XRGSMCTransport)?) {
-        self.transport = transport; super.init(); reloadInventory()
+    init(transport: (any XRGSMCTransport)?, branchNameSource: @escaping (String) -> [String: String] = XRGSMCBranchNames.load) {
+        self.transport = transport; self.branchNameSource = branchNameSource
+        super.init(); reloadInventory()
     }
     static func code(_ key: String) -> UInt32? {
         let bytes = Array(key.utf8)
@@ -43,6 +47,11 @@ import Foundation
         }
         for key in duplicates { found.removeValue(forKey: key) }
         inventory = found
+        branchNames = [:]
+        if let code = found["RBr "], let raw = transport.readValue(for: code) as? Data,
+           let branch = XRGSMCBranchNames.branch(raw) {
+            branchNames = branchNameSource(branch)
+        }
         // These legacy channels report distance from a limit, not absolute C.
         knownTemperatureKeys = Set(found.keys.filter { $0.hasPrefix("T") && $0 != "TCAC" && $0 != "TCBC" })
     }
@@ -68,22 +77,23 @@ import Foundation
         return groups.filter { $0.value.keys.contains(where: { $0.hasSuffix("Ac") }) }
     }
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
-        if knownTemperatureKeys.contains(key) { return Self.temperatureName(forKey: key) }
+        if knownTemperatureKeys.contains(key) {
+            if let name = branchNames[key] { return "\(name) · \(key)" }
+            return Self.temperatureName(forKey: key)
+        }
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
         return Self.hidName(forKey: key)
     }
     // Family names follow driver product names and the published SMC key
     // reference linked in Tools/macos-sensor-names.md. Case is significant.
-    static func temperatureName(forKey key: String) -> String {
-        if key == "Tp0P", !XRGNPUReader.isAppleSilicon() { return "Power board · \(key)" }
-        let exact = ["TC0D": "CPU diode", "TC0H": "CPU heatsink", "TC0P": "CPU proximity",
-                     "TCAD": "CPU package", "TG0D": "GPU diode", "TG0H": "GPU heatsink",
-                     "TG0P": "GPU proximity", "Tm0P": "Mainboard", "TW0P": "Wi-Fi",
-                     "TL0P": "Display", "TTLD": "Thunderbolt left", "TTRD": "Thunderbolt right"]
-        if let label = exact[key] { return "\(label) · \(key)" }
-        let families = ["TC": "CPU", "Tp": "CPU", "Te": "CPU efficiency",
-                        "TG": "GPU", "Tg": "GPU", "Tm": "Memory", "TM": "Memory",
+    static func temperatureName(forKey key: String, appleSilicon: Bool = XRGNPUReader.isAppleSilicon()) -> String {
+        // Position suffixes and even some families vary by branch: on m87,
+        // Tm0P is charger proximity and TG0H is northbridge proximity.
+        var families = ["TC": "CPU", "TM": "Memory",
                         "TB": "Battery", "TH": "Drive", "TA": "Ambient", "TZ": "Thermal zone"]
+        if appleSilicon {
+            families.merge(["Tp": "CPU", "Te": "CPU efficiency", "Tg": "GPU"]) { _, new in new }
+        }
         if let family = families[String(key.prefix(2))] { return "\(family) temperature · \(key)" }
         return "Temperature sensor · \(key)"
     }
@@ -111,4 +121,89 @@ import Foundation
         return "\(label ?? "Temperature sensor") · \(key)"
     }
     @objc public func isKnownKey(_ key: String) -> Bool { knownTemperatureKeys.contains(key) || inventory[key] != nil && key.hasPrefix("F") && key.hasSuffix("Ac") }
+}
+
+/// Optional descriptions from the installed system library, matched to the
+/// driver's exact RBr branch. No Apple catalogue is copied into the application.
+/// Unknown ABI, branch or unreadable memory disables this optional source.
+enum XRGSMCBranchNames {
+    static func branch(_ bytes: Data) -> String? {
+        guard (1...16).contains(bytes.count) else { return nil }
+        let text = bytes.prefix { $0 != 0 }
+        guard !text.isEmpty, text.allSatisfy({ (33...126).contains($0) }),
+              bytes.dropFirst(text.count).allSatisfy({ $0 == 0 }) else { return nil }
+        return String(bytes: text, encoding: .ascii)
+    }
+
+    static func load(branch: String) -> [String: String] {
+        guard let handle = dlopen("/usr/lib/libSMC.dylib", RTLD_LAZY | RTLD_LOCAL) else { return [:] }
+        defer { dlclose(handle) }
+        guard let symbol = dlsym(handle, "AccumulatorPlatformStructLookupArray") else { return [:] }
+        return decode(branch: branch, address: UInt64(UInt(bitPattern: symbol)), read: readMemory)
+    }
+
+    private static func readMemory(_ address: UInt64, _ count: Int) -> Data? {
+        guard address > 0, count > 0, count <= 272 * 10_000,
+              address <= UInt64.max - UInt64(count) else { return nil }
+        var output = Data(count: count), copied: mach_vm_size_t = 0
+        let status = output.withUnsafeMutableBytes { bytes in
+            mach_vm_read_overwrite(mach_task_self_, address, mach_vm_size_t(count),
+                                   mach_vm_address_t(UInt(bitPattern: bytes.baseAddress!)), &copied)
+        }
+        return status == KERN_SUCCESS && copied == count ? output : nil
+    }
+
+    static func decode(branch expected: String, address: UInt64,
+                       read: (UInt64, Int) -> Data?) -> [String: String] {
+        guard branch(Data(expected.utf8)) == expected,
+              address > 0, address <= UInt64.max - 256 * 48 else { return [:] }
+        var matching: Data?
+        for index in 0..<256 {
+            guard let row = read(address + UInt64(index * 48), 48), row.count == 48 else { return [:] }
+            // The observed exported array ends at a non-record boundary.
+            // Never search beyond it or scan for a replacement symbol.
+            guard let name = branch(Data(row.prefix(16))) else {
+                return matching.flatMap { descriptions($0, read: read) } ?? [:]
+            }
+            guard XRGSMCWire.word(row, at: 32) <= 10_000,
+                  XRGSMCWire.word(row, at: 36) <= 10_000,
+                  XRGSMCWire.word(row, at: 40) <= 1,
+                  XRGSMCWire.word(row, at: 44) == 0 else { return [:] }
+            if name == expected {
+                guard matching == nil else { return [:] }
+                matching = row
+            }
+        }
+        return [:]
+    }
+
+    private static func descriptions(_ row: Data, read: (UInt64, Int) -> Data?) -> [String: String]? {
+        var names: [String: String] = [:]
+        for group in 0..<2 {
+            let count = Int(XRGSMCWire.word(row, at: 32 + group * 4))
+            if count == 0 { continue }
+            let pointer = row.withUnsafeBytes {
+                UInt64(littleEndian: $0.loadUnaligned(fromByteOffset: 16 + group * 8, as: UInt64.self))
+            }
+            guard pointer > 0, pointer <= UInt64.max - UInt64(count * 272),
+                  let bytes = read(pointer, count * 272), bytes.count == count * 272 else { return nil }
+            for index in 0..<count {
+                let value = Data(bytes[index * 272..<(index + 1) * 272])
+                guard value[262] == 0, value[263] == 0,
+                      value[268..<272].allSatisfy({ $0 == 0 }) else { return nil }
+                guard let key = String(bytes: value.prefix(4).reversed(), encoding: .ascii),
+                      XRGSMCSensors.code(key) != nil, key.hasPrefix("T") else { continue }
+                let raw = value[5..<261]
+                guard let end = raw.firstIndex(of: 0), end > raw.startIndex,
+                      let text = String(bytes: raw[..<end], encoding: .utf8),
+                      !text.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return nil }
+                var name = text.trimmingCharacters(in: .whitespaces)
+                if name.hasSuffix("(\(key))") { name = String(name.dropLast(6)).trimmingCharacters(in: .whitespaces) }
+                guard !name.isEmpty else { return nil }
+                if let previous = names[key], previous != name { return nil }
+                names[key] = name
+            }
+        }
+        return names
+    }
 }

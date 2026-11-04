@@ -36,7 +36,7 @@ struct XRGSMCReaderTests {
     @Test func friendlyNamesPreserveCaseSensitiveSourceIdentityAndUnknownChannels() {
         let source = SMCSensorFixture(["TC0P", "Tp01", "Tg0U", "Tzzz", "F0Ac", "FAAc"])
         let sensors = XRGSMCSensors(transport: source)
-        #expect(sensors.humanReadableName(forKey: "TC0P") == "CPU proximity · TC0P")
+        #expect(sensors.humanReadableName(forKey: "TC0P") == "CPU temperature · TC0P")
         #expect(sensors.humanReadableName(forKey: "Tp01") == "CPU temperature · Tp01")
         #expect(sensors.humanReadableName(forKey: "Tg0U") == "GPU temperature · Tg0U")
         #expect(sensors.humanReadableName(forKey: "Tzzz") == "Temperature sensor · Tzzz")
@@ -49,6 +49,88 @@ struct XRGSMCReaderTests {
         #expect(sensors.humanReadableName(forKey: "als-temp") == "Ambient light sensor temperature · als-temp")
         #expect(sensors.humanReadableName(forKey: "gas gauge battery") == "Battery temperature · gas gauge battery")
         #expect(!sensors.isKnownKey("Tzzz2") && sensors.knownTemperatureKeys.contains("Tzzz"))
+    }
+    @Test func branchDescriptionsOnlyApplyToAnExactDriverBranchAndKeepRawIdentities() {
+        let source = SMCSensorFixture(["RBr ", "Tm0P", "TG0H", "Tzzz"])
+        source.set("RBr ", Data([109, 56, 55, 0, 0, 0, 0, 0]))
+        var branches: [String] = []
+        let sensors = XRGSMCSensors(transport: source, branchNameSource: { branch in
+            branches.append(branch)
+            return branch == "m87" ? ["Tm0P": "Charger proximity", "TG0H": "Northbridge proximity"] : [:]
+        })
+        #expect(branches == ["m87"])
+        #expect(sensors.humanReadableName(forKey: "Tm0P") == "Charger proximity · Tm0P")
+        #expect(sensors.humanReadableName(forKey: "TG0H") == "Northbridge proximity · TG0H")
+        #expect(sensors.knownTemperatureKeys == ["Tm0P", "TG0H", "Tzzz"])
+        source.set("RBr ", Data("J815".utf8)); sensors.reloadInventory()
+        #expect(branches == ["m87", "J815"])
+        #expect(sensors.humanReadableName(forKey: "Tm0P") == "Temperature sensor · Tm0P")
+        #expect(sensors.humanReadableName(forKey: "TG0H") == "Temperature sensor · TG0H")
+        for silicon in [true, false] {
+            #expect(XRGSMCSensors.temperatureName(forKey: "Tm0P", appleSilicon: silicon) == "Temperature sensor · Tm0P")
+            #expect(XRGSMCSensors.temperatureName(forKey: "TG0H", appleSilicon: silicon) == "Temperature sensor · TG0H")
+        }
+        #expect(XRGSMCSensors.temperatureName(forKey: "Tp0P", appleSilicon: false) == "Temperature sensor · Tp0P")
+        #expect(XRGSMCSensors.temperatureName(forKey: "Ta00", appleSilicon: true) == "Temperature sensor · Ta00")
+    }
+
+    @Test func malformedBranchIdentityDoesNotLoadAnyCatalogue() {
+        let source = SMCSensorFixture(["RBr ", "Tm0P"])
+        for data in [Data(), Data([109, 0, 56]), Data([109, 10]), Data(repeating: 65, count: 17)] {
+            source.set("RBr ", data)
+            let sensors = XRGSMCSensors(transport: source, branchNameSource: { _ in
+                Issue.record("Invalid branch requested a catalogue"); return [:]
+            })
+            #expect(sensors.humanReadableName(forKey: "Tm0P") == "Temperature sensor · Tm0P")
+        }
+    }
+
+    @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
+        func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
+            for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }
+        }
+        func row(_ branch: String, count: UInt64 = 1) -> Data {
+            var data = Data(repeating: 0, count: 48)
+            data.replaceSubrange(0..<branch.utf8.count, with: branch.utf8)
+            word(0x2000, 16, into: &data); word(count, 32, into: &data, width: 4)
+            return data
+        }
+        func description(_ label: String) -> Data {
+            var data = Data(repeating: 0, count: 272)
+            data.replaceSubrange(0..<4, with: "P0mT".utf8)
+            data.replaceSubrange(5..<(5+label.utf8.count), with: label.utf8)
+            data[261] = 2; data.replaceSubrange(264..<268, with: "87ps".utf8)
+            return data
+        }
+        var memory = [UInt64(0x1000): row("m87"), 0x1030: Data(repeating: 0, count: 48),
+                      0x2000: description("Charger proximity (Tm0P)")]
+        var requests = 0
+        func decode(_ branch: String) -> [String: String] {
+            XRGSMCBranchNames.decode(branch: branch, address: 0x1000) { address, count in
+                requests += 1
+                guard let bytes = memory[address], bytes.count == count else { return nil }
+                return bytes
+            }
+        }
+        #expect(decode("m87") == ["Tm0P": "Charger proximity"])
+        #expect(decode("M87").isEmpty && decode("J815").isEmpty)
+        memory[0x1030] = row("m87"); #expect(decode("m87").isEmpty)
+        memory[0x1030] = Data(repeating: 0, count: 48)
+        memory[0x1000] = row("m87", count: 10_001); #expect(decode("m87").isEmpty)
+        memory[0x1000] = row("m87")
+        memory[0x2000] = description("bad\nname"); #expect(decode("m87").isEmpty)
+        memory[0x2000] = description("Charger proximity")
+        memory[0x2000]![268] = 1; #expect(decode("m87").isEmpty)
+        memory[0x2000] = nil; #expect(decode("m87").isEmpty)
+        #expect(requests < 30)
+        var boundedReads = 0
+        let noBoundary = XRGSMCBranchNames.decode(branch: "m87", address: 0x1000) { _, _ in
+            boundedReads += 1; return row("other")
+        }
+        #expect(noBoundary.isEmpty && boundedReads == 256)
+        #expect(XRGSMCBranchNames.decode(branch: "m87", address: UInt64.max) { _, _ in
+            Issue.record("Overflow address must not be read"); return nil
+        }.isEmpty)
     }
     struct Sample:Sendable {let type:UInt32;let bytes:[UInt8];let value:Double}
     static let numbers:[Sample] = [
