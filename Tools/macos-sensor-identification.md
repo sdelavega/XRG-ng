@@ -105,8 +105,12 @@ report legend likewise did not supply an explicit thermal-label bridge.
 The local board's iBoot payload was decoded and checked for embedded LZFSE SMC
 firmware; no such stream or `AppleSMCFirmware` marker was found in that payload.
 This is a bounded negative result, not proof that the machine has no SMC firmware.
-The device tree names its SMC firmware `t8142smc`; obtaining that exact image is
-the next specific artifact needed for further compact-key registration analysis.
+The device tree names its SMC firmware `t8142smc`. A subsequent first-stage LLB
+investigation recovered board-specific j815 and j773s SMC images from Apple's
+26B123 restore archive, validated their page containers, and decoded the j815
+key trie. See [the firmware checkpoint](macos-smc-firmware-investigation.md) for
+the reusable inspector, provenance, input-buffer links and remaining provider
+boundary. These structural links have not yet established physical labels.
 
 Extraction scripts, source/derived hashes, scoped report-channel metadata and
 REA snapshots are retained under `dist/sensor-firmware-validation/`. No Apple
