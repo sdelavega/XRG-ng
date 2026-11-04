@@ -22,7 +22,7 @@ questions for named computations. A full identity resolution is not claimed.
 | `TPDD`, `TPDE`, `TPDF` | Registered group-one inputs 114–116 | Actual producer and physical source |
 | `Tz11`–`Tz18`, `Tz1j` | Registered group-one inputs 197–205 | Actual producer and physical source |
 | `SDN0`, `SDN3` | Two fields received from `ans_to_smc`, message subtype 14 | Sender-side unit and field semantics; SMART/HID equivalence unproved |
-| `TAOL` | Float at offset four in host-input packet `zEAO` | Host writer, physical source and unit contract |
+| `TAOL` | Sensor input: float at offset four in writable packet `zEAO` | Actual writer, physical source and unit contract |
 | `TB1T`, `TB2T` | Battery provider command `0x6c`, two tenths-scaled fields | Sender-side unit contract for those fields |
 
 The named ANE0/SNE MTR hardware has the same noncontiguous channel layout as

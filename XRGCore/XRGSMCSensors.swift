@@ -145,6 +145,7 @@ import IOKit
     }
     static func verifiedTemperatureName(forKey key: String, systemModel: String?) -> String? {
         if systemModel == "Mac17,4" {
+            if key == "TAOL" { return "Sensor input" }
             if key == "TRD8" { return "Power management 2 temperature channel 9" }
             if key == "TRD9" { return "Power management 2 temperature channel 10" }
             if key == "TDBP" { return "Temperature monitor 1 channel 1" }
