@@ -60,7 +60,10 @@ import IOKit
             branchNames = branchNameSource(branch)
         }
         // These legacy channels report distance from a limit, not absolute C.
-        knownTemperatureKeys = Set(found.keys.filter { $0.hasPrefix("T") && $0 != "TCAC" && $0 != "TCBC" })
+        knownTemperatureKeys = Set(found.keys.filter {
+            $0.hasPrefix("T") && $0 != "TCAC" && $0 != "TCBC" &&
+                Self.nonTemperatureName(forKey: $0, systemModel: systemModel) == nil
+        })
         // Some published ADC source keys are absent from ordinary key enumeration.
         // Keep their metadata for verified firmware aliases, without adding keys.
         publishedNames = publishedNameSource()
@@ -87,6 +90,9 @@ import IOKit
         return groups.filter { $0.value.keys.contains(where: { $0.hasSuffix("Ac") }) }
     }
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
+        if inventory[key] != nil, let name = Self.nonTemperatureName(forKey: key, systemModel: systemModel) {
+            return "\(name) · \(key)"
+        }
         if knownTemperatureKeys.contains(key) {
             if let name = publishedNames[key] { return "\(name) · \(key)" }
             if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel) {
@@ -115,8 +121,13 @@ import IOKit
                        "TRD4": "TR5b", "TRD5": "TR6b", "TRD6": "TR7b", "TRD7": "TR8l",
                        "Tm0B": "TP2d", "TIOP": "TP3d", "TW0P": "TP4d", "TPMP": "TP5d",
                        "T5SP": "TP6d", "TCHP": "TP7d", "TMVR": "TP8d",
-                       "TH0T": "TR2d", "TSDD": "TR3d", "TSCD": "TR4d", "TPSP": "TR5d"]
+                       "TH0T": "TR2d", "TH0x": "TR2d", "TSDD": "TR3d", "TSCD": "TR4d", "TPSP": "TR5d"]
         return sources[key]
+    }
+    static func nonTemperatureName(forKey key: String, systemModel: String?) -> String? {
+        // j815's TVMD selects discrete thermal-policy lookup rows. Its T prefix
+        // and floating-point transport do not make it an absolute temperature.
+        systemModel == "Mac17,4" && key == "TVMD" ? "Thermal control selector" : nil
     }
     static func verifiedTemperatureName(forKey key: String, systemModel: String?) -> String? {
         if systemModel == "Mac17,4" {

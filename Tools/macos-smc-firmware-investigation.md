@@ -245,6 +245,39 @@ verified all 47 combined M5 names with readable values, and verified that
 these model-specific names do not apply to Havana. Ignored
 `dist/monitor-maximum-name-validation/` retains logs and snapshots.
 
+## Resolved j815 copied PMU channel and categorical selector
+
+`TH0x` is a direct copy of `TH0T`: `0x30914..0x30928` reads sensor
+group one input 7 and writes its unchanged value to input 11 through
+`0x3da54` / `0x3d988`. It therefore uses the same live `TR2d` PMU2 device 2
+label, with its distinct raw key retained. This is a producer trace, not a
+conclusion drawn from equal readings.
+
+`TVMD` is consumed as a discrete thermal-control selector. Eight verified
+lookup consumers match it against rows `[0, 1, 2, 3]`; their outputs include
+different policy thresholds. This categorical use does not establish its
+assignment routine or exhaust every possible value. On `Mac17,4`, it is
+labeled **Thermal control selector** and excluded from Celsius readings.
+The exclusion is exact to this model/key; zero-valued temperature readings
+remain visible. The floating-point wire format and `T` prefix alone are
+insufficient to classify a key as temperature.
+
+Ignored `dist/tz-producer-validation/other-source/model-source-units.json`
+and `dist/havana-smc-artifact-discovery/j815-tvmd-consumer-proof.json`
+retain the source/sink namespace joins and lookup contracts. The other TV
+models have verified computation graphs, but their complete upstream unit
+contracts and physical origins remain open. In particular, `0x3a948`
+source descriptors refer to sensor group/input indices, whereas its sink
+can refer to generic float parameters. Those numeric namespaces must not
+be joined by equal index alone.
+
+Both hosts passed the full Debug gate: 634 Swift tests plus 19 XCTest tests
+per architecture, universal builds, isolated AppKit checks and packaged smoke
+checks. Native probes verified all 48 selected M5 names and the selector's
+exclusion (147 temperature keys), while Havana retained its 273 temperature
+keys. Logs and snapshots are retained under ignored
+`dist/selector-alias-name-validation/`.
+
 ## Source identity
 
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded
