@@ -183,7 +183,7 @@ against 124-byte `soc-device` records. The selected live metadata names device
 this establishes meanings for the long PMP labels, not for four-character
 SMC keys. Type-eight temperature records call `0x10237a8` with the resolved
 device object and bank. That method registers callback `0x1023904` through
-the device's provider object. The callback obtains its channel number from
+the device's provider object. The callback obtains a bank selector from
 runtime-built per-bank configuration; it does not directly supply the SMC
 source ID or the `0x150`/`0x152` PTD starts.
 
@@ -193,7 +193,10 @@ not connect either source ID to ANE or another component. The next specific
 boundary is construction of the device/bank configuration consumed by
 `0x10237a8` and `0x1023904`, including its PTD output-channel assignment.
 Initialization near `0x10133fc` is a lead, with indirect calls and merged
-decompiler boundaries still requiring instruction-level checks.
+decompiler boundaries still requiring instruction-level checks. The scoped
+callback/accessor checks are retained in ignored `PMP_PTD_BOUNDARY.md` and
+`pmp-soc-thermal-accessor-objdump.txt` under
+`dist/havana-smc-artifact-discovery/`.
 
 The current `thermalmonitord` constant-dictionary decoder checked all 4,551
 dictionaries without a parse error and found no literal `Ts00`, `Ta00` or
