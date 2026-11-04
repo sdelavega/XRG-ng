@@ -61,7 +61,9 @@ import IOKit
         }
         // These legacy channels report distance from a limit, not absolute C.
         knownTemperatureKeys = Set(found.keys.filter { $0.hasPrefix("T") && $0 != "TCAC" && $0 != "TCBC" })
-        publishedNames = publishedNameSource().filter { knownTemperatureKeys.contains($0.key) }
+        // Some published ADC source keys are absent from ordinary key enumeration.
+        // Keep their metadata for verified firmware aliases, without adding keys.
+        publishedNames = publishedNameSource()
     }
     @objc(temperatureValuesIncludingUnknown:) public func temperatureValues(includingUnknown: Bool) -> [String: Any] {
         var values: [String: Any] = [:]
@@ -87,6 +89,11 @@ import IOKit
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
         if knownTemperatureKeys.contains(key) {
             if let name = publishedNames[key] { return "\(name) · \(key)" }
+            if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel),
+               let name = publishedNames[source],
+               name.hasPrefix(source.hasPrefix("TP") ? "Power management die " : "Power management 2 die ") {
+                return "\(name) · \(key)"
+            }
             if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return "\(name) · \(key)" }
             if let name = branchNames[key] { return "\(name) · \(key)" }
             return Self.temperatureName(forKey: key)
@@ -94,7 +101,23 @@ import IOKit
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
         return Self.hidName(forKey: key)
     }
+    static func verifiedPublishedAlias(forKey key: String, systemModel: String?) -> String? {
+        guard systemModel == "Mac17,4" else { return nil }
+        // These streams and canonical keys select the same HAL and ADC ID.
+        // Require the canonical key's live published label at the call site.
+        let sources = ["TPD0": "TP1b", "TPD1": "TP2b", "TPD2": "TP3b", "TPD3": "TP4b",
+                       "TPD4": "TP5b", "TPD5": "TP6b", "TPD6": "TP7b", "TPD7": "TP8b",
+                       "TPD8": "TP9b", "TPD9": "TPab", "TPDA": "TPbl", "TPDB": "TPcl", "TPDC": "TPdl",
+                       "TRD0": "TR1b", "TRD1": "TR2b", "TRD2": "TR3b", "TRD3": "TR4b",
+                       "TRD4": "TR5b", "TRD5": "TR6b", "TRD6": "TR7b", "TRD7": "TR8l"]
+        return sources[key]
+    }
     static func verifiedTemperatureName(forKey key: String, systemModel: String?) -> String? {
+        if systemModel == "Mac17,4" {
+            if key == "TPDX" || key == "TRDX" { return "Temperature maximum (selected channels)" }
+            if key == "TCMb" { return "Adjusted temperature maximum" }
+            return nil
+        }
         // The j773s firmware joins these exact keys to six ANE-TO-SMC
         // streams. Channel numbers describe stream order, not core position.
         // Other boards use different providers for the same Ta keys.
