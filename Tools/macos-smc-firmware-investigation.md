@@ -311,6 +311,19 @@ object `0x8e478` and record `0x89454`. This positive packet join does not identi
 the host writer or a physical ambient-light temperature sensor. Neither
 similar spelling nor a matching instantaneous reading establishes that source.
 
+The ordinary command-`0x11` write path supplies a concrete input interface:
+`zEAO`'s `0xc0` flags pass the permission gate, its size must match 32 bytes,
+and the accepted request is byte-copied into that exact backing buffer at
+`0x2b980..0x2b98c`. The M5 label is therefore **Sensor input**, replacing the
+unverified Ambient family claim. This describes the demonstrated input role;
+the actual writer, physical source and unit contract remain unresolved.
+Ignored `dist/aon-source-routing-validation/taol-role/` retains the native
+write-gate/copy proof and passing `verify_taol_write_role.py` reproducer.
+The input-role label passed both hosts' full Debug gates with 659 tests per
+architecture, universal builds and native / Rosetta packaged checks. Native
+probes verified 58 selected M5 labels and 79 selected M4 labels. Logs and
+snapshots are retained under ignored `dist/taol-role-name-validation/`.
+
 Ignored proof artifacts include `tv-fixed-model-producers.json` and
 `tv-model-initializer-proof.json` under `dist/aon-source-routing-validation/`,
 the clamp and maximum proofs under `dist/havana-smc-artifact-discovery/`, and
