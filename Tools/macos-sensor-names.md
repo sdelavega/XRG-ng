@@ -161,5 +161,9 @@ physical-source join; see the
 On M5, `TAOL` is labeled **Sensor input** because its demonstrated source is
 the writable `zEAO` input buffer. The Ambient family label lacked a physical
 source join; its actual writer, source and units remain under investigation.
+M4 `TfC0`–`TfC4` use **Telemetry input N (average)** labels for their verified
+arithmetic sample-average role. These names make no CPU/GPU/site or unit
+assignment. The firmware exports zero for an empty averaging window; these
+labels do not add availability filtering.
 
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).
