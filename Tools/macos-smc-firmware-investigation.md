@@ -686,6 +686,65 @@ instruction excerpts. Root-owned Hopper dossiers use explicitly synthetic
 analysis entry seeds; native instructions control where merged pseudocode
 loses function boundaries.
 
+## Matching MSP responder and temperature hardware path
+
+Read-only cached controller metadata reports MSP version `62.10.4.0.7.0`,
+TLC 3D G8 / 4p / 1024 type, and a generic `nand-device-desc`. Native
+IONVMeFamily code publishes that same descriptor and decodes its low five bits
+through `kVendorStrings`; this machine selects Toshiba. Serial numbers, ECIDs
+and unique hardware identifiers are excluded from retained metadata.
+
+The installed matching candidate is
+`/usr/standalone/firmware/t303/bfh_ofw.t303.ofw.toshiba_tlc_3d_g8_4p_1024gb.bin`,
+SHA-256 `892998731a3e7fd229ee268185dbbc21e11e847836fc6a3354e0771f7af83d25`.
+Its own native version is `AppleMSP-62.10.4.0.7.0`. Bounded 2 KiB frames carry
+16-byte headers and explicit payload lengths/termination. Four grouped images
+contain coherent original FWSG tables; the main image's own TEXT/DATA layout
+provides a valid analysis carrier. The decoded main-image SHA-256 is
+`854f0b6a1c12b5a83fec8954ab62b033eb92ecf6851a1f4713a52ade56fcca08`.
+Frame checksums and the exact active file load are not independently verified;
+matching installed vendor/type/version is kept distinct from active-byte proof.
+
+The ANS pre-NAND dispatcher translates command `0x7a`, type zero into wire
+opcode `0xa6`. The matching MSP image dispatches that opcode through table
+`0xb6508` to handler `0x1ad64`. Its selected type-zero branch calls the local
+temperature getter: a mapped peripheral initialized from logical address
+`0x700c0000` supplies status and a 12-bit ADC field at offset `0x200`. The
+getter applies a polynomial; the response rounds its result by sixteen into
+the same Q2 Celsius word consumed by ANS. Type one follows a separate
+NAND-side command and must not be substituted for the selected type zero.
+
+This identifies a per-MSP calibrated ADC temperature provider for the two
+logical storage channels. It does not establish the transducer's internal or
+external placement, a NAND die, or a board position. Ignored `ans-current/`
+retains `verify_nand_vendor.py`, `inspect_t303_responder.py` and
+`verify_msp_temperature_responder.py`, native instruction proofs and original
+FWSG metadata. Firmware was inspected statically and never executed.
+
+## Configured host sensor packets and autonomous PMP routes
+
+Current SMC code has three configured generic host packet readers. Fixed maps
+join `zEAO` slot zero to input 99 / `TAOL`, `zETM` slots 18 and 27 to inputs
+97/98 / `SDTo` and `SDTp`, and `zEPD` slot zero to input 100 / `SDDS`.
+Packet headers validate count/version; they do not choose a destination.
+Those paths therefore cannot supply `Tz197..205` or the omitted PMU inputs.
+`zES0` and `zETD` remain outside this configured reader mechanism; their
+writable flags do not identify a producer or consumer. Reproducers are
+`inspect_zetm_consumer.py` and `inspect_configured_ze_readers.py` under ignored
+`dist/tz-producer-validation/current-command-roles/`.
+
+The current PMP investigation also found a real autonomous hardware packet
+publisher. Native SoC-device allocation assigns ANE0 a range starting at
+`0x220`; its hardware object's method programs the PTD destination low/high
+words into the mapped peripheral described at logical `0x421970000`.
+The programmed destination is PMP-relative `0x3803d1100`, with the runtime bus
+base retained explicitly. The separate thermal consumer reads PMS-DEVC-PKT
+slots `0x22a/0x22b`. Neither route alone identifies AON destination `0x152`.
+The forwarding/address-translation edge remains separate from these proven
+producer and consumer configurations. Ignored
+`current-26C5035r/aon-routing/verify_autonomous_packet_configuration.py`
+reproduces the exact selected allocation and hardware register programming.
+
 ## Official diagnostic catalogue cross-check
 
 The public Apple diagnostic asset service returned model-specific images after

@@ -96,9 +96,11 @@ The current ANS query array now has a positive writer: NAND-engine command
 `0x7a` supplies the indexed temperature values. Its signed `/4` consumer takes
 a maximum, then adds 273 when filling the standard NVMe health log's Kelvin
 field. This establishes the engineering Celsius contract by an explicit
-producer/consumer conversion. The composite maximum is distinct from either
-individual SDN channel; it does not identify a physical die or prove equality
-with the host's NAND HID reading.
+producer/consumer conversion. The matching installed MSP responder now traces the selected type-zero
+request to a calibrated local ADC temperature provider. Exact active file
+selection and transducer placement remain separate boundaries. The composite
+maximum is distinct from either individual SDN channel and does not prove
+equality with the host's NAND HID reading.
 
 The current OS shared-cache scan found no `zEAO` writer candidate across 84
 system cache/support files (7.23 GB), using checked ASCII, UTF16 and split
