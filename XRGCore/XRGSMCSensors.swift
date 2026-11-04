@@ -11,8 +11,8 @@ import Foundation
 }
 
 /// Inventory is made from driver keys, not a copied model/description database.
-/// Raw keys remain the persisted identity. Labels intentionally make no claim
-/// about a channel's physical location or calibration without driver metadata.
+/// Raw keys remain the persisted identity. Labels describe sensor families;
+/// undocumented channels never acquire an invented physical location/core number.
 @objc(XRGSMCSensors) public final class XRGSMCSensors: NSObject, XRGSMCSensorValuesProvider {
     private let transport: (any XRGSMCTransport)?
     private var inventory: [String: UInt32] = [:]
@@ -68,9 +68,47 @@ import Foundation
         return groups.filter { $0.value.keys.contains(where: { $0.hasSuffix("Ac") }) }
     }
     @objc(humanReadableNameForKey:) public func humanReadableName(forKey key: String) -> String {
-        if knownTemperatureKeys.contains(key) { return "SMC temperature · \(key)" }
+        if knownTemperatureKeys.contains(key) { return Self.temperatureName(forKey: key) }
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
-        return key
+        return Self.hidName(forKey: key)
+    }
+    // Family names follow driver product names and the published SMC key
+    // reference linked in Tools/macos-sensor-names.md. Case is significant.
+    static func temperatureName(forKey key: String) -> String {
+        if key == "Tp0P", !XRGNPUReader.isAppleSilicon() { return "Power board · \(key)" }
+        let exact = ["TC0D": "CPU diode", "TC0H": "CPU heatsink", "TC0P": "CPU proximity",
+                     "TCAD": "CPU package", "TG0D": "GPU diode", "TG0H": "GPU heatsink",
+                     "TG0P": "GPU proximity", "Tm0P": "Mainboard", "TW0P": "Wi-Fi",
+                     "TL0P": "Display", "TTLD": "Thunderbolt left", "TTRD": "Thunderbolt right"]
+        if let label = exact[key] { return "\(label) · \(key)" }
+        let families = ["TC": "CPU", "Tp": "CPU", "Te": "CPU efficiency",
+                        "TG": "GPU", "Tg": "GPU", "Tm": "Memory", "TM": "Memory",
+                        "TB": "Battery", "TH": "Drive", "TA": "Ambient", "TZ": "Thermal zone"]
+        if let family = families[String(key.prefix(2))] { return "\(family) temperature · \(key)" }
+        return "Temperature sensor · \(key)"
+    }
+    static func hidName(forKey key: String) -> String {
+        func groups(_ pattern: String) -> [String]? {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: key, range: NSRange(key.startIndex..., in: key)) else { return nil }
+            return (1..<match.numberOfRanges).map {
+                Range(match.range(at: $0), in: key).map { String(key[$0]) } ?? ""
+            }
+        }
+        var label: String?
+        if key == "als-temp" { label = "Ambient light sensor temperature" }
+        else if key == "gas gauge battery" { label = "Battery temperature" }
+        else if let parts = groups("^PMU([0-9]*) (tdie|tdev)([0-9]+)$") {
+            let unit = parts[0].isEmpty ? "" : " \(parts[0])"
+            label = "Power management\(unit) \(parts[1] == "tdie" ? "die" : "device") \(parts[2])"
+        } else if let parts = groups("^PMU([0-9]*) tcal$") {
+            label = "Power management\(parts[0].isEmpty ? "" : " " + parts[0]) calibration"
+        } else if let parts = groups("^NAND CH([0-9]+) temp$") {
+            label = "Storage temperature channel \(parts[0])"
+        } else if let parts = groups("^([ep])ACC(.*)$") {
+            label = "CPU \(parts[0] == "e" ? "efficiency" : "performance") temperature\(parts[1])"
+        }
+        return "\(label ?? "Temperature sensor") · \(key)"
     }
     @objc public func isKnownKey(_ key: String) -> Bool { knownTemperatureKeys.contains(key) || inventory[key] != nil && key.hasPrefix("F") && key.hasSuffix("Ac") }
 }
