@@ -133,4 +133,15 @@
     return nil;
 #endif
 }
+- (NSNumber *)locationIDForService:(id)service {
+#if TARGET_CPU_ARM64 || defined(XRG_SENSOR_TEST_TRANSPORTS)
+    @try {
+        if (CFGetTypeID((__bridge CFTypeRef)service) != XRGHIDServiceTypeID()) return nil;
+        id location = CFBridgingRelease(XRGHIDCopyProduct((__bridge IOHIDServiceClientRef)service, CFSTR("LocationID")));
+        return [location isKindOfClass:[NSNumber class]] ? location : nil;
+    } @catch (NSException *exception) { return nil; }
+#else
+    return nil;
+#endif
+}
 @end

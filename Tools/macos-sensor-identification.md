@@ -40,7 +40,8 @@ incorrect. Apple Silicon CPU/GPU families also do not apply to Intel by default.
   manufacture an alias from their shared prefix.
 - Driver HID products and LocationID values give explicit names for PMU,
   storage and battery services. Multiple battery services share one product
-  string; the existing product-based collection contract is unchanged here.
+  string. The follow-up now disambiguates those products with validated LocationIDs;
+  see [the naming and selection rules](macos-sensor-names.md).
 - Published catalogues disagree about `TPD*`, `TRDX`, `TPMP`, `TPSP` and `TDBP`.
   Neither an M2 temperature-correlation experiment nor a model-independent
   catalogue establishes those physical assignments on M5. They remain unresolved.
@@ -75,3 +76,38 @@ To resolve the remaining channels, obtain a model-specific explicit description
 or a verified firmware/driver key transformation. Controlled temperature
 correlation can guide that investigation but cannot by itself identify a sensor's
 physical location or justify changing its metric meaning.
+
+## Follow-up: exact-board firmware and HID identities
+
+The local restore kernel cache was decoded with the system LZFSE decoder. Owned
+standalone copies of its AppleSMC and ApplePMP fileset entries preserve VM
+addresses and segment bytes, with relocated Mach-O file offsets. Kernel-collection
+chained fixups were not materialized; indirect/static-reference coverage is
+therefore incomplete. No driver was loaded or altered.
+
+Hopper's AppleSMC `_createSensor` observation
+`ev_f3bba0fe6ceca9897c18b8781f089b686a4b573234842a6f2b81f133d1366c84`
+shows that PMU products are constructed from source keys and that gas-gauge
+sources share the text `gas gauge battery`. Live IORegistry independently pairs
+that product with six distinct LocationIDs: `TG0B`, `TG0C`, `TG0H`, `TG0V`, `TG1B`
+and `TG2B`. The preceding last-write-wins dictionary lost five of those channels.
+The new implementation uses those driver identities without borrowing any
+firmware code or assigning unverified physical positions to the IDs.
+
+The exact-board `t8142pmp.im4p` payload is an uncompressed Mach-O inside IMG4.
+Its SHA-256 is `58d790f2a5e0d8a12acff79ca37934e63f2fb71492d896bbacd39fde495405c4`.
+Hopper evidence `ev_50a0b6ca9f67e6fccd8bd4325f2530097b8df436af544fd357c64b1a20307dc2`
+shows its `temp-sensor` consumer reading 56-byte records, copying their long
+labels and resolving their device IDs against 124-byte `soc-device` records.
+That path did not establish a translation to the compact SMC keys. The live PMP
+report legend likewise did not supply an explicit thermal-label bridge.
+
+The local board's iBoot payload was decoded and checked for embedded LZFSE SMC
+firmware; no such stream or `AppleSMCFirmware` marker was found in that payload.
+This is a bounded negative result, not proof that the machine has no SMC firmware.
+The device tree names its SMC firmware `t8142smc`; obtaining that exact image is
+the next specific artifact needed for further compact-key registration analysis.
+
+Extraction scripts, source/derived hashes, scoped report-channel metadata and
+REA snapshots are retained under `dist/sensor-firmware-validation/`. No Apple
+binary or catalogue is committed to the repository.
