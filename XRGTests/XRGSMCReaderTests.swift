@@ -382,6 +382,17 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TH0b", systemModel: "Mac17,4") == nil)
     }
 
+    @Test func m5SuppliedInputDoesNotAcquireAnUnprovedAmbientSource() {
+        let source = SMCSensorFixture(["TAOL", "RBr "])
+        source.set("TAOL", 0.0); source.set("RBr ", Data("m87".utf8))
+        let sensors = XRGSMCSensors(transport: source, branchNameSource: { _ in ["TAOL": "Ambient temperature"] },
+                                   systemModel: "Mac17,4", publishedNameSource: { [:] })
+        #expect(sensors.humanReadableName(forKey: "TAOL") == "Sensor input · TAOL")
+        #expect(sensors.temperatureValues(includingUnknown: true)["TAOL"] as? Double == 0.0)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TAOL", systemModel: "Mac16,11") == nil)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TAOL", systemModel: nil) == nil)
+    }
+
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
         func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
             for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }
