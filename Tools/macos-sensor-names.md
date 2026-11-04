@@ -28,6 +28,11 @@ Two further PMU2 readings use temperature-channel ordinals because their
 specific die/device roles remain unknown. Verified PMU device identities
 override misleading generic CPU/memory/drive families on this exact model;
 see [the device-stream proof](macos-smc-firmware-investigation.md#resolved-j815-pmu-device-streams).
+Four other M5 readings are named by their two verified serial temperature
+monitors and channel ordinals. Six additional computed fields describe
+verified maximum operations, including adjusted GPU/CPU temperature maxima.
+These names identify producer/algorithm roles without inferring board
+placement; see [the monitor and maximum proofs](macos-smc-firmware-investigation.md#resolved-j815-serial-monitors-and-further-maxima).
 
 Duplicate HID products use the driver's `LocationID` to keep their channels
 separate. For example, six `gas gauge battery` services on the local M5 become

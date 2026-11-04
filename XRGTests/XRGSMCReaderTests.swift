@@ -234,6 +234,35 @@ struct XRGSMCReaderTests {
         #expect(other.humanReadableName(forKey: "TRD8") == "Temperature sensor · TRD8")
     }
 
+    @Test func serialTemperatureMonitorsUseVerifiedProducerAndChannelOrdinals() {
+        let source = SMCSensorFixture(["TDBP", "TDeL", "Ts0P", "Ts1P", "Ts00", "TDEL"])
+        source.set("TDBP", 40.0); source.set("TDeL", 45.0)
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { [:] })
+        #expect(sensors.humanReadableName(forKey: "TDBP") == "Temperature monitor 1 channel 1 · TDBP")
+        #expect(sensors.humanReadableName(forKey: "TDeL") == "Temperature monitor 1 channel 2 · TDeL")
+        #expect(sensors.humanReadableName(forKey: "Ts0P") == "Temperature monitor 2 channel 1 · Ts0P")
+        #expect(sensors.humanReadableName(forKey: "Ts1P") == "Temperature monitor 2 channel 2 · Ts1P")
+        #expect(sensors.humanReadableName(forKey: "Ts00") == "Temperature sensor · Ts00")
+        #expect(sensors.humanReadableName(forKey: "TDEL") == "Temperature sensor · TDEL")
+        #expect(sensors.temperatureValues(includingUnknown: true)["TDBP"] as? Double == 40.0)
+        #expect(sensors.temperatureValues(includingUnknown: true)["TDeL"] as? Double == 45.0)
+        let other = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { [:] })
+        #expect(other.humanReadableName(forKey: "Ts0P") == "Temperature sensor · Ts0P")
+    }
+
+    @Test func adjustedTemperatureAggregatesKeepTheirVerifiedSourceFamilies() {
+        let source = SMCSensorFixture(["TVD0", "TVDA", "TVDG", "TVDP", "TVDE", "TVV0"])
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { [:] })
+        #expect(sensors.humanReadableName(forKey: "TVD0") == "Adjusted temperature maximum · TVD0")
+        #expect(sensors.humanReadableName(forKey: "TVDA") == "Adjusted temperature maximum · TVDA")
+        #expect(sensors.humanReadableName(forKey: "TVDG") == "GPU temperature maximum (adjusted) · TVDG")
+        #expect(sensors.humanReadableName(forKey: "TVDP") == "CPU temperature maximum (adjusted) · TVDP")
+        #expect(sensors.humanReadableName(forKey: "TVDE") == "CPU efficiency temperature maximum (adjusted) · TVDE")
+        #expect(sensors.humanReadableName(forKey: "TVV0") == "Temperature maximum (selected channels) · TVV0")
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TVDA", systemModel: nil) == nil)
+        #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TVDG", systemModel: "Mac16,11") == nil)
+    }
+
     @Test func boundedLegacyCatalogueDecoderRejectsAmbiguousBranchesAndChangedLayouts() {
         func word(_ value: UInt64, _ offset: Int, into data: inout Data, width: Int = 8) {
             for i in 0..<width { data[offset+i] = UInt8(truncatingIfNeeded: value >> (8*i)) }
