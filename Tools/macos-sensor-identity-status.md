@@ -68,6 +68,24 @@ The four remaining `TV` computation roles are fixed affine models, now named
 by role. Their identities as computations do not establish physical sensor
 sites or resolve every upstream feature's sender-side unit contract.
 
+The complete selected M4 PMU stream family has now been checked: nine active
+objects and all 132 TV/SL/TD mappings reconstructed from native constructor
+instructions. None assigns the nine `Tz` inputs or the three omitted PMU `F`
+inputs. That closes this selected-map boundary, not all possible runtime
+configuration or private writers.
+
+Sender-side ANS and embedded PMU firmware are now available for static analysis;
+their hashes and acquisition/extraction proofs are recorded in the firmware
+investigation. Their acquisition does not by itself close the packet contracts
+listed above. In particular, the similar ANS query-response record uses a
+different wire class/subtype from the exact SDN receiver.
+
+The current OS shared-cache scan found no `zEAO` writer candidate across 84
+system cache/support files (7.23 GB), using checked ASCII, UTF16 and split
+instruction patterns. This is a bounded negative search on 26C5035r; dynamic
+key construction and writers outside that cache remain open. It does not
+identify the writer or justify an ambient-light temperature label.
+
 ## Evidence needed to close these boundaries
 
 An exact named producer-to-destination configuration or packet contract can
