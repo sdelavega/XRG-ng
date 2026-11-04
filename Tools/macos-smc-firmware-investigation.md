@@ -187,13 +187,17 @@ the device's provider object. The callback obtains a bank selector from
 runtime-built per-bank configuration; it does not directly supply the SMC
 source ID or the `0x150`/`0x152` PTD starts.
 
+The [subsequent bank-configuration trace](macos-pmp-bank-investigation.md)
+resolves this selector and virtual call through a mask/unmask-style control
+path. It does not assign a temperature output slot; the earlier callback
+construction lead is closed. Static named-device configurations were also
+located, with runtime mutation still possible.
+
 The live `ptd-range` record named `SOC-DEV-PKT` starts at `0xa8` and spans
 `0x180` entries, containing both starts. Membership in that interval does
-not connect either source ID to ANE or another component. The next specific
-boundary is construction of the device/bank configuration consumed by
-`0x10237a8` and `0x1023904`, including its PTD output-channel assignment.
-Initialization near `0x10133fc` is a lead, with indirect calls and merged
-decompiler boundaries still requiring instruction-level checks. The scoped
+not connect either source ID to ANE or another component. The remaining
+boundary is the origin/layout of the packet data containing those PTD starts.
+The scoped
 callback/accessor checks are retained in ignored `PMP_PTD_BOUNDARY.md` and
 `pmp-soc-thermal-accessor-objdump.txt` under
 `dist/havana-smc-artifact-discovery/`.
