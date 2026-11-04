@@ -80,7 +80,12 @@ Failed battery polls show “Battery unavailable”, distinct from a successful
 read that finds no installed battery. They append missing power samples in both
 history modes. The last capacity snapshot remains cached for compatibility, but
 the panel hides stale charge, charging state and watt readings until a successful
-poll. Recovery with the same battery count retains the history and failure gap.
+poll. Recovery with the same nonzero installed-battery count retains the history
+and failure gap.
+An observed change in installed-battery count clears both power histories. No
+installed batteries means missing history, while a real zero-watt reading from
+an installed battery remains zero. This boundary detects count changes, not a
+replacement that leaves the count unchanged.
 The collector prefers the top-level `AppleRawCurrentCapacity` /
 `AppleRawMaxCapacity` pair, then the same pair inside `BatteryData`. It never
 combines halves from different dictionaries or labels normalized 0–100 capacity

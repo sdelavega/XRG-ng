@@ -88,6 +88,36 @@ struct XRGBatteryViewTests {
         }
     }
 
+    @Test(arguments: [0, 1])
+    func batteryCountChangesRetireBothHistoriesWithoutInventingZeroSamples(windowMinutes: Int) throws {
+        try withFixture { settings, defaults in
+            defaults.set(4, forKey: XRGBatteryView.historyKey)
+            defaults.set(windowMinutes, forKey: XRGBatteryView.windowKey)
+            var wall = 100.0
+            let source = BatterySource([battery(amperage: -10000)])
+            let miner = XRGBatteryMiner(source: { source.samples }, historyClock: { wall })
+            let view = XRGBatteryView(frame: NSRect(x: 0, y: 0, width: 200, height: 100),
+                miner: miner, settings: settings, defaults: defaults)
+            wall = 110; source.samples = [battery()]; miner.graphUpdate(nil)
+            #expect(view.wattScale == 120 && view.historyWattScale == 120)
+            wall = 120; source.samples = [battery(amperage: -500), battery(amperage: -500)]
+            miner.graphUpdate(nil)
+            #expect(view.currentWatts == -12)
+            #expect(view.wattScale == 30 && view.historyWattScale == 30)
+            #expect(miner.dischargeWatts.orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(miner.timedHistory.observationCount == 1)
+            wall = 130; source.samples = []; miner.graphUpdate(nil)
+            #expect(miner.batteryStatus() == .noBattery && view.currentWatts == 0)
+            #expect(miner.chargeWatts.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(miner.dischargeWatts.orderedValues.allSatisfy { $0 == XRGGraphRenderer.missingValue })
+            #expect(miner.timedHistory.observationCount == 0)
+            wall = 140; source.samples = [battery(amperage: 0)]; miner.graphUpdate(nil)
+            #expect(miner.batteryStatus() == .runningOnBattery)
+            #expect(miner.dischargeWatts.currentValue == 0 && view.historyData()[1].currentValue == 0)
+            #expect(miner.dischargeWatts.orderedValues.dropLast().allSatisfy { $0 == XRGGraphRenderer.missingValue })
+        }
+    }
+
     @Test func nestedBatteryCapacityReachesBothVisibleColumns() throws {
         try withFixture { settings, defaults in
             let source = BatterySource([XRGBatteryInfo(dictionary: [
