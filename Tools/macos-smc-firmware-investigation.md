@@ -620,7 +620,13 @@ The SMC reports `AppleSMCFirmware_H17_6-7372.60.63.j815.REL` and ANS reports
 `AppleStorageFirmwareASP3-241.60.3~407`. All 2,431 SMC key records, all 148
 T-key records and all 291 group-input associations match the old inventory.
 Backing addresses move by eight bytes; code and table relocations are checked
-explicitly. Inventory equality alone does not establish producer equivalence.
+explicitly. Inventory equality alone does not establish producer equivalence. Independent
+current-code checks rederive 34 selected PMU descriptors and both serial
+monitors, plus 47 adjusted inputs, seven maxima, six fixed models, adaptive
+model bindings, eight categorical consumers, TAOL and the TH0x copy. Their
+logical bindings match the earlier proofs. The checks normalize explicit
+relocations and compare configuration/operations; they do not claim whole-image
+equivalence or resolve new upstream units.
 The current LLB comparison also preserves seven named MTR hardware records,
 617 MTR operations and five DPE operations after dereferencing relocated
 pointers. It does not add an AON source-to-destination route.
