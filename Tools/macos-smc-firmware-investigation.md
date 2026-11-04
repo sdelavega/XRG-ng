@@ -109,6 +109,48 @@ on Havana and retained generic names for the 14 matching keys on the M5.
 Ignored `dist/die-sensor-name-validation/` retains both gate logs and native
 name/value snapshots.
 
+## Resolved j815 PMU die streams and computed maxima
+
+On `Mac17,4`, 21 readable stream keys share an exact HAL object and ADC ID
+with canonical temperature sources whose names are published by the native
+driver. Provider selection at `0x33c08` joins P-source keys to HAL `0x8f5b0`
+and R-source keys to HAL `0x8f630`. The corresponding key-to-ADC methods are
+`0xe700` and `0xc280`. Canonical reads through `0x2d308` / `0x9ddc` and stream
+reads through `0x10368` call the same provider engineering converter for each
+ADC ID. These stream values are Celsius, not raw ADC counts.
+
+| Stream keys | Canonical sources | Published identity |
+| --- | --- | --- |
+| `TPD0`–`TPD8` | `TP1b`–`TP9b` | PMU die 1–9 |
+| `TPD9` | `TPab` | PMU die 10 |
+| `TPDA`–`TPDC` | `TPbl`, `TPcl`, `TPdl` | PMU die 11–13 |
+| `TRD0`–`TRD6` | `TR1b`–`TR7b` | PMU2 die 1–7 |
+| `TRD7` | `TR8l` | PMU2 die 8 |
+
+The application requires the exact model and each exact canonical source's
+qualified live PMU die label. Canonical ADC source IDs need not appear in the
+ordinary SMC key inventory; their metadata can name a verified stream alias
+without fabricating an extra readable key. Other models and missing or
+inconsistent source labels retain their existing fallback.
+
+Three j815 keys describe computations rather than individual physical CPU
+sensors. `TPDX` takes the maximum of inputs 101–116, including three inputs
+outside the thirteen mapped PMU die streams. `TRDX` takes the maximum of
+inputs 118 and 120–126; it skips two stream entries. Both use the label
+Temperature maximum (selected channels), without claiming a maximum over all
+PMU sensors. `TCMb` takes a nonnegative-seeded maximum of 47 floats
+(`0xa9e88` through `0xa9f40`). All 47 sources are active transforms of inputs
+142–188, applying individual offsets and a `[-20,120]` clamp. Its label is
+Adjusted temperature maximum; the previous CPU family fallback was inaccurate.
+
+Ignored `dist/tz-producer-validation/td-source/` retains the original mapping
+and inverse decoders, focused instructions, `td-identities.json` and
+`tcmb-adjusted-sources.json`. The full Debug gate passed on both hosts with
+648 tests per architecture and native / Rosetta packaged smoke checks.
+Fresh linked probes verified all 24 M5 names and readable temperature values,
+and verified that the aliases/maxima labels do not apply on Havana. Logs and
+snapshots are in ignored `dist/pmu-alias-name-validation/`.
+
 ## Source identity
 
 The preserved local restore bundles contain second-stage iBoot. SMC is embedded

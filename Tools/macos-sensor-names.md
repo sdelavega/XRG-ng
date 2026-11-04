@@ -17,6 +17,12 @@ inventory. This metadata takes precedence over older branch descriptions.
 Other HID providers are excluded from this join, and ambiguous or malformed
 records retain the existing fallback label. The source-key argument proof is
 recorded in [the identification investigation](macos-sensor-identification.md).
+On the M5 MacBook Air (`Mac17,4`), verified firmware ADC links also let those
+published names identify 21 readable `TPD` / `TRD` stream channels. Labels
+require each exact source's metadata and retain the stream's original key.
+Three computed readings now describe their actual maximum operations instead
+of implying individual CPU sensors; see
+[the stream and maximum proofs](macos-smc-firmware-investigation.md#resolved-j815-pmu-die-streams-and-computed-maxima).
 
 Duplicate HID products use the driver's `LocationID` to keep their channels
 separate. For example, six `gas gauge battery` services on the local M5 become
