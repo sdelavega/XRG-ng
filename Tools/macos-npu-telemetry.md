@@ -16,10 +16,12 @@ inference model or an ANE device user client.
 - **Pwr↑ / n/a%**: residency is unavailable, but energy increased. Activity is
   inferred from energy; no capacity percentage is manufactured from watts.
 - **Pwr / n/a%** with zero watts: no energy increase reported, utilization unknown.
-- **Traffic / No bus**: positive / absent ANE fabric bandwidth-bin reports in a
+- **Traffic / Quiet**: positive / absent ANE fabric bandwidth-bin reports in a
   valid interval. A narrow secondary-color band plots their rate with an observed
   scale. These are sampling reports, not bytes, inferences or compute occupancy;
   the band never becomes a capacity percentage. Background traffic can appear.
+  “Quiet” describes the observed traffic interval, not missing hardware or proof
+  that the Neural Engine is idle. Earlier versions called this state “No bus”.
 - **Last detected activity**: end of a positive residency interval, observed
   fabric-traffic interval, or an energy interval when the other signals are
   unavailable, with the evidence source.

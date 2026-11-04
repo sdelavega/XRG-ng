@@ -56,6 +56,17 @@ private final class BatteryNibOwner: NSObject {}
 
 @Suite(.serialized) @MainActor
 struct XRGBatteryViewTests {
+    @Test func nestedBatteryCapacityReachesBothVisibleColumns() throws {
+        try withFixture { settings, defaults in
+            let source = BatterySource([XRGBatteryInfo(dictionary: [
+                "CurrentCapacity": 50, "MaxCapacity": 100,
+                "BatteryData": ["AppleRawCurrentCapacity": 2679, "AppleRawMaxCapacity": 5358]
+            ])])
+            let view = panel(source, settings, defaults)
+            #expect(view.graphLabels.leftLabel.accessibilityValue()?.contains("2679mAh") == true)
+            #expect(view.graphLabels.rightLabel.accessibilityValue()?.contains("5358mAh") == true)
+        }
+    }
     @Test func retentionKeepsSignedPowerStatusAndPollingIndependentOfGraphSize() throws {
         try withFixture { settings, defaults in
             let source = BatterySource([battery()]), view = panel(source, settings, defaults)

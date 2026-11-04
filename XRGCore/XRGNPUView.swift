@@ -96,7 +96,7 @@ public final class XRGNPUView: NSView, XRGModuleView {
             // An energy change is evidence of activity, but cannot define a percentage.
             if miner.trafficObserved == true { status = "Traffic" }
             else if (miner.powerWatts ?? 0) > 0 { status = "Pwr↑" }
-            else { status = miner.trafficObserved == false ? "No bus" : "Pwr" }
+            else { status = miner.trafficObserved == false ? "Quiet" : "Pwr" }
             values = "\(watts)\nn/a%"
         }
         labels.layoutColumnText("NPU\n\(status)", centerText: nil,

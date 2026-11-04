@@ -43,9 +43,21 @@ public final class XRGBatteryInfo: NSObject {
 
     public init(dictionary: [String: Any]) {
         func number(_ key: String) -> NSNumber { dictionary[key] as? NSNumber ?? 0 }
-        let rawCurrent = dictionary["AppleRawCurrentCapacity"] as? NSNumber
-        let rawMaximum = dictionary["AppleRawMaxCapacity"] as? NSNumber
-        hasRawCapacity = rawCurrent != nil && (rawMaximum?.doubleValue ?? 0) > 0
+        func capacities(_ values: [String: Any]) -> (NSNumber, NSNumber)? {
+            guard let current = values["AppleRawCurrentCapacity"] as? NSNumber,
+                  let maximum = values["AppleRawMaxCapacity"] as? NSNumber,
+                  [current, maximum].allSatisfy({
+                      CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.isFinite &&
+                      $0.doubleValue >= 0 && $0.doubleValue <= Double(Int.max) && $0.intValue >= 0
+                  }), maximum.intValue > 0 else { return nil }
+            return (current, maximum)
+        }
+        // Newer AppleSmartBattery drivers nest the mAh pair in BatteryData.
+        // Keep each pair together: normalized Current/MaxCapacity are percentages.
+        let raw = capacities(dictionary) ?? capacities(dictionary["BatteryData"] as? [String: Any] ?? [:])
+        let rawCurrent = raw?.0
+        let rawMaximum = raw?.1
+        hasRawCapacity = raw != nil
         // Some macOS power sources expose only normalized percentage capacities.
         let current = hasRawCapacity ? rawCurrent?.doubleValue : (dictionary["CurrentCapacity"] as? NSNumber)?.doubleValue
         let maximum = hasRawCapacity ? rawMaximum?.doubleValue : (dictionary["MaxCapacity"] as? NSNumber)?.doubleValue
@@ -54,8 +66,8 @@ public final class XRGBatteryInfo: NSObject {
         } else {
             chargeFraction = 0
         }
-        currentCharge = max(0, number("AppleRawCurrentCapacity").intValue)
-        totalCapacity = max(0, number("AppleRawMaxCapacity").intValue)
+        currentCharge = rawCurrent?.intValue ?? 0
+        totalCapacity = rawMaximum?.intValue ?? 0
         voltage = max(0, CGFloat(number("Voltage").doubleValue) / 1000)
         amperage = CGFloat(number("Amperage").int64Value) / 1000
         let minutes = number("TimeRemaining").intValue
