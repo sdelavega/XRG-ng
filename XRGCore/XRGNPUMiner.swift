@@ -10,6 +10,12 @@ private final class XRGNPUWorker: @unchecked Sendable {
     private var pending = false
     private var lastPoll: TimeInterval = -.infinity
     private lazy var reader = XRGNPUReader()
+    func reset() {
+        lock.lock(); lastPoll = -.infinity; lock.unlock()
+        // Serialize reader replacement behind any read already in progress.
+        // The miner rejects that read's old generation when it is delivered.
+        queue.async { [self] in reader = XRGNPUReader() }
+    }
     func request(_ completion: @escaping @MainActor @Sendable (XRGNPUReading) -> Void) {
         lock.lock()
         let now = ProcessInfo.processInfo.systemUptime
@@ -26,6 +32,8 @@ private final class XRGNPUWorker: @unchecked Sendable {
 @MainActor @objc(XRGNPUMiner)
 public final class XRGNPUMiner: NSObject {
     private let worker: XRGNPUWorker?
+    private let requestSource: ((@escaping @MainActor @Sendable (XRGNPUReading) -> Void) -> Void)?
+    private let resetSource: (() -> Void)?
     private let source: (() -> XRGNPUReading?)?
     private let historyClock: () -> TimeInterval
     let timedPower = XRGTimedHistory(channels: 1, retentionMinutes: 60)!
@@ -48,6 +56,10 @@ public final class XRGNPUMiner: NSObject {
     private var lastActivityIntervalEnd: TimeInterval?
     private var lastTrafficIntervalEnd: TimeInterval?
     private var trafficSourceIDs: [String] = []
+    private var generation = UUID()
+    private var collectionActive = true
+    private var minimumIntervalStart: TimeInterval?
+    private var awaitingResumeSample = false
     @nonobjc var secondsSinceActivity: TimeInterval? {
         guard let lastActivityTime, clock().isFinite else { return nil }
         return max(0, clock() - lastActivityTime)
@@ -59,11 +71,47 @@ public final class XRGNPUMiner: NSObject {
 
     public override init() {
         historyClock = { Date().timeIntervalSince1970 }; worker = XRGNPUWorker(); source = nil; clock = { ProcessInfo.processInfo.systemUptime }
+        requestSource = nil; resetSource = nil
         super.init(); getLatestNPUInfo()
     }
     init(source: @escaping () -> XRGNPUReading?, clock: @escaping () -> TimeInterval, historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         self.historyClock = historyClock; worker = nil; self.source = source; self.clock = clock
+        requestSource = nil; resetSource = nil
         super.init(); getLatestNPUInfo()
+    }
+    init(request: @escaping (@escaping @MainActor @Sendable (XRGNPUReading) -> Void) -> Void,
+         reset: @escaping () -> Void, clock: @escaping () -> TimeInterval,
+         historyClock: @escaping () -> TimeInterval) {
+        worker = nil; source = nil; requestSource = request; resetSource = reset
+        self.clock = clock; self.historyClock = historyClock
+        super.init(); getLatestNPUInfo()
+    }
+    @nonobjc func suspendCollection() {
+        guard collectionActive else { return }
+        collectionActive = false
+        invalidateForLifecycle("ANE collection suspended")
+    }
+    @nonobjc func samplingDidWake() {
+        // A wake is a boundary even when the sleep notification was missed.
+        invalidateForLifecycle("Waiting for a fresh ANE interval after wake")
+        collectionActive = true
+        worker?.reset(); resetSource?()
+    }
+    private func invalidateForLifecycle(_ reason: String) {
+        generation = UUID(); previous = nil; lastReading = nil
+        powerWatts = nil; activeFraction = nil; trafficObserved = nil; trafficReportsPerSecond = nil
+        lastActivityIntervalEnd = nil; lastTrafficIntervalEnd = nil
+        // Uptime excludes sleep. An age computed across sleep would understate
+        // how long ago the activity was observed, so retire that session marker.
+        lastActivityTime = nil; lastActivitySource = nil
+        let now = clock()
+        minimumIntervalStart = now.isFinite && now >= 0 ? now : nil
+        awaitingResumeSample = true; issue = reason
+        // Retain observations already measured, with a missing boundary marker.
+        for data in [powerDataSet, activityDataSet, trafficDataSet] { data.setNextValue(XRGGraphRenderer.missingValue) }
+        let observed = historyClock()
+        for history in [timedPower, timedActivity, timedTraffic] { history.append(time: observed, values: [.nan]) }
+        onUpdate?()
     }
     @objc public func setDataSize(_ count: Int) {
         guard (0...20_000).contains(count), numSamples != count else { return }
@@ -84,6 +132,7 @@ public final class XRGNPUMiner: NSObject {
     }
     private func acceptActivity(_ reading: XRGNPUReading) {
         guard !reading.devices.isEmpty, let interval = reading.activity, let fraction = interval.activeFraction,
+              minimumIntervalStart.map({ interval.start >= $0 }) ?? true,
               interval.end <= reading.time, reading.time - interval.end <= 5,
               lastActivityIntervalEnd.map({ interval.end > $0 && interval.start >= $0 }) ?? true else {
             resetActivity(); return
@@ -101,6 +150,7 @@ public final class XRGNPUMiner: NSObject {
     }
     private func acceptTraffic(_ reading: XRGNPUReading) {
         guard !reading.devices.isEmpty, let interval = reading.traffic, let count = interval.observations,
+              minimumIntervalStart.map({ interval.start >= $0 }) ?? true,
               interval.end <= reading.time, reading.time - interval.end <= 5,
               lastTrafficIntervalEnd.map({ interval.end > $0 && interval.start >= $0 }) ?? true else {
             resetTraffic(); return
@@ -116,8 +166,14 @@ public final class XRGNPUMiner: NSObject {
         }
     }
     @objc public func getLatestNPUInfo() {
-        if let worker {
-            worker.request { [weak self] reading in self?.accept(reading); self?.onUpdate?() }
+        guard collectionActive else { return }
+        if worker != nil || requestSource != nil {
+            let token = generation
+            let completion: @MainActor @Sendable (XRGNPUReading) -> Void = { [weak self] reading in
+                guard let self, self.collectionActive, self.generation == token else { return }
+                self.accept(reading); self.onUpdate?()
+            }
+            if let worker { worker.request(completion) } else { requestSource?(completion) }
         } else if let reading = source?() { accept(reading) }
         if let lastReading, clock() - lastReading > max(5, staleAfter.isFinite ? staleAfter : 5) {
             powerWatts = nil; previous = nil; issue = "ANE sample is stale"; resetHistory(); resetActivity(); resetTraffic()
@@ -134,14 +190,18 @@ public final class XRGNPUMiner: NSObject {
             lastTrafficIntervalEnd = nil; trafficSourceIDs = []; resetTraffic()
         }
         let observed = historyClock()
+        let resuming = awaitingResumeSample
+        awaitingResumeSample = false
         defer {
             timedPower.append(time: observed, values: [powerWatts ?? .nan])
             timedActivity.append(time: observed, values: [activeFraction.map { $0 * 100 } ?? .nan])
             timedTraffic.append(time: observed, values: [trafficReportsPerSecond ?? .nan])
         }
         devices = reading.devices; current = reading; lastReading = reading.time
-        acceptActivity(reading)
-        acceptTraffic(reading)
+        // The first fresh native snapshot establishes IOReport baselines and
+        // normally has no intervals. Keep prior history across that warmup.
+        if !resuming || reading.activity.map({ $0.start >= (minimumIntervalStart ?? 0) }) == true { acceptActivity(reading) }
+        if !resuming || reading.traffic.map({ $0.start >= (minimumIntervalStart ?? 0) }) == true { acceptTraffic(reading) }
         let old = previous
         previous = nil; powerWatts = nil
         guard let energy = reading.energy, !energy.isEmpty, energy.count <= 16,
@@ -154,7 +214,9 @@ public final class XRGNPUMiner: NSObject {
               old.devices.map(\.id).sorted() == reading.devices.map(\.id).sorted(),
               Set(before.map(\.id)) == Set(energy.map(\.id)),
               reading.time > old.time, reading.time - old.time <= 300 else {
-            issue = "Waiting for ANE energy interval"; resetHistory(); return
+            issue = "Waiting for ANE energy interval"
+            if !resuming { resetHistory() }
+            return
         }
         let counters = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
         var joules = 0.0

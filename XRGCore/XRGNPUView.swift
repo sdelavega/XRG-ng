@@ -77,6 +77,8 @@ public final class XRGNPUView: NSView, XRGModuleView {
         miner.getLatestNPUInfo(); updateLabels(); needsDisplay = true
     }
     public func fastUpdate(_ timer: Timer?) {}
+    @nonobjc func samplingWillSleep() { miner.suspendCollection() }
+    @nonobjc func samplingDidWake() { miner.samplingDidWake() }
     public func min5Update(_ timer: Timer?) {}
     public func min30Update(_ timer: Timer?) {}
     public func fullReading() -> String { miner.fullReading() }

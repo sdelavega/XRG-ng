@@ -305,6 +305,35 @@ struct XRGGraphWindowTests {
         window.setSystemJustWokeUp(false); window.cleanupBeforeExiting()
         center.post(name: NSWorkspace.didWakeNotification, object: nil); #expect(!window.systemJustWokeUp())
     }
+    @Test func npuSleepWakeDoesNotReusePreSleepTelemetry() throws {
+        let f = try GraphWindowFixture(); defer { f.cleanUp() }
+        var now = 1.0, reads = 0
+        let device = XRGNPUDevice(id: 1, cores: 16, architecture: "fixture", firmwareLoaded: true)
+        var sample = XRGNPUReading(time: 1, devices: [device], appleSilicon: true,
+                                   energy: [.init(id: "ANE", unit: "mJ", value: 1000)], error: nil)
+        sample.activity = .init(start: 0, end: 1, clusters: [.init(id: "ANE", states: ["ACT": 50, "IDLE": 50])])
+        let miner = XRGNPUMiner(source: { reads += 1; return sample }, clock: { now })
+        let view = XRGNPUView(frame: NSRect(x: 0, y: 0, width: 86, height: 90), miner: miner,
+                             settings: f.window.appSettings, defaults: f.defaults)
+        f.window.contentView?.addSubview(view); view.awakeFromNib()
+        #expect(miner.activeFraction == 0.5)
+        let before = reads
+        f.window.systemWillSleep(Notification(name: NSWorkspace.willSleepNotification))
+        #expect(miner.activeFraction == nil && miner.powerWatts == nil && miner.trafficObserved == nil)
+        now = 2
+        sample = .init(time: 2, devices: [device], appleSilicon: true, energy: sample.energy, error: nil, activity: sample.activity)
+        view.graphUpdate(nil)
+        #expect(reads == before)
+        f.window.systemDidWake(Notification(name: NSWorkspace.didWakeNotification))
+        view.graphUpdate(nil)
+        #expect(miner.activeFraction == nil && miner.powerWatts == nil)
+        f.window.cleanupBeforeExiting()
+        let stopped = reads
+        now = 3
+        sample = .init(time: 3, devices: [device], appleSilicon: true, energy: sample.energy, error: nil, activity: sample.activity)
+        view.graphUpdate(nil)
+        #expect(reads == stopped)
+    }
     @Test func weakTimersDoNotKeepAClosedWindowAliveAndAreInvalidatedOnDeinit() throws {
         let f = try GraphWindowFixture(); defer { f.cleanUp() }
         weak var weakWindow: XRGGraphWindow?
