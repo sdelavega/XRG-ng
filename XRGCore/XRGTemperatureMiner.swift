@@ -35,6 +35,9 @@ import Foundation
     func name(forKey key: String) -> String?
     func isKnownKey(_ key: String) -> Bool
     var knownTemperatureKeyCount: Int { get }
+    /// An `XRGSensorGroup` raw value. Readers without it report every sensor
+    /// as identified.
+    @objc(sensorGroupForKey:) optional func sensorGroup(forKey key: String) -> Int
 }
 
 /// The app supplies this factory; the core and its tests do not link sensor transports.
@@ -98,6 +101,21 @@ public final class XRGTemperatureMiner: NSObject {
         state.ingestFans(fans, names: names(for: fans.map(\.key)))
         let silicon = reader?.siliconTemperatures() ?? [:]
         state.ingestTemperatures(silicon, names: names(for: Array(silicon.keys)))
+    }
+
+    /// Readings that never change for this many samples are suspected
+    /// placeholders. Temperature updates run at most every five seconds, so
+    /// this is at least five minutes of identical readings.
+    nonisolated static let flatLineSamples = 60
+
+    /// Groups for the Temperature settings pickers. A sensor the reader cannot
+    /// identify moves to suspected unused once its reading has stayed exactly
+    /// the same for `flatLineSamples` updates; identified sensors never do.
+    public func sensorGroup(forKey key: String) -> XRGSensorGroup {
+        let group = (reader?.sensorGroup?(forKey: key)).flatMap { XRGSensorGroup(rawValue: $0) } ?? .identified
+        guard group == .unidentified, let sensor = state.sensor(forLocation: key), sensor.units == "°C",
+              sensor.unchangedSamples >= Self.flatLineSamples else { return group }
+        return .suspectedUnused
     }
 
     @objc(locationKeysIncludingUnknown:)

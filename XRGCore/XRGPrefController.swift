@@ -33,6 +33,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     private let defaults: UserDefaults
     private let center: NotificationCenter
     private let sensorSource: () -> [XRGSensorData]
+    private let sensorGroupSource: (String) -> XRGSensorGroup
     private let interfaceSource: (XRGGraphWindow) -> [String]
     private let openURL: (URL) -> Bool
     private let errorNotice: (String, NSWindow?) -> Void
@@ -146,6 +147,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             let miner = XRGTemperatureMiner.shared
             return miner.locationKeys(includingUnknown: XRGTemperatureView.showUnknownSensors()).compactMap { miner.sensor(forLocation: $0) }
         }
+        sensorGroupSource = { XRGTemperatureMiner.shared.sensorGroup(forKey: $0) }
         interfaceSource = { $0.netView?.miner.networkInterfaces() ?? [] }
         openURL = { NSWorkspace.shared.open($0) }; errorNotice = Self.presentError
         showFont = { font in
@@ -157,7 +159,8 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         super.init()
     }
     @nonobjc init(defaults: UserDefaults, center: NotificationCenter = NotificationCenter(),
-                  sensors: @escaping () -> [XRGSensorData] = { [] }, interfaces: @escaping (XRGGraphWindow) -> [String] = { _ in [] },
+                  sensors: @escaping () -> [XRGSensorData] = { [] },
+                  sensorGroups: @escaping (String) -> XRGSensorGroup = { _ in .identified }, interfaces: @escaping (XRGGraphWindow) -> [String] = { _ in [] },
                   openURL: @escaping (URL) -> Bool = { _ in true }, error: @escaping (String, NSWindow?) -> Void = { _, _ in },
                   fontPanel: @escaping (NSFont?) -> Void = { _ in },
                   chooseOpen: @escaping (NSWindow, @escaping (URL?) -> Void) -> Void = { _, done in done(nil) },
@@ -165,7 +168,8 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
                   notificationPermission: @escaping () async -> String = { "Notification transport is not installed in this preview." },
                   readFile: @escaping (URL) throws -> Data = XRGTheme.readFile,
                   writeFile: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
-        self.defaults = defaults; self.center = center; sensorSource = sensors; interfaceSource = interfaces
+        self.defaults = defaults; self.center = center; sensorSource = sensors; sensorGroupSource = sensorGroups
+        interfaceSource = interfaces
         self.openURL = openURL; errorNotice = error; showFont = fontPanel; self.chooseOpen = chooseOpen; self.chooseSave = chooseSave
         self.notificationPermission = notificationPermission
         self.readFile = readFile; self.writeFile = writeFile; animate = false
@@ -395,8 +399,15 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             control.removeAllItems(); bind(control, #selector(sensorChoiceChanged(_:)), target: self)
             guard !temperatureSensors.isEmpty else { control.addItem(withTitle: "No Sensors Found"); control.item(at: 0)?.isEnabled = false; continue }
             let selector = [#selector(XRGGraphWindow.setTempFG1Location(_:)), #selector(XRGGraphWindow.setTempFG2Location(_:)), #selector(XRGGraphWindow.setTempFG3Location(_:))][index]
-            for (key, label) in [("", "None")] + temperatureSensors.map({ ($0.key, $0.label()) }) {
+            func add(_ key: String, _ label: String) {
                 let item = NSMenuItem(title: label, action: selector, keyEquivalent: ""); item.representedObject = key; item.target = xrgGraphWindow; control.menu?.addItem(item)
+            }
+            add("", "None")
+            // Section headers appear only when more than one group is present.
+            let sections = Self.sensorSections(temperatureSensors, group: sensorGroupSource)
+            for (title, sensors) in sections {
+                if sections.count > 1 { control.menu?.addItem(.separator()); control.menu?.addItem(.sectionHeader(title: title)) }
+                for sensor in sensors { add(sensor.key, sensor.label()) }
             }
             let selected = [settings?.tempFG1Location, settings?.tempFG2Location, settings?.tempFG3Location][index] ?? ""
             control.selectItem(at: control.itemArray.firstIndex { $0.representedObject as? String == selected } ?? 0)
@@ -417,6 +428,14 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
             for name in interfaceSource(graph) { networkInterface?.addItem(withTitle: name); networkInterface?.lastItem?.representedObject = name }
         }
         if let index = networkInterface?.itemArray.firstIndex(where: { $0.representedObject as? String == settings?.networkInterface }) { networkInterface?.selectItem(at: index) }
+    }
+    /// Identified, unidentified and suspected-unused sensors, in that order,
+    /// keeping each group's existing order and omitting empty groups.
+    static func sensorSections(_ sensors: [XRGSensorData], group: (String) -> XRGSensorGroup) -> [(String, [XRGSensorData])] {
+        let grouped = Dictionary(grouping: sensors) { group($0.key) }
+        let order: [(XRGSensorGroup, String)] = [(.identified, "Identified Sensors"), (.unidentified, "Unidentified Sensors"),
+                                                 (.suspectedUnused, "Suspected Unused Sensors")]
+        return order.compactMap { entry in grouped[entry.0].map { (entry.1, $0) } }
     }
     @IBAction public func sensorChoiceChanged(_ sender: NSPopUpButton) {
         guard let item = sender.selectedItem else { return }
