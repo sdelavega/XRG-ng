@@ -1034,6 +1034,61 @@ decompiler. See ignored `J815_TS_TA_PRODUCERS.md`,
 subset, not equality of the entire live table and the following firmware
 bytes.
 
+## Further source-contract checks
+
+The current battery updater reads two separate wire commands: `0x6c` into
+battery object offset `0x49`, and `0x6d` into offset `0x4b`. Native provider
+and bus dispatch preserve these command bytes and copy each raw two-byte
+response without normalization. Getter `0x9010` produces raw/10. This proves
+the selected transport, not Celsius versus Kelvin or transducer placement;
+neither an SBS `0x08` remap nor a sibling gas-gauge command contract may be
+substituted. The exact live generic gauge identifies as bq40z651.
+`dist/battery-temperature-contract/verify_battery_transport.py` independently
+checks the selected current SMC instructions against original payload bytes.
+
+The j773s configured writer closure now inventories all 33 common/simple and
+eight weighted call sites across the full firmware TEXT extent and decodes
+their actual destination maps. None samples group-one inputs 305–313 or
+group-two inputs 32/50/68. The additional Tz pointer records belong to the
+32-byte scalar-monitor table at `0x70268`, not the compact key trie. Records
+at `0x71528 + 32*n` have monitor IDs 151–159 and four-byte sources; their
+consumers update record-local accumulators, never the source floats. Selected
+raw buffers are disjoint and native accessors expose scalar values, status or
+indices. The F periodic average export still writes zero on an empty window.
+This is a closure of the fixed supplied normal typed graph, excluding
+arbitrary writes, patches, corruption and other configuration. It establishes
+neither physical identity nor hardware availability. The original-image proof
+and native implementation are retained in
+`dist/m4-pmuf-source/configured-closure/verify_configured_closure.py`.
+
+The exact j815 restore DeviceTree (`6ad24d4b4ae70d48304e0ce6eb7c1936d26d4cb7a1133c7c3a8de8d7bb023694`)
+decodes to 506 nodes. All 61 PMP properties and 36 additional scoped
+PTD/MMIO/interrupt properties equal current live metadata. It supplies no
+boot-only missing sensor mapping. Normal and RestoreDeviceTree manifest
+digests have different IM4P type inputs (`dtre` versus `rdtr`); the proof
+preserves the original container and accounts explicitly for this difference.
+See `dist/sensor-devicetree-artifacts/verify_devicetree_evidence.py`.
+
+Current ApplePTDUserClient initialization returns false and its external
+method returns unsupported. The retained selector helper is therefore not
+promoted into a usable packet API. `_ptdRead` only copies sixteen-byte
+dashboard records; public twelve-byte registry entries contain identifiers,
+versions, starts, sizes and interrupt/features metadata, not samples or units.
+The alternate SMC read constructs `ptdR`, which is absent from the current
+2,431-key trie. These are static findings, with no user client opened or
+IOConnect method invoked. See
+`dist/ptd-read-api-investigation/verify_ptd_read_contract.py`.
+
+Official iStat Menus 7.50/build 2394 (archive filename 7.50.2) exact Mac17,4,
+Mac16,11 and global recipes contain none of the unresolved target keys.
+TG Pro 2.104's `setupSensorsForKeyFilePath:` simply reads a supplied UTF-8
+file and splits its lines; Hopper evidence is
+`ev_4ad757c0d8797fdf6e1a3fda4bbadd9022a9a20bf2790d6b6243c6da98920ff2`.
+Its resources add no missing map. Pinned iSMC dump correlations do not satisfy
+the firmware join requirement. No application was installed or executed, and
+no decrypted full catalogue was retained. Acquisition hashes and target-only
+proofs remain under `dist/sensor-reference-artifacts/`.
+
 ## Remaining boundary and evidence
 
 The Ts/Ta provider/registration path is established through opaque PTD source
