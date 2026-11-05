@@ -9,6 +9,11 @@ The detailed [firmware investigation](macos-smc-firmware-investigation.md) and
 artifact hashes, addresses and bounded exclusions. Proprietary input images and
 derived binary evidence remain in ignored `dist/` directories.
 
+Plain-language names from Stats and Asahi Linux, plus "(probable)" labels for
+the M5 `Ta`/`Ts` groups, are layered on top of these roles; see
+[community sensor names](macos-sensor-community-names.md). They do not close
+the evidence boundaries below.
+
 The latest native probes leave 26 readable generically labeled fields on M5
 and 12 on M4. The five M4 `TfC` readings now have verified filtered-maximum sample-average
 role labels. The tables below account for generic fields and also retain unit

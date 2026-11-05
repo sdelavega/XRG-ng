@@ -81,16 +81,21 @@ Apple Silicon key can identify different cores across chip generations; these
 labels deliberately avoid assigning core numbers from another chip's layout.
 Apple Silicon CPU/GPU prefix rules are not applied to Intel hardware.
 
-The installed catalogue does not cover the local M5. Unknown channels therefore
-remain generic. See [the identification investigation](macos-sensor-identification.md)
+The installed catalogue does not cover the local M5. Credited Stats and Asahi
+Linux names now lead the label where they apply, ahead of any verified role;
+see [community sensor names](macos-sensor-community-names.md). Channels that
+no source covers remain generic. See [the identification investigation](macos-sensor-identification.md)
 for the evidence and remaining limits.
 
 References checked 2026-11-04:
 
 - [VirtualSMC key reference](https://github.com/acidanthera/VirtualSMC/blob/master/Docs/SMCSensorKeys.txt)
-- [Stats sensor definitions](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift),
-  consulted for family meanings and cross-generation ambiguity, not copied as a
-  sensor catalogue or implementation.
+- [Stats sensor definitions](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift)
+  (MIT). Since 2026-11-05 its Apple Silicon key names are used, with credit,
+  where no verified role exists; see
+  [community sensor names](macos-sensor-community-names.md).
+- [Asahi Linux hwmon device trees](https://github.com/torvalds/linux/tree/master/arch/arm64/boot/dts/apple)
+  (GPL-2.0+ OR MIT), used for `TH0x`, `TB0T`, `TCHP` and `TW0P`.
 - Local IORegistry temperature-service product names, used to check the PMU,
   storage, ambient-light and battery naming rules.
 

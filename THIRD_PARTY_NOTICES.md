@@ -18,6 +18,46 @@ arrangement recorded with their corresponding source revisions. Do not remove
 notices from those historical packages. The dependency notices below still apply
 to current distributions; replacement of the sensor backend does not remove them.
 
+## macOS sensor names from Stats and Asahi Linux
+
+`XRGCore/XRGSMCCommunityNames.swift` contains plain-language temperature sensor
+names taken from two community projects. Per-key sources and the rules for
+combining them with firmware-verified roles are in
+`Tools/macos-sensor-community-names.md`.
+
+[Stats](https://github.com/exelban/stats) by Serhiy Mytrovtsiy: Apple Silicon
+SMC key names (`Modules/Sensors/values.swift`, commit `27fa75a5`, 2026-11-04)
+and HID product-name patterns. Stats is distributed under the MIT license:
+
+> MIT License
+>
+> Copyright (c) 2019 Serhiy Mytrovtsiy
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+[Asahi Linux](https://asahilinux.org/): SMC hwmon sensor labels from the Apple
+device trees `arch/arm64/boot/dts/apple/hwmon-common.dtsi`,
+`hwmon-laptop.dtsi` and `hwmon-mini.dtsi` (mainline Linux `05441d69`, Asahi
+fork `6ba0637d`). Copyright The Asahi Linux Contributors. Those files are
+dual-licensed `GPL-2.0+ OR MIT`; XRG-ng uses them under GPL-2.0-or-later,
+which permits distribution under GPL-3.0-or-later.
+
 ## macOS Sparkle updater
 
 The macOS app embeds [Sparkle](https://github.com/sparkle-project/Sparkle)
