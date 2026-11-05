@@ -9,8 +9,10 @@ The detailed [firmware investigation](macos-smc-firmware-investigation.md) and
 artifact hashes, addresses and bounded exclusions. Proprietary input images and
 derived binary evidence remain in ignored `dist/` directories.
 
-Plain-language names from Stats and Asahi Linux, plus "(probable)" labels for
-the M5 `Ta`/`Ts` groups, are layered on top of these roles; see
+Plain-language names from Stats and Asahi Linux replace channel-only roles
+where they identify the component, and the M5 `Ta`/`Ts` groups carry
+"(probable)" names; the unexplained inputs below are grouped as suspected
+unused in the Temperature settings. See
 [community sensor names](macos-sensor-community-names.md). They do not close
 the evidence boundaries below.
 

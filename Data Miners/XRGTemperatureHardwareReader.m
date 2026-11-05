@@ -83,6 +83,18 @@
     @catch (NSException *exception) { return NO; }
 }
 
+- (NSInteger)sensorGroupForKey:(NSString *)key {
+    BOOL hid = [self.knownHIDKeys containsObject:key];
+    @try {
+        id<XRGSMCSensorValuesProvider> smc = self.smcSensors;
+        if ([smc respondsToSelector:@selector(sensorGroupForKey:)] && !(hid && ![smc isKnownKey:key])) {
+            return [smc sensorGroupForKey:key];
+        }
+    } @catch (NSException *exception) {}
+    if (hid) return [XRGSMCSensors hidSensorGroupForKey:key];
+    return XRGSensorGroupUnidentified;
+}
+
 - (NSInteger)knownTemperatureKeyCount {
     @try { return self.smcSensors.knownTemperatureKeys.count; }
     @catch (NSException *exception) { return 0; }

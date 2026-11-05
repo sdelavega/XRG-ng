@@ -569,20 +569,33 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors(transport:nil).fanValues.isEmpty)
     }
 
-    // Community names: Stats (MIT) and Asahi Linux (GPL-2.0+ OR MIT).
-    // See XRGCore/XRGSMCCommunityNames.swift and THIRD_PARTY_NOTICES.md.
-    @Test func appleChipParsesBrandsLikeStatsAndRejectsOtherProcessors() {
-        #expect(XRGAppleChip(brand: "Apple M4 Pro") == XRGAppleChip(generation: 4, tier: .pro))
-        #expect(XRGAppleChip(brand: "Apple M5") == XRGAppleChip(generation: 5))
-        #expect(XRGAppleChip(brand: "Apple M1 Max") == XRGAppleChip(generation: 1, tier: .max))
-        #expect(XRGAppleChip(brand: "Apple M2 Ultra") == XRGAppleChip(generation: 2, tier: .ultra))
-        #expect(XRGAppleChip(brand: "Apple A18 Pro") == XRGAppleChip(generation: 0, isA18Pro: true))
-        for brand in ["", "Apple", "Apple Mx", "Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz", "VirtualApple @ 2.50GHz processor"] {
-            #expect(XRGAppleChip(brand: brand) == nil)
+    // Best names from GPT-verified roles, Apple, Stats (MIT) and Asahi Linux
+    // (GPL-2.0+ OR MIT). See XRGCore/XRGSMCCommunityNames.swift.
+    @Test func macChipParsesBrandsLikeStatsAndTheModelTableCoversEveryMac() {
+        #expect(XRGMacChip(brand: "Apple M4 Pro") == XRGMacChip(.m(4), tier: .pro))
+        #expect(XRGMacChip(brand: "Apple M5") == XRGMacChip(.m(5)))
+        #expect(XRGMacChip(brand: "Apple M1 Max") == XRGMacChip(.m(1), tier: .max))
+        #expect(XRGMacChip(brand: "Apple M2 Ultra") == XRGMacChip(.m(2), tier: .ultra))
+        #expect(XRGMacChip(brand: "Apple A18 Pro") == XRGMacChip(.a18Pro))
+        #expect(XRGMacChip(brand: "Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz") == XRGMacChip(.intel))
+        for brand in ["", "Apple", "Apple Mx", "VirtualApple @ 2.50GHz processor"] {
+            #expect(XRGMacChip(brand: brand) == nil)
         }
+        #expect(XRGMacModels.model("Mac16,11")?.chip == XRGMacChip(.m(4), tier: .pro))
+        #expect(XRGMacModels.model("Mac16,11")?.board == "J773s" && XRGMacModels.model("Mac16,11")?.form == .mini)
+        #expect(XRGMacModels.model("Mac17,4")?.board == "J815" && XRGMacModels.model("Mac17,4")?.form == .laptop)
+        #expect(XRGMacModels.model("Mac15,14")?.chip == XRGMacChip(.m(3), tier: .ultra))
+        #expect(XRGMacModels.model("Mac15,4")?.form == .iMac)
+        #expect(XRGMacModels.model("Mac17,5")?.chip == XRGMacChip(.a18Pro))
+        for intel in ["MacBookPro16,1", "MacBookPro16,2", "MacBookPro16,4", "iMac20,1", "iMac20,2", "MacPro7,1"] {
+            #expect(XRGMacModels.model(intel)?.chip == XRGMacChip(.intel))
+        }
+        #expect(XRGMacModels.model("MacBookPro16,3") == nil && XRGMacModels.model("Macmini8,1") == nil)
+        #expect(Set(XRGMacModels.all.map(\.identifier)).count == XRGMacModels.all.count)
+        #expect(XRGMacChip.host(model: "Mac16,11") == XRGMacChip(.m(4), tier: .pro))
     }
 
-    @Test func communityNamesRequireAChipAndNeverApplyToUnknownProcessors() {
+    @Test func communityNamesRequireAChip() {
         let source = SMCSensorFixture(["Tp01", "TW0P", "TH0x"])
         for model in [nil, "Mac16,11", "Mac17,4"] {
             let sensors = XRGSMCSensors(transport: source, systemModel: model, publishedNameSource: { [:] })
@@ -592,95 +605,127 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCCommunityNames.name(forKey: "TW0P", chip: nil, systemModel: "Mac16,11") == nil)
     }
 
-    @Test func m4ProMiniCombinesCommunityNamesWithVerifiedRoles() {
-        let m4Pro = XRGAppleChip(generation: 4, tier: .pro)
-        let source = SMCSensorFixture(["Te05", "Tp01", "Tp0e", "Tg1U", "Tg0G", "Tg0k", "Tm0p", "Tm1p", "Tm2p",
-                                       "TW0P", "TH0a", "TH0b", "TH0x", "Ta00", "Tz11", "TPDF"])
-        let names = ["TP5d": "Power management device 5"]
-        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { names }, chip: m4Pro)
-        #expect(sensors.humanReadableName(forKey: "Te05") == "CPU efficiency core 1 · Te05")
-        #expect(sensors.humanReadableName(forKey: "Tp01") == "CPU performance core 1 · Tp01")
-        #expect(sensors.humanReadableName(forKey: "Tp0e") == "CPU performance core 8 · Tp0e")
-        #expect(sensors.humanReadableName(forKey: "Tg1U") == "GPU 1 · Tg1U")
-        #expect(sensors.humanReadableName(forKey: "Tg0k") == "GPU 8 · Tg0k")
+    @Test func m4ProMiniUsesOneBestNamePerSensorAndGroupsThem() {
+        let source = SMCSensorFixture(["Te05", "Tp01", "Tp0e", "Tg1U", "Tg0G", "Tg0k", "Tm0p", "Tm1p", "Tm2p", "TW0P",
+                                       "TH0a", "TH0b", "TH0x", "Ta00", "Ts00", "TPD0", "TCMb", "Tz11", "TPDF", "Tq01"])
+        let names = ["TP5d": "Power management device 5", "TP1b": "Power management die 1"]
+        let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { names },
+                                    chip: XRGMacChip(.m(4), tier: .pro))
+        func expectName(_ key: String, _ name: String, _ group: XRGSensorGroup = .identified) {
+            #expect(sensors.humanReadableName(forKey: key) == "\(name) · \(key)")
+            #expect(sensors.sensorGroup(forKey: key) == group.rawValue)
+        }
+        expectName("Te05", "CPU efficiency core 1")
+        expectName("Tp01", "CPU performance core 1")
+        expectName("Tp0e", "CPU performance core 8")
+        expectName("Tg1U", "GPU 1")
+        expectName("Tg0k", "GPU 8")
         // Stats assigns Tg0G to the base M4 only.
-        #expect(sensors.humanReadableName(forKey: "Tg0G") == "GPU temperature · Tg0G")
-        #expect(sensors.humanReadableName(forKey: "Tm0p") == "Memory proximity 1 · Power management device 5 · Tm0p")
-        #expect(sensors.humanReadableName(forKey: "Tm1p") == "Memory proximity 2 · Power management stream 3 device channel 2 · Tm1p")
-        #expect(sensors.humanReadableName(forKey: "Tm2p") == "Memory proximity 3 · Tm2p")
-        #expect(sensors.humanReadableName(forKey: "TW0P") == "Wi-Fi/Bluetooth module temperature · Power management stream 2 device channel 2 · TW0P")
-        #expect(sensors.humanReadableName(forKey: "TH0a") == "NAND flash temperature 1 · Calibrated temperature channel 1 · TH0a")
-        #expect(sensors.humanReadableName(forKey: "TH0b") == "NAND flash temperature 2 · Calibrated temperature channel 2 · TH0b")
-        #expect(sensors.humanReadableName(forKey: "TH0x") == "NAND flash temperature · Temperature maximum (calibrated channels) · TH0x")
-        // Firmware-verified names without a community counterpart are unchanged.
-        #expect(sensors.humanReadableName(forKey: "Ta00") == "Neural Engine temperature channel 1 · Ta00")
-        // Unresolved inputs stay generic; no reference identifies them.
-        #expect(sensors.humanReadableName(forKey: "Tz11") == "Temperature sensor · Tz11")
-        #expect(sensors.humanReadableName(forKey: "TPDF") == "Temperature sensor · TPDF")
+        expectName("Tg0G", "GPU temperature", .unidentified)
+        // Community component names beat channel-only verified names.
+        expectName("Tm0p", "Memory proximity 1")
+        expectName("Tm1p", "Memory proximity 2")
+        expectName("Tm2p", "Memory proximity 3")
+        expectName("TW0P", "Wi-Fi/Bluetooth module temperature")
+        expectName("TH0a", "NAND flash temperature 1")
+        expectName("TH0b", "NAND flash temperature 2")
+        expectName("TH0x", "NAND flash temperature (hottest)")
+        // Verified names with no better competitor are kept.
+        expectName("Ta00", "Neural Engine temperature channel 1")
+        expectName("Ts00", "SoC die temperature channel 1 (average)")
+        expectName("TPD0", "Power management die 1 (average)")
+        expectName("TCMb", "Temperature maximum (selected channels)")
+        // No producer writes these on this model.
+        expectName("Tz11", "Temperature sensor", .suspectedUnused)
+        expectName("TPDF", "Temperature sensor", .suspectedUnused)
+        expectName("Tq01", "Temperature sensor", .unidentified)
         let base = XRGSMCSensors(transport: source, systemModel: "Mac16,10", publishedNameSource: { [:] },
-                                 chip: XRGAppleChip(generation: 4))
+                                 chip: XRGMacChip(.m(4)))
         #expect(base.humanReadableName(forKey: "Tg0G") == "GPU 1 · Tg0G")
         #expect(base.humanReadableName(forKey: "Tg1U") == "GPU temperature · Tg1U")
+        #expect(base.sensorGroup(forKey: "Tz11") == XRGSensorGroup.unidentified.rawValue)
     }
 
-    @Test func m5AirCombinesCommunityNamesAndMarksCrossModelInference() {
-        let m5 = XRGAppleChip(generation: 5)
+    @Test func m5AirUsesOneBestNamePerSensorAndMarksCrossModelInference() {
+        let m5 = XRGMacChip(.m(5))
         let source = SMCSensorFixture(["Tp00", "Tp0C", "Tp0G", "Tp0O", "Tg0U", "Tg1g", "TW0P", "TCHP", "TH0T", "TH0x",
-                                       "TB0T", "TB1T", "Ta00", "Ta0R", "Ts00", "Ts0R", "Ts0P", "Tz11", "TPDD", "TMVR"])
+                                       "TB0T", "TB1T", "Ta00", "Ta0R", "Ts00", "Ts0R", "Ts0P", "Tz11", "TPDD", "TMVR", "TAOL"])
         let names = ["TP4d": "Power management device 4", "TP7d": "Power management device 7",
-                     "TR2d": "Power management 2 device 2"]
+                     "TP8d": "Power management device 8", "TR2d": "Power management 2 device 2"]
         let sensors = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { names }, chip: m5)
-        #expect(sensors.humanReadableName(forKey: "Tp00") == "CPU super core 1 · Tp00")
-        #expect(sensors.humanReadableName(forKey: "Tp0C") == "CPU super core 4 · Tp0C")
-        // The base M5 has four super cores and no performance-core tier.
-        #expect(sensors.humanReadableName(forKey: "Tp0G") == "CPU temperature · Tp0G")
-        #expect(sensors.humanReadableName(forKey: "Tp0O") == "CPU temperature · Tp0O")
-        #expect(sensors.humanReadableName(forKey: "Tg0U") == "GPU 1 · Tg0U")
-        #expect(sensors.humanReadableName(forKey: "Tg1g") == "GPU 8 · Tg1g")
-        #expect(sensors.humanReadableName(forKey: "TW0P") == "Wi-Fi/Bluetooth module temperature · Power management device 4 · TW0P")
-        #expect(sensors.humanReadableName(forKey: "TCHP") == "Charge regulator temperature · Power management device 7 · TCHP")
-        #expect(sensors.humanReadableName(forKey: "TH0T") == "NAND flash temperature · Power management 2 device 2 · TH0T")
-        #expect(sensors.humanReadableName(forKey: "TH0x") == "NAND flash temperature · Power management 2 device 2 · TH0x")
-        #expect(sensors.humanReadableName(forKey: "TB0T") == "Battery hotspot · TB0T")
-        #expect(sensors.humanReadableName(forKey: "TB1T") == "Battery 1 · TB1T")
-        #expect(sensors.humanReadableName(forKey: "Ta00") == "Neural Engine temperature 1 (probable) · Ta00")
-        #expect(sensors.humanReadableName(forKey: "Ta0R") == "Neural Engine temperature 6 (probable) · Ta0R")
-        #expect(sensors.humanReadableName(forKey: "Ts00") == "SoC die temperature 1 (probable) · Ts00")
-        #expect(sensors.humanReadableName(forKey: "Ts0R") == "SoC die temperature 8 (probable) · Ts0R")
-        #expect(sensors.humanReadableName(forKey: "Ts0P") == "Temperature monitor 2 channel 1 · Ts0P")
-        #expect(sensors.humanReadableName(forKey: "Tz11") == "Temperature sensor · Tz11")
-        #expect(sensors.humanReadableName(forKey: "TPDD") == "Temperature sensor · TPDD")
-        // Without published metadata the community name replaces the fallback.
+        let expected = [
+            "Tp00": "CPU super core 1", "Tp0C": "CPU super core 4",
+            // The base M5 has four super cores and no performance-core tier.
+            "Tp0G": "CPU temperature", "Tp0O": "CPU temperature",
+            "Tg0U": "GPU 1", "Tg1g": "GPU 8",
+            "TW0P": "Wi-Fi/Bluetooth module temperature", "TCHP": "Charge regulator temperature",
+            "TH0T": "NAND flash temperature", "TH0x": "NAND flash temperature",
+            "TB0T": "Battery hotspot", "TB1T": "Battery 1",
+            "Ta00": "Neural Engine temperature 1 (probable)", "Ta0R": "Neural Engine temperature 6 (probable)",
+            "Ts00": "SoC die temperature 1 (probable)", "Ts0R": "SoC die temperature 8 (probable)",
+            "Ts0P": "Temperature monitor 2 channel 1", "TMVR": "Power management device 8",
+            "TAOL": "Ambient light sensor temperature", "Tz11": "Temperature sensor", "TPDD": "Temperature sensor",
+        ]
+        for (key, name) in expected { #expect(sensors.humanReadableName(forKey: key) == "\(name) · \(key)") }
+        #expect(sensors.sensorGroup(forKey: "Tp0G") == XRGSensorGroup.unidentified.rawValue)
+        #expect(sensors.sensorGroup(forKey: "Ts0P") == XRGSensorGroup.identified.rawValue)
+        #expect(sensors.sensorGroup(forKey: "Tz11") == XRGSensorGroup.suspectedUnused.rawValue)
+        #expect(sensors.sensorGroup(forKey: "TPDD") == XRGSensorGroup.suspectedUnused.rawValue)
+        // A verified alias with neither metadata nor a community name stays generic.
         let bare = XRGSMCSensors(transport: source, systemModel: "Mac17,4", publishedNameSource: { [:] }, chip: m5)
         #expect(bare.humanReadableName(forKey: "TCHP") == "Charge regulator temperature · TCHP")
-        // A verified alias with neither metadata nor a community name stays generic.
         #expect(bare.humanReadableName(forKey: "TMVR") == "Temperature sensor · TMVR")
+        #expect(bare.sensorGroup(forKey: "TMVR") == XRGSensorGroup.unidentified.rawValue)
         let pro = XRGSMCSensors(transport: source, systemModel: "Mac17,9", publishedNameSource: { [:] },
-                                chip: XRGAppleChip(generation: 5, tier: .pro))
+                                chip: XRGMacChip(.m(5), tier: .pro))
         #expect(pro.humanReadableName(forKey: "Tp0G") == "CPU super core 5 · Tp0G")
         #expect(pro.humanReadableName(forKey: "Tp0O") == "CPU performance core 1 · Tp0O")
         // The cross-model inference is limited to the validated model.
         #expect(pro.humanReadableName(forKey: "Ta00") == "Temperature sensor · Ta00")
+        // Asahi scopes battery and charger names to laptops; the family fallback remains.
+        let studio = XRGSMCSensors(transport: source, systemModel: "Mac17,14", publishedNameSource: { [:] },
+                                   chip: XRGMacChip(.m(5), tier: .max))
+        #expect(studio.humanReadableName(forKey: "TCHP") == "CPU temperature · TCHP")
+        #expect(studio.sensorGroup(forKey: "TCHP") == XRGSensorGroup.unidentified.rawValue)
+        #expect(studio.humanReadableName(forKey: "TH0x") == "NAND flash temperature · TH0x")
+    }
+
+    @Test func intelMacsUseStatsNamesBelowApplesBoardDescriptions() {
+        let source = SMCSensorFixture(["RBr ", "TC0P", "TC2c", "TA1P", "TH0A", "Tm0P", "TG0D", "TW0P", "Tx9Q"])
+        source.set("RBr ", Data("j152f".utf8))
+        let sensors = XRGSMCSensors(transport: source, branchNameSource: { _ in ["TG0D": "GPU Die"] },
+                                    systemModel: "MacBookPro16,1", publishedNameSource: { [:] }, chip: XRGMacChip(.intel))
+        #expect(sensors.humanReadableName(forKey: "TC0P") == "CPU proximity · TC0P")
+        #expect(sensors.humanReadableName(forKey: "TC2c") == "CPU core 3 · TC2c")
+        #expect(sensors.humanReadableName(forKey: "TA1P") == "Ambient 2 · TA1P")
+        #expect(sensors.humanReadableName(forKey: "TH0A") == "Disk 1 (A) · TH0A")
+        #expect(sensors.humanReadableName(forKey: "Tm0P") == "Mainboard · Tm0P")
+        #expect(sensors.humanReadableName(forKey: "TG0D") == "GPU Die · TG0D")
+        #expect(sensors.humanReadableName(forKey: "TW0P") == "Airport · TW0P")
+        #expect(sensors.sensorGroup(forKey: "Tx9Q") == XRGSensorGroup.unidentified.rawValue)
+        #expect(XRGSMCCommunityNames.statsIntelName(forKey: "TC٣c") == nil)
     }
 
     @Test func statsGenerationTablesFollowTheirChipFamilies() {
-        func name(_ key: String, _ chip: XRGAppleChip) -> String? {
+        func name(_ key: String, _ chip: XRGMacChip) -> String? {
             XRGSMCCommunityNames.name(forKey: key, chip: chip, systemModel: nil)
         }
-        #expect(name("Tp09", XRGAppleChip(generation: 1)) == "CPU efficiency core 1")
-        #expect(name("Tp09", XRGAppleChip(generation: 2, tier: .max)) == "CPU performance core 3")
-        #expect(name("Tm02", XRGAppleChip(generation: 1, tier: .ultra)) == "Memory 1")
-        #expect(name("Tf4E", XRGAppleChip(generation: 3, tier: .pro)) == "CPU performance core 12")
-        #expect(name("Tf2A", XRGAppleChip(generation: 3)) == "GPU 8")
-        #expect(name("Tp09", XRGAppleChip(generation: 6)) == "CPU super core 3")
-        #expect(name("Te0i", XRGAppleChip(generation: 6)) == "CPU efficiency core 6")
-        #expect(name("Tg1h", XRGAppleChip(generation: 6)) == "GPU 12")
-        #expect(name("Tp05", XRGAppleChip(generation: 0, isA18Pro: true)) == "CPU performance core 1")
-        #expect(name("Tg0e", XRGAppleChip(generation: 0, isA18Pro: true)) == "GPU 4")
-        #expect(name("TaLP", XRGAppleChip(generation: 2)) == "Airflow left")
-        #expect(name("Tf04", XRGAppleChip(generation: 4)) == nil)
-        #expect(name("Tp01", XRGAppleChip(generation: 7)) == nil)
-        #expect(name("TH0T", XRGAppleChip(generation: 5)) == nil)
+        #expect(name("Tp09", XRGMacChip(.m(1))) == "CPU efficiency core 1")
+        #expect(name("Tp09", XRGMacChip(.m(2), tier: .max)) == "CPU performance core 3")
+        #expect(name("Tm02", XRGMacChip(.m(1), tier: .ultra)) == "Memory 1")
+        #expect(name("Tf4E", XRGMacChip(.m(3), tier: .pro)) == "CPU performance core 12")
+        #expect(name("Tf2A", XRGMacChip(.m(3))) == "GPU 8")
+        #expect(name("Tp09", XRGMacChip(.m(6))) == "CPU super core 3")
+        #expect(name("Te0i", XRGMacChip(.m(6))) == "CPU efficiency core 6")
+        #expect(name("Tg1h", XRGMacChip(.m(6))) == "GPU 12")
+        #expect(name("Tp05", XRGMacChip(.a18Pro)) == "CPU performance core 1")
+        #expect(name("Tg0e", XRGMacChip(.a18Pro)) == "GPU 4")
+        #expect(name("TaLP", XRGMacChip(.m(2))) == "Airflow left")
+        #expect(name("TH0x", XRGMacChip(.m(2))) == "NAND flash temperature")
+        #expect(name("Tf04", XRGMacChip(.m(4))) == nil)
+        #expect(name("Tp01", XRGMacChip(.m(7))) == nil)
+        #expect(name("TH0T", XRGMacChip(.m(5))) == nil)
+        #expect(name("TC0P", XRGMacChip(.m(5))) == nil)
     }
 
     @Test func statsHIDProductNamesAreOneBasedAndRejectMalformedIndices() {
@@ -695,5 +740,7 @@ struct XRGSMCReaderTests {
                         "GPU MTR Temp Sensor123", "GPU MTR Temp Sensor1a"] {
             #expect(XRGSMCCommunityNames.hidName(forProduct: product) == nil)
         }
+        #expect(XRGSMCSensors.hidSensorGroup(forKey: "PMU tdie1") == XRGSensorGroup.identified.rawValue)
+        #expect(XRGSMCSensors.hidSensorGroup(forKey: "mystery probe") == XRGSensorGroup.unidentified.rawValue)
     }
 }

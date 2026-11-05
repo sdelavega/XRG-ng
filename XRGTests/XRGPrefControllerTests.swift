@@ -30,6 +30,7 @@ private final class PreferencesNibOwner: NSObject {
 }
 @MainActor private final class PreferencesInputs {
     var sensors: [XRGSensorData] = []
+    var groups: [String: XRGSensorGroup] = [:]
     var interfaces = ["en0", "en4"]
     var errors: [String] = []
     var opened: [URL] = []
@@ -53,7 +54,8 @@ private final class PreferencesNibOwner: NSObject {
         #expect(nib.instantiate(withOwner: owner, topLevelObjects: &objects))
         let decoded = try #require(owner.prefController)
         let source = inputs
-        pref = XRGPrefController(defaults: defaults, center: center, sensors: { source.sensors }, interfaces: { _ in source.interfaces },
+        pref = XRGPrefController(defaults: defaults, center: center, sensors: { source.sensors },
+                                 sensorGroups: { source.groups[$0] ?? .identified }, interfaces: { _ in source.interfaces },
                                  openURL: { source.opened.append($0); return true }, error: { message, _ in source.errors.append(message) }, fontPanel: { source.fonts.append($0) })
         let url = try #require(bundle.url(forResource: "PreferencesOutletKeys", withExtension: "plist"))
         let keys = try #require(PropertyListSerialization.propertyList(from: Data(contentsOf: url), options: [], format: nil) as? [String])
@@ -205,6 +207,26 @@ struct XRGPrefControllerTests {
         popup.selectItem(at: 0); try f.send(popup); #expect(f.graph.appSettings?.tempFG1Location == "")
         f.inputs.sensors = []; f.pref.setUpTemperaturePanel()
         #expect(popup.itemTitles == ["No Sensors Found"])
+    }
+    @Test func sensorPickersGroupIdentifiedUnidentifiedAndSuspectedUnusedSensors() throws {
+        let f = try PreferencesFixture(); defer { f.cleanUp() }
+        f.inputs.sensors = [f.sensor("Tz11", "Temperature sensor · Tz11"), f.sensor("Tp01", "CPU performance core 1 · Tp01"),
+                            f.sensor("Tq01", "Temperature sensor · Tq01"), f.sensor("TW0P", "Wi-Fi/Bluetooth module temperature · TW0P")]
+        f.inputs.groups = ["Tz11": .suspectedUnused, "Tq01": .unidentified]
+        f.graph.appSettings?.tempFG1Location = "Tq01"; f.pref.setUpTemperaturePanel()
+        let popup = try #require(f.pref.tempFG1Location)
+        let titles = popup.itemArray.map { $0.isSeparatorItem ? "-" : $0.title }
+        #expect(titles == ["None", "-", "Identified Sensors", "CPU performance core 1 · Tp01", "Wi-Fi/Bluetooth module temperature · TW0P",
+                           "-", "Unidentified Sensors", "Temperature sensor · Tq01",
+                           "-", "Suspected Unused Sensors", "Temperature sensor · Tz11"])
+        #expect(popup.itemArray.filter(\.isSectionHeader).allSatisfy { $0.representedObject == nil })
+        #expect(popup.selectedItem?.representedObject as? String == "Tq01")
+        let tz = try #require(popup.itemArray.firstIndex { $0.representedObject as? String == "Tz11" })
+        popup.selectItem(at: tz); try f.send(popup); #expect(f.graph.appSettings?.tempFG1Location == "Tz11")
+        // A single group needs no headers.
+        f.inputs.groups = [:]; f.pref.setUpTemperaturePanel()
+        #expect(popup.itemTitles == ["None", "Temperature sensor · Tz11", "CPU performance core 1 · Tp01",
+                                     "Temperature sensor · Tq01", "Wi-Fi/Bluetooth module temperature · TW0P"])
     }
     @Test func savingWithoutSensorsPreservesStoredSensorChoices() throws {
         let f = try PreferencesFixture(); defer { f.cleanUp() }

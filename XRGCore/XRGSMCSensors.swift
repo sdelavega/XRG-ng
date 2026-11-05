@@ -10,29 +10,41 @@ import IOKit
     @objc(temperatureValuesIncludingUnknown:) func temperatureValues(includingUnknown: Bool) -> [String: Any]
     @objc(humanReadableNameForKey:) func humanReadableName(forKey key: String) -> String
     func isKnownKey(_ key: String) -> Bool
+    @objc(sensorGroupForKey:) optional func sensorGroup(forKey key: String) -> Int
+}
+
+/// How well a sensor is identified; the Temperature settings pickers group by it.
+@objc public enum XRGSensorGroup: Int {
+    /// A name that says what the sensor measures.
+    case identified = 0
+    /// Only a family or generic fallback name is known.
+    case unidentified = 1
+    /// Firmware evidence or a never-changing reading suggests nothing feeds it.
+    case suspectedUnused = 2
 }
 
 /// Inventory is made from driver keys. Raw keys remain the persisted identity.
-/// Labels combine firmware-verified roles with credited community names
-/// (XRGSMCCommunityNames.swift); keys no reference covers keep family labels.
+/// Each key gets one best name, chosen from firmware-verified roles, Apple's
+/// own board descriptions and credited community names
+/// (XRGSMCCommunityNames.swift); keys no source covers keep family labels.
 @objc(XRGSMCSensors) public final class XRGSMCSensors: NSObject, XRGSMCSensorValuesProvider {
     private let transport: (any XRGSMCTransport)?
     private let branchNameSource: (String) -> [String: String]
     private let systemModel: String?
     private let publishedNameSource: () -> [String: String]
     /// Chip family for the community name tables (XRGSMCCommunityNames.swift).
-    private let chip: XRGAppleChip?
+    private let chip: XRGMacChip?
     private var inventory: [String: UInt32] = [:]
     private var branchNames: [String: String] = [:]
     private var publishedNames: [String: String] = [:]
     public private(set) var knownTemperatureKeys: Set<String> = []
     /// The production reader names the host's own chip; injected readers
     /// (tests, fixtures) get community names only for an injected chip.
-    @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader(), chip: XRGAppleChip.host()) }
+    @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader(), chip: XRGMacChip.host()) }
     init(transport: (any XRGSMCTransport)?, branchNameSource: @escaping (String) -> [String: String] = XRGSMCBranchNames.load,
          systemModel: String? = XRGCPUMiner.systemModelIdentifier(),
          publishedNameSource: @escaping () -> [String: String] = XRGSMCPublishedNames.load,
-         chip: XRGAppleChip? = nil) {
+         chip: XRGMacChip? = nil) {
         self.transport = transport; self.branchNameSource = branchNameSource; self.systemModel = systemModel
         self.publishedNameSource = publishedNameSource
         self.chip = chip
@@ -99,35 +111,65 @@ import IOKit
         if inventory[key] != nil, let name = Self.nonTemperatureName(forKey: key, systemModel: systemModel) {
             return "\(name) · \(key)"
         }
-        if knownTemperatureKeys.contains(key) {
-            // A community plain-language name leads; a firmware-verified role,
-            // when known, follows it so neither source hides the other.
-            let community = XRGSMCCommunityNames.name(forKey: key, chip: chip, systemModel: systemModel)
-            func label(_ role: String?) -> String {
-                ([community, role].compactMap { $0 } + [key]).joined(separator: " · ")
-            }
-            if let name = publishedNames[key] { return label(name) }
-            if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel) {
-                let unit = source.hasPrefix("TP") ? "Power management " : "Power management 2 "
-                let role = source.hasSuffix("d") ? "device " : "die "
-                if let name = publishedNames[source], name.hasPrefix(unit + role) {
-                    let suffix = systemModel == "Mac16,11" && key.hasPrefix("TPD") ? " (average)" : ""
-                    return label("\(name)\(suffix)")
-                }
-                // The verified provider supersedes misleading generic TC/TM/TH
-                // families even when its exact published channel name is absent.
-                return label(community == nil ? "Temperature sensor" : nil)
-            }
-            if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return label(name) }
-            // Apple's own description for this exact board branch outranks
-            // community references, which are not board-specific.
-            if let name = branchNames[key] { return "\(name) · \(key)" }
-            if community != nil { return label(nil) }
-            return Self.temperatureName(forKey: key)
-        }
+        if knownTemperatureKeys.contains(key) { return "\(bestTemperatureName(forKey: key).name) · \(key)" }
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
         return Self.hidName(forKey: key, systemModel: systemModel)
     }
+    /// Names that only say which firmware channel carries a reading. A
+    /// component name from any other source is more useful than these.
+    static func isProvenanceName(_ name: String) -> Bool {
+        name == "Temperature sensor" || name.hasPrefix("Power management")
+            || name.hasPrefix("Calibrated temperature channel") || name.hasPrefix("Temperature monitor")
+    }
+
+    /// The firmware-verified name for a key: the driver's published name, a
+    /// proven alias of a published channel, or a verified role on this model.
+    private func verifiedName(forKey key: String) -> String? {
+        if let name = publishedNames[key] { return name }
+        if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel) {
+            let unit = source.hasPrefix("TP") ? "Power management " : "Power management 2 "
+            let role = source.hasSuffix("d") ? "device " : "die "
+            if let name = publishedNames[source], name.hasPrefix(unit + role) {
+                return name + (systemModel == "Mac16,11" && key.hasPrefix("TPD") ? " (average)" : "")
+            }
+            // The verified provider supersedes misleading generic TC/TM/TH
+            // families even when its exact published channel name is absent.
+            return "Temperature sensor"
+        }
+        return Self.verifiedTemperatureName(forKey: key, systemModel: systemModel)
+    }
+
+    /// The single best name for an SMC temperature key, and whether it says
+    /// what the sensor measures. Order: names written for this exact model,
+    /// verified component/computation names, Apple's description for this
+    /// board, community names, verified channel-only names, family fallback.
+    func bestTemperatureName(forKey key: String) -> (name: String, identified: Bool) {
+        if chip != nil, let name = XRGSMCCommunityNames.modelName(forKey: key, systemModel: systemModel) {
+            return (name, true)
+        }
+        let verified = verifiedName(forKey: key)
+        if let verified, !Self.isProvenanceName(verified) { return (verified, true) }
+        if let name = branchNames[key] { return (name, true) }
+        if let name = XRGSMCCommunityNames.name(forKey: key, chip: chip, systemModel: systemModel) { return (name, true) }
+        if let verified { return (verified, verified != "Temperature sensor") }
+        return (Self.familyName(forKey: key), false)
+    }
+
+    @objc(sensorGroupForKey:) public func sensorGroup(forKey key: String) -> Int {
+        if knownTemperatureKeys.contains(key) {
+            if XRGSMCCommunityNames.suspectedUnusedKeys(systemModel: systemModel).contains(key) {
+                return XRGSensorGroup.suspectedUnused.rawValue
+            }
+            return (bestTemperatureName(forKey: key).identified ? XRGSensorGroup.identified : .unidentified).rawValue
+        }
+        if inventory[key] != nil, key.hasPrefix("F") { return XRGSensorGroup.identified.rawValue }
+        return Self.hidSensorGroup(forKey: key)
+    }
+
+    @objc(hidSensorGroupForKey:) public static func hidSensorGroup(forKey key: String) -> Int {
+        (hidName(forKey: key).hasPrefix("Temperature sensor · ") ? XRGSensorGroup.unidentified : .identified).rawValue
+    }
+
     static func verifiedPublishedAlias(forKey key: String, systemModel: String?) -> String? {
         if systemModel == "Mac16,11" {
             let dieKeys = ["TP1b", "TP2b", "TP3b", "TP4b", "TP5b", "TP6b", "TP7b",
@@ -243,6 +285,9 @@ import IOKit
         }
         if let family = families[String(key.prefix(2))] { return "\(family) temperature · \(key)" }
         return "Temperature sensor · \(key)"
+    }
+    static func familyName(forKey key: String) -> String {
+        String(temperatureName(forKey: key).dropLast(" · \(key)".count))
     }
     private static let localHIDSystemModel = XRGCPUMiner.systemModelIdentifier()
     @objc(humanReadableHIDNameForKey:) public static func hidName(forKey key: String) -> String {

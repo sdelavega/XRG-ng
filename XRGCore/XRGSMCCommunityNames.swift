@@ -12,85 +12,54 @@
 //   (mainline Linux 05441d69, Asahi fork 6ba0637d). GPL-2.0+ OR MIT,
 //   Copyright The Asahi Linux Contributors. https://github.com/AsahiLinux/linux
 //
-// These names supplement, never replace, the firmware-verified roles in
-// XRGSMCSensors.swift. Raw keys stay the persisted identity.
+// XRGSMCSensors chooses one best name per key from these tables, the
+// firmware-verified roles and Apple's own board descriptions.
 import Foundation
-import Darwin
-
-/// Apple Silicon chip family, parsed the same way Stats parses the CPU brand.
-struct XRGAppleChip: Equatable, Sendable {
-    enum Tier: Sendable { case base, pro, max, ultra }
-    /// M-series generation; 0 for A-series chips.
-    let generation: Int
-    let tier: Tier
-    let isA18Pro: Bool
-
-    init(generation: Int, tier: Tier = .base, isA18Pro: Bool = false) {
-        self.generation = generation; self.tier = tier; self.isA18Pro = isA18Pro
-    }
-
-    /// Accepts brands such as "Apple M4 Pro" or "Apple M5". Anything else,
-    /// including Intel and Rosetta's virtual brand, is not an Apple chip.
-    init?(brand: String) {
-        let text = brand.lowercased()
-        guard text.hasPrefix("apple ") else { return nil }
-        if text.contains("a18 pro") { self.init(generation: 0, isA18Pro: true); return }
-        let words = text.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        guard let chip = words.first(where: { $0.first == "m" && $0.count > 1 && $0.dropFirst().allSatisfy(\.isNumber) }),
-              let generation = Int(chip.dropFirst()), (1...99).contains(generation) else { return nil }
-        let tier: Tier = words.contains("pro") ? .pro : words.contains("max") ? .max
-            : words.contains("ultra") ? .ultra : .base
-        self.init(generation: generation, tier: tier)
-    }
-
-    static func host() -> XRGAppleChip? {
-        var size = 0
-        guard sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, (1...256).contains(size) else { return nil }
-        var bytes = [UInt8](repeating: 0, count: size)
-        guard sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 else { return nil }
-        return XRGAppleChip(brand: String(decoding: bytes.prefix(while: { $0 != 0 }), as: UTF8.self))
-    }
-}
 
 enum XRGSMCCommunityNames {
-    /// Returns a plain-language name for an Apple Silicon SMC temperature key,
-    /// or nil when no reference covers this key on this chip.
-    static func name(forKey key: String, chip: XRGAppleChip?, systemModel: String?) -> String? {
+    /// The community name for an SMC temperature key, or nil when no
+    /// reference covers this key on this chip and model.
+    static func name(forKey key: String, chip: XRGMacChip?, systemModel: String?) -> String? {
         guard let chip else { return nil }
-        if let name = derivedName(forKey: key, systemModel: systemModel) { return name }
-        if let name = asahi[key] { return name }
+        if let name = modelName(forKey: key, systemModel: systemModel) { return name }
+        guard chip.isAppleSilicon else { return statsIntelName(forKey: key) }
+        if let name = asahiName(forKey: key, form: systemModel.flatMap(XRGMacModels.model)?.form) { return name }
         if let name = statsGeneration(chip)[key] { return name }
         return statsAppleSilicon[key]
     }
 
     // MARK: Asahi Linux (GPL-2.0+ OR MIT)
 
-    /// hwmon-common.dtsi (all machines), hwmon-laptop.dtsi and hwmon-mini.dtsi.
-    /// Asahi describes these keys on every M1/M2 machine it supports. The two
-    /// models validated here publish the same keys (Tools/macos-smc-firmware-
-    /// investigation.md, diagnostic profiles 5089/5076).
-    static let asahi: [String: String] = [
-        "TH0x": "NAND flash temperature",
-        "TB0T": "Battery hotspot",
-        "TCHP": "Charge regulator temperature",
-        "TW0P": "Wi-Fi/Bluetooth module temperature",
-    ]
+    /// Applied with Asahi's own scoping: hwmon-common.dtsi on every machine,
+    /// hwmon-laptop.dtsi on laptops and hwmon-mini.dtsi on the Mac mini.
+    static func asahiName(forKey key: String, form: XRGMacModel.Form?) -> String? {
+        if key == "TH0x" { return "NAND flash temperature" }
+        if form == .laptop {
+            if key == "TB0T" { return "Battery hotspot" }
+            if key == "TCHP" { return "Charge regulator temperature" }
+        }
+        if key == "TW0P", form == .laptop || form == .mini { return "Wi-Fi/Bluetooth module temperature" }
+        return nil
+    }
 
-    // MARK: Derived from an Asahi name plus a firmware-verified copy/maximum
+    // MARK: Model-specific best names
 
-    /// TH0x is NAND flash (Asahi). The firmware investigation proves that on
-    /// Mac17,4 TH0x copies TH0T, and on Mac16,11 TH0x is the larger of TH0a
-    /// and TH0b, so those inputs are the same NAND sensor(s).
+    /// Names for one validated model that combine a community identity with a
+    /// firmware-verified copy, maximum or channel layout.
+    ///
+    /// TH0x is NAND flash (Asahi, Stats). The firmware investigation proves
+    /// that on Mac17,4 TH0x copies TH0T, and on Mac16,11 TH0x is the larger of
+    /// TH0a and TH0b, so those inputs are the same NAND sensor(s).
     ///
     /// Mac17,4 Ta/Ts: six Ta and eight Ts keys are actively sampled from the
     /// a0va/s0va AON sources, but their publisher was not traced. The same six
     /// Ta keys are firmware-verified Neural Engine channels on Mac16,11, and the
     /// a0va layout matches the ANE0 MTR hardware; Ts keys are verified SoC die
     /// (MTR) channels there. "(probable)" marks this cross-model inference.
-    static func derivedName(forKey key: String, systemModel: String?) -> String? {
+    static func modelName(forKey key: String, systemModel: String?) -> String? {
         switch systemModel {
         case "Mac17,4":
-            if key == "TH0T" { return "NAND flash temperature" }
+            if key == "TH0T" || key == "TH0x" { return "NAND flash temperature" }
             if let index = ["Ta00", "Ta04", "Ta08", "Ta0K", "Ta0O", "Ta0R"].firstIndex(of: key) {
                 return "Neural Engine temperature \(index + 1) (probable)"
             }
@@ -100,9 +69,22 @@ enum XRGSMCCommunityNames {
         case "Mac16,11":
             if key == "TH0a" { return "NAND flash temperature 1" }
             if key == "TH0b" { return "NAND flash temperature 2" }
+            if key == "TH0x" { return "NAND flash temperature (hottest)" }
         default: break
         }
         return nil
+    }
+
+    /// Registered inputs that the firmware investigation found no configured
+    /// producer for (Tools/macos-sensor-identity-status.md). They read zero
+    /// on the validated machines; nothing proves the hardware is absent.
+    static func suspectedUnusedKeys(systemModel: String?) -> Set<String> {
+        let tz: Set<String> = ["Tz11", "Tz12", "Tz13", "Tz14", "Tz15", "Tz16", "Tz17", "Tz18", "Tz1j"]
+        switch systemModel {
+        case "Mac16,11": return tz.union(["TPDF", "TRDF", "TTDF"])
+        case "Mac17,4": return tz.union(["TPDD", "TPDE", "TPDF"])
+        default: return []
+        }
     }
 
     // MARK: Stats (MIT)
@@ -112,8 +94,10 @@ enum XRGSMCCommunityNames {
     static let statsAppleSilicon: [String: String] = [
         "TaLP": "Airflow left",
         "TaRF": "Airflow right",
+        "TH0x": "NAND flash temperature",
         "TB1T": "Battery 1",
         "TB2T": "Battery 2",
+        "TW0P": "Wi-Fi/Bluetooth module temperature",
     ]
 
     private static func numbered(_ prefix: String, _ keys: [String]) -> [String: String] {
@@ -124,13 +108,13 @@ enum XRGSMCCommunityNames {
     /// sensor within a cluster; Stats lists more sensors than some chips have
     /// cores (eight performance entries on the four-core M1), so they are not
     /// a verified one-to-one core assignment.
-    static func statsGeneration(_ chip: XRGAppleChip) -> [String: String] {
-        if chip.isA18Pro {
+    static func statsGeneration(_ chip: XRGMacChip) -> [String: String] {
+        if chip.family == .a18Pro {
             return numbered("CPU efficiency core", ["Te05", "Te0S"])
                 .merging(numbered("CPU performance core", ["Tp05", "Tp0D"])) { $1 }
                 .merging(numbered("GPU", ["Tg05", "Tg0D", "Tg0L", "Tg0e"])) { $1 }
         }
-        switch chip.generation {
+        switch chip.generation ?? 0 {
         case 1:
             return numbered("CPU efficiency core", ["Tp09", "Tp0T"])
                 .merging(numbered("CPU performance core",
@@ -179,6 +163,44 @@ enum XRGSMCCommunityNames {
         default:
             return [:]
         }
+    }
+
+    /// Stats' entries for Intel Macs ("Platform.all" and ".intel"). Apple's
+    /// own description for the exact board, read from libSMC at runtime,
+    /// outranks these where it exists.
+    static let statsIntel: [String: String] = [
+        "TC0D": "CPU diode", "TC0E": "CPU diode virtual", "TC0F": "CPU diode filtered",
+        "TC0H": "CPU heatsink", "TC0P": "CPU proximity", "TCAD": "CPU package",
+        "TCAH": "CPU A heatsink", "TCBH": "CPU B heatsink",
+        "TCGC": "GPU Intel Graphics", "TG0D": "GPU diode", "TGDD": "GPU AMD Radeon",
+        "TG0H": "GPU heatsink", "TG0P": "GPU proximity",
+        "Tm0P": "Mainboard", "Tp0P": "Powerboard", "TB1T": "Battery", "TW0P": "Airport",
+        "TL0P": "Display", "TTLD": "Thunderbolt left", "TTRD": "Thunderbolt right",
+        "TN0D": "Northbridge diode", "TN0H": "Northbridge heatsink", "TN0P": "Northbridge proximity",
+        "TMA1": "Memory riser A slot 1", "TMA2": "Memory riser A slot 2",
+        "TMA3": "Memory riser A slot 3", "TMA4": "Memory riser A slot 4",
+        "TMB1": "Memory riser B slot 1", "TMB2": "Memory riser B slot 2",
+        "TMB3": "Memory riser B slot 3", "TMB4": "Memory riser B slot 4",
+    ]
+
+    /// Stats' Intel wildcard entries, "%" being one digit. Stats numbers the
+    /// keys it finds in order; XRG numbers by the digit (0 → 1), which is the
+    /// same whenever the keys are contiguous.
+    private static let statsIntelPatterns: [(prefix: String, suffix: Character, name: String)] = [
+        ("TA", "P", "Ambient %"), ("Th", "H", "Heatpipe %"), ("TZ", "C", "Thermal zone %"),
+        ("TC", "c", "CPU core %"), ("TC", "C", "CPU core %"), ("TI", "P", "Thunderbolt %"),
+        ("TH", "A", "Disk % (A)"), ("TH", "B", "Disk % (B)"), ("TH", "C", "Disk % (C)"),
+    ]
+
+    static func statsIntelName(forKey key: String) -> String? {
+        if let name = statsIntel[key] { return name }
+        let characters = Array(key)
+        guard characters.count == 4, let digit = characters[2].wholeNumberValue, characters[2].isASCII else { return nil }
+        for pattern in statsIntelPatterns
+        where String(characters[0...1]) == pattern.prefix && characters[3] == pattern.suffix {
+            return pattern.name.replacingOccurrences(of: "%", with: String(digit + 1))
+        }
+        return nil
     }
 
     /// Stats' HID product patterns. The trailing driver index is zero-based;

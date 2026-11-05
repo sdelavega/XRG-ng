@@ -39,6 +39,8 @@ public final class XRGSensorData: NSObject {
     public var units: String?
     public var key: String
     public var currentValue = 0.0
+    /// Consecutive updates that repeated the previous value exactly.
+    public internal(set) var unchangedSamples = 0
     public let dataSet = XRGDataSet()
     @nonobjc let timedHistory = XRGTimedHistory(channels: 1, retentionMinutes: 60, allowsNegativeValues: true)!
     public var isEnabled = false
@@ -94,6 +96,8 @@ public final class XRGTemperatureState: NSObject {
         let sensor: XRGSensorData
         if let existing = sensors[location] {
             sensor = existing
+            // A missed update resets currentValue to 0, which also ends a run.
+            sensor.unchangedSamples = existing.currentValue == value ? existing.unchangedSamples + 1 : 0
         } else {
             sensor = XRGSensorData(sensorKey: location)
             sensor.dataSet.resize(count, fillingWith: missingPadding ? XRGGraphRenderer.missingValue : 0)

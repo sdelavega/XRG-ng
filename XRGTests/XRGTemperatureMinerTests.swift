@@ -47,8 +47,42 @@ private final class TemperatureReader: NSObject, XRGTemperatureReader {
     func isKnownKey(_ key: String) -> Bool { known.contains(key) }
 }
 
+@MainActor
+private final class GroupedTemperatureReader: NSObject, XRGTemperatureReader {
+    var smc: [String: Any] = [:]
+    var groups: [String: Int] = [:]
+    var knownTemperatureKeyCount = 0
+    func temperatures(includingUnknown: Bool) -> [String: Any] { smc }
+    func siliconTemperatures() -> [String: Any] { [:] }
+    func fanReadings() -> [String: Any] { [:] }
+    func name(forKey key: String) -> String? { key }
+    func isKnownKey(_ key: String) -> Bool { true }
+    func sensorGroup(forKey key: String) -> Int { groups[key] ?? 0 }
+}
+
 @Suite @MainActor
 struct XRGTemperatureMinerTests {
+    @Test func onlyUnidentifiedReadingsThatNeverChangeBecomeSuspectedUnused() {
+        let reader = GroupedTemperatureReader()
+        reader.smc = ["named": 40.0, "flat": 40.0, "noisy": 40.0, "evidence": 41.0]
+        reader.groups = ["flat": 1, "noisy": 1, "evidence": 2, "bad": 7]
+        var time = 0.0
+        let miner = XRGTemperatureMiner(reader: reader, clock: { time })
+        func update(_ count: Int) { for _ in 0..<count { time += 5; miner.updateCurrentTemperatures(true) } }
+        update(XRGTemperatureMiner.flatLineSamples)
+        #expect(miner.sensorGroup(forKey: "named") == .identified)
+        #expect(miner.sensorGroup(forKey: "flat") == .unidentified)
+        #expect(miner.sensorGroup(forKey: "evidence") == .suspectedUnused)
+        #expect(miner.sensorGroup(forKey: "bad") == .identified)
+        update(1)
+        #expect(miner.sensorGroup(forKey: "named") == .identified)
+        #expect(miner.sensorGroup(forKey: "flat") == .suspectedUnused)
+        reader.smc["flat"] = 40.25; update(1)
+        #expect(miner.sensorGroup(forKey: "flat") == .unidentified)
+        // Readers without groups report every sensor as identified.
+        let plain = XRGTemperatureMiner(reader: nil, clock: { time })
+        #expect(plain.sensorGroup(forKey: "flat") == .identified)
+    }
     @Test func cadencePreferenceChangesAndClockRollback() {
         let reader = TemperatureReader()
         reader.smc = ["cpu": 50, "unknown": 55]
