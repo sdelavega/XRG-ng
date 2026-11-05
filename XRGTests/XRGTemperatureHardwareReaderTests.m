@@ -137,6 +137,9 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
     XCTAssertTrue([reader isKnownKey:@"cpu"]);
     XCTAssertEqual(reader.knownTemperatureKeyCount, 1);
     XCTAssertEqualObjects([reader siliconTemperatureValues][@"hid"], @60);
+    // The fixture provider has no groups; unnamed channels stay unidentified.
+    XCTAssertEqual([reader sensorGroupForKey:@"cpu"], XRGSensorGroupUnidentified);
+    XCTAssertEqual([reader sensorGroupForKey:@"hid"], XRGSensorGroupUnidentified);
 
     throwTemperatures = throwFans = throwNames = throwKnown = throwHID = YES;
     XCTAssertNoThrow([reader temperatureValuesIncludingUnknown:YES]);
@@ -163,6 +166,8 @@ CFTypeID XRGHIDServiceTypeID(void) { return CFDictionaryGetTypeID(); }
     XCTAssertEqualObjects([reader siliconTemperatureValues][@"PMU tdie1"], @60);
     XCTAssertTrue([reader isKnownKey:@"PMU tdie1"]);
     XCTAssertEqualObjects([reader humanReadableNameForKey:@"PMU tdie1"], @"Power management die 1 · PMU tdie1");
+    XCTAssertEqual([reader sensorGroupForKey:@"PMU tdie1"], XRGSensorGroupIdentified);
+    XCTAssertEqual([reader sensorGroupForKey:@"PMU tdie2"], XRGSensorGroupUnidentified);
     XCTAssertFalse([reader isKnownKey:@"PMU tdie2"]);
     XCTAssertFalse([reader isKnownKey:@"HID:54473042:gas gauge battery"]);
     missingServices = YES;

@@ -21,7 +21,8 @@ to current distributions; replacement of the sensor backend does not remove them
 ## macOS sensor names from Stats and Asahi Linux
 
 `XRGCore/XRGSMCCommunityNames.swift` contains plain-language temperature sensor
-names taken from two community projects. Per-key sources and the rules for
+names taken from two community projects, and `XRGCore/XRGMacModels.swift`
+contains Mac model data from the Asahi Linux documentation. Per-key sources and the rules for
 combining them with firmware-verified roles are in
 `Tools/macos-sensor-community-names.md`.
 
@@ -57,6 +58,16 @@ device trees `arch/arm64/boot/dts/apple/hwmon-common.dtsi`,
 fork `6ba0637d`). Copyright The Asahi Linux Contributors. Those files are
 dual-licensed `GPL-2.0+ OR MIT`; XRG-ng uses them under GPL-2.0-or-later,
 which permits distribution under GPL-3.0-or-later.
+
+Apple Silicon model identifiers, board names and SoC numbers in
+`XRGCore/XRGMacModels.swift` are adapted from the Asahi Linux
+[device list](https://github.com/AsahiLinux/docs/blob/main/docs/hw/devices/device-list.md)
+by The Asahi Linux Contributors, licensed under
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Changes: the
+data was converted to a Swift table, the "AP" suffix was dropped from board
+names, SoC numbers were replaced by chip names, and two identifiers were
+corrected (`Mac17,4` for the 15-inch M5 MacBook Air and `Mac15,14` for the
+M3 Ultra Mac Studio).
 
 ## macOS Sparkle updater
 
