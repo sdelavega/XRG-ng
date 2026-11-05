@@ -314,9 +314,10 @@ similar spelling nor a matching instantaneous reading establishes that source.
 The ordinary command-`0x11` write path supplies a concrete input interface:
 `zEAO`'s `0xc0` flags pass the permission gate, its size must match 32 bytes,
 and the accepted request is byte-copied into that exact backing buffer at
-`0x2b980..0x2b98c`. The M5 label is therefore **Sensor input**, replacing the
-unverified Ambient family claim. This describes the demonstrated input role;
-the actual writer, physical source and unit contract remain unresolved.
+`0x2b980..0x2b98c`. The initial M5 label was **Sensor input**, replacing the unverified Ambient
+family claim. The later current-build AOP proof below identifies the actual
+`als-temp` writer and refines that label; the input-interface proof remains
+independent of the upstream unit contract.
 Ignored `dist/aon-source-routing-validation/taol-role/` retains the native
 write-gate/copy proof and passing `verify_taol_write_role.py` reproducer.
 The input-role label passed both hosts' full Debug gates with 659 tests per
@@ -361,7 +362,12 @@ Three exact named streams, `L1TD`, `F1TD` and `F2TD`, bind distinct PMU HAL
 objects `0x77428`, `0x774a8` and `0x77528`. Their 16-entry maps publish
 `TPD0..TPDE` / `TPDG`, `TRD0..TRDE` / `TRDG`, and `TTD0..TTDE` / `TTDG`.
 The `F` suffix in each family is skipped by these maps; it must not receive
-an extrapolated PMU label. ADC selectors identify die channels 1..15 and 17.
+an extrapolated PMU label. ADC selectors identify die channels 1..15 and 17
+in the logical ADC-ID namespace. Sixteen consecutive packed fields map to
+selectors `0x4d..0x5b` and `0x5d`; selector `0x5c` explicitly returns `-22`
+without conversion output. This does not imply seventeen physical captures.
+The separate `PMU tcal` key `TP0Z` uses selector `0x92`. No source edge from
+the unmapped `F` inputs to `0x5c` is inferred.
 The shared PMU engineering-temperature converter produces signed 16.16 values
 before conversion to float.
 
@@ -752,6 +758,41 @@ label change passed both machines' full Debug gates: 660 tests per architecture,
 universal builds, isolated AppKit checks and native/Rosetta packaged-entry
 checks. Native probes verified 58 selected M5 labels and 84 selected M4 labels;
 logs and snapshots are under ignored `dist/taol-als-source-name-validation/`.
+
+## Resolved current M5 storage composite HID identity
+
+The exact live provider is `AppleEmbeddedNVMeTemperatureSensor`, product
+`NAND CH0 temp`, LocationID `TN0n`, below `AppleANS3CGv2Controller` on Mac17,4.
+Native initialization stores that product literal; its `copyEvent` directly
+calls `AppleEmbeddedNVMeController::GetTemperature` at `0xaef7878`.
+That method directly calls `IONVMeController::GetSMARTData`, then reads the
+sixteen-bit field at SMART offsets 1–2 and subtracts 273. `GetSMARTData`
+constructs log page two with NUMD 127. This is the standard composite
+Kelvin field, not a separately selected channel-zero temperature.
+
+Combined with the current ANS health-log producer proof, the host HID is the
+maximum-derived composite. Individual `SDN0`/`SDN3` equality is not claimed.
+The Mac17,4 label is **Storage composite temperature**. The model guard also
+requires `TN0n` for a qualified HID identity; unique products preserve their
+legacy product-only identity. Other models, other qualified locations and
+other NAND channels retain existing labels. The public Objective-C selector
+`humanReadableHIDNameForKey:` remains unchanged; native hardware-model lookup
+for that static entry point is cached.
+
+Ignored `dist/storage-hid-composite-identity/verify_storage_composite.py`
+checks all 485 retained native instructions against the original kernel,
+including exact product bytes, constructor/vtable identity and direct call
+chain. This proof uses the current 26C5035r kernel; it is not extrapolated to
+Havana's uninspected 26B123 storage driver.
+
+Validation retained under ignored `dist/storage-composite-name-validation/`
+includes 660 passing native tests on M5, both 660-test architectures and the
+full packaged checks on Havana, and the full 660-test M5 Rosetta retry plus
+its packaged check. The initial M5 Rosetta suite timed out in an unrelated
+AI log-scanning wait; the complete retry passed without changing tests or
+thresholds. Native probes verified 58 selected M5 / 84 selected M4 SMC names
+and the live storage HID on both machines, including the unchanged M4 label.
+The original failure log and retry result bundle remain retained.
 
 ## Matching MSP responder and temperature hardware path
 

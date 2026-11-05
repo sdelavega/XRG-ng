@@ -35,7 +35,7 @@ private final class SMCSensorFixture: NSObject, XRGSMCTransport {
 struct XRGSMCReaderTests {
     @Test func friendlyNamesPreserveCaseSensitiveSourceIdentityAndUnknownChannels() {
         let source = SMCSensorFixture(["TC0P", "Tp01", "Tg0U", "Tzzz", "F0Ac", "FAAc"])
-        let sensors = XRGSMCSensors(transport: source)
+        let sensors = XRGSMCSensors(transport: source, systemModel: nil)
         #expect(sensors.humanReadableName(forKey: "TC0P") == "CPU temperature · TC0P")
         #expect(sensors.humanReadableName(forKey: "Tp01") == "CPU temperature · Tp01")
         #expect(sensors.humanReadableName(forKey: "Tg0U") == "GPU temperature · Tg0U")
@@ -46,6 +46,18 @@ struct XRGSMCReaderTests {
         #expect(sensors.humanReadableName(forKey: "PMU tdev8") == "Power management device 8 · PMU tdev8")
         #expect(sensors.humanReadableName(forKey: "PMU tcal") == "Power management calibration · PMU tcal")
         #expect(sensors.humanReadableName(forKey: "NAND CH0 temp") == "Storage temperature channel 0 · NAND CH0 temp")
+        let m5 = XRGSMCSensors(transport: source, systemModel: "Mac17,4")
+        #expect(m5.humanReadableName(forKey: "NAND CH0 temp") == "Storage composite temperature · NAND CH0 temp")
+        let nand = XRGAppleSiliconSensorMiner.identity(product: "NAND CH0 temp", location: 0x544E306E)
+        #expect(m5.humanReadableName(forKey: nand) == "Storage composite temperature · HID TN0n")
+        let otherLocation = XRGAppleSiliconSensorMiner.identity(product: "NAND CH0 temp", location: 0x544E316E)
+        #expect(m5.humanReadableName(forKey: otherLocation) == "Storage temperature channel 0 · HID TN1n")
+        #expect(m5.humanReadableName(forKey: "NAND CH1 temp") == "Storage temperature channel 1 · NAND CH1 temp")
+        for model in [nil, "Mac16,11", "Mac17,3"] {
+            let other = XRGSMCSensors(transport: source, systemModel: model)
+            #expect(other.humanReadableName(forKey: "NAND CH0 temp") == "Storage temperature channel 0 · NAND CH0 temp")
+            #expect(other.humanReadableName(forKey: nand) == "Storage temperature channel 0 · HID TN0n")
+        }
         #expect(sensors.humanReadableName(forKey: "als-temp") == "Ambient light sensor temperature · als-temp")
         #expect(sensors.humanReadableName(forKey: "gas gauge battery") == "Battery temperature · gas gauge battery")
         #expect(!sensors.isKnownKey("Tzzz2") && sensors.knownTemperatureKeys.contains("Tzzz"))
