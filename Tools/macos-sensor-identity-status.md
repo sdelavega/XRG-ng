@@ -124,12 +124,22 @@ that missed an intervening instruction. PMC, MSR and TMU candidate
 images were inspected with their exact build/provenance boundaries; none
 provided a positive routing join in the bounded checks.
 
-For M4 `Tz`, the selected normal writer families are now classified across
-MTR, cache, protocol, PMU, fallback and outlined calls. Fixed-reference checks
-find the known state/pair/key-descriptor references, with no identified value
-writer. Runtime-loaded/indexed pointers, private configuration and bulk memory
-operations remain outside that closure. This still does not justify calling
-these inputs unavailable, unassigned or reserved.
+For M4 `Tz` and the three omitted PMU `F` fields, the fixed selected normal
+typed writer graph is now closed across the simple, weighted, packet, cache,
+MTR, PMU, counter and delta families. No configured sampling edge reaches
+these twelve fields. Selected raw-copy buffers are disjoint from their value
+backings, accessors return values/status/indices rather than writable pointers,
+and ordinary public writes reject their `0xc5` flags. The additional nine Tz
+pointer records are scalar monitor consumers: they read the source and update
+their own accumulators. Earlier descriptions of these records as key leaves
+were imprecise. The F average flush still writes zero for an empty sample
+window; that software value is not a measurement of zero degrees.
+
+This result assumes the supplied constructors/maps and normal typed protocols;
+arbitrary memory writes, corruption, patches and configuration outside that
+graph are excluded. It does not establish a transducer identity or justify
+calling these fields unavailable, unassigned or reserved. The reproducible
+closure is retained in `dist/m4-pmuf-source/configured-closure/`.
 
 The official diagnostic assets are now available and checked, superseding the
 initial local-DNS acquisition failure. Exact native board/chip selectors choose
@@ -138,6 +148,21 @@ SMC keys; they provide no remaining AON/TfC/Tz physical map. The paired repair
 image also supplies no such catalogue. This is a catalogue boundary, not proof
 that uncatalogued inputs are unavailable. See the firmware investigation for
 the acquired image hashes and exact profile-selection checks.
+
+The exact restore DeviceTree adds no missing boot-only PMP mapping: all 61 PMP
+properties and 36 additional scoped PTD/MMIO/interrupt properties match the
+current live tree byte-for-byte. The production ApplePTD user client rejects
+initialization and external methods; its retained packet-read helper is not a
+callable API. Its alternate SMC path requests `ptdR`, absent from the current
+SMC trie. Public registry metadata describes slots, not their samples or
+physical sources. No hardware packet-read experiment was performed.
+
+Official iStat Menus 7.50/build 2394 exact-model recipes for Mac17,4 and
+Mac16,11, and its global recipe, omit the unresolved target keys. TG Pro
+2.104 resources and its supplied-text-file loader add no identity catalogue.
+Pinned iSMC correlations do not supply a producer join. These checks justify
+no additional labels; proprietary binaries and derived catalogue data remain
+outside the repository.
 
 ## Evidence needed to close these boundaries
 
