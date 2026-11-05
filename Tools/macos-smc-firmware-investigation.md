@@ -1036,6 +1036,33 @@ bytes.
 
 ## Further source-contract checks
 
+The exact current AON consumer contract is now independently checked against
+original SMC bytes. The selected `s0va`, `a0va`, `g0va`, `p0va` and `e0va`
+objects request 2/3/8/6/3 hardware records and map 8/6/23/14/4 samples.
+The provider reads sixteen-byte hardware records but packs only each low
+64-bit word into an eight-byte output slot. A map selects one halfword and
+converts its signed low fifteen bits directly by `/64`; bit 15 and the high
+64-bit word are not assigned meanings by this proof. The selected group-one
+path performs no averaging, maximum, filtering or unit offset. Stack bounds
+and all map offsets are checked; unused packet lanes are not invented sensors.
+All twenty current SMC descriptors match the current LLB and the corresponding
+retained live metadata. This proves packet layout and numeric scale, not
+physical ownership or Celsius independently. See
+`dist/aon-consumer-contract/verify_aon_consumer.py`.
+
+The current LLB's actual boot caller selects AV bank two. Its twenty-row
+policy span contains `s0va` and `a0va`, but its separate hardware configuration
+has an empty autonomous-publisher vector and count zero. Bank one has two
+configured publishers at `0x388acc000` and `0x388adc000`. The generic hardware
+programmer does write destination/configuration registers when records exist;
+the selected AV bank skips that loop. The `ptdE` SMC exchange returns policy
+spans, not the missing physical-source configuration. The matching second
+iBoot stage preserves this selected empty vector. These facts close that
+constructor family, not every hardware or runtime publisher. Reproducers are
+`verify_llb_av_constructor.py`, `verify_ptde_exchange.py` and
+`iboot-stage/verify_iboot_stage.py` under
+`dist/havana-smc-artifact-discovery/current-26C5035r/aon-routing/`.
+
 The current battery updater reads two separate wire commands: `0x6c` into
 battery object offset `0x49`, and `0x6d` into offset `0x4b`. Native provider
 and bus dispatch preserve these command bytes and copy each raw two-byte
@@ -1060,6 +1087,20 @@ arbitrary writes, patches, corruption and other configuration. It establishes
 neither physical identity nor hardware availability. The original-image proof
 and native implementation are retained in
 `dist/m4-pmuf-source/configured-closure/verify_configured_closure.py`.
+
+The current j815 counterpart independently inventories seventeen common-writer
+edges, five convenience-wrapper calls and twenty-two outlined-wrapper calls,
+then redecodes every selected map and direct destination. None samples inputs
+114–116 (`TPDD/E/F`) or 197–205 (Tz). Weighted writers accept only groups two
+and three. These twelve targets are group one, so the M4 empty-average zero
+mechanism does not apply: their established default numeric origin is DATA
+zero-fill initialization. Their initial metadata matches active inputs. Tz
+records in the 121-entry monitor table at `0x89b60` carry diagnostic IDs
+112–120 and only read their underlying values into local accumulators. No
+actual runtime rebinding route was identified in this fixed normal typed
+graph. A selected producer-to-input edge remains necessary before assigning
+a physical identity; absence of that edge is not a hardware-absence claim.
+See `dist/m5-unmapped-input-closure/verify_current_closure.py`.
 
 The exact j815 restore DeviceTree (`6ad24d4b4ae70d48304e0ce6eb7c1936d26d4cb7a1133c7c3a8de8d7bb023694`)
 decodes to 506 nodes. All 61 PMP properties and 36 additional scoped
