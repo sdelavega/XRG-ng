@@ -24,7 +24,7 @@ questions for named computations. A full identity resolution is not claimed.
 | `Tz11`–`Tz18`, `Tz1j` | Registered group-one inputs 197–205 | Actual producer and physical source |
 | `SDN0`, `SDN3` | Logical MSP0/MSP1 storage temperature channels, signed quarter-degrees Celsius | Exact physical sensor sites; host HID reports the aggregate composite |
 | `TAOL` | Ambient light sensor temperature: exact AOP `als-temp` provider through `zEAO` slot zero | Independent upstream unit contract; exact transducer placement |
-| `TB1T`, `TB2T` | Battery provider command `0x6c`, two tenths-scaled fields | Sender-side unit contract for those fields |
+| `TB1T`, `TB2T` | Separate battery provider commands `0x6c` / `0x6d`, each raw response scaled by `/10` | Sender-side unit contract for those fields |
 
 The named ANE0/SNE MTR hardware has the same noncontiguous channel layout as
 `a0va`. That is a useful lead, not the missing routing edge. Current installed
@@ -36,6 +36,23 @@ flags and nonnull backing with active inputs. Successful updates also use
 status zero. Static registration therefore cannot distinguish unavailable
 channels from real zero readings. They must not be hidden as unavailable or
 called reserved merely because a bounded writer search found no producer.
+
+The exact current firmware's fixed normal typed writer graph has now been
+checked across every common-writer edge and its selected PMU, monitor, AON,
+cache, housekeeping, protocol, byte-buffer and outlined-wrapper maps. No
+configured sampling edge reaches these twelve inputs, and no actual runtime
+rebinding mechanism was identified in that graph. All are group one: unlike
+the M4 F fields, they receive no periodic empty-average zero write. Zero-fill
+initialization supplies the established default value. Tz's extra references
+are diagnostic scalar-monitor consumers (IDs 112–120), not producers or
+physical channel numbers. The proof is retained in
+`dist/m5-unmapped-input-closure/`; it assumes the supplied fixed configuration
+and normal typed protocols and does not assert hardware absence.
+
+This leaves two distinct evidence gaps: a selected producer edge for these
+twelve registered scalars, and a named physical publisher for the fourteen
+actively sampled `a0va` / `s0va` channels. Further default-state checks cannot
+resolve either gap.
 
 The fixed/adaptive `TV` computation roles are identified independently of these
 remaining source contracts. Their labels do not turn model outputs into direct
