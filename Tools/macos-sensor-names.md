@@ -163,9 +163,11 @@ AOP firmware binds the exact `als-temp` provider to slot zero of the writable
 `zEAO` packet, which current SMC code maps to `TAOL`. This names the sensor
 component, without claiming ambient-air temperature or a physical die site.
 The independent upstream unit contract remains recorded in the investigation.
-M4 `TfC0`–`TfC4` use **Telemetry input N (average)** labels for their verified
-arithmetic sample-average role. These names make no CPU/GPU/site or unit
-assignment. The firmware exports zero for an empty averaging window; these
-labels do not add availability filtering.
+M4 `TfC0`–`TfC4` use **Power management temperature maximum N (filtered
+average)** labels. Each is a sample average of a filtered maximum of two
+configured thermal captures. Exact named Abbey PMU parents establish the
+power-management provider; CPU/GPU placement and downstream transducer sites
+are not inferred from packet prefixes. Empty averaging windows still export
+zero; these labels do not add availability filtering.
 
 NPU “Quiet” is explained in [macos-npu-telemetry.md](macos-npu-telemetry.md).
