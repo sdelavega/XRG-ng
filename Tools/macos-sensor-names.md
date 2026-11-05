@@ -163,6 +163,13 @@ AOP firmware binds the exact `als-temp` provider to slot zero of the writable
 `zEAO` packet, which current SMC code maps to `TAOL`. This names the sensor
 component, without claiming ambient-air temperature or a physical die site.
 The independent upstream unit contract remains recorded in the investigation.
+On M5 Mac17,4, the native `NAND CH0 temp` HID reading uses **Storage composite
+temperature**. Its exact `TN0n` provider reads the NVMe SMART composite field,
+which the matching ANS firmware derives from a maximum. This describes an
+aggregate storage reading, without assigning an individual NAND die. Other
+models and qualified HID locations retain their existing channel labels.
+The native product/raw identity and Objective-C naming selector stay unchanged.
+
 M4 `TfC0`–`TfC4` use **Power management temperature maximum N (filtered
 average)** labels. Each is a sample average of a filtered maximum of two
 configured thermal captures. Exact named Abbey PMU parents establish the
