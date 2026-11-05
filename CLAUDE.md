@@ -380,7 +380,9 @@ gboolean preferences_get_bool(const char *key, gboolean default_value) {
 - **Network counters:** filter loopback and calculate deltas before advancing the
   previous counter. Cover resets and interface replacement with fixtures.
 - **Temperature names:** SMC labels are generated from raw keys; never restore the
-  inherited vendor catalog. HID uses driver product labels. Saved raw-key choices
+  inherited vendor catalog. Credited Stats (MIT) and Asahi Linux (GPL-2.0+/MIT)
+  names live in `XRGCore/XRGSMCCommunityNames.swift`; record any new source in
+  `THIRD_PARTY_NOTICES.md` and `Tools/macos-sensor-community-names.md`. HID uses driver product labels. Saved raw-key choices
   remain stable. Relative-to-limit channels must not become absolute temperatures.
 - **Module layout:** preserve module identities and the default order table. The
   manager sorts nonsequential values and preserves registration order for ties;
