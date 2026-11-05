@@ -111,7 +111,7 @@ import IOKit
             return Self.temperatureName(forKey: key)
         }
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
-        return Self.hidName(forKey: key)
+        return Self.hidName(forKey: key, systemModel: systemModel)
     }
     static func verifiedPublishedAlias(forKey key: String, systemModel: String?) -> String? {
         if systemModel == "Mac16,11" {
@@ -229,9 +229,16 @@ import IOKit
         if let family = families[String(key.prefix(2))] { return "\(family) temperature · \(key)" }
         return "Temperature sensor · \(key)"
     }
+    private static let localHIDSystemModel = XRGCPUMiner.systemModelIdentifier()
     @objc(humanReadableHIDNameForKey:) public static func hidName(forKey key: String) -> String {
+        hidName(forKey: key, systemModel: localHIDSystemModel)
+    }
+    static func hidName(forKey key: String, systemModel: String?) -> String {
         if let identity = XRGAppleSiliconSensorMiner.parseIdentity(key) {
-            let label = hidName(forKey: identity.product)
+            // The verified M5 NVMe provider uses TN0n. Unique HID products keep
+            // their legacy product-only key; qualified identities retain location.
+            let model = identity.product == "NAND CH0 temp" && identity.location != 0x544E306E ? nil : systemModel
+            let label = hidName(forKey: identity.product, systemModel: model)
             let suffix = " · \(identity.product)"
             let friendly = label.hasSuffix(suffix) ? String(label.dropLast(suffix.count)) : label
             let source = Self.name(identity.location) ?? String(format: "%08X", identity.location)
@@ -252,6 +259,8 @@ import IOKit
             label = "Power management\(unit) \(parts[1] == "tdie" ? "die" : "device") \(parts[2])"
         } else if let parts = groups("^PMU([0-9]*) tcal$") {
             label = "Power management\(parts[0].isEmpty ? "" : " " + parts[0]) calibration"
+        } else if key == "NAND CH0 temp", systemModel == "Mac17,4" {
+            label = "Storage composite temperature"
         } else if let parts = groups("^NAND CH([0-9]+) temp$") {
             label = "Storage temperature channel \(parts[0])"
         } else if let parts = groups("^([ep])ACC(.*)$") {
