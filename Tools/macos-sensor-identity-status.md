@@ -10,7 +10,7 @@ artifact hashes, addresses and bounded exclusions. Proprietary input images and
 derived binary evidence remain in ignored `dist/` directories.
 
 The latest native probes leave 26 readable generically labeled fields on M5
-and 12 on M4. The five M4 `TfC` readings now have verified sample-average
+and 12 on M4. The five M4 `TfC` readings now have verified filtered-maximum sample-average
 role labels. The tables below account for generic fields and also retain unit
 questions for named computations. A full identity resolution is not claimed.
 
@@ -67,7 +67,7 @@ were not read back. No firmware execution or device-state change was used.
 | Keys / inputs | Demonstrated identity | Remaining edge |
 | --- | --- | --- |
 | `TPDF`, `TRDF`, `TTDF` | Group-two inputs omitted by the selected PMU stream maps but included in their maxima | Actual producers; no extrapolated die label |
-| `TfC0`–`TfC4` | Telemetry input 1–5 (average), from PTD packets `p0t1`, `g0t1`, `p1t1`, `g1t1`, `s0t1`, respectively | Named physical owners and packet-field meaning; a measured value versus limit is not established |
+| `TfC0`–`TfC4` | Power management temperature maximum 1–5 (filtered average): two thermal captures, low-pass filter, then sample mean; exact Abbey parent and downstream target configured | Downstream transducer/package site; no CPU/GPU inference |
 | `Tz11`–`Tz18`, `Tz1j` | Separate j773s group-one inputs | Actual producers and physical sources; no M5 producer assumption |
 
 The M4 `TVmd` input is demonstrably consumed as a categorical control, but its
