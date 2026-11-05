@@ -12,24 +12,30 @@ import IOKit
     func isKnownKey(_ key: String) -> Bool
 }
 
-/// Inventory is made from driver keys, not a copied model/description database.
-/// Raw keys remain the persisted identity. Labels describe sensor families;
-/// undocumented channels never acquire an invented physical location/core number.
+/// Inventory is made from driver keys. Raw keys remain the persisted identity.
+/// Labels combine firmware-verified roles with credited community names
+/// (XRGSMCCommunityNames.swift); keys no reference covers keep family labels.
 @objc(XRGSMCSensors) public final class XRGSMCSensors: NSObject, XRGSMCSensorValuesProvider {
     private let transport: (any XRGSMCTransport)?
     private let branchNameSource: (String) -> [String: String]
     private let systemModel: String?
     private let publishedNameSource: () -> [String: String]
+    /// Chip family for the community name tables (XRGSMCCommunityNames.swift).
+    private let chip: XRGAppleChip?
     private var inventory: [String: UInt32] = [:]
     private var branchNames: [String: String] = [:]
     private var publishedNames: [String: String] = [:]
     public private(set) var knownTemperatureKeys: Set<String> = []
-    @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader()) }
+    /// The production reader names the host's own chip; injected readers
+    /// (tests, fixtures) get community names only for an injected chip.
+    @objc public override convenience init() { self.init(transport: XRGSMCReader.openReader(), chip: XRGAppleChip.host()) }
     init(transport: (any XRGSMCTransport)?, branchNameSource: @escaping (String) -> [String: String] = XRGSMCBranchNames.load,
          systemModel: String? = XRGCPUMiner.systemModelIdentifier(),
-         publishedNameSource: @escaping () -> [String: String] = XRGSMCPublishedNames.load) {
+         publishedNameSource: @escaping () -> [String: String] = XRGSMCPublishedNames.load,
+         chip: XRGAppleChip? = nil) {
         self.transport = transport; self.branchNameSource = branchNameSource; self.systemModel = systemModel
         self.publishedNameSource = publishedNameSource
+        self.chip = chip
         super.init(); reloadInventory()
     }
     static func code(_ key: String) -> UInt32? {
@@ -94,20 +100,29 @@ import IOKit
             return "\(name) · \(key)"
         }
         if knownTemperatureKeys.contains(key) {
-            if let name = publishedNames[key] { return "\(name) · \(key)" }
+            // A community plain-language name leads; a firmware-verified role,
+            // when known, follows it so neither source hides the other.
+            let community = XRGSMCCommunityNames.name(forKey: key, chip: chip, systemModel: systemModel)
+            func label(_ role: String?) -> String {
+                ([community, role].compactMap { $0 } + [key]).joined(separator: " · ")
+            }
+            if let name = publishedNames[key] { return label(name) }
             if let source = Self.verifiedPublishedAlias(forKey: key, systemModel: systemModel) {
                 let unit = source.hasPrefix("TP") ? "Power management " : "Power management 2 "
                 let role = source.hasSuffix("d") ? "device " : "die "
                 if let name = publishedNames[source], name.hasPrefix(unit + role) {
                     let suffix = systemModel == "Mac16,11" && key.hasPrefix("TPD") ? " (average)" : ""
-                    return "\(name)\(suffix) · \(key)"
+                    return label("\(name)\(suffix)")
                 }
                 // The verified provider supersedes misleading generic TC/TM/TH
                 // families even when its exact published channel name is absent.
-                return "Temperature sensor · \(key)"
+                return label(community == nil ? "Temperature sensor" : nil)
             }
-            if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return "\(name) · \(key)" }
+            if let name = Self.verifiedTemperatureName(forKey: key, systemModel: systemModel) { return label(name) }
+            // Apple's own description for this exact board branch outranks
+            // community references, which are not board-specific.
             if let name = branchNames[key] { return "\(name) · \(key)" }
+            if community != nil { return label(nil) }
             return Self.temperatureName(forKey: key)
         }
         if key.hasPrefix("F"), key.hasSuffix("Ac"), let index = key.dropFirst().first.flatMap({ Int(String($0), radix:16) }) { return "Fan \(index + 1) · \(key)" }
@@ -253,6 +268,7 @@ import IOKit
         }
         var label: String?
         if key == "als-temp" { label = "Ambient light sensor temperature" }
+        else if let name = XRGSMCCommunityNames.hidName(forProduct: key) { label = name }
         else if key == "gas gauge battery" { label = "Battery temperature" }
         else if let parts = groups("^PMU([0-9]*) (tdie|tdev)([0-9]+)$") {
             let unit = parts[0].isEmpty ? "" : " \(parts[0])"
