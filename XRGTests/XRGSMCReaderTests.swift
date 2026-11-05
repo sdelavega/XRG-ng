@@ -393,13 +393,13 @@ struct XRGSMCReaderTests {
         #expect(XRGSMCSensors.verifiedTemperatureName(forKey: "TAOL", systemModel: nil) == nil)
     }
 
-    @Test func m4TelemetryInputLabelsPreserveProvenSampleAverageRoles() {
+    @Test func m4TelemetryLabelsPreserveVerifiedPowerManagementMaximumRoles() {
         let keys = ["TfC0", "TfC1", "TfC2", "TfC3", "TfC4"]
         let source = SMCSensorFixture(keys + ["TfC5", "TFC0"])
         source.set("TfC0", 0.0)
         let sensors = XRGSMCSensors(transport: source, systemModel: "Mac16,11", publishedNameSource: { [:] })
         for (index, key) in keys.enumerated() {
-            #expect(sensors.humanReadableName(forKey: key) == "Telemetry input \(index + 1) (average) · \(key)")
+            #expect(sensors.humanReadableName(forKey: key) == "Power management temperature maximum \(index + 1) (filtered average) · \(key)")
             #expect(XRGSMCSensors.verifiedTemperatureName(forKey: key, systemModel: "Mac17,4") == nil)
         }
         #expect(sensors.temperatureValues(includingUnknown: true)["TfC0"] as? Double == 0.0)

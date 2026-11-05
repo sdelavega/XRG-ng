@@ -486,20 +486,52 @@ divides accumulated numerator by denominator and exports the arithmetic mean;
 an empty window exports zero. A disabled flush flag can defer publication.
 These are sample averages, without a claimed time weighting or interval.
 
-Labels **Telemetry input 1 (average)** through **5** follow `TfC0`..`TfC4`
-key order. They identify proven processing roles, not physical owners or
-temperature-versus-limit field semantics. The separate PMP fast-die input
-and disabled output paths do not establish an alias to these packet fields.
-Ignored `dist/tz-producer-validation/m4-other/` retains the hash-checked
-`collect_tfc_proof.py`, exact packet and backing joins, and the independent
-`fastdie-input/` and `fastdie-output/` follow-ups.
+The later sender-side PMU proof resolves the input meaning. The exact boot
+configuration is parsed by the extracted PMU firmware, using each variant's
+own schema/handler table. For all five packets, telemetry tag 29's field at
+offset two selects tag 9 low-pass record four. That record's source resolves
+to tag 3's maximum of two enabled thermal captures. The firmware then converts
+signed Q16 to Q6 for telemetry; SMC accumulates the arithmetic sample mean.
+The five fields are therefore **filtered thermal maxima followed by sample
+averaging**, rather than individual instantaneous sensor readings.
 
-Both hosts passed the complete Debug gate with 660 tests per architecture,
-universal builds and native / Rosetta packaged checks. Native probes verified
-84 selected M4 labels and 58 selected M5 labels. The remaining readable
-generic names number twelve on M4 and twenty-six on M5; physical and unit
-questions for named telemetry inputs remain separately documented. Logs and
-snapshots are under ignored `dist/m4-telemetry-average-name-validation/`.
+The native boot loader explicitly matches named parent endpoints, independently
+of packet prefixes:
+
+| Key | Parent endpoint | Private bus / target |
+| --- | --- | --- |
+| `TfC0` | `AbbeyF1Priv` | 1 / 1 |
+| `TfC1` | `AbbeyF1Priv` | 1 / 4 |
+| `TfC2` | `AbbeyL1Priv` | 1 / 2 |
+| `TfC3` | `AbbeyF2Priv` | 1 / 5 |
+| `TfC4` | `AbbeyF2Priv` | 1 / 3 |
+
+These are named PMU parents and configured private targets, not physical
+transducer/package names. The thermal conversion uses integer Q16 coefficients
+5240 and -6964969, matching the independently inspected canonical PMU die
+conversion family after coefficient quantization. The proof preserves that
+quantization and calibration-offset distinction; sample equality is not
+claimed. No CPU/GPU source follows from `p`/`g`/`s` prefixes.
+
+Labels **Power management temperature maximum N (filtered average)** follow
+`TfC0`..`TfC4` key order. Their ordinal identifies the presentation entry,
+without claiming a die, CPU core or native bus address. These refine the
+earlier **Telemetry input N (average)** role labels. The separate PMP fast-die
+input and disabled output paths still do not establish an alias.
+Ignored `dist/aon-source-routing-validation/m4-t1-config/` retains the passing
+`inspect_t1_config.py` and `verify_t1_owners.py`, source hashes, original
+configuration records and native instruction proofs. Earlier SMC
+`collect_tfc_proof.py` evidence remains under `dist/tz-producer-validation/m4-other/`.
+
+The initial sample-average naming checkpoint passed both complete Debug gates
+with 660 tests per architecture, universal builds and native / Rosetta packaged
+checks. Its native probes verified 84 selected M4 and 58 selected M5 labels.
+The remaining readable generic names number twelve on M4 and twenty-six on M5.
+Those initial logs remain under ignored `dist/m4-telemetry-average-name-validation/`. The
+refined power-management maximum labels also passed both full Debug gates
+with 660 tests per architecture and the packaged checks. Updated native probes
+verified all 84 selected M4 and 58 selected M5 labels; evidence is under ignored
+`dist/m4-pmu-filtered-max-name-validation/`.
 
 ## Source identity
 
