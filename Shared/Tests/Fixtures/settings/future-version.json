@@ -1,0 +1,10 @@
+{
+  "format": "xrg-ng-settings",
+  "version": 2,
+  "settings": {
+    "general.window.border_width": 8,
+    "restructured.everything": {
+      "new": "shape"
+    }
+  }
+}

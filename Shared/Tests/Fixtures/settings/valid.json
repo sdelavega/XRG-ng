@@ -1,0 +1,19 @@
+{
+  "format": "xrg-ng-settings",
+  "version": 1,
+  "settings": {
+    "general.window.title": "Dashboard",
+    "graphs.refresh": 2.5,
+    "general.window.sticky_edges": true,
+    "appearance.series1.color": [0.165, 0.224, 0.773, 1.0],
+    "general.window.collapsed": true,
+    "graphs.order": "memory,cpu,gpu,npu,vram,battery,temperature,fans,network,disk,weather,stock,ai,processes",
+    "general.window.border_width": 8,
+    "general.window.orientation": "horizontal",
+    "general.window.expand_on_hover": false,
+    "appearance.window.transparency": 0.5,
+    "graphs.cpu.time_window": 5.0,
+    "general.window.collapse_anchor": "end",
+    "graphs.cpu.height": null
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "diagnostics": [
+    {
+      "id": "appearance.window.transparency",
+      "problem": "invalid-value"
+    },
+    {
+      "id": "general.window.border_width",
+      "problem": "invalid-value"
+    },
+    {
+      "id": "graphs.refresh",
+      "problem": "invalid-value"
+    }
+  ],
+  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"graphs.cpu.samples\": 500\n  },\n  \"version\": 1\n}\n"
+}

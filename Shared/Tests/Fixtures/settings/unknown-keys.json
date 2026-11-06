@@ -1,0 +1,18 @@
+{
+  "format": "xrg-ng-settings",
+  "version": 1,
+  "settings": {
+    "some.scalar": 3.25,
+    "another.scalar": -7,
+    "future.widget.config": {
+      "size": 2,
+      "labels": ["a", "b"],
+      "nested": {
+        "deep": null
+      }
+    },
+    "experiments.alpha.flag": true,
+    "general.window.border_width": 2
+  },
+  "toplevel.extra": "kept"
+}

@@ -1,0 +1,21 @@
+{
+  "diagnostics": [
+    {
+      "id": "appearance.display_effect",
+      "problem": "invalid-value"
+    },
+    {
+      "id": "appearance.series2.color",
+      "problem": "invalid-value"
+    },
+    {
+      "id": "general.window.border_width",
+      "problem": "invalid-value"
+    },
+    {
+      "id": "general.window.expand_on_hover",
+      "problem": "invalid-value"
+    }
+  ],
+  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"general.window.opacity\": 0.85\n  },\n  \"version\": 1\n}\n"
+}

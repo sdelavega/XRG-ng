@@ -1,0 +1,4 @@
+{
+  "diagnostics": [],
+  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"appearance.window.transparency\": 0.5,\n    \"general.window.border_width\": 8,\n    \"general.window.collapse_anchor\": \"end\",\n    \"general.window.collapsed\": true,\n    \"general.window.expand_on_hover\": false,\n    \"general.window.orientation\": \"horizontal\",\n    \"general.window.title\": \"Dashboard\",\n    \"graphs.cpu.time_window\": 5,\n    \"graphs.order\": \"memory,cpu,gpu,npu,vram,battery,temperature,fans,network,disk,weather,stock,ai,processes\",\n    \"graphs.refresh\": 2.5\n  },\n  \"version\": 1\n}\n"
+}

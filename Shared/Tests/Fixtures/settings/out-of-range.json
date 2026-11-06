@@ -1,0 +1,10 @@
+{
+  "format": "xrg-ng-settings",
+  "version": 1,
+  "settings": {
+    "graphs.refresh": 0.05,
+    "general.window.border_width": 99,
+    "graphs.cpu.samples": 500,
+    "appearance.window.transparency": 2
+  }
+}

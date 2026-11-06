@@ -1,0 +1,12 @@
+{
+  "format": "xrg-ng-settings",
+  "version": 1,
+  "settings": {
+    "general.window.expand_on_hover": "yes",
+    "general.window.border_width": 4.5,
+    "appearance.display_effect": "sparkle",
+    "graphs.cpu.effect": null,
+    "appearance.series2.color": [0.1, 0.2],
+    "general.window.opacity": 0.85
+  }
+}
