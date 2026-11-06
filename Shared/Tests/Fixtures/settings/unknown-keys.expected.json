@@ -1,4 +1,4 @@
 {
   "diagnostics": [],
-  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"another.scalar\": -7,\n    \"experiments.alpha.flag\": true,\n    \"future.widget.config\": {\n      \"labels\": [\n        \"a\",\n        \"b\"\n      ],\n      \"nested\": {\n        \"deep\": null\n      },\n      \"size\": 2\n    },\n    \"general.window.border_width\": 2,\n    \"some.scalar\": 3.25,\n    \"toplevel.extra\": \"kept\"\n  },\n  \"version\": 1\n}\n"
+  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"another.scalar\": -7,\n    \"experiments.alpha.flag\": true,\n    \"future.widget.config\": {\n      \"labels\": [\n        \"a\",\n        \"b\"\n      ],\n      \"nested\": {\n        \"deep\": null\n      },\n      \"size\": 2\n    },\n    \"general.window.border_width\": 2,\n    \"some.scalar\": 3.25\n  },\n  \"toplevel.extra\": \"kept\",\n  \"version\": 1\n}\n"
 }

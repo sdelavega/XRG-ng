@@ -14,8 +14,10 @@ import Testing
 /// - `diagnostics`: the `[XRGSettingsDiagnostic]` the load reports;
 /// - `document`: the canonical document bytes as a JSON string (UTF-8, LF,
 ///   sorted keys, two-space indent, trailing newline; only values that differ
-///   from their catalog default, plus every unknown key), or `null` when the
-///   input is unreadable.
+///   from their catalog default, plus every unknown key at the level it came
+///   from — a root member the format does not define is written back at the
+///   top level, and preserved numbers keep their original text), or `null`
+///   when the input is unreadable.
 ///
 /// The expected files are hand-derived from the spec's format rules, never
 /// generated from the implementation, so the pinned bytes are an independent
@@ -119,24 +121,24 @@ struct SettingsDocumentTests {
         let input = try Data(contentsOf: Self.fixturesDirectory.appendingPathComponent("unknown-keys.json"))
         let (document, diagnostics) = try #require(loadOK(input, catalog))
         #expect(diagnostics.isEmpty, "preserved keys are not problems")
-        // Keys the catalog does not know survive verbatim, wherever they sat
-        // in the input; a top-level unknown key is carried inside `settings`,
-        // the document's one value namespace.
+        // Keys the catalog does not know survive verbatim at the level they
+        // sat in the input: inside `settings`, or at the top level.
         #expect(document.values == ["general.window.border_width": .int(2)])
         #expect(document.unknown == [
-            "another.scalar": .number(-7),
+            "another.scalar": .number("-7"),
             "experiments.alpha.flag": .bool(true),
             "future.widget.config": .object([
                 "labels": .array([.string("a"), .string("b")]),
                 "nested": .object(["deep": .null]),
-                "size": .number(2),
+                "size": .number("2"),
             ]),
-            "some.scalar": .number(3.25),
-            "toplevel.extra": .string("kept"),
+            "some.scalar": .number("3.25"),
         ])
+        #expect(document.rootUnknown == ["toplevel.extra": .string("kept")])
         let (reloaded, rediagnostics) = try #require(loadOK(document.serialized(), catalog))
         #expect(rediagnostics.isEmpty)
         #expect(reloaded.unknown == document.unknown)
+        #expect(reloaded.rootUnknown == document.rootUnknown)
         #expect(reloaded.values == document.values)
         #expect(reloaded.serialized() == document.serialized())
     }
@@ -160,6 +162,15 @@ struct SettingsDocumentTests {
             ("settings is a string", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": "x"}"#.utf8)),
             ("trailing garbage", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {}} oops"#.utf8)),
             ("not utf-8", Data([0xff, 0xfe, 0x00, 0x7b])),
+            ("trailing comma", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {},}"#.utf8)),
+            // The parser enforces the JSON number grammar.
+            ("leading zero number", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": 01}}"#.utf8)),
+            ("number missing fraction digits", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": 1.}}"#.utf8)),
+            ("number missing exponent digits", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": 1e}}"#.utf8)),
+            ("bad string escape", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": "\q"}}"#.utf8)),
+            ("raw control character in string", Data("{\"\u{01}\": 1}".utf8)),
+            ("nesting deeper than the parser allows",
+             Data((String(repeating: "[", count: 512) + String(repeating: "]", count: 512)).utf8)),
         ]
         for (name, data) in cases {
             let diagnostic = try #require(loadUnreadable(data, catalog), "\(name): expected unreadable")
@@ -306,15 +317,15 @@ struct SettingsDocumentTests {
         #expect(document.value("general.window.opacity", catalog: catalog) == .double(0.5))
         #expect(document.value("appearance.font", catalog: catalog) == .string("Menlo 12"))
         #expect(document.value("graphs.refresh", catalog: catalog) == .int(5))
-        // Unknown keys are never touched by a reset.
-        #expect(document.unknown["toplevel.extra"] == .string("kept"))
+        // Unknown keys, at either level, are never touched by a reset.
+        #expect(document.rootUnknown["toplevel.extra"] == .string("kept"))
         #expect(document.unknown["future.widget.config"] != nil)
 
         // The Linux reset also reaches the Linux-only entries of the section.
         document.resetSection("general", catalog: catalog, platform: .linux)
         #expect(document.value("general.window.opacity", catalog: catalog) == .int(1))
         #expect(document.value("graphs.refresh", catalog: catalog) == .int(5))
-        #expect(document.unknown["toplevel.extra"] == .string("kept"))
+        #expect(document.rootUnknown["toplevel.extra"] == .string("kept"))
     }
 
     // MARK: serialise
@@ -338,19 +349,78 @@ struct SettingsDocumentTests {
         #expect(document.serialized() == XRGSettingsDocument.defaults(catalog: catalog, platform: .linux).serialized())
     }
 
-    @Test func topLevelUnknownsAreFoldedIntoSettings() throws {
+    // MARK: unknown root members and numbers
+
+    /// A root member and a settings member of the same name are two
+    /// different values: both survive, each written at its own level.
+    @Test func rootCollisionWithSettingsIsPreservedAtBothLevels() throws {
         let catalog = try XRGSettingsCatalog.load()
-        let input = Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"general.window.border_width": 2}, "toplevel.extra": {"z": true}}"#.utf8)
+        let input = Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"extra": 2}, "extra": 1}"#.utf8)
         let (document, diagnostics) = try #require(loadOK(input, catalog))
         #expect(diagnostics.isEmpty)
-        #expect(document.values == ["general.window.border_width": .int(2)])
-        #expect(document.unknown == ["toplevel.extra": .object(["z": .bool(true)])])
-        // The one value namespace is `settings`, so the unknown key is
-        // written there — hand-derived expected bytes, exactly as for the corpus.
-        let expected = "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"general.window.border_width\": 2,\n    \"toplevel.extra\": {\n      \"z\": true\n    }\n  },\n  \"version\": 1\n}\n"
+        #expect(document.values.isEmpty)
+        #expect(document.unknown == ["extra": .number("2")])
+        #expect(document.rootUnknown == ["extra": .number("1")])
+        // The whole top level sorts canonically, so "extra" comes before
+        // "format". Hand-derived expected bytes, exactly as for the corpus.
+        let expected = "{\n  \"extra\": 1,\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"extra\": 2\n  },\n  \"version\": 1\n}\n"
         #expect(document.serialized() == Data(expected.utf8))
-        // Folding is idempotent: the second round-trip is byte-identical.
+        // The collision survives the round trip, each value still at its level.
         let (reloaded, _) = try #require(loadOK(document.serialized(), catalog))
+        #expect(reloaded.unknown == document.unknown)
+        #expect(reloaded.rootUnknown == document.rootUnknown)
+        #expect(reloaded.serialized() == document.serialized())
+    }
+
+    /// A root member named like a catalog id is root data, not a setting: it
+    /// stays at the root and never changes that setting's value.
+    @Test func rootMemberNamedLikeACatalogIdIsRootData() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        // Without a stored value, the setting stays at its default.
+        let onlyRoot = Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {}, "general.window.border_width": 8}"#.utf8)
+        let (bare, diagnostics) = try #require(loadOK(onlyRoot, catalog))
+        #expect(diagnostics.isEmpty)
+        #expect(bare.values.isEmpty)
+        #expect(bare.unknown.isEmpty)
+        #expect(bare.rootUnknown == ["general.window.border_width": .number("8")])
+        #expect(bare.value("general.window.border_width", catalog: catalog) == .int(4))
+        let bareBytes = "{\n  \"format\": \"xrg-ng-settings\",\n  \"general.window.border_width\": 8,\n  \"settings\": {},\n  \"version\": 1\n}\n"
+        #expect(bare.serialized() == Data(bareBytes.utf8))
+
+        // With both present, the root member still does not touch the setting.
+        let both = Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"general.window.border_width": 2}, "general.window.border_width": 8}"#.utf8)
+        let (document, _) = try #require(loadOK(both, catalog))
+        #expect(document.values == ["general.window.border_width": .int(2)])
+        #expect(document.rootUnknown == ["general.window.border_width": .number("8")])
+        #expect(document.value("general.window.border_width", catalog: catalog) == .int(2))
+        let bothBytes = "{\n  \"format\": \"xrg-ng-settings\",\n  \"general.window.border_width\": 8,\n  \"settings\": {\n    \"general.window.border_width\": 2\n  },\n  \"version\": 1\n}\n"
+        #expect(document.serialized() == Data(bothBytes.utf8))
+        let (reloaded, _) = try #require(loadOK(document.serialized(), catalog))
+        #expect(reloaded.serialized() == document.serialized())
+    }
+
+    /// Preserved numbers round-trip byte for byte, whatever their precision:
+    /// an integer beyond Double's exact range and a decimal longer than its
+    /// shortest form survive unchanged — plain, inside arrays and inside
+    /// objects, in `settings` and at the top level. The corpus runs the same
+    /// check through `precision.json`; this pins it with a second,
+    /// independently derived expectation.
+    @Test func unknownNumbersSurviveByteExactly() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let input = Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"big": 9007199254740993, "deep": {"decimal": 0.1000000000000000055511151231257827}, "list": [9007199254740993, 0.1000000000000000055511151231257827]}}"#.utf8)
+        let (document, diagnostics) = try #require(loadOK(input, catalog))
+        #expect(diagnostics.isEmpty)
+        // The stored value is the original number text, not a rounded Double.
+        #expect(document.unknown["big"] == .number("9007199254740993"))
+        #expect(document.unknown["list"] == .array([
+            .number("9007199254740993"),
+            .number("0.1000000000000000055511151231257827"),
+        ]))
+        let expected = "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"big\": 9007199254740993,\n    \"deep\": {\n      \"decimal\": 0.1000000000000000055511151231257827\n    },\n    \"list\": [\n      9007199254740993,\n      0.1000000000000000055511151231257827\n    ]\n  },\n  \"version\": 1\n}\n"
+        #expect(document.serialized() == Data(expected.utf8))
+        // load∘serialize is byte-stable: the second load sees the same numbers.
+        let (reloaded, _) = try #require(loadOK(document.serialized(), catalog))
+        #expect(reloaded.unknown == document.unknown)
         #expect(reloaded.serialized() == document.serialized())
     }
 
@@ -359,6 +429,7 @@ struct SettingsDocumentTests {
         let document = XRGSettingsDocument.defaults(catalog: catalog, platform: .macos)
         #expect(document.values.isEmpty)
         #expect(document.unknown.isEmpty)
+        #expect(document.rootUnknown.isEmpty)
         #expect(document.value("general.window.border_width", catalog: catalog) == .int(4))
         #expect(document.value("graphs.refresh", catalog: catalog) == .int(1))
         #expect(document.value("nope.nope", catalog: catalog) == .null)

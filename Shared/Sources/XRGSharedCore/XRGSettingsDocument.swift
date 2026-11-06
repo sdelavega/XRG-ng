@@ -4,45 +4,260 @@
 import Foundation
 
 /// A JSON value of a settings document, used only for the keys the catalog
-/// does not know, so they survive a load and a save verbatim: the other
-/// platform's settings, and settings from a newer version of the app, must not
-/// be lost by an older core. The document's canonical writer re-emits integral
-/// numbers without a fraction; values are compared by value, never by case.
-public enum JSONValue: Codable, Equatable, Sendable {
+/// does not know — inside `settings` or at the top level — so they survive a
+/// load and a save verbatim: the other platform's settings, and settings from
+/// a newer version of the app, must not be lost or altered by an older core.
+///
+/// A number keeps the exact text it had in the file. `parse` builds values
+/// and validates that text against the JSON number grammar, and the
+/// document's writer re-emits it unchanged, so an integer beyond the exact
+/// range of `Double` (`9007199254740993`, not `9007199254740992`) or a
+/// decimal longer than `Double`'s shortest form round-trips byte for byte, at
+/// every nesting depth. Two numbers are equal when their original text is.
+///
+/// Deliberately not `Codable`: a `Decoder` hands numbers back only as
+/// `Double`, which cannot round-trip arbitrary JSON numbers, so a conforming
+/// implementation would reintroduce exactly the loss this type exists to
+/// prevent. Build one from bytes with `parse`; the document's writer
+/// serialises one with its canonical renderer.
+public enum JSONValue: Equatable, Sendable {
     case null
     case bool(Bool)
-    case number(Double)
+    /// A number's original JSON text, a lexeme `parse` has validated.
+    case number(String)
     case string(String)
     case array([JSONValue])
     case object([String: JSONValue])
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-            return
-        }
-        // The modern decoder keeps JSON types strict (a number never decodes
-        // as Bool and vice versa), which the catalog's own decoding relies on.
-        if let value = try? container.decode(Bool.self) { self = .bool(value); return }
-        if let value = try? container.decode(Double.self) { self = .number(value); return }
-        if let value = try? container.decode(String.self) { self = .string(value); return }
-        if let value = try? container.decode([JSONValue].self) { self = .array(value); return }
-        if let value = try? container.decode([String: JSONValue].self) { self = .object(value); return }
-        throw DecodingError.dataCorruptedError(in: container,
-            debugDescription: "unsupported JSON value")
+    /// The number as a `Double`, nil for anything that is not a number.
+    /// Catalog values only: every catalog range sits far inside `Double`'s
+    /// precision. Preserved unknown values never pass through here.
+    var doubleValue: Double? {
+        guard case .number(let text) = self else { return nil }
+        return Double(text)
     }
 
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .null: try container.encodeNil()
-        case .bool(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .string(let value): try container.encode(value)
-        case .array(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
+    /// Parse exactly one JSON value from UTF-8 text, or nil when the JSON
+    /// grammar rejects the input: trailing content, an invalid number, a raw
+    /// control character in a string, a bad or unpaired `\u` escape, or
+    /// nesting deeper than the parser allows. Every number keeps its original
+    /// text. Duplicate object members are lenient, like `JSONDecoder`: the
+    /// last one wins. A UTF-8 BOM is not whitespace and is rejected.
+    static func parse(_ text: String) -> JSONValue? {
+        JSONTextParser.parse(text)
+    }
+}
+
+/// The document's strict JSON parser. `JSONDecoder` cannot be used here: it
+/// converts every number to `Double` on the way in, which loses the original
+/// text that preserved unknown values must round-trip with. This parser is
+/// pure Swift, so it behaves identically on Darwin and corelibs.
+private struct JSONTextParser {
+    /// A hostile file must not be able to overflow the stack; deeper nesting
+    /// is rejected and the document is reported malformed.
+    private static let maximumDepth = 256
+
+    private let scalars: [UnicodeScalar]
+    private var position = 0
+
+    private init(_ text: String) {
+        self.scalars = Array(text.unicodeScalars)
+    }
+
+    static func parse(_ text: String) -> JSONValue? {
+        var parser = JSONTextParser(text)
+        guard let value = parser.parseValue(depth: 0) else { return nil }
+        parser.skipWhitespace()
+        guard parser.isAtEnd else { return nil }
+        return value
+    }
+
+    private var current: UnicodeScalar? {
+        position < scalars.count ? scalars[position] : nil
+    }
+
+    private var isAtEnd: Bool {
+        position == scalars.count
+    }
+
+    private static func isDigit(_ scalar: UnicodeScalar) -> Bool {
+        scalar >= "0" && scalar <= "9"
+    }
+
+    private mutating func skipWhitespace() {
+        while let scalar = current,
+              scalar == " " || scalar == "\t" || scalar == "\n" || scalar == "\r" {
+            position += 1
         }
+    }
+
+    private mutating func parseValue(depth: Int) -> JSONValue? {
+        guard depth <= Self.maximumDepth else { return nil }
+        skipWhitespace()
+        guard let scalar = current else { return nil }
+        switch scalar {
+        case "{": return parseObject(depth: depth + 1)
+        case "[": return parseArray(depth: depth + 1)
+        case "\"": return parseString().map { .string($0) }
+        case "t": return parseLiteral("true", .bool(true))
+        case "f": return parseLiteral("false", .bool(false))
+        case "n": return parseLiteral("null", .null)
+        default:
+            guard Self.isDigit(scalar) || scalar == "-" else { return nil }
+            return parseNumber()
+        }
+    }
+
+    private mutating func parseObject(depth: Int) -> JSONValue? {
+        position += 1  // "{"
+        var fields: [String: JSONValue] = [:]
+        skipWhitespace()
+        if current == "}" { position += 1; return .object(fields) }
+        while true {
+            skipWhitespace()
+            guard let key = parseString() else { return nil }
+            skipWhitespace()
+            guard current == ":" else { return nil }
+            position += 1
+            guard let value = parseValue(depth: depth) else { return nil }
+            // Duplicate members: the last one wins, as JSONDecoder did.
+            fields[key] = value
+            skipWhitespace()
+            if current == "," { position += 1; continue }
+            if current == "}" { position += 1; return .object(fields) }
+            return nil
+        }
+    }
+
+    private mutating func parseArray(depth: Int) -> JSONValue? {
+        position += 1  // "["
+        var items: [JSONValue] = []
+        skipWhitespace()
+        if current == "]" { position += 1; return .array(items) }
+        while true {
+            guard let value = parseValue(depth: depth) else { return nil }
+            items.append(value)
+            skipWhitespace()
+            if current == "," { position += 1; continue }
+            if current == "]" { position += 1; return .array(items) }
+            return nil
+        }
+    }
+
+    /// A JSON string. A raw control character is rejected; an escape is one
+    /// of the two-character forms or a `\u` escape, and a high surrogate must
+    /// be followed by its low half — a lone surrogate is not a Unicode
+    /// scalar and cannot live in a Swift string.
+    private mutating func parseString() -> String? {
+        guard current == "\"" else { return nil }
+        position += 1
+        var out = String.UnicodeScalarView()
+        while let scalar = current {
+            position += 1
+            if scalar == "\"" { return String(out) }
+            if scalar == "\\" {
+                guard let escaped = parseEscape() else { return nil }
+                out.append(contentsOf: escaped)
+                continue
+            }
+            guard scalar.value >= 0x20 else { return nil }
+            out.append(scalar)
+        }
+        return nil
+    }
+
+    /// The scalars of one escape sequence, backslash consumed.
+    private mutating func parseEscape() -> [UnicodeScalar]? {
+        guard let scalar = current else { return nil }
+        position += 1
+        switch scalar {
+        case "\"": return ["\""]
+        case "\\": return ["\\"]
+        case "/": return ["/"]
+        case "b": return ["\u{08}"]
+        case "f": return ["\u{0c}"]
+        case "n": return ["\n"]
+        case "r": return ["\r"]
+        case "t": return ["\t"]
+        case "u": return parseUnicodeEscape()
+        default: return nil
+        }
+    }
+
+    private mutating func parseUnicodeEscape() -> [UnicodeScalar]? {
+        guard let high = parseHexQuad() else { return nil }
+        guard (0xd800...0xdbff).contains(high) else {
+            // Not a high surrogate: it must still be an ordinary scalar.
+            guard let scalar = UnicodeScalar(high) else { return nil }
+            return [scalar]
+        }
+        guard position + 1 < scalars.count, scalars[position] == "\\", scalars[position + 1] == "u",
+              let low = parseHexQuad(), (0xdc00...0xdfff).contains(low) else { return nil }
+        guard let paired = UnicodeScalar(0x10000 + (high - 0xd800) << 10 + (low - 0xdc00)) else {
+            return nil
+        }
+        return [paired]
+    }
+
+    private mutating func parseHexQuad() -> UInt32? {
+        var value: UInt32 = 0
+        for _ in 0..<4 {
+            guard let scalar = current, let digit = Self.hexDigit(of: scalar) else { return nil }
+            value = value << 4 | UInt32(digit)
+            position += 1
+        }
+        return value
+    }
+
+    private static func hexDigit(of scalar: UnicodeScalar) -> Int? {
+        switch scalar {
+        case "0"..."9": return Int(scalar.value - 48)
+        case "a"..."f": return Int(scalar.value - 97 + 10)
+        case "A"..."F": return Int(scalar.value - 65 + 10)
+        default: return nil
+        }
+    }
+
+    /// A number, scanned by the JSON grammar and kept as its original text:
+    /// no leading zeros, a fraction needs digits, an exponent needs digits.
+    private mutating func parseNumber() -> JSONValue? {
+        let start = position
+        if current == "-" { position += 1 }
+        guard let first = current else { return nil }
+        if first == "0" {
+            position += 1
+        } else if Self.isDigit(first) {
+            while let scalar = current, Self.isDigit(scalar) { position += 1 }
+        } else {
+            return nil
+        }
+        if current == "." {
+            position += 1
+            guard scanDigits() else { return nil }
+        }
+        if let scalar = current, scalar == "e" || scalar == "E" {
+            position += 1
+            if current == "+" || current == "-" { position += 1 }
+            guard scanDigits() else { return nil }
+        }
+        return .number(String(String.UnicodeScalarView(scalars[start..<position])))
+    }
+
+    private mutating func scanDigits() -> Bool {
+        var digits = 0
+        while let scalar = current, Self.isDigit(scalar) {
+            position += 1
+            digits += 1
+        }
+        return digits > 0
+    }
+
+    private mutating func parseLiteral(_ literal: String, _ value: JSONValue) -> JSONValue? {
+        for expected in literal.unicodeScalars {
+            guard current == expected else { return nil }
+            position += 1
+        }
+        return value
     }
 }
 
@@ -90,38 +305,51 @@ public enum XRGSettingsLoad: Equatable, Sendable {
 }
 
 /// One settings document: the values of the catalog ids the file stored, plus
-/// every unknown key preserved verbatim.
+/// every unknown key preserved verbatim, at the level it came from.
 ///
 /// The document keeps one invariant: `values` only ever holds a valid value
 /// that differs from its entry's catalog default (storing the default removes
-/// the key), and `unknown` only holds keys the catalog does not know. That is
-/// what lets `serialized()` write every stored value without needing the
-/// catalog: the written settings are exactly the differing values plus the
-/// unknown keys, sorted, in the canonical form of the spec (UTF-8, LF, sorted
-/// keys, two-space indent, trailing newline).
+/// the key), `unknown` only holds `settings` keys the catalog does not know,
+/// and `rootUnknown` only holds root members other than `format`, `version`
+/// and `settings`. That is what lets `serialized()` write the document
+/// without needing the catalog: the written top level is `format`,
+/// `settings`, `version` and every root member, all sorted; `settings` holds
+/// the differing values plus the unknown settings keys, sorted; everything
+/// in the canonical form of the spec (UTF-8, LF, sorted keys, two-space
+/// indent, trailing newline).
 public struct XRGSettingsDocument: Equatable, Sendable {
     public static let format = "xrg-ng-settings"
     public static let version = 1
 
     /// Stored values of catalog ids, each differing from its default.
     public private(set) var values: [String: XRGSettingsValue]
-    /// Keys the catalog does not know, preserved verbatim.
+    /// Settings keys the catalog does not know, preserved verbatim.
     public private(set) var unknown: [String: JSONValue]
+    /// Root members the format does not define, preserved verbatim and
+    /// written back at the top level: never merged into `settings`, never
+    /// treated as a setting — even when named like a catalog id.
+    public private(set) var rootUnknown: [String: JSONValue]
 
-    init(values: [String: XRGSettingsValue] = [:], unknown: [String: JSONValue] = [:]) {
+    init(values: [String: XRGSettingsValue] = [:], unknown: [String: JSONValue] = [:],
+         rootUnknown: [String: JSONValue] = [:]) {
         self.values = values
         self.unknown = unknown
+        self.rootUnknown = rootUnknown
     }
 
     /// Parse and validate a settings document. Values that fail their entry's
     /// rules fall back to the catalog default for that key only and are
-    /// reported as diagnostics; the rest of the document still loads. Keys the
-    /// catalog does not know — in `settings` or at the top level — are
-    /// preserved in `unknown`. A malformed file, a file of another format, or
-    /// a newer version is `.unreadable`: the caller must not overwrite it.
+    /// reported as diagnostics; the rest of the document still loads. Keys
+    /// the catalog does not know are preserved verbatim: `unknown` holds the
+    /// ones inside `settings`, `rootUnknown` the top-level members the format
+    /// does not define. A malformed file, a file of another format, or a
+    /// newer version is `.unreadable`: the caller must not overwrite it.
     public static func load(_ data: Data, catalog: XRGSettingsCatalog) -> XRGSettingsLoad {
         let malformed = XRGSettingsDiagnostic(id: nil, problem: XRGSettingsDiagnostic.malformed)
-        guard let root = try? JSONDecoder().decode(JSONValue.self, from: data),
+        // The core's own parser, not JSONDecoder: it keeps every number's
+        // original text, so preserved values round-trip byte for byte.
+        guard let text = String(data: data, encoding: .utf8),
+              let root = JSONValue.parse(text),
               case .object(let fields) = root else {
             return .unreadable(malformed)
         }
@@ -131,7 +359,8 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         guard format == Self.format else {
             return .unreadable(XRGSettingsDiagnostic(id: nil, problem: XRGSettingsDiagnostic.unknownFormat))
         }
-        guard let versionField = fields["version"], case .number(let versionNumber) = versionField,
+        guard let versionField = fields["version"], case .number(let versionText) = versionField,
+              let versionNumber = Double(versionText), versionNumber.isFinite,
               let version = Int(exactly: versionNumber) else {
             return .unreadable(malformed)
         }
@@ -149,35 +378,30 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         var values: [String: XRGSettingsValue] = [:]
         var unknown: [String: JSONValue] = [:]
         var diagnostics: [XRGSettingsDiagnostic] = []
-        func resolve(_ key: String, _ json: JSONValue) {
-            guard let entry = catalog.entry(key) else {
-                unknown[key] = json
-                return
-            }
-            guard let value = XRGSettingsValue(json: json), Self.validate(value, for: entry) == nil else {
-                diagnostics.append(XRGSettingsDiagnostic(id: key, problem: XRGSettingsDiagnostic.invalidValue))
-                return
-            }
-            // A value at its default is not stored: it is the default.
-            guard !XRGSettingsValue.sameValue(value, entry.defaultValue) else { return }
-            values[key] = value
-        }
         // Deterministic diagnostics: settings keys in canonical sort order.
         for key in settings.keys.sorted(by: Self.precedes) {
-            resolve(key, settings[key]!)
+            guard let entry = catalog.entry(key) else {
+                unknown[key] = settings[key]!
+                continue
+            }
+            guard let value = XRGSettingsValue(json: settings[key]!),
+                  Self.validate(value, for: entry) == nil else {
+                diagnostics.append(XRGSettingsDiagnostic(id: key, problem: XRGSettingsDiagnostic.invalidValue))
+                continue
+            }
+            // A value at its default is not stored: it is the default.
+            guard !XRGSettingsValue.sameValue(value, entry.defaultValue) else { continue }
+            values[key] = value
         }
-        // `settings` is the document's one value namespace, so a top-level
-        // key the format does not define is carried there too: it round-trips
-        // through older cores byte-stably after the first save. A newer
-        // version that restructures the document bumps `version` and is
-        // already refused above.
-        let extras = fields.keys.filter {
-            $0 != "format" && $0 != "version" && $0 != "settings" && settings[$0] == nil
-        }.sorted(by: Self.precedes)
-        for key in extras {
-            resolve(key, fields[key]!)
+        // Members the format does not define stay at the top level, whatever
+        // their name: they are not settings, and `settings` never absorbs
+        // them (so a root member can never collide with, or be mistaken
+        // for, a setting).
+        var rootUnknown: [String: JSONValue] = [:]
+        for key in fields.keys where key != "format" && key != "version" && key != "settings" {
+            rootUnknown[key] = fields[key]!
         }
-        return .ok(XRGSettingsDocument(values: values, unknown: unknown), diagnostics)
+        return .ok(XRGSettingsDocument(values: values, unknown: unknown, rootUnknown: rootUnknown), diagnostics)
     }
 
     /// The document with every setting at its default: no stored values and
@@ -217,7 +441,7 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     }
 
     /// Restore every entry of one section to its default for `platform`.
-    /// Other sections, and unknown keys, are not touched.
+    /// Other sections, and unknown keys at either level, are not touched.
     public mutating func resetSection(_ section: String, catalog: XRGSettingsCatalog, platform: XRGSettingsPlatform) {
         for entry in catalog.entries(section: section, platform: platform) {
             values.removeValue(forKey: entry.id)
@@ -225,16 +449,26 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     }
 
     /// The canonical bytes of the document: UTF-8, LF, sorted keys, two-space
-    /// indent, trailing newline; `settings` holds the stored values plus every
-    /// unknown key. Only values that differ from their default are ever
-    /// stored, so all of them are written.
+    /// indent, trailing newline. `settings` holds the stored values plus
+    /// every unknown settings key; unknown root members are written back at
+    /// the top level, sorted with `format`, `settings` and `version`. Only
+    /// values that differ from their default are ever stored, so all of them
+    /// are written.
     public func serialized() -> Data {
+        var members: [String: String] = [
+            "format": Self.quote(Self.format),
+            "settings": Self.renderSettings(values: values, unknown: unknown),
+            "version": "\(Self.version)",
+        ]
+        for (key, json) in rootUnknown {
+            members[key] = Self.render(json, indent: "  ")
+        }
         var text = "{\n"
-        text += "  \"format\": " + Self.quote(Self.format) + ",\n"
-        text += "  \"settings\": " + Self.renderSettings(values: values, unknown: unknown) + ",\n"
-        text += "  \"version\": \(Self.version)\n"
-        text += "}"
-        return Data(text.utf8) + Data([0x0a])
+        text += members.keys.sorted(by: Self.precedes)
+            .map { "  " + Self.quote($0) + ": " + members[$0]! }
+            .joined(separator: ",\n")
+        text += "\n}\n"
+        return Data(text.utf8)
     }
 
     // MARK: - Validation
@@ -327,7 +561,8 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         switch json {
         case .null: return "null"
         case .bool(let value): return value ? "true" : "false"
-        case .number(let value): return number(value)
+        // The number's original text, re-emitted unchanged.
+        case .number(let text): return text
         case .string(let value): return quote(value)
         case .array(let items):
             if items.isEmpty { return "[]" }
@@ -348,6 +583,7 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// Swift's shortest round-trip form, which is the same on every platform.
     /// Non-finite values cannot come from a parse or pass `validate`; they are
     /// rendered defensively (`null` for NaN, a large exponent otherwise).
+    /// Preserved unknown numbers never come here: they keep their own text.
     static func number(_ value: Double) -> String {
         if value.isNaN { return "null" }
         if value.isInfinite { return value > 0 ? "1e999" : "-1e999" }
@@ -388,13 +624,17 @@ extension XRGSettingsValue {
         switch json {
         case .null: self = .null
         case .bool(let value): self = .bool(value)
-        case .number(let value): self = Self.wholeNumber(value)
+        case .number:
+            // A catalog value goes through Double: every catalog range sits
+            // far inside its precision. Preserved unknown values never do.
+            guard let number = json.doubleValue else { return nil }
+            self = Self.wholeNumber(number)
         case .string(let value): self = .string(value)
         case .array(let items):
             var components: [Double] = []
             for item in items {
-                guard case .number(let value) = item else { return nil }
-                components.append(value)
+                guard let component = item.doubleValue else { return nil }
+                components.append(component)
             }
             guard components.count == 4,
                   components.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return nil }
