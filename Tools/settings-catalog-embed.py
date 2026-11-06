@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Stephen de la Vega.
 """Embed the shared settings catalog into XRGSharedCore as generated Swift.
 
 The catalog ships as a string literal so the shared library needs no resource
@@ -39,7 +41,9 @@ def canonical_json() -> str:
 
 
 def swift_source(json_text: str) -> str:
-    return HEADER + json_text + '"""#\n}\n'
+    # The empty line before the closing delimiter keeps the literal's final
+    # line break, so the embedded string is the catalog file byte for byte.
+    return HEADER + json_text + "\n" + '"""#\n}\n'
 
 
 def main() -> int:

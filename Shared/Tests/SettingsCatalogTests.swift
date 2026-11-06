@@ -132,6 +132,11 @@ struct SettingsCatalogTests {
                 default:
                     Issue.record("\(entry.id): a source default must be a string or int")
                 }
+            case .order:
+                guard case .string = value else {
+                    Issue.record("\(entry.id): an order default must be the comma-separated id list")
+                    continue
+                }
             case .action:
                 Issue.record("\(entry.id): an action entry must default to null")
             }
@@ -177,19 +182,27 @@ struct SettingsCatalogTests {
                 "the stocks section must keep display order on every platform")
     }
 
+    @Test func hiddenEntriesArePersistedStateWithLegacyMappings() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let hidden = catalog.entries.filter { !$0.shown }
+        // The settings windows never render `shown: false` entries and the
+        // window-control coverage check skips them, but each one must still
+        // be migrated and persisted through the document.
+        #expect(!hidden.isEmpty)
+        for entry in hidden {
+            #expect(entry.legacy?.macos != nil || entry.legacy?.linux != nil,
+                    "\(entry.id) is hidden but has no legacy mapping on any platform")
+        }
+    }
+
     @Test func embeddedCatalogIsCurrent() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", "Tools/settings-catalog-embed.py", "--check"]
-        process.currentDirectoryURL = repoRoot()
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        let details = String(data: data, encoding: .utf8) ?? ""
-        #expect(process.terminationStatus == 0,
-                "the embedded catalog is stale; run Tools/settings-catalog-embed.py\n\(details)")
+        // Compare the embedded literal against the committed catalog file; the
+        // check runs on every platform, including Windows, where the Python
+        // tool is not invoked. CI additionally runs
+        // `python3 Tools/settings-catalog-embed.py --check`.
+        let url = repoRoot().appendingPathComponent("Shared/Settings/settings-catalog.json")
+        let file = try String(contentsOf: url, encoding: .utf8)
+        #expect(Data(file.utf8) == Data(XRGSettingsCatalogData.json.utf8),
+                "the embedded catalog is stale; run Tools/settings-catalog-embed.py")
     }
 }

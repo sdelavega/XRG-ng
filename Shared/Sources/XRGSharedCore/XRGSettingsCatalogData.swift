@@ -266,6 +266,99 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "general.window.collapsed",
+    "section": "general",
+    "group": "Window",
+    "label": "Graph window collapsed",
+    "help": "Whether the graph window is currently collapsed; managed by the window itself.",
+    "control": "toggle",
+    "default": false,
+    "platforms": [
+      "macos",
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "windowIsMinimized",
+      "linux": "/window_collapse/collapsed"
+    }
+  },
+  {
+    "id": "general.window.uncollapsed_frame",
+    "section": "general",
+    "group": "Window",
+    "label": "Uncollapsed window frame",
+    "help": "The frame the macOS graph window restores to when it expands; an NSRect string.",
+    "control": "text",
+    "default": "",
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "unminimizedFrame"
+    }
+  },
+  {
+    "id": "general.window.remember_size",
+    "section": "general",
+    "group": "Window",
+    "label": "Remember window size",
+    "help": "Whether the Linux dashboard remembers the window size it was resized to.",
+    "control": "toggle",
+    "default": false,
+    "platforms": [
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "linux": "/window_size",
+      "linuxTransform": "windowSizePresent"
+    }
+  },
+  {
+    "id": "general.window.width",
+    "section": "general",
+    "group": "Window",
+    "label": "Remembered window width",
+    "help": "The remembered dashboard window width; null when not remembered.",
+    "control": "integer",
+    "default": null,
+    "range": {
+      "min": 100,
+      "max": 8192,
+      "unit": "px"
+    },
+    "platforms": [
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "linux": "/window_size/width"
+    }
+  },
+  {
+    "id": "general.window.height",
+    "section": "general",
+    "group": "Window",
+    "label": "Remembered window height",
+    "help": "The remembered dashboard window height; null when not remembered.",
+    "control": "integer",
+    "default": null,
+    "range": {
+      "min": 100,
+      "max": 8192,
+      "unit": "px"
+    },
+    "platforms": [
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "linux": "/window_size/height"
+    }
+  },
+  {
     "id": "general.updates.check_on_launch",
     "section": "general",
     "group": "Updates",
@@ -291,6 +384,22 @@ public enum XRGSettingsCatalogData {
     "platforms": [
       "macos"
     ]
+  },
+  {
+    "id": "general.sensors_window.open",
+    "section": "general",
+    "group": "Sensors window",
+    "label": "Sensors window open",
+    "help": "Whether the Sensors window reopens at launch; managed by that window.",
+    "control": "toggle",
+    "default": false,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "showSensorWindow"
+    }
   },
   {
     "id": "general.reset",
@@ -691,6 +800,25 @@ public enum XRGSettingsCatalogData {
     ]
   },
   {
+    "id": "graphs.order",
+    "section": "graphs",
+    "group": "Order",
+    "label": "Graph order",
+    "help": "The graphs, in display order; the id list is comma-separated.",
+    "control": "order",
+    "default": "cpu,gpu,npu,vram,memory,battery,temperature,fans,network,disk,weather,stock,ai,processes",
+    "platforms": [
+      "macos",
+      "linux"
+    ],
+    "legacy": {
+      "macos": "graphPresentationV1.order",
+      "macosTransform": "graphOrder",
+      "linux": "/modules",
+      "linuxTransform": "modulesOrder"
+    }
+  },
+  {
     "id": "graphs.refresh",
     "section": "graphs",
     "group": "Refresh",
@@ -854,7 +982,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/0/height"
     }
@@ -890,7 +1018,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/0/style"
     }
@@ -929,7 +1057,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -946,7 +1074,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/0/colors/background"
     }
@@ -964,7 +1092,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/0/colors/series/0"
     }
@@ -982,7 +1110,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/0/colors/series/1"
     }
@@ -1000,7 +1128,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.cpu.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/0/colors/series/2"
     }
@@ -1054,6 +1182,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.cpu.size_width",
+    "section": "graphs",
+    "group": "CPU graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_CPU_width"
+    }
+  },
+  {
+    "id": "graphs.cpu.size_height",
+    "section": "graphs",
+    "group": "CPU graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_CPU_height"
+    }
+  },
+  {
     "id": "graphs.gpu.visible",
     "section": "graphs",
     "group": "GPU graph",
@@ -1088,7 +1248,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/1/height"
     }
@@ -1124,7 +1284,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/1/style"
     }
@@ -1163,7 +1323,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -1180,7 +1340,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/1/colors/background"
     }
@@ -1198,7 +1358,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/1/colors/series/0"
     }
@@ -1216,7 +1376,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/1/colors/series/1"
     }
@@ -1234,7 +1394,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.gpu.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/1/colors/series/2"
     }
@@ -1288,6 +1448,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.gpu.size_width",
+    "section": "graphs",
+    "group": "GPU graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_GPU_width"
+    }
+  },
+  {
+    "id": "graphs.gpu.size_height",
+    "section": "graphs",
+    "group": "GPU graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_GPU_height"
+    }
+  },
+  {
     "id": "graphs.npu.visible",
     "section": "graphs",
     "group": "Neural engine graph",
@@ -1322,7 +1514,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/2/height"
     }
@@ -1358,7 +1550,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/2/style"
     }
@@ -1397,7 +1589,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -1414,7 +1606,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/2/colors/background"
     }
@@ -1432,7 +1624,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/2/colors/series/0"
     }
@@ -1450,7 +1642,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/2/colors/series/1"
     }
@@ -1468,7 +1660,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.tpu.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/2/colors/series/2"
     }
@@ -1522,6 +1714,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.npu.size_width",
+    "section": "graphs",
+    "group": "Neural engine graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_NPU_width"
+    }
+  },
+  {
+    "id": "graphs.npu.size_height",
+    "section": "graphs",
+    "group": "Neural engine graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_NPU_height"
+    }
+  },
+  {
     "id": "graphs.vram.visible",
     "section": "graphs",
     "group": "VRAM graph",
@@ -1556,7 +1780,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/10/height"
     }
@@ -1592,7 +1816,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/10/style"
     }
@@ -1631,7 +1855,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -1648,7 +1872,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/10/colors/background"
     }
@@ -1666,7 +1890,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/10/colors/series/0"
     }
@@ -1684,7 +1908,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/10/colors/series/1"
     }
@@ -1702,7 +1926,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.vram.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/10/colors/series/2"
     }
@@ -1756,6 +1980,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.vram.size_width",
+    "section": "graphs",
+    "group": "VRAM graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_VRAM_width"
+    }
+  },
+  {
+    "id": "graphs.vram.size_height",
+    "section": "graphs",
+    "group": "VRAM graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_VRAM_height"
+    }
+  },
+  {
     "id": "graphs.memory.visible",
     "section": "graphs",
     "group": "Memory graph",
@@ -1790,7 +2046,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/3/height"
     }
@@ -1826,7 +2082,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/3/style"
     }
@@ -1865,7 +2121,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -1882,7 +2138,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/3/colors/background"
     }
@@ -1900,7 +2156,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/3/colors/series/0"
     }
@@ -1918,7 +2174,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/3/colors/series/1"
     }
@@ -1936,7 +2192,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.memory.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/3/colors/series/2"
     }
@@ -1990,6 +2246,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.memory.size_width",
+    "section": "graphs",
+    "group": "Memory graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Memory_width"
+    }
+  },
+  {
+    "id": "graphs.memory.size_height",
+    "section": "graphs",
+    "group": "Memory graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Memory_height"
+    }
+  },
+  {
     "id": "graphs.battery.visible",
     "section": "graphs",
     "group": "Battery graph",
@@ -2024,7 +2312,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/4/height"
     }
@@ -2060,7 +2348,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/4/style"
     }
@@ -2099,7 +2387,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -2116,7 +2404,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/4/colors/background"
     }
@@ -2134,7 +2422,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/4/colors/series/0"
     }
@@ -2152,7 +2440,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/4/colors/series/1"
     }
@@ -2170,7 +2458,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.battery.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/4/colors/series/2"
     }
@@ -2224,6 +2512,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.battery.size_width",
+    "section": "graphs",
+    "group": "Battery graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Battery_width"
+    }
+  },
+  {
+    "id": "graphs.battery.size_height",
+    "section": "graphs",
+    "group": "Battery graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Battery_height"
+    }
+  },
+  {
     "id": "graphs.temperature.visible",
     "section": "graphs",
     "group": "Temperature graph",
@@ -2258,7 +2578,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/5/height"
     }
@@ -2294,7 +2614,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/5/style"
     }
@@ -2333,7 +2653,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -2350,7 +2670,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/5/colors/background"
     }
@@ -2368,7 +2688,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/5/colors/series/0"
     }
@@ -2386,7 +2706,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/5/colors/series/1"
     }
@@ -2404,7 +2724,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.temperature.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/5/colors/series/2"
     }
@@ -2458,6 +2778,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.temperature.size_width",
+    "section": "graphs",
+    "group": "Temperature graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Temperature_width"
+    }
+  },
+  {
+    "id": "graphs.temperature.size_height",
+    "section": "graphs",
+    "group": "Temperature graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Temperature_height"
+    }
+  },
+  {
     "id": "graphs.network.visible",
     "section": "graphs",
     "group": "Network graph",
@@ -2492,7 +2844,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/6/height"
     }
@@ -2528,7 +2880,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/6/style"
     }
@@ -2567,7 +2919,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -2584,7 +2936,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/6/colors/background"
     }
@@ -2602,7 +2954,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/6/colors/series/0"
     }
@@ -2620,7 +2972,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/6/colors/series/1"
     }
@@ -2638,7 +2990,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.network.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/6/colors/series/2"
     }
@@ -2692,6 +3044,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.network.size_width",
+    "section": "graphs",
+    "group": "Network graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Network_width"
+    }
+  },
+  {
+    "id": "graphs.network.size_height",
+    "section": "graphs",
+    "group": "Network graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Network_height"
+    }
+  },
+  {
     "id": "graphs.disk.visible",
     "section": "graphs",
     "group": "Disk graph",
@@ -2726,7 +3110,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/7/height"
     }
@@ -2762,7 +3146,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/7/style"
     }
@@ -2801,7 +3185,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -2818,7 +3202,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/7/colors/background"
     }
@@ -2836,7 +3220,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/7/colors/series/0"
     }
@@ -2854,7 +3238,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/7/colors/series/1"
     }
@@ -2872,7 +3256,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.disk.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/7/colors/series/2"
     }
@@ -2926,6 +3310,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.disk.size_width",
+    "section": "graphs",
+    "group": "Disk graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Disk_width"
+    }
+  },
+  {
+    "id": "graphs.disk.size_height",
+    "section": "graphs",
+    "group": "Disk graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Disk_height"
+    }
+  },
+  {
     "id": "graphs.ai.visible",
     "section": "graphs",
     "group": "AI tokens graph",
@@ -2960,7 +3376,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/8/height"
     }
@@ -2996,7 +3412,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/8/style"
     }
@@ -3035,7 +3451,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -3052,7 +3468,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/8/colors/background"
     }
@@ -3070,7 +3486,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/8/colors/series/0"
     }
@@ -3088,7 +3504,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/8/colors/series/1"
     }
@@ -3106,7 +3522,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.ai.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/8/colors/series/2"
     }
@@ -3160,6 +3576,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.ai.size_width",
+    "section": "graphs",
+    "group": "AI tokens graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_AI Tokens_width"
+    }
+  },
+  {
+    "id": "graphs.ai.size_height",
+    "section": "graphs",
+    "group": "AI tokens graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_AI Tokens_height"
+    }
+  },
+  {
     "id": "graphs.fans.visible",
     "section": "graphs",
     "group": "Fans graph",
@@ -3194,7 +3642,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/11/height"
     }
@@ -3230,7 +3678,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/11/style"
     }
@@ -3269,7 +3717,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -3286,7 +3734,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/11/colors/background"
     }
@@ -3304,7 +3752,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/11/colors/series/0"
     }
@@ -3322,7 +3770,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/11/colors/series/1"
     }
@@ -3340,7 +3788,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.fans.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/11/colors/series/2"
     }
@@ -3394,6 +3842,38 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "graphs.fans.size_width",
+    "section": "graphs",
+    "group": "Fans graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Fans_width"
+    }
+  },
+  {
+    "id": "graphs.fans.size_height",
+    "section": "graphs",
+    "group": "Fans graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Fans_height"
+    }
+  },
+  {
     "id": "graphs.weather.visible",
     "section": "graphs",
     "group": "Weather graph",
@@ -3428,7 +3908,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.height",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/12/height"
     }
@@ -3464,7 +3944,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.curve",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/12/style"
     }
@@ -3503,7 +3983,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -3520,7 +4000,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.colors.0",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/12/colors/background"
     }
@@ -3538,7 +4018,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.colors.1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/12/colors/series/0"
     }
@@ -3556,7 +4036,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.colors.2",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/12/colors/series/1"
     }
@@ -3574,9 +4054,41 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.weather.colors.3",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/12/colors/series/2"
+    }
+  },
+  {
+    "id": "graphs.weather.size_width",
+    "section": "graphs",
+    "group": "Weather graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Weather_width"
+    }
+  },
+  {
+    "id": "graphs.weather.size_height",
+    "section": "graphs",
+    "group": "Weather graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Weather_height"
     }
   },
   {
@@ -3586,7 +4098,7 @@ public enum XRGSettingsCatalogData {
     "label": "Visible",
     "help": "Show the stock graph.",
     "control": "toggle",
-    "default": true,
+    "default": false,
     "platforms": [
       "macos",
       "linux"
@@ -3613,7 +4125,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.height",
       "macosTransform": "graphPreferenceHeight"
     }
   },
@@ -3648,7 +4160,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.curve",
       "macosTransform": "graphPreferenceCurve"
     }
   },
@@ -3686,7 +4198,7 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.effect",
       "macosTransform": "graphPreferenceEffect"
     }
   },
@@ -3703,7 +4215,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.colors.0",
       "macosTransform": "graphPreferenceColor"
     }
   },
@@ -3720,7 +4232,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.colors.1",
       "macosTransform": "graphPreferenceColor"
     }
   },
@@ -3737,7 +4249,7 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.colors.2",
       "macosTransform": "graphPreferenceColor"
     }
   },
@@ -3754,8 +4266,40 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
+      "macos": "graphPresentationV1.overrides.stock.colors.3",
       "macosTransform": "graphPreferenceColor"
+    }
+  },
+  {
+    "id": "graphs.stock.size_width",
+    "section": "graphs",
+    "group": "Stock graph",
+    "label": "Graph width",
+    "help": "The graph's current pixel width in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Stock_width"
+    }
+  },
+  {
+    "id": "graphs.stock.size_height",
+    "section": "graphs",
+    "group": "Stock graph",
+    "label": "Graph height",
+    "help": "The graph's current pixel height in the window layout; null when never resized.",
+    "control": "decimal",
+    "default": null,
+    "platforms": [
+      "macos"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "XRGModule_Stock_height"
     }
   },
   {
@@ -3790,7 +4334,6 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
       "macosTransform": "graphPreferenceHeight",
       "linux": "/modules/9/height"
     }
@@ -3825,7 +4368,6 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
       "macosTransform": "graphPreferenceCurve",
       "linux": "/modules/9/style"
     }
@@ -3842,7 +4384,6 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/9/colors/background"
     }
@@ -3859,7 +4400,6 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/9/colors/series/0"
     }
@@ -3876,7 +4416,6 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/9/colors/series/1"
     }
@@ -3893,7 +4432,6 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "graphPresentationV1",
       "macosTransform": "graphPreferenceColor",
       "linux": "/modules/9/colors/series/2"
     }
@@ -4299,6 +4837,105 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "diskGraphMode"
+    }
+  },
+  {
+    "id": "graphs.processes.sort",
+    "section": "graphs",
+    "group": "Processes graph",
+    "label": "Process sort",
+    "help": "How the process list is sorted.",
+    "control": "choice",
+    "default": "cpu",
+    "options": [
+      {
+        "value": "cpu",
+        "label": "CPU"
+      },
+      {
+        "value": "memory",
+        "label": "Memory"
+      },
+      {
+        "value": "pid",
+        "label": "PID"
+      },
+      {
+        "value": "name",
+        "label": "Name"
+      }
+    ],
+    "platforms": [
+      "macos",
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "processInspectorV1.sort",
+      "macosTransform": "processInspectorField",
+      "linux": "/processes/sort"
+    }
+  },
+  {
+    "id": "graphs.processes.filter",
+    "section": "graphs",
+    "group": "Processes graph",
+    "label": "Process filter",
+    "help": "Text the process list filters by; empty shows every process.",
+    "control": "text",
+    "default": "",
+    "platforms": [
+      "macos",
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "processInspectorV1.search",
+      "macosTransform": "processInspectorField",
+      "linux": "/processes/filter"
+    }
+  },
+  {
+    "id": "graphs.processes.user",
+    "section": "graphs",
+    "group": "Processes graph",
+    "label": "Process user",
+    "help": "The user the process list filters by, as a name or numeric id; empty shows every user.",
+    "control": "text",
+    "default": "",
+    "platforms": [
+      "macos",
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "processInspectorV1.user",
+      "macosTransform": "processInspectorField",
+      "linux": "/processes/uid",
+      "linuxTransform": "uidToString"
+    }
+  },
+  {
+    "id": "graphs.processes.limit",
+    "section": "graphs",
+    "group": "Processes graph",
+    "label": "Process row limit",
+    "help": "How many rows the process list shows.",
+    "control": "integer",
+    "default": 50,
+    "range": {
+      "min": 10,
+      "max": 200
+    },
+    "platforms": [
+      "macos",
+      "linux"
+    ],
+    "shown": false,
+    "legacy": {
+      "macos": "processInspectorV1.limit",
+      "macosTransform": "processInspectorField",
+      "linux": "/processes/limit"
     }
   },
   {
@@ -5467,5 +6104,6 @@ public enum XRGSettingsCatalogData {
     ]
   }
 ]
+
 """#
 }

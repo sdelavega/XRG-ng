@@ -6,6 +6,9 @@ import Foundation
 /// How a setting is edited in the settings window.
 public enum XRGSettingsControl: String, Codable, Sendable {
     case toggle, choice, segmented, integer, decimal, duration, color, path, text, source, action
+    /// A reorderable list of ids; the value is the ids, comma-separated, in
+    /// display order.
+    case order
 }
 
 /// The platforms a setting exists on; a setting is not shown elsewhere.
@@ -131,6 +134,13 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
     public var range: XRGSettingsRange?
     public var options: [XRGSettingsOption]?
     public var platforms: [XRGSettingsPlatform]
+    /// False marks persisted document state that is edited outside the
+    /// settings window (window geometry and collapse latches, module sizes,
+    /// auxiliary-window state). The settings windows never render these
+    /// entries, and the window-control coverage check must skip them; they
+    /// exist so every persisted value has one defined home in the document.
+    /// Absent in the JSON means true.
+    public var shown: Bool
     public var legacy: XRGSettingsLegacy?
     public var depends: XRGSettingsDependency?
     /// The runtime source kind (`temperature`, `gpu`, ...) whose options the
@@ -141,7 +151,7 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
                 control: XRGSettingsControl, defaultValue: XRGSettingsValue,
                 range: XRGSettingsRange? = nil, options: [XRGSettingsOption]? = nil,
                 platforms: [XRGSettingsPlatform], legacy: XRGSettingsLegacy? = nil,
-                depends: XRGSettingsDependency? = nil, source: String? = nil) {
+                depends: XRGSettingsDependency? = nil, source: String? = nil, shown: Bool = true) {
         self.id = id
         self.section = section
         self.group = group
@@ -155,12 +165,50 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
         self.legacy = legacy
         self.depends = depends
         self.source = source
+        self.shown = shown
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, section, group, label, help, control
         case defaultValue = "default"
-        case range, options, platforms, legacy, depends, source
+        case range, options, platforms, shown, legacy, depends, source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        section = try container.decode(String.self, forKey: .section)
+        group = try container.decode(String.self, forKey: .group)
+        label = try container.decode(String.self, forKey: .label)
+        help = try container.decodeIfPresent(String.self, forKey: .help)
+        control = try container.decode(XRGSettingsControl.self, forKey: .control)
+        defaultValue = try container.decode(XRGSettingsValue.self, forKey: .defaultValue)
+        range = try container.decodeIfPresent(XRGSettingsRange.self, forKey: .range)
+        options = try container.decodeIfPresent([XRGSettingsOption].self, forKey: .options)
+        platforms = try container.decode([XRGSettingsPlatform].self, forKey: .platforms)
+        shown = try container.decodeIfPresent(Bool.self, forKey: .shown) ?? true
+        legacy = try container.decodeIfPresent(XRGSettingsLegacy.self, forKey: .legacy)
+        depends = try container.decodeIfPresent(XRGSettingsDependency.self, forKey: .depends)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(section, forKey: .section)
+        try container.encode(group, forKey: .group)
+        try container.encode(label, forKey: .label)
+        try container.encodeIfPresent(help, forKey: .help)
+        try container.encode(control, forKey: .control)
+        try container.encode(defaultValue, forKey: .defaultValue)
+        try container.encodeIfPresent(range, forKey: .range)
+        try container.encodeIfPresent(options, forKey: .options)
+        try container.encode(platforms, forKey: .platforms)
+        // The canonical file omits `shown` when true; keep that form stable.
+        if !shown { try container.encode(false, forKey: .shown) }
+        try container.encodeIfPresent(legacy, forKey: .legacy)
+        try container.encodeIfPresent(depends, forKey: .depends)
+        try container.encodeIfPresent(source, forKey: .source)
     }
 }
 

@@ -23,6 +23,19 @@ Conventions:
 - Whole JSON numbers decode as the catalog's `int`, so a whole decimal such
   as an opacity of 1.0 is read back as an integer with the same value; later
   tasks compare numbers by value, not by case.
+- Every entry is rendered in the settings window unless it carries
+  `"shown": false`. False marks persisted document state that is edited
+  outside the settings window (collapse latches and remembered window
+  geometry, module sizes, the Sensors window latch, the process view). The
+  windows never render these entries, and the window-control coverage check
+  must skip them; a test asserts each one still has a legacy mapping, so it is
+  migrated and persisted through the document.
+- An `order` control's value is a comma-separated list of graph ids in
+  display order. Its default is the current default order: the macOS module
+  layout (CPU, GPU, Neural engine, VRAM, Memory, Battery, Temperature, Fans,
+  Network, Disk, Weather, Stock, AI tokens) with the Linux-only Processes
+  graph after AI tokens. Users who reorder keep their order through
+  migration.
 - Linux pointers are JSON pointers (RFC 6901) into the version-40
   `settings.conf` as the Rust serde model writes it, taking field names from
   the serde attributes (`rename_all = "snake_case"` and friends).
@@ -31,11 +44,21 @@ Conventions:
   temperature 5, network 6, disk 7, ai 8, processes 9, gpu_memory 10, fans 11,
   weather 12). The saved array is the user's display order, so migration must
   locate the module by its `id` wherever it sits.
-- Stocks entries are catalogued for both platforms (decision D8); Linux has no
-  version-40 stock fields yet, so their `legacy.linux` pointers are null.
+- macOS `graphPresentationV1` fields are inventoried individually, as
+  `graphPresentationV1.order`, `graphPresentationV1.version` and
+  `graphPresentationV1.overrides.<graph>.<field>` paths into the blob, because
+  the Graph Options editor edits each one separately. The blob's graph name
+  `tpu` is the catalog's `npu`; on Linux `tpu` and `gpu_memory` are the
+  catalog's `npu` and `vram`.
+- Stocks entries are catalogued for both platforms (decision D8) and ship
+  hidden (spec §7); Linux has no version-40 stock fields yet, so their
+  `legacy.linux` pointers are null.
 - The `temperature` source kind carries the sensor grouping from the macOS 26
   sensor work (Identified, Unidentified, Suspected unused); the grouping is
   the platform's job at runtime, never catalog data.
+- A legacy value that already is the document value (strings, plain numbers,
+  booleans) needs no transform; transforms exist only where a legacy value
+  must be decoded or converted.
 
 ## macOS transforms
 
@@ -47,10 +70,12 @@ the catalog value. Task 4 implements them; this task only names them.
 | `cpuMonitorSource` | decodes the XRGMonitorSource JSON blob at XRGCPUView.Source.v1 into the selected logical CPU index as a number, or null for the aggregate. |
 | `gpuMonitorSource` | decodes the XRGMonitorSource JSON blob at XRGGPUView.Source.v1 into the selected GPU identity string, or null for automatic. |
 | `hardwareSourceSlot` | decodes the XRGHardwareSources JSON blob (vramGraphSourcesV1 or fanGraphSourcesV1) into the source id of the curve slot named by the entry, or null when selection is automatic or the slot is empty. |
-| `graphPreferenceHeight` | decodes the XRGGraphPreferences blob at graphPresentationV1 into the height override of the graph named by the entry, or null when it inherits. |
-| `graphPreferenceCurve` | decodes the graphPresentationV1 blob into the curve style (solid/pixel/dot/hollow) of the graph named by the entry, or null when it inherits. |
-| `graphPreferenceEffect` | decodes the graphPresentationV1 blob into the display effect of the graph named by the entry, or null when it inherits the global effect. |
-| `graphPreferenceColor` | decodes the graphPresentationV1 blob into one RGBA color override (background or series 1-3) of the graph named by the entry, or null when it inherits the palette. |
+| `graphPreferenceHeight` | decodes the graphPresentationV1 blob into the height override at the entry's legacy field path, or null when that override is absent. |
+| `graphPreferenceCurve` | decodes the graphPresentationV1 blob into the curve style (solid/pixel/dot/hollow) at the entry's legacy field path, or null when that override is absent. |
+| `graphPreferenceEffect` | decodes the graphPresentationV1 blob into the display effect at the entry's legacy field path, or null when that override is absent. |
+| `graphPreferenceColor` | decodes the graphPresentationV1 blob into the RGBA color override at the entry's legacy field path (component 0 is the graph background, 1-3 the series), or null when that override is absent. |
+| `graphOrder` | decodes the graphPresentationV1 blob into a comma-separated list of graph ids from its order field; an absent order field yields null. The blob's graph name tpu is the catalog's npu. |
+| `processInspectorField` | decodes the processInspectorV1 JSON blob into the field named by the entry's legacy path. |
 | `nsColorArchive` | decodes the keyed NSColor archive stored at the color key into sRGB RGBA components between 0 and 1. |
 | `fontArchive` | decodes the keyed NSFont archive stored at graphFont into a 'Name Size' descriptor string; the system font serialises as 'System <size>'. |
 | `orientationFlag` | converts the YES/NO graphOrientationVertical flag into the orientation value vertical or horizontal. |
@@ -78,6 +103,9 @@ the catalog value. Task 4 implements them; this task only names them.
 | `unitsToTemperature` | converts the weather units value metric/us, or null, into celsius/fahrenheit, or null. |
 | `unitsToDistance` | converts the weather units value metric/us, or null, into kilometers/miles, or null. |
 | `unitsToPressure` | converts the weather units value metric/us, or null, into hectopascals/inches, or null. |
+| `modulesOrder` | converts the /modules array into a comma-separated list of graph ids in array order, mapping module ids to catalog ids (tpu is npu, gpu_memory is vram). |
+| `windowSizePresent` | converts /window_size into true when a size is remembered, or false when it is null. |
+| `uidToString` | converts the numeric user id into its decimal string, or the empty string when it is null. |
 
 ## macOS defaults keys
 
@@ -95,6 +123,9 @@ the catalog value. Task 4 implements them; this task only names them.
 | `showSummary` | bool | YES | General pane, Show Summary Statistics when minimized | `general.window.show_summary` |
 | `minimizeUpDown` | int | 0 | General pane, Minimize the Graph Window into | `general.window.collapse_anchor` |
 | `isDockIconHidden` | bool | NO | Graph window Hide UI action | `general.window.hide_dock_icon` |
+| `windowIsMinimized` | bool | false | Graph window collapse latch | `general.window.collapsed` |
+| `unminimizedFrame` | string | NSRect string | Graph window, frame to restore on expansion | `general.window.uncollapsed_frame` |
+| `showSensorWindow` | bool | false | Sensors window open-at-launch state | `general.sensors_window.open` |
 | `antiAliasing` | bool | YES | General pane, Enable Anti-Aliasing | `appearance.antialiasing` |
 | `graphRefresh` | double | 1.0 | General pane, Graph Refresh slider (0.2-10 s) | `graphs.refresh` |
 | `showCPUGraph` | bool | YES | General pane, graph checkbox | `graphs.cpu.visible` |
@@ -170,7 +201,11 @@ the catalog value. Task 4 implements them; this task only names them.
 | `aiTokensAggregateByProvider` | bool | false | AI pane, Track usage by AI provider | `ai.tracking.by_provider` |
 | `aiTokensShowRate` | bool | true | AI pane, Show token rate | `ai.display.rate` |
 | `aiTokensShowBreakdown` | bool | true | AI pane, Show detailed breakdown | `ai.display.breakdown` |
-| `graphPresentationV1` | data | XRGGraphPreferences blob | Window menu, Graph Options editor | `graphs.*.height`, `graphs.*.style`, `graphs.*.effect` and `graphs.*.color.*` via the graphPreference* transforms |
+| `graphPresentationV1.order` | array of graph ids | absent | Window menu, Graph Options editor order | `graphs.order` |
+| `processInspectorV1.sort` | string | cpu | Processes inspector, sort menu | `graphs.processes.sort` |
+| `processInspectorV1.search` | string | empty | Processes inspector, search field | `graphs.processes.filter` |
+| `processInspectorV1.user` | string | empty | Processes inspector, user field | `graphs.processes.user` |
+| `processInspectorV1.limit` | int | 100 | Processes inspector, row limit menu | `graphs.processes.limit` |
 | `XRGCPUView.Source.v1` | data | XRGMonitorSource blob | CPU pane Device to monitor and CPU graph context menu | `sources.cpu.core` |
 | `XRGGPUView.Source.v1` | data | XRGMonitorSource blob | GPU graph context menu, GPU sources | `sources.gpu.device` |
 | `XRGGPUView.PlotMode.v1` | string | memoryAndActivity | GPU graph context menu, plot mode | `graphs.gpu.plot_mode` |
@@ -198,14 +233,9 @@ the catalog value. Task 4 implements them; this task only names them.
 | `XRGAITokenView.HistoryMinutes.v1` | int | 0 | AI tokens graph context menu, AI Time Window | `graphs.ai.time_window` |
 | `XRGHardwareGraphView.Fans.HistorySamples.v1` | int | 0 | Fans graph context menu, Fans History | `graphs.fans.samples` |
 | `XRGHardwareGraphView.Fans.HistoryMinutes.v1` | int | 0 | Fans graph context menu, Fans Time Window | `graphs.fans.time_window` |
-| `windowWidth, windowHeight, windowOriginX, windowOriginY` | mixed | screen-relative | Registered defaults for the window frame | excluded: window geometry, an AppKit window frame (spec Non-goals); it stays platform-local. |
-| `unminimizedFrame` | string | NSRect string | Written by the graph window when it collapses | excluded: window geometry/state (spec Non-goals). |
-| `windowIsMinimized` | bool | false | Written by the graph window when it collapses | excluded: window collapsed state, not a setting (spec Non-goals). |
-| `XRGModule_<name>_width, XRGModule_<name>_height` | double | per module | Saved by XRGModule when a graph is resized | excluded: window layout (spec Non-goals); the Graphs height entries carry explicit per-graph heights. |
-| `showSensorWindow` | bool | false | Sensors window open-at-launch state | excluded: window open state, not a setting (spec Non-goals). |
-| `tempLocationsAutoconfigured` | bool | unset | One-time latch written by temperature sensor auto-configuration | excluded: internal auto-configuration latch; the sensor entries are the settings. |
+| `windowWidth, windowHeight, windowOriginX, windowOriginY` | mixed | screen-relative | Registered defaults for the window frame | excluded: window frame geometry (spec Non-goals) - registered defaults from the original XRG that the app no longer reads or writes (verified by search; only a legacy-fixture test seeds them), so there is no state to migrate. |
+| `tempLocationsAutoconfigured` | bool | unset | One-time latch written by temperature sensor auto-configuration | excluded: internal auto-configuration latch, never edited by the user in any window; the sensor entries are the settings. |
 | `portableThemeDocument` | data | unset | Written when a theme is applied or imported | excluded: portable theme document, the import/export artifact of the Themes section; the palette lives in the appearance color entries and the name in themes.name. |
-| `processInspectorV1` | data | sort/search/user/limit blob | Processes inspector window | excluded: inspector window state (spec Non-goals: inspectors are out of scope). |
 | `aiTokensDailyUnclassifiedTokens, aiTokensDailyPromptTokens, aiTokensDailyCompletionTokens` | number | 0 | Daily AI usage counters | excluded: observed usage data recorded by the app, not user settings. |
 | `aiTokensDailyModelUnclassifiedTokens, aiTokensDailyModelPromptTokens, aiTokensDailyModelCompletionTokens` | dictionary | empty | Daily AI usage counters by model | excluded: observed usage data recorded by the app, not user settings. |
 | `aiTokensDailyProviderUnclassifiedTokens, aiTokensDailyProviderPromptTokens, aiTokensDailyProviderCompletionTokens` | dictionary | empty | Daily AI usage counters by provider | excluded: observed usage data recorded by the app, not user settings. |
@@ -213,16 +243,139 @@ the catalog value. Task 4 implements them; this task only names them.
 | `fastCPUUsage` | bool | false | Written only by the CollectorProfile profiling tool | excluded: never read by the app; the fast-bars defaults key is showCPUBars. |
 | `packagedSmokeMarker` | string | unset | Packaged smoke test marker | excluded: test tooling marker, not an app setting. |
 | `SU* (Sparkle keys: SUEnableAutomaticChecks, SUScheduledCheckInterval, ...)` | mixed | Sparkle's | Sparkle update framework | excluded: framework-owned updater state (spec Non-goals); Sparkle keeps managing it. |
+| `graphPresentationV1.version` | int | 1 | Window menu, Graph Options editor | excluded: blob format version, structural. |
+| `graphPresentationV1.overrides.cpu.height` | varies | absent | Window menu, Graph Options editor (CPU graph) | `graphs.cpu.height` |
+| `graphPresentationV1.overrides.cpu.curve` | varies | absent | Window menu, Graph Options editor (CPU graph) | `graphs.cpu.style` |
+| `graphPresentationV1.overrides.cpu.effect` | varies | absent | Window menu, Graph Options editor (CPU graph) | `graphs.cpu.effect` |
+| `graphPresentationV1.overrides.cpu.colors.0` | RGBA or null | null | Window menu, Graph Options editor (CPU graph), colors | `graphs.cpu.color.background` |
+| `graphPresentationV1.overrides.cpu.colors.1` | RGBA or null | null | Window menu, Graph Options editor (CPU graph), colors | `graphs.cpu.color.series1` |
+| `graphPresentationV1.overrides.cpu.colors.2` | RGBA or null | null | Window menu, Graph Options editor (CPU graph), colors | `graphs.cpu.color.series2` |
+| `graphPresentationV1.overrides.cpu.colors.3` | RGBA or null | null | Window menu, Graph Options editor (CPU graph), colors | `graphs.cpu.color.series3` |
+| `graphPresentationV1.overrides.gpu.height` | varies | absent | Window menu, Graph Options editor (GPU graph) | `graphs.gpu.height` |
+| `graphPresentationV1.overrides.gpu.curve` | varies | absent | Window menu, Graph Options editor (GPU graph) | `graphs.gpu.style` |
+| `graphPresentationV1.overrides.gpu.effect` | varies | absent | Window menu, Graph Options editor (GPU graph) | `graphs.gpu.effect` |
+| `graphPresentationV1.overrides.gpu.colors.0` | RGBA or null | null | Window menu, Graph Options editor (GPU graph), colors | `graphs.gpu.color.background` |
+| `graphPresentationV1.overrides.gpu.colors.1` | RGBA or null | null | Window menu, Graph Options editor (GPU graph), colors | `graphs.gpu.color.series1` |
+| `graphPresentationV1.overrides.gpu.colors.2` | RGBA or null | null | Window menu, Graph Options editor (GPU graph), colors | `graphs.gpu.color.series2` |
+| `graphPresentationV1.overrides.gpu.colors.3` | RGBA or null | null | Window menu, Graph Options editor (GPU graph), colors | `graphs.gpu.color.series3` |
+| `graphPresentationV1.overrides.tpu.height` | varies | absent | Window menu, Graph Options editor (Neural engine graph) | `graphs.npu.height` |
+| `graphPresentationV1.overrides.tpu.curve` | varies | absent | Window menu, Graph Options editor (Neural engine graph) | `graphs.npu.style` |
+| `graphPresentationV1.overrides.tpu.effect` | varies | absent | Window menu, Graph Options editor (Neural engine graph) | `graphs.npu.effect` |
+| `graphPresentationV1.overrides.tpu.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Neural engine graph), colors | `graphs.npu.color.background` |
+| `graphPresentationV1.overrides.tpu.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Neural engine graph), colors | `graphs.npu.color.series1` |
+| `graphPresentationV1.overrides.tpu.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Neural engine graph), colors | `graphs.npu.color.series2` |
+| `graphPresentationV1.overrides.tpu.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Neural engine graph), colors | `graphs.npu.color.series3` |
+| `graphPresentationV1.overrides.vram.height` | varies | absent | Window menu, Graph Options editor (VRAM graph) | `graphs.vram.height` |
+| `graphPresentationV1.overrides.vram.curve` | varies | absent | Window menu, Graph Options editor (VRAM graph) | `graphs.vram.style` |
+| `graphPresentationV1.overrides.vram.effect` | varies | absent | Window menu, Graph Options editor (VRAM graph) | `graphs.vram.effect` |
+| `graphPresentationV1.overrides.vram.colors.0` | RGBA or null | null | Window menu, Graph Options editor (VRAM graph), colors | `graphs.vram.color.background` |
+| `graphPresentationV1.overrides.vram.colors.1` | RGBA or null | null | Window menu, Graph Options editor (VRAM graph), colors | `graphs.vram.color.series1` |
+| `graphPresentationV1.overrides.vram.colors.2` | RGBA or null | null | Window menu, Graph Options editor (VRAM graph), colors | `graphs.vram.color.series2` |
+| `graphPresentationV1.overrides.vram.colors.3` | RGBA or null | null | Window menu, Graph Options editor (VRAM graph), colors | `graphs.vram.color.series3` |
+| `graphPresentationV1.overrides.memory.height` | varies | absent | Window menu, Graph Options editor (Memory graph) | `graphs.memory.height` |
+| `graphPresentationV1.overrides.memory.curve` | varies | absent | Window menu, Graph Options editor (Memory graph) | `graphs.memory.style` |
+| `graphPresentationV1.overrides.memory.effect` | varies | absent | Window menu, Graph Options editor (Memory graph) | `graphs.memory.effect` |
+| `graphPresentationV1.overrides.memory.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Memory graph), colors | `graphs.memory.color.background` |
+| `graphPresentationV1.overrides.memory.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Memory graph), colors | `graphs.memory.color.series1` |
+| `graphPresentationV1.overrides.memory.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Memory graph), colors | `graphs.memory.color.series2` |
+| `graphPresentationV1.overrides.memory.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Memory graph), colors | `graphs.memory.color.series3` |
+| `graphPresentationV1.overrides.battery.height` | varies | absent | Window menu, Graph Options editor (Battery graph) | `graphs.battery.height` |
+| `graphPresentationV1.overrides.battery.curve` | varies | absent | Window menu, Graph Options editor (Battery graph) | `graphs.battery.style` |
+| `graphPresentationV1.overrides.battery.effect` | varies | absent | Window menu, Graph Options editor (Battery graph) | `graphs.battery.effect` |
+| `graphPresentationV1.overrides.battery.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Battery graph), colors | `graphs.battery.color.background` |
+| `graphPresentationV1.overrides.battery.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Battery graph), colors | `graphs.battery.color.series1` |
+| `graphPresentationV1.overrides.battery.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Battery graph), colors | `graphs.battery.color.series2` |
+| `graphPresentationV1.overrides.battery.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Battery graph), colors | `graphs.battery.color.series3` |
+| `graphPresentationV1.overrides.temperature.height` | varies | absent | Window menu, Graph Options editor (Temperature graph) | `graphs.temperature.height` |
+| `graphPresentationV1.overrides.temperature.curve` | varies | absent | Window menu, Graph Options editor (Temperature graph) | `graphs.temperature.style` |
+| `graphPresentationV1.overrides.temperature.effect` | varies | absent | Window menu, Graph Options editor (Temperature graph) | `graphs.temperature.effect` |
+| `graphPresentationV1.overrides.temperature.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Temperature graph), colors | `graphs.temperature.color.background` |
+| `graphPresentationV1.overrides.temperature.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Temperature graph), colors | `graphs.temperature.color.series1` |
+| `graphPresentationV1.overrides.temperature.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Temperature graph), colors | `graphs.temperature.color.series2` |
+| `graphPresentationV1.overrides.temperature.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Temperature graph), colors | `graphs.temperature.color.series3` |
+| `graphPresentationV1.overrides.network.height` | varies | absent | Window menu, Graph Options editor (Network graph) | `graphs.network.height` |
+| `graphPresentationV1.overrides.network.curve` | varies | absent | Window menu, Graph Options editor (Network graph) | `graphs.network.style` |
+| `graphPresentationV1.overrides.network.effect` | varies | absent | Window menu, Graph Options editor (Network graph) | `graphs.network.effect` |
+| `graphPresentationV1.overrides.network.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Network graph), colors | `graphs.network.color.background` |
+| `graphPresentationV1.overrides.network.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Network graph), colors | `graphs.network.color.series1` |
+| `graphPresentationV1.overrides.network.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Network graph), colors | `graphs.network.color.series2` |
+| `graphPresentationV1.overrides.network.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Network graph), colors | `graphs.network.color.series3` |
+| `graphPresentationV1.overrides.disk.height` | varies | absent | Window menu, Graph Options editor (Disk graph) | `graphs.disk.height` |
+| `graphPresentationV1.overrides.disk.curve` | varies | absent | Window menu, Graph Options editor (Disk graph) | `graphs.disk.style` |
+| `graphPresentationV1.overrides.disk.effect` | varies | absent | Window menu, Graph Options editor (Disk graph) | `graphs.disk.effect` |
+| `graphPresentationV1.overrides.disk.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Disk graph), colors | `graphs.disk.color.background` |
+| `graphPresentationV1.overrides.disk.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Disk graph), colors | `graphs.disk.color.series1` |
+| `graphPresentationV1.overrides.disk.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Disk graph), colors | `graphs.disk.color.series2` |
+| `graphPresentationV1.overrides.disk.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Disk graph), colors | `graphs.disk.color.series3` |
+| `graphPresentationV1.overrides.ai.height` | varies | absent | Window menu, Graph Options editor (AI tokens graph) | `graphs.ai.height` |
+| `graphPresentationV1.overrides.ai.curve` | varies | absent | Window menu, Graph Options editor (AI tokens graph) | `graphs.ai.style` |
+| `graphPresentationV1.overrides.ai.effect` | varies | absent | Window menu, Graph Options editor (AI tokens graph) | `graphs.ai.effect` |
+| `graphPresentationV1.overrides.ai.colors.0` | RGBA or null | null | Window menu, Graph Options editor (AI tokens graph), colors | `graphs.ai.color.background` |
+| `graphPresentationV1.overrides.ai.colors.1` | RGBA or null | null | Window menu, Graph Options editor (AI tokens graph), colors | `graphs.ai.color.series1` |
+| `graphPresentationV1.overrides.ai.colors.2` | RGBA or null | null | Window menu, Graph Options editor (AI tokens graph), colors | `graphs.ai.color.series2` |
+| `graphPresentationV1.overrides.ai.colors.3` | RGBA or null | null | Window menu, Graph Options editor (AI tokens graph), colors | `graphs.ai.color.series3` |
+| `graphPresentationV1.overrides.fans.height` | varies | absent | Window menu, Graph Options editor (Fans graph) | `graphs.fans.height` |
+| `graphPresentationV1.overrides.fans.curve` | varies | absent | Window menu, Graph Options editor (Fans graph) | `graphs.fans.style` |
+| `graphPresentationV1.overrides.fans.effect` | varies | absent | Window menu, Graph Options editor (Fans graph) | `graphs.fans.effect` |
+| `graphPresentationV1.overrides.fans.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Fans graph), colors | `graphs.fans.color.background` |
+| `graphPresentationV1.overrides.fans.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Fans graph), colors | `graphs.fans.color.series1` |
+| `graphPresentationV1.overrides.fans.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Fans graph), colors | `graphs.fans.color.series2` |
+| `graphPresentationV1.overrides.fans.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Fans graph), colors | `graphs.fans.color.series3` |
+| `graphPresentationV1.overrides.weather.height` | varies | absent | Window menu, Graph Options editor (Weather graph) | `graphs.weather.height` |
+| `graphPresentationV1.overrides.weather.curve` | varies | absent | Window menu, Graph Options editor (Weather graph) | `graphs.weather.style` |
+| `graphPresentationV1.overrides.weather.effect` | varies | absent | Window menu, Graph Options editor (Weather graph) | `graphs.weather.effect` |
+| `graphPresentationV1.overrides.weather.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Weather graph), colors | `graphs.weather.color.background` |
+| `graphPresentationV1.overrides.weather.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Weather graph), colors | `graphs.weather.color.series1` |
+| `graphPresentationV1.overrides.weather.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Weather graph), colors | `graphs.weather.color.series2` |
+| `graphPresentationV1.overrides.weather.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Weather graph), colors | `graphs.weather.color.series3` |
+| `graphPresentationV1.overrides.stock.height` | varies | absent | Window menu, Graph Options editor (Stock graph) | `graphs.stock.height` |
+| `graphPresentationV1.overrides.stock.curve` | varies | absent | Window menu, Graph Options editor (Stock graph) | `graphs.stock.style` |
+| `graphPresentationV1.overrides.stock.effect` | varies | absent | Window menu, Graph Options editor (Stock graph) | `graphs.stock.effect` |
+| `graphPresentationV1.overrides.stock.colors.0` | RGBA or null | null | Window menu, Graph Options editor (Stock graph), colors | `graphs.stock.color.background` |
+| `graphPresentationV1.overrides.stock.colors.1` | RGBA or null | null | Window menu, Graph Options editor (Stock graph), colors | `graphs.stock.color.series1` |
+| `graphPresentationV1.overrides.stock.colors.2` | RGBA or null | null | Window menu, Graph Options editor (Stock graph), colors | `graphs.stock.color.series2` |
+| `graphPresentationV1.overrides.stock.colors.3` | RGBA or null | null | Window menu, Graph Options editor (Stock graph), colors | `graphs.stock.color.series3` |
+| `XRGModule_CPU_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.cpu.size_width` |
+| `XRGModule_CPU_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.cpu.size_height` |
+| `XRGModule_GPU_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.gpu.size_width` |
+| `XRGModule_GPU_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.gpu.size_height` |
+| `XRGModule_NPU_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.npu.size_width` |
+| `XRGModule_NPU_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.npu.size_height` |
+| `XRGModule_VRAM_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.vram.size_width` |
+| `XRGModule_VRAM_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.vram.size_height` |
+| `XRGModule_Memory_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.memory.size_width` |
+| `XRGModule_Memory_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.memory.size_height` |
+| `XRGModule_Battery_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.battery.size_width` |
+| `XRGModule_Battery_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.battery.size_height` |
+| `XRGModule_Temperature_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.temperature.size_width` |
+| `XRGModule_Temperature_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.temperature.size_height` |
+| `XRGModule_Network_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.network.size_width` |
+| `XRGModule_Network_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.network.size_height` |
+| `XRGModule_Disk_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.disk.size_width` |
+| `XRGModule_Disk_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.disk.size_height` |
+| `XRGModule_AI Tokens_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.ai.size_width` |
+| `XRGModule_AI Tokens_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.ai.size_height` |
+| `XRGModule_Fans_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.fans.size_width` |
+| `XRGModule_Fans_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.fans.size_height` |
+| `XRGModule_Weather_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.weather.size_width` |
+| `XRGModule_Weather_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.weather.size_height` |
+| `XRGModule_Stock_width` | double | unset | Saved by XRGModule when a graph is resized | `graphs.stock.size_width` |
+| `XRGModule_Stock_height` | double | unset | Saved by XRGModule when a graph is resized | `graphs.stock.size_height` |
 
 ## Linux version-40 fields
 
 | Key | Type | Default | Where it lives today | Catalog entry |
 |---|---|---|---|---|
 | `/theme` | builtin or custom | Classic | Preferences, Theme picker | `themes.preset`, `themes.name` and the `appearance.*.color` entries via the theme* transforms |
+| `/modules` | array of module ids | default order | Preferences, Graphs (up and down buttons) | `graphs.order` |
 | `/graph_height` | u32 | 90 | Preferences, Dashboard, Default graph height | `graphs.default_height` |
 | `/graph_width` | u32 | 140 | Preferences, Dashboard, Graph width | `general.window.graph_width` |
 | `/sampling_interval_ms` | u32 | 1000 | Preferences, Dashboard, System sampling target | `graphs.refresh` |
 | `/window_opacity` | f64 | 1.0 | Preferences, Dashboard, Window opacity | `general.window.opacity` |
+| `/window_size` | object or null | null | Preferences, Dashboard, Remember window size | `general.window.remember_size` |
+| `/window_size/width` | u32 | part of window_size | Remembered dashboard window width | `general.window.width` |
+| `/window_size/height` | u32 | part of window_size | Remembered dashboard window height | `general.window.height` |
+| `/window_collapse/collapsed` | bool | false | Preferences, Dashboard, Collapsed window | `general.window.collapsed` |
 | `/window_collapse/expand_on_hover` | bool | false | Preferences, Dashboard, Hover expansion | `general.window.expand_on_hover` |
 | `/window_collapse/anchor` | start or end | start | Preferences, Dashboard, Collapse anchor | `general.window.collapse_anchor` |
 | `/network_min_scale` | u64 | 0 | Preferences, Dashboard, Network minimum scale | `graphs.network.minimum_scale` |
@@ -264,6 +417,10 @@ the catalog value. Task 4 implements them; this task only names them.
 | `/metrics/fan` | string or null | null | Preferences, Metric sources, Fan | `sources.fans.sensor1` |
 | `/metrics/fan_extra/0` | string or null | null | Preferences, Metric sources, Fan curve 2 | `sources.fans.sensor2` |
 | `/metrics/fan_extra/1` | string or null | null | Preferences, Metric sources, Fan curve 3 | `sources.fans.sensor3` |
+| `/processes/sort` | cpu, memory, pid or name | cpu | Processes window, sort | `graphs.processes.sort` |
+| `/processes/uid` | u32 or null | null | Processes window, user filter | `graphs.processes.user` |
+| `/processes/filter` | string | empty | Processes window, name filter | `graphs.processes.filter` |
+| `/processes/limit` | u32 | 50 | Processes window, row limit | `graphs.processes.limit` |
 | `/ai/accounting/enabled` | bool | false | Preferences, AI monitoring, Track observed session/daily usage | `ai.tracking.enabled` |
 | `/ai/accounting/auto_reset` | bool | true | Preferences, AI monitoring, Reset daily counters at local midnight | `ai.tracking.auto_reset` |
 | `/ai/accounting/daily_budget` | u64 | 0 | Preferences, AI monitoring, Daily token budget | `ai.tracking.daily_budget` |
@@ -298,18 +455,11 @@ the catalog value. Task 4 implements them; this task only names them.
 | `/weather/history_hours` | u32 or null | null | Preferences, Weather observations, History window | `weather.history_hours` |
 | `/weather/secondary` | none, wind, humidity, visibility, dewpoint or pressure | none | Preferences, Weather observations, Secondary curve | `weather.secondary` |
 | `/version` | u32 | 40 | settings.conf header | excluded: file format version, migrated structurally, not a setting. |
-| `/modules (the array order)` | array | default order | Preferences, Graphs (up and down buttons) | excluded: graph display order is structural; it is migrated as the document's own graph order, not a typed control. |
-| `/modules/<i>/id` | module id | varies | Identity of each element of the modules array | excluded: module identity inside the user-reorderable array; see the index convention above. |
-| `/window_size (with /width and /height)` | object | null | Preferences, Dashboard, Remember window size | excluded: window geometry, the Linux counterpart of an AppKit window frame (spec Non-goals). |
-| `/window_collapse/collapsed` | bool | false | Preferences, Dashboard, Collapsed window | excluded: manual collapsed latch, window state, not a setting (spec Non-goals). |
+| `/modules/<i>/id` | module id | varies | Identity of each element of the modules array | excluded: module identity inside the user-reorderable array, never edited as a value; `graphs.order` and the per-field pointers resolve it. |
 | `/theme/custom/theme/format` | string | xrg-ng-theme | Custom theme document inside /theme | excluded: part of the portable theme document; see /theme. |
 | `/theme/custom/theme/version` | u32 | 1 | Custom theme document inside /theme | excluded: part of the portable theme document; see /theme. |
 | `/theme/custom/theme/name` | string | 1-80 chars | Custom theme document inside /theme | excluded: part of the portable theme document; read through the /theme pointer by themes.name. |
 | `/theme/custom/theme/colors` | [[f64; 4]; 7] | varies | Custom theme document inside /theme | excluded: part of the portable theme document; read through the /theme pointer by the appearance color entries. |
-| `/processes/sort` | cpu, memory, pid or name | cpu | Processes window | excluded: inspector window state (spec Non-goals: inspectors are out of scope). |
-| `/processes/uid` | u32 or null | null | Processes window | excluded: inspector window state (spec Non-goals: inspectors are out of scope). |
-| `/processes/filter` | string | empty | Processes window | excluded: inspector window state (spec Non-goals: inspectors are out of scope). |
-| `/processes/limit` | u32 | 50 | Processes window | excluded: inspector window state (spec Non-goals: inspectors are out of scope). |
 | `/modules/0/visible` | varies | see module | Preferences, Graphs (CPU graph) | `graphs.cpu.visible` |
 | `/modules/0/style` | varies | see module | Preferences, Graphs (CPU graph) | `graphs.cpu.style` |
 | `/modules/0/height` | varies | see module | Preferences, Graphs (CPU graph) | `graphs.cpu.height` |
