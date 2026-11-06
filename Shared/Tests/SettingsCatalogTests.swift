@@ -195,6 +195,18 @@ struct SettingsCatalogTests {
         }
     }
 
+    /// Line endings must not affect the drift comparison: Swift multiline
+    /// literals normalise their line breaks, while a CRLF checkout or edit
+    /// keeps CRLF in the JSON file. Normalize both sides so only real
+    /// content drift fails the check.
+    private func normalizedLineEndings(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    private func catalogIsCurrent(file: String, embedded: String) -> Bool {
+        normalizedLineEndings(file) == normalizedLineEndings(embedded)
+    }
+
     @Test func embeddedCatalogIsCurrent() throws {
         // Compare the embedded literal against the committed catalog file; the
         // check runs on every platform, including Windows, where the Python
@@ -202,7 +214,19 @@ struct SettingsCatalogTests {
         // `python3 Tools/settings-catalog-embed.py --check`.
         let url = repoRoot().appendingPathComponent("Shared/Settings/settings-catalog.json")
         let file = try String(contentsOf: url, encoding: .utf8)
-        #expect(Data(file.utf8) == Data(XRGSettingsCatalogData.json.utf8),
+        #expect(catalogIsCurrent(file: file, embedded: XRGSettingsCatalogData.json),
                 "the embedded catalog is stale; run Tools/settings-catalog-embed.py")
+    }
+
+    @Test func driftComparisonIgnoresLineEndingsButNotContent() {
+        let embedded = XRGSettingsCatalogData.json
+        let crlf = embedded.replacingOccurrences(of: "\n", with: "\r\n")
+        // A CRLF copy of the same catalog must compare equal...
+        #expect(catalogIsCurrent(file: crlf, embedded: embedded))
+        // ...while a one-byte content change must not, whatever the endings.
+        var mutated = crlf
+        let index = crlf.index(crlf.startIndex, offsetBy: 100)
+        mutated.replaceSubrange(index...index, with: crlf[index] == "X" ? "Y" : "X")
+        #expect(!catalogIsCurrent(file: mutated, embedded: embedded))
     }
 }

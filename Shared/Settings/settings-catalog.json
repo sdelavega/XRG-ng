@@ -276,22 +276,6 @@
     }
   },
   {
-    "id": "general.window.uncollapsed_frame",
-    "section": "general",
-    "group": "Window",
-    "label": "Uncollapsed window frame",
-    "help": "The frame the macOS graph window restores to when it expands; an NSRect string.",
-    "control": "text",
-    "default": "",
-    "platforms": [
-      "macos"
-    ],
-    "shown": false,
-    "legacy": {
-      "macos": "unminimizedFrame"
-    }
-  },
-  {
     "id": "general.window.remember_size",
     "section": "general",
     "group": "Window",

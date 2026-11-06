@@ -124,7 +124,7 @@ the catalog value. Task 4 implements them; this task only names them.
 | `minimizeUpDown` | int | 0 | General pane, Minimize the Graph Window into | `general.window.collapse_anchor` |
 | `isDockIconHidden` | bool | NO | Graph window Hide UI action | `general.window.hide_dock_icon` |
 | `windowIsMinimized` | bool | false | Graph window collapse latch | `general.window.collapsed` |
-| `unminimizedFrame` | string | NSRect string | Graph window, frame to restore on expansion | `general.window.uncollapsed_frame` |
+| `unminimizedFrame` | string | NSRect string | Graph window, frame to restore on expansion | excluded: AppKit window restore frame - the graph window captures its own `host.frame` when it collapses and restores it when it expands (XRGBackgroundView), so it stays in NSUserDefaults per the spec's Non-goals and ruling R6. |
 | `showSensorWindow` | bool | false | Sensors window open-at-launch state | `general.sensors_window.open` |
 | `antiAliasing` | bool | YES | General pane, Enable Anti-Aliasing | `appearance.antialiasing` |
 | `graphRefresh` | double | 1.0 | General pane, Graph Refresh slider (0.2-10 s) | `graphs.refresh` |

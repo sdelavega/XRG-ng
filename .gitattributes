@@ -1,0 +1,5 @@
+# The settings catalog and its generated Swift embedding are compared
+# byte for byte by the drift tests, and Swift multiline string literals
+# normalise their line breaks; keep both files on LF everywhere.
+Shared/Settings/*.json text eol=lf
+Shared/Sources/XRGSharedCore/XRGSettingsCatalogData.swift text eol=lf
