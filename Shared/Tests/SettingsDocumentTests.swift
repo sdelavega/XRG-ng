@@ -169,6 +169,17 @@ struct SettingsDocumentTests {
             ("number missing exponent digits", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": 1e}}"#.utf8)),
             ("bad string escape", Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": "\q"}}"#.utf8)),
             ("raw control character in string", Data("{\"\u{01}\": 1}".utf8)),
+            // A `\u` surrogate escape must be a complete pair: a lone half,
+            // or a second escape that is not the low surrogate, is not a
+            // Unicode scalar (RFC 8259 §7).
+            ("lone high surrogate escape",
+             Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": "\uD83D"}}"#.utf8)),
+            ("lone low surrogate escape",
+             Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": "\uDE00"}}"#.utf8)),
+            ("high surrogate escape paired with non-low A",
+             Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": "\uD83D\u0041"}}"#.utf8)),
+            ("high surrogate escape followed by raw A",
+             Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"n": "\uD83DA"}}"#.utf8)),
             ("nesting deeper than the parser allows",
              Data((String(repeating: "[", count: 512) + String(repeating: "]", count: 512)).utf8)),
         ]
@@ -447,5 +458,45 @@ struct SettingsDocumentTests {
         let (atDefaults, diagnostics) = try #require(loadOK(loadedDefault, catalog))
         #expect(diagnostics.isEmpty)
         #expect(atDefaults.serialized() == Data(canonical.utf8))
+    }
+
+    // MARK: escaped surrogate pairs
+
+    /// A supplementary character written as a pair of `\u` escapes is valid
+    /// JSON (RFC 8259 §7) and must not make the document unreadable: an
+    /// unknown key and an unknown string value that both contain 😀 (U+1F600)
+    /// load, and the canonical output carries the character as raw UTF-8.
+    /// The same character written raw in the file loads to the same document
+    /// and the same bytes.
+    @Test func surrogatePairsSurviveRoundTrip() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        // 😀 is U+1F600: high surrogate D83D, low surrogate DE00.
+        let escaped = Data(#"{"format": "xrg-ng-settings", "version": 1, "settings": {"emoji\uD83D\uDE00key": "\uD83D\uDE00"}}"#.utf8)
+        let (document, diagnostics) = try #require(loadOK(escaped, catalog))
+        #expect(diagnostics.isEmpty)
+        #expect(document.values.isEmpty)
+        #expect(document.unknown == ["emoji\u{1F600}key": .string("\u{1F600}")])
+        // Hand-derived expected bytes: the writer emits non-ASCII raw, so the
+        // key and the value each carry U+1F600 as the four UTF-8 bytes
+        // F0 9F 98 80; keys sorted, two-space indent, LF, trailing newline.
+        let expected = "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"emoji\u{1F600}key\": \"\u{1F600}\"\n  },\n  \"version\": 1\n}\n"
+        #expect(document.serialized() == Data(expected.utf8))
+
+        // The same character raw in the file: the same document, the same
+        // canonical bytes — the escape and the raw form are one character.
+        let raw = Data("{\"format\": \"xrg-ng-settings\", \"version\": 1, \"settings\": {\"emoji\u{1F600}key\": \"\u{1F600}\"}}".utf8)
+        let (rawDocument, rawDiagnostics) = try #require(loadOK(raw, catalog))
+        #expect(rawDiagnostics.isEmpty)
+        #expect(rawDocument.unknown == document.unknown)
+        #expect(rawDocument.serialized() == document.serialized())
+
+        // Both canonical outputs reload byte-identically: the pair survives,
+        // the raw bytes are read back raw, and load∘serialize is stable.
+        for bytes in [document.serialized(), rawDocument.serialized()] {
+            let (reloaded, reloadedDiagnostics) = try #require(loadOK(bytes, catalog))
+            #expect(reloadedDiagnostics.isEmpty)
+            #expect(reloaded.unknown == document.unknown)
+            #expect(reloaded.serialized() == bytes)
+        }
     }
 }

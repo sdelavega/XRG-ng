@@ -191,8 +191,14 @@ private struct JSONTextParser {
             guard let scalar = UnicodeScalar(high) else { return nil }
             return [scalar]
         }
-        guard position + 1 < scalars.count, scalars[position] == "\\", scalars[position + 1] == "u",
-              let low = parseHexQuad(), (0xdc00...0xdfff).contains(low) else { return nil }
+        // A high surrogate is only half of a pair: the low half must follow
+        // as another `\u` escape, whose two characters are consumed here,
+        // before the quad is read.
+        guard position + 1 < scalars.count, scalars[position] == "\\", scalars[position + 1] == "u" else {
+            return nil
+        }
+        position += 2
+        guard let low = parseHexQuad(), (0xdc00...0xdfff).contains(low) else { return nil }
         guard let paired = UnicodeScalar(0x10000 + (high - 0xd800) << 10 + (low - 0xdc00)) else {
             return nil
         }
