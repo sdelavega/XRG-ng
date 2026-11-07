@@ -17,7 +17,8 @@ use xrg_ng_linux::{
     shared,
 };
 
-// The raw ABI entry points a C caller uses, for the buffer contract checks.
+// The raw ABI entry points a C caller uses, for the buffer contract checks
+// and the request-level refusals no Rust type can express.
 unsafe extern "C" {
     fn xrg_settings_load(doc: *const u8, len: u32, out: *mut u8, cap: u32, needed: *mut u32)
     -> i32;
@@ -28,6 +29,84 @@ unsafe extern "C" {
         cap: u32,
         needed: *mut u32,
     ) -> i32;
+    fn xrg_settings_set(
+        doc: *const u8,
+        len: u32,
+        id: *const u8,
+        id_len: u32,
+        value: *const u8,
+        value_len: u32,
+        out: *mut u8,
+        cap: u32,
+        needed: *mut u32,
+    ) -> i32;
+    fn xrg_settings_reset_section(
+        doc: *const u8,
+        len: u32,
+        section: *const u8,
+        section_len: u32,
+        out: *mut u8,
+        cap: u32,
+        needed: *mut u32,
+    ) -> i32;
+}
+
+/// The status and decoded body of one raw `xrg_settings_set` call, so the
+/// wire itself can be inspected for inputs `serde_json::Value` cannot hold.
+fn raw_set(doc: &[u8], id: &[u8], value: &[u8]) -> (i32, Option<serde_json::Value>) {
+    let mut needed = 0;
+    let mut output = vec![0u8; 8192];
+    let status = unsafe {
+        xrg_settings_set(
+            doc.as_ptr(),
+            u32::try_from(doc.len()).expect("the document fits the ABI"),
+            id.as_ptr(),
+            u32::try_from(id.len()).expect("the id fits the ABI"),
+            value.as_ptr(),
+            u32::try_from(value.len()).expect("the value fits the ABI"),
+            output.as_mut_ptr(),
+            output.len() as u32,
+            &mut needed,
+        )
+    };
+    if status <= 0 {
+        return (status, None);
+    }
+    (
+        status,
+        serde_json::from_slice(&output[..status as usize]).ok(),
+    )
+}
+
+/// The status and decoded body of one raw `xrg_settings_reset_section`
+/// call, for section bytes `&str` cannot hold.
+fn raw_reset_section(doc: &[u8], section: &[u8]) -> (i32, Option<serde_json::Value>) {
+    let mut needed = 0;
+    let mut output = vec![0u8; 8192];
+    let status = unsafe {
+        xrg_settings_reset_section(
+            doc.as_ptr(),
+            u32::try_from(doc.len()).expect("the document fits the ABI"),
+            section.as_ptr(),
+            u32::try_from(section.len()).expect("the section fits the ABI"),
+            output.as_mut_ptr(),
+            output.len() as u32,
+            &mut needed,
+        )
+    };
+    if status <= 0 {
+        return (status, None);
+    }
+    (
+        status,
+        serde_json::from_slice(&output[..status as usize]).ok(),
+    )
+}
+
+/// The wire kind one response's `error` carries, or None when there is no
+/// error object at all.
+fn error_kind(response: &serde_json::Value) -> Option<&str> {
+    response.get("error")?.get("kind")?.as_str()
 }
 
 /// Shared/Tests/Fixtures/settings, the same files the Swift corpus reads.
@@ -310,6 +389,71 @@ fn oversized_set_requests_are_not_invalid_documents() {
             b"not json",
             "graphs.processes.filter",
             &serde_json::json!("")
+        ),
+        Err(document::SetError::InvalidDocument)
+    );
+}
+
+#[test]
+fn unparsable_set_values_are_request_errors_not_invalid_documents() {
+    shared::check_abi();
+    let defaults = defaults_document();
+    let id = b"general.window.border_width".to_vec();
+
+    // 257 nested arrays around 0: valid JSON, only 515 bytes on the wire,
+    // but nesting past the core parser's 256 depth limit. Against a valid
+    // document it must be a request error, never InvalidDocument, so the
+    // caller never mistakes it for a file to replace.
+    let mut too_deep = serde_json::json!(0);
+    for _ in 0..257 {
+        too_deep = serde_json::Value::Array(vec![too_deep]);
+    }
+    assert_eq!(
+        document::set(&defaults, "general.window.border_width", &too_deep),
+        Err(document::SetError::UnparsableRequest)
+    );
+    // One level less parses on the core side and is refused for its shape.
+    let mut bounded = serde_json::json!(0);
+    for _ in 0..256 {
+        bounded = serde_json::Value::Array(vec![bounded]);
+    }
+    assert_eq!(
+        document::set(&defaults, "general.window.border_width", &bounded),
+        Err(document::SetError::WrongType)
+    );
+
+    // Malformed JSON and invalid UTF-8 cannot pass through `serde_json`,
+    // so they ride the raw wire: still a request error, still never -1.
+    for value in [b"{not json".to_vec(), vec![0xff, 0xfe]] {
+        let (status, response) = raw_set(&defaults, &id, &value);
+        let response = response.unwrap_or_else(|| {
+            panic!("a value the core cannot parse must ride the wire, got {status}")
+        });
+        assert_eq!(error_kind(&response), Some("unparsable-request"));
+    }
+    // An id that is not UTF-8 is refused the same way.
+    let (id_status, id_response) = raw_set(&defaults, &[0xff], b"8");
+    let id_response = id_response.unwrap_or_else(|| {
+        panic!("an id the core cannot parse must ride the wire, got {id_status}")
+    });
+    assert_eq!(error_kind(&id_response), Some("unparsable-request"));
+    // So is a section name that is not UTF-8, in the reset entry point.
+    let (section_status, section_response) = raw_reset_section(&defaults, &[0xff]);
+    let section_response = section_response.unwrap_or_else(|| {
+        panic!("a section the core cannot parse must ride the wire, got {section_status}")
+    });
+    assert_eq!(error_kind(&section_response), Some("unparsable-request"));
+
+    // An unreadable document with a perfectly valid value is still -1, and
+    // still exactly InvalidDocument on the Rust side.
+    let (refused, refused_response) = raw_set(b"not json", &id, b"8");
+    assert_eq!(refused, -1);
+    assert!(refused_response.is_none());
+    assert_eq!(
+        document::set(
+            b"not json",
+            "general.window.border_width",
+            &serde_json::json!(8)
         ),
         Err(document::SetError::InvalidDocument)
     );

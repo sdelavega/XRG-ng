@@ -481,8 +481,10 @@ private func settingsRefusal(_ error: SettingsErrorJSON,
 
 /// Store one value: the new document, or the core's refusal with its kind
 /// and, for an out-of-range value, the entry's bounds. A request that cannot
-/// cross — an id over 256 bytes or a value over 8 KiB — is reported as
-/// request-too-large through the same wire, so a caller can tell it from a
+/// cross — an id over 256 bytes, a value over 8 KiB, or an id or value that
+/// cannot be parsed (invalid UTF-8, malformed JSON, or nesting past the
+/// parser's depth limit) — is reported as request-too-large or
+/// unparsable-request through the same wire, so a caller can tell it from a
 /// document that does not load (-1).
 @c(xrg_settings_set) public func settingsSet(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
     _ id: UnsafePointer<UInt8>?, _ idLen: UInt32,
@@ -499,10 +501,20 @@ private func settingsRefusal(_ error: SettingsErrorJSON,
         return settingsRefusal(SettingsErrorJSON(kind: "request-too-large", min: nil, max: nil),
                                output, capacity, needed)
     }
-    guard let idText = String(bytes: UnsafeBufferPointer(start: id, count: Int(idLen)), encoding: .utf8),
-          let valueText = String(bytes: UnsafeBufferPointer(start: value, count: Int(valueLen)), encoding: .utf8),
+    // A request that cannot be parsed — an id that is not UTF-8, or a value
+    // that is not UTF-8, not JSON, or nested past the parser's depth limit —
+    // is a request problem while the document is fine, so it rides the wire
+    // like the size refusal, never -1.
+    guard let idText = String(bytes: UnsafeBufferPointer(start: id, count: Int(idLen)), encoding: .utf8) else {
+        return settingsRefusal(SettingsErrorJSON(kind: "unparsable-request", min: nil, max: nil),
+                               output, capacity, needed)
+    }
+    guard let valueText = String(bytes: UnsafeBufferPointer(start: value, count: Int(valueLen)), encoding: .utf8),
           let json = JSONValue.parse(valueText)
-    else { return -1 }
+    else {
+        return settingsRefusal(SettingsErrorJSON(kind: "unparsable-request", min: nil, max: nil),
+                               output, capacity, needed)
+    }
     guard let settingsValue = XRGSettingsValue(json: json) else {
         // A shape no control can hold, reported as the type refusal `set`
         // itself would give.
@@ -523,17 +535,24 @@ private func settingsRefusal(_ error: SettingsErrorJSON,
 
 /// Restore one section to its defaults; unknown keys at either level, and
 /// every other section, are untouched. The section must be one of the
-/// catalog's, and the document must load.
+/// catalog's, and the document must load; a section name that cannot be
+/// parsed (invalid UTF-8) rides the wire as unparsable-request.
 @c(xrg_settings_reset_section) public func settingsResetSection(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
     _ section: UnsafePointer<UInt8>?, _ sectionLen: UInt32,
     _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
     _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
     guard len <= 1_048_576, sectionLen <= 256, let doc, let section,
           let catalog = try? XRGSettingsCatalog.load(),
-          let name = String(bytes: UnsafeBufferPointer(start: section, count: Int(sectionLen)), encoding: .utf8),
-          XRGSettingsCatalog.sections.contains(name),
           case .ok(var document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
     else { return -1 }
+    // A section name that cannot be parsed — invalid UTF-8 — is a request
+    // problem while the document is fine, so it rides the wire like the
+    // `set` refusals, never -1.
+    guard let name = String(bytes: UnsafeBufferPointer(start: section, count: Int(sectionLen)), encoding: .utf8) else {
+        return settingsRefusal(SettingsErrorJSON(kind: "unparsable-request", min: nil, max: nil),
+                               output, capacity, needed)
+    }
+    guard XRGSettingsCatalog.sections.contains(name) else { return -1 }
     // The ABI names no platform, so both platforms' entries of the section
     // return to their default: a stored value of either survives neither.
     document.resetSection(name, catalog: catalog, platform: .macos)

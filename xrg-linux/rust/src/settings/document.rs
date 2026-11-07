@@ -74,6 +74,10 @@ pub enum SetError {
     /// The id or the value exceeds what the settings ABI accepts; the
     /// document itself is fine.
     RequestTooLarge,
+    /// The id or the value could not be parsed — invalid UTF-8, malformed
+    /// JSON, or nesting past the core parser's depth limit; the document
+    /// itself is fine.
+    UnparsableRequest,
     /// The id is not in the catalog.
     UnknownId,
     /// The value cannot have this control's shape.
@@ -186,6 +190,7 @@ impl From<WireError> for SetError {
         match wire.kind.as_str() {
             "unknown-id" => Self::UnknownId,
             "request-too-large" => Self::RequestTooLarge,
+            "unparsable-request" => Self::UnparsableRequest,
             "wrong-type" => Self::WrongType,
             "out-of-range" => Self::OutOfRange {
                 min: wire.min.unwrap_or_default(),
@@ -366,6 +371,14 @@ pub fn reset_section(doc: &[u8], section: &str) -> Result<Vec<u8>, String> {
         CallError::Transport(problem) => problem.to_owned(),
     })?;
     let wire: Wire = serde_json::from_slice(&response).map_err(|error| error.to_string())?;
+    if let Some(error) = wire.error {
+        // A refusal here is about the request, most plainly a section name
+        // that is not UTF-8; it never means the document is at fault.
+        return Err(match error.kind.as_str() {
+            "unparsable-request" => "the section name could not be parsed".to_owned(),
+            problem => format!("the shared core refused the reset: {problem}"),
+        });
+    }
     wire.document
         .map(String::into_bytes)
         .ok_or_else(|| "the shared core omitted the reset document".into())

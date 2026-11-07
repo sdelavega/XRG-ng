@@ -96,6 +96,62 @@ struct SharedCoreTests {
         let stored = try #require(okResponse as? [String: Any])
         #expect(stored["document"] is String)
     }
+    @Test func settingsSetRefusesUnparsableValuesAsRequestErrors() throws {
+        let document = Data(#"{"format": "xrg-ng-settings", "settings": {}, "version": 1}"#.utf8)
+        func respond(doc: Data, id: Data, value: Data) throws -> (Int32, Any?) {
+            var output = [UInt8](repeating: 42, count: 512)
+            var needed: UInt32 = 0
+            let status = doc.withUnsafeBytes { rawDoc in
+                id.withUnsafeBytes { rawId in
+                    value.withUnsafeBytes { rawValue in
+                        settingsSet(rawDoc.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(doc.count),
+                                    rawId.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(id.count),
+                                    rawValue.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(value.count),
+                                    &output, UInt32(output.count), &needed)
+                    }
+                }
+            }
+            return (status, status > 0 ? try JSONSerialization.jsonObject(with: Data(output[0..<Int(status)])) : nil)
+        }
+        func refusalKind(_ response: Any?) throws -> String {
+            let refusal = try #require(response as? [String: Any])
+            return try #require((refusal["error"] as? [String: Any])?["kind"] as? String)
+        }
+        // Each of these values cannot be parsed by the core — the first is
+        // valid JSON nested past the parser's depth limit, the second is not
+        // JSON, the third is not UTF-8 — while the document itself is fine,
+        // so each rides the wire as a request error, never -1.
+        let id = Data("general.window.border_width".utf8)
+        let tooDeep = Data((String(repeating: "[", count: 257) + "0" + String(repeating: "]", count: 257)).utf8)
+        for value in [tooDeep, Data("{not json".utf8), Data([0xff, 0xfe])] {
+            let (status, response) = try respond(doc: document, id: id, value: value)
+            #expect(status > 0)
+            #expect(try refusalKind(response) == "unparsable-request")
+        }
+        // An id that is not UTF-8 is refused the same way, as is a section
+        // name in the reset entry point.
+        let (idStatus, idResponse) = try respond(doc: document, id: Data([0xff]), value: Data("8".utf8))
+        #expect(idStatus > 0)
+        #expect(try refusalKind(idResponse) == "unparsable-request")
+        let unparsableSection = Data([0xff])
+        var resetOutput = [UInt8](repeating: 42, count: 512)
+        var resetNeeded: UInt32 = 0
+        let resetStatus = document.withUnsafeBytes { rawDoc in
+            unparsableSection.withUnsafeBytes { rawSection in
+                settingsResetSection(rawDoc.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(document.count),
+                                      rawSection.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(unparsableSection.count),
+                                      &resetOutput, UInt32(resetOutput.count), &resetNeeded)
+            }
+        }
+        #expect(resetStatus > 0)
+        #expect(try refusalKind(JSONSerialization.jsonObject(
+            with: Data(resetOutput[0..<Int(resetStatus)]))) == "unparsable-request")
+        // A document that does not load, with a perfectly valid value, is
+        // still -1: only the document argument is worth -1.
+        let (refused, refusedResponse) = try respond(doc: Data("not json".utf8), id: id, value: Data("8".utf8))
+        #expect(refused == -1)
+        #expect(refusedResponse == nil)
+    }
     @Test func parsersRejectMalformedOrOverflowingData() {
         let metrics = XRGLocalProviderParser.metrics(from: "tokens_input_total{model=\"a b\"} 7\ncost_total 0.25\ntokens_output_total NaN\n")
         #expect(metrics.tokens == 7 && metrics.cost == 0.25)

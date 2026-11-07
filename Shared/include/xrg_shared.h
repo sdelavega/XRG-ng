@@ -132,7 +132,9 @@ int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *ou
  * set values to 8 KiB, tickers to 256 bytes, chart responses to 8 MiB; an id
  * or a set value over its bound is reported through xrg_settings_set's error
  * response as request-too-large instead of -1, so a caller can tell a
- * refused request from a document that does not load.
+ * refused request from a document that does not load. So is an id, section
+ * or value that cannot be parsed at all — invalid UTF-8, malformed JSON, or
+ * nesting past the core parser's depth limit — as unparsable-request.
  * xrg_settings_catalog writes {"sections":[...],"entries":[...]}: the section
  * list in sidebar order and, in display order, the entries whose platforms
  * include the requested one (platform 0 macOS, 1 Linux). xrg_settings_load
@@ -140,11 +142,18 @@ int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *ou
  * document is the canonical bytes as a JSON string, null when unreadable.
  * xrg_settings_set writes {"document":...} or
  * {"error":{"kind":"unknown-id"|"wrong-type"|"out-of-range"|"not-an-option"|
- * "dependency-not-met"|"request-too-large","min":...,"max":...}} with the
+ * "dependency-not-met"|"request-too-large"|"unparsable-request",
+ * "min":...,"max":...}} with the
  * bounds present only for out-of-range; request-too-large means the id or
  * the value exceeded its documented bound while the document itself may be
- * fine. xrg_settings_reset_section writes {"document":...} after
- * restoring both platforms' entries of one catalog section, leaving unknown
+ * fine, and unparsable-request means the id or the value could not be
+ * parsed — invalid UTF-8, malformed JSON, or nesting past the core parser's
+ * depth limit — again while the document itself may be fine. -1 stays
+ * reserved for invalid arguments and a document that does not load.
+ * xrg_settings_reset_section writes {"document":...} after
+ * restoring both platforms' entries of one catalog section — or the same
+ * {"error":{"kind":"unparsable-request",...}} for a section name that is not
+ * UTF-8 — leaving unknown
  * keys and other sections untouched. xrg_settings_migrate_linux_v40 writes
  * {"document":...,"diagnostics":[...]}, refusing bytes that are not a JSON
  * object. xrg_settings_linux_view writes the version-40-shaped view the Rust
