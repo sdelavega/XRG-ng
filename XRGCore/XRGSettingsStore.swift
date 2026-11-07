@@ -22,8 +22,9 @@ import Foundation
 ///
 /// Keys the catalog does not map — Sparkle's `SU*` state, AppKit window frames,
 /// the `unminimizedFrame` restore rectangle, internal latches and recorded
-/// usage data — are not settings; they keep their home in `NSUserDefaults`
-/// on both backends.
+/// usage data — are not settings: the allowlisted ones (`isExcludedLegacyKey`)
+/// keep their home in `NSUserDefaults` on both backends; every other unmapped
+/// key is refused on the document backend and never written anywhere.
 @MainActor public final class XRGSettingsStore {
     /// Posted on the main thread after every stored change, with the changed
     /// id in `userInfo["id"]` and the store as the notification's object.
@@ -133,7 +134,20 @@ import Foundation
     /// store on catalog defaults with a `loadProblem`; a missing file is the
     /// first launch of 0.2.3, which migrates the 0.2.2 domain into a new
     /// document — once, without touching the domain — and writes it.
-    public init(fileURL: URL, defaults: UserDefaults, catalog: XRGSettingsCatalog) {
+    public convenience init(fileURL: URL, defaults: UserDefaults, catalog: XRGSettingsCatalog) {
+        // The 0.2.2 installation is the user's `com.sdelavega.xrg` persistent
+        // domain (fix round 2, finding 5): empty or absent — a fresh install,
+        // no settings.json — starts from the catalog defaults. Only ever read.
+        self.init(fileURL: fileURL, defaults: defaults, catalog: catalog,
+                  legacyDomain: defaults.persistentDomain(forName: Self.productionBundleIdentifier) ?? [:])
+    }
+
+    /// `legacyDomain` is the 0.2.2 `NSUserDefaults` domain's contents: its
+    /// persistent state, exactly what `persistentDomain(forName:)` reads on a
+    /// real installation. Empty means a fresh install. Internal so tests
+    /// inject disposable domains and never touch the real one.
+    init(fileURL: URL, defaults: UserDefaults, catalog: XRGSettingsCatalog,
+         legacyDomain: [String: Any]) {
         backend = .document(fileURL)
         self.defaults = defaults
         self.catalog = catalog
@@ -156,15 +170,21 @@ import Foundation
         } else {
             // First launch of 0.2.3: migrate the 0.2.2 domain once. A key
             // that fails conversion takes its default and is logged; launch
-            // never blocks (spec §4). Keys the user never persisted keep
-            // their EFFECTIVE 0.2.2 values: the registered defaults 0.2.2
-            // served are written into the document wherever they differ from
-            // the catalog default, so an upgrade changes nothing the user
-            // sees (netMinGraphScale stays 1024, review issue 4).
-            let registered = XRGWindowPreferences.defaultValues(
-                metric: Locale.current.measurementSystem != .us, screen: NSScreen.main?.frame ?? .zero)
+            // never blocks (spec §4). On an UPGRADE — the 0.2.2 domain is
+            // non-empty — keys the user never persisted keep their EFFECTIVE
+            // 0.2.2 values: the registered defaults 0.2.2 served are written
+            // into the document wherever they differ from the catalog
+            // default, so an upgrade changes nothing the user sees
+            // (netMinGraphScale stays 1024, review issue 4). A FRESH install
+            // (empty or absent domain) skips the baseline and starts from
+            // the catalog defaults (netMinGraphScale 0, fix round 2,
+            // finding 5).
+            let registered: [String: Any] = legacyDomain.isEmpty
+                ? [:]
+                : XRGWindowPreferences.defaultValues(
+                    metric: Locale.current.measurementSystem != .us, screen: NSScreen.main?.frame ?? .zero)
             let (migrated, diagnostics) = XRGSettingsMigration.fromMacDefaults(
-                defaults.dictionaryRepresentation(), registered: registered, catalog: catalog)
+                legacyDomain, registered: registered, catalog: catalog)
             locked.mutate { $0 = migrated }
             Self.note(diagnostics)
             if let error = persistError() {
@@ -253,6 +273,24 @@ import Foundation
         post(id)
     }
 
+    /// Non-setting state that keeps its `NSUserDefaults` home on the document
+    /// backend (docs/settings-inventory.md): Sparkle's `SU*` updater state,
+    /// AppKit's `NSWindow Frame *` autodrive keys, the graph window's
+    /// `unminimizedFrame` restore rectangle, the temperature sensor
+    /// auto-configuration latch `tempLocationsAutoconfigured`, and the
+    /// recorded AI usage data (the `aiTokens*` daily counters and by-model/
+    /// by-provider dictionaries, and the `aiTokensDailyDate` /
+    /// `aiTokensLastNotifyDate` dates). This is the EXPLICIT allowlist: any
+    /// other key the catalog does not map is refused — never written to the
+    /// domain, never converted into the document (fix round 2, finding 2).
+    static let excludedLegacyPrefixes = ["SU", "NSWindow Frame ", "aiTokens"]
+    static let excludedLegacyKeys = ["unminimizedFrame", "tempLocationsAutoconfigured"]
+
+    /// Whether one raw 0.2.2 defaults key is allowlisted excluded state.
+    static func isExcludedLegacyKey(_ key: String) -> Bool {
+        excludedLegacyKeys.contains(key) || excludedLegacyPrefixes.contains { key.hasPrefix($0) }
+    }
+
     /// Store raw 0.2.2-style defaults values (a preferences snapshot, a theme,
     /// a graph presentation or process options blob). The legacy backend
     /// writes them to its domain verbatim, as 0.2.2 did; the document backend
@@ -260,39 +298,55 @@ import Foundation
     /// conversion REPLACES what the keys' entries held: a snapshot whose
     /// value converts to the entry's default — or whose blob omits a field —
     /// clears the stored value, so restoring defaults cannot silently revert
-    /// (review issue 3). Keys the catalog does not map at all are excluded
-    /// state and keep their home in `NSUserDefaults` on both backends; keys
-    /// it maps with one entry or a whole blob never touch the domain on the
-    /// document backend (decision D5, review issue 2).
-    public func setLegacyValues(_ raw: [String: Any]) {
+    /// (review issue 3). On the document backend, keys the catalog maps with
+    /// one entry or a whole blob never touch the domain; unmapped keys keep
+    /// their `NSUserDefaults` home ONLY when they are allowlisted excluded
+    /// state (`isExcludedLegacyKey`); every other unmapped key is refused —
+    /// returned, logged, and never written anywhere (fix round 2,
+    /// finding 2). Returns the refused keys (empty on the legacy backend).
+    @discardableResult
+    public func setLegacyValues(_ raw: [String: Any]) -> [String] {
         switch backend {
         case .legacy:
             for (key, value) in raw { defaults.set(value, forKey: key) }
+            return []
         case .document:
+            var refused: [String] = []
             for (key, value) in raw where ids(legacyKey: key).isEmpty {
-                defaults.set(value, forKey: key)
+                if Self.isExcludedLegacyKey(key) {
+                    // Excluded state keeps its `NSUserDefaults` home.
+                    defaults.set(value, forKey: key)
+                } else {
+                    // Not a setting and not allowlisted state: refuse it.
+                    refused.append(key)
+                }
+            }
+            if !refused.isEmpty {
+                NSLog("XRG-ng settings: refusing unmapped legacy keys \(refused.sorted())")
             }
             let named = raw.keys.flatMap { ids(legacyKey: $0) }
                 .sorted(by: XRGSettingsDocument.precedes)
-            guard !named.isEmpty else { return }
-            let (migrated, _) = XRGSettingsMigration.fromMacDefaults(raw, catalog: catalog)
-            locked.mutate { document in
-                for id in named {
-                    if let value = migrated.values[id] {
-                        try? document.storeMigrated(id, value, catalog: catalog)
-                    } else if let entry = catalog.entry(id) {
-                        // The value converted to the entry's default (or the
-                        // blob carries no such field): clear what was stored.
-                        try? document.storeMigrated(id, entry.defaultValue, catalog: catalog)
+            if !named.isEmpty {
+                let (migrated, _) = XRGSettingsMigration.fromMacDefaults(raw, catalog: catalog)
+                locked.mutate { document in
+                    for id in named {
+                        if let value = migrated.values[id] {
+                            try? document.storeMigrated(id, value, catalog: catalog)
+                        } else if let entry = catalog.entry(id) {
+                            // The value converted to the entry's default (or the
+                            // blob carries no such field): clear what was stored.
+                            try? document.storeMigrated(id, entry.defaultValue, catalog: catalog)
+                        }
                     }
                 }
-            }
-            if loadProblem == nil {
-                if let error = persistError() {
-                    loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                if loadProblem == nil {
+                    if let error = persistError() {
+                        loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                    }
                 }
+                for id in named { post(id) }
             }
-            for id in named { post(id) }
+            return refused.sorted()
         }
     }
 
@@ -333,6 +387,33 @@ import Foundation
         NotificationCenter.default.post(name: Self.didChange, object: self, userInfo: ["id": id])
     }
 
+    /// The store's durable file write: serialize the bytes to the temporary
+    /// file, mode 0600, then fsync it so the rename cannot promote a
+    /// half-written file (spec §2). Internal to the module so tests can
+    /// force `open` and `fsync` failures (fix round 2, finding 4): a throw
+    /// stops the write before the replacement, and the caller removes the
+    /// temporary file.
+    typealias DurableFileWrite = (_ temporary: URL, _ bytes: Data) throws -> Void
+    nonisolated(unsafe) static let defaultDurableWrite: DurableFileWrite = { temporary, bytes in
+        try bytes.write(to: temporary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        let descriptor = open(temporary.path, O_RDONLY)
+        guard descriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                          userInfo: [NSLocalizedDescriptionKey: "Could not open \(temporary.path) for fsync"])
+        }
+        let synced = fsync(descriptor) == 0
+        close(descriptor)
+        guard synced else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                          userInfo: [NSLocalizedDescriptionKey: "Could not sync \(temporary.path)"])
+        }
+    }
+    /// The write `persistError()` uses. Injectable (internal) so tests can
+    /// force the `open` and `fsync` failures the default checks. The default
+    /// closure is stateless, so the unchecked isolation is sound.
+    nonisolated(unsafe) var durableWrite: DurableFileWrite = XRGSettingsStore.defaultDurableWrite
+
     /// Write the document atomically: a temporary file in the same directory,
     /// fsync, then rename over the settings file (spec §2). Mode 0600. Returns
     /// the error that stopped the write, nil on success.
@@ -341,7 +422,10 @@ import Foundation
     /// lacks owner write, or a directory that is not writable — is never
     /// replaced: the write is refused before any temporary file exists, the
     /// change stays in memory and `loadProblem` reports it, exactly like an
-    /// unreadable file (review issue 1). Durability is checked too: a
+    /// unreadable file (review issue 1). The owner-write MODE BIT is checked
+    /// explicitly, in addition to `access(W_OK)`: an ACL can grant write
+    /// access while the bit is absent, and the bit is what the ruling
+    /// requires (fix round 2, finding 1). Durability is checked too: a
     /// temporary file that cannot be opened or synced stops the write
     /// instead of proceeding to the replacement (review issue 10).
     private func persistError() -> NSError? {
@@ -354,27 +438,21 @@ import Foundation
         }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: fileURL.path), access(fileURL.path, W_OK) != 0 {
-                throw denied(fileURL.path)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                if access(fileURL.path, W_OK) != 0 { throw denied(fileURL.path) }
+                // The owner-write mode bit itself must be present: effective
+                // access (an ACL) is not enough (ruling B).
+                var status = stat()
+                guard stat(fileURL.path, &status) == 0, status.st_mode & S_IWUSR != 0 else {
+                    throw denied(fileURL.path)
+                }
             }
             if access(directory.path, W_OK) != 0 {
                 throw denied(directory.path)
             }
             let temporary = directory.appendingPathComponent(".settings-\(UUID().uuidString).tmp")
             do {
-                try bytes.write(to: temporary)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
-                let descriptor = open(temporary.path, O_RDONLY)
-                guard descriptor >= 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                                  userInfo: [NSLocalizedDescriptionKey: "Could not open \(temporary.path) for fsync"])
-                }
-                let synced = fsync(descriptor) == 0
-                close(descriptor)
-                guard synced else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
-                                  userInfo: [NSLocalizedDescriptionKey: "Could not sync \(temporary.path)"])
-                }
+                try durableWrite(temporary, bytes)
                 // A rename within the directory cannot leave a half-written
                 // file, and replaces the settings file if it already exists.
                 _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)

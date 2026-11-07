@@ -144,25 +144,18 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
 
     func refreshGraphPalette() { prefController?.setUpColorPanel() }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    /// The launch restoration: re-collapse the graph window if it was
+    /// collapsed (restoring the expanded dimensions first, preserving the
+    /// fork's fix for relaunches that otherwise get stuck as a thin strip)
+    /// and reopen the sensors window if it was open. Extracted from
+    /// `applicationDidFinishLaunching` so the document store's
+    /// byte-for-byte quietness — these paths only re-assert what the
+    /// document already says, so settings.json is never rewritten by a
+    /// launch, restore or shutdown — is testable without a running app
+    /// (fix round 2, finding 3).
+    func restoreLaunchState() {
         guard let window = xrgGraphWindow else { return }
-        // The AI token observer is not main-actor confined; hand it the
-        // shared document store before any accounting can start. A test
-        // scene's injected suite keeps the observer on that suite.
-        if defaults === UserDefaults.standard, Bundle.main.bundleIdentifier == "com.sdelavega.xrg" {
-            XRGAITokensObserver.adoptStore(XRGSettingsStore.shared)
-        }
-        budgetNotifications?.installNativeDelegate()
-        budgetNotifications?.start()
-        window.startRuntimeIfNeeded()
-        window.moduleManager?.windowChanged(to: window.frame.size)
-        window.initializeNPUView()
-        window.initializeAITokenView()
-        window.initializeHardwareViews()
-
         if window.appSettings?.windowCollapsed == true {
-            // Restore the expanded dimensions before collapsing, preserving the
-            // fork's fix for relaunches that otherwise get stuck as a thin strip.
             let collapsedLimit = (2 * CGFloat(window.borderWidth)) + (window.appSettings?.textRectHeight ?? 0) + 1
             if let savedFrame = defaults.string(forKey: "unminimizedFrame") {
                 let saved = NSRectFromString(savedFrame)
@@ -180,6 +173,24 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         if window.appSettings?.sensorsWindowOpen == true {
             openSensorWindow(self)
         }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let window = xrgGraphWindow else { return }
+        // The AI token observer is not main-actor confined; hand it the
+        // shared document store before any accounting can start. A test
+        // scene's injected suite keeps the observer on that suite.
+        if defaults === UserDefaults.standard, Bundle.main.bundleIdentifier == "com.sdelavega.xrg" {
+            XRGAITokensObserver.adoptStore(XRGSettingsStore.shared)
+        }
+        budgetNotifications?.installNativeDelegate()
+        budgetNotifications?.start()
+        window.startRuntimeIfNeeded()
+        window.moduleManager?.windowChanged(to: window.frame.size)
+        window.initializeNPUView()
+        window.initializeAITokenView()
+        window.initializeHardwareViews()
+        restoreLaunchState()
 
         // Preserve the existing launch ordering until menu activation is
         // verified independently of the language migration.

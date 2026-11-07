@@ -34,6 +34,16 @@ struct XRGSettingsStoreTests {
             return home.appendingPathComponent("Library/Preferences/\(domain).plist")
         }
 
+        /// Seed the suite's persistent domain and flush it to cfprefsd: the
+        /// store's migration reads the suite's PERSISTENT domain (the 0.2.2
+        /// rule, fix round 2 finding 5), which only reflects `set` after a
+        /// flush — on a real 0.2.2 installation the values are already on
+        /// disk, so production needs no flush.
+        func seed(_ values: [String: Any]) {
+            for (key, value) in values { defaults.set(value, forKey: key) }
+            defaults.synchronize()
+        }
+
         /// Remove the suite's persistent domain and its plist file, like the
         /// repo's other disposable-domain tests, plus this fixture's directory.
         func cleanUp() {
@@ -60,13 +70,12 @@ struct XRGSettingsStoreTests {
     @Test func firstLaunchMigratesDefaultsOnce() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let defaults = fixture.defaults
-        defaults.set("My XRG", forKey: "windowTitle")
-        defaults.set(7, forKey: "borderWidth")
-        defaults.set(true, forKey: "dropShadow")
-        defaults.set(2.5, forKey: "graphRefresh")
+        fixture.seed(["windowTitle": "My XRG", "borderWidth": 7, "dropShadow": true, "graphRefresh": 2.5])
         let catalog = try self.catalog()
 
-        let first = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let first = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog,
+                                     legacyDomain: ["windowTitle": "My XRG", "borderWidth": 7,
+                                                    "dropShadow": true, "graphRefresh": 2.5])
         #expect(first.loadProblem == nil)
 
         // The document exists and carries the migrated settings.
@@ -82,7 +91,7 @@ struct XRGSettingsStoreTests {
         try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)],
                                                 ofItemAtPath: fixture.documentURL.path)
         let stamp = try modificationDate(fixture.documentURL)
-        let second = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let second = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
         #expect(second.value("general.window.title") == .string("My XRG"))
         #expect(second.value("general.window.border_width") == .int(7))
         #expect(try modificationDate(fixture.documentURL) == stamp)
@@ -92,18 +101,20 @@ struct XRGSettingsStoreTests {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let defaults = fixture.defaults
         let seeded: [String: Any] = ["windowTitle": "Keep", "borderWidth": 9, "graphOrientationVertical": false,
-                                     "windowLevel": 2, "checkForUpdates": false, "tempUnits": 1]
-        for (key, value) in seeded { defaults.set(value, forKey: key) }
+                                      "windowLevel": 2, "checkForUpdates": false, "tempUnits": 1]
+        fixture.seed(seeded)
         let catalog = try self.catalog()
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog,
+                                     legacyDomain: seeded)
         #expect(store.value("general.window.title") == .string("Keep"))
         #expect(store.value("general.window.level") == .string("background"))
         #expect(store.value("graphs.temperature.units") == .string("celsius"))
 
         // Migration reads the domain; it never adds, changes or removes a key.
         let before = defaults.dictionaryRepresentation()
-        _ = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        _ = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog,
+                             legacyDomain: seeded)
         let after = defaults.dictionaryRepresentation()
         for key in after.keys {
             #expect(before[key] != nil, "migration added key \(key)")
@@ -125,7 +136,7 @@ struct XRGSettingsStoreTests {
     @Test func setWritesAtomicallyAndNotifies() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
 
         var changed: [(String?, XRGSettingsStore?)] = []
         let center = NotificationCenter.default
@@ -155,7 +166,7 @@ struct XRGSettingsStoreTests {
     @Test func invalidSetIsNotSaved() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         try store.set("general.window.title", .string("Valid"))
         let bytes = documentBytes(fixture.documentURL)
         let stamp = try modificationDate(fixture.documentURL)
@@ -188,7 +199,7 @@ struct XRGSettingsStoreTests {
         try garbage.write(to: fixture.documentURL)
                 let stamp = try modificationDate(fixture.documentURL)
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         // The store runs on catalog defaults and reports the problem.
         #expect(store.loadProblem?.problem == XRGSettingsDiagnostic.malformed)
         #expect(store.value("general.window.border_width") == .int(4))
@@ -222,7 +233,7 @@ struct XRGSettingsStoreTests {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                         ofItemAtPath: fixture.documentURL.path) }
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         #expect(store.loadProblem != nil)
         #expect(store.loadProblem?.problem != XRGSettingsDiagnostic.malformed)
         #expect(store.value("general.window.border_width") == .int(4))
@@ -249,7 +260,7 @@ struct XRGSettingsStoreTests {
         let bytes = try #require(documentBytes(fixture.documentURL))
         let stamp = try modificationDate(fixture.documentURL)
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         #expect(store.loadProblem == nil)  // the file is readable: it loads
         try store.set("general.window.title", .string("Held in memory"))
         #expect(store.value("general.window.title") == .string("Held in memory"))
@@ -267,7 +278,7 @@ struct XRGSettingsStoreTests {
     @Test func permissionsRemovedAfterLoadKeepFileUnchanged() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         try store.set("general.window.title", .string("Writable once"))
         let bytes = try #require(documentBytes(fixture.documentURL))
         let stamp = try modificationDate(fixture.documentURL)
@@ -296,7 +307,7 @@ struct XRGSettingsStoreTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         #expect(store.loadProblem == nil)
         try store.set("general.window.title", .string("Held in memory"))
         #expect(store.value("general.window.title") == .string("Held in memory"))
@@ -312,12 +323,13 @@ struct XRGSettingsStoreTests {
     @Test func migrationIntoNonWritableDirectoryCreatesNoFile() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        fixture.defaults.set("My XRG", forKey: "windowTitle")
+        fixture.seed(["windowTitle": "My XRG"])
         let directory = fixture.documentURL.deletingLastPathComponent()
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: ["windowTitle": "My XRG"])
         #expect(store.loadProblem != nil)
         #expect(store.value("general.window.title") == .string("My XRG"))
         #expect(!FileManager.default.fileExists(atPath: fixture.documentURL.path))
@@ -356,9 +368,10 @@ struct XRGSettingsStoreTests {
     @Test func userValuesBeatRegisteredDefaults() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        fixture.defaults.set(512, forKey: "netMinGraphScale")
+        fixture.seed(["netMinGraphScale": 512])
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: ["netMinGraphScale": 512])
         #expect(store.loadProblem == nil)
         #expect(store.value("graphs.network.minimum_scale") == .int(512))
         let bytes = try #require(documentBytes(fixture.documentURL))
@@ -378,7 +391,7 @@ struct XRGSettingsStoreTests {
         let catalog = try self.catalog()
         let before = defaults.persistentDomain(forName: fixture.domain) ?? [:]
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
         #expect(store.loadProblem == nil)
         var snapshot: [String: Any] = [:]
         snapshot[XRGGraphPreferences.key] = try XRGGraphPreferences().encoded()
@@ -417,7 +430,7 @@ struct XRGSettingsStoreTests {
     @Test func snapshotValuesReplaceRemovedOnes() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         try store.set("sources.cpu.core", .int(3))
         try store.set("graphs.cpu.height", .int(90))
         #expect(store.value("sources.cpu.core") == .int(3))
@@ -428,7 +441,7 @@ struct XRGSettingsStoreTests {
         store.setLegacyValues(snapshot)
 
         // The cleared values survive a reopen.
-        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         #expect(reopened.value("sources.cpu.core") == .null)
         #expect(reopened.value("graphs.cpu.height") == .null)
     }
@@ -443,15 +456,16 @@ struct XRGSettingsStoreTests {
         options.search = "xrg"
         options.user = "root"
         options.limit = 200
-        defaults.set(try JSONEncoder().encode(options), forKey: XRGProcessInspector.optionsKey)
+        fixture.seed([XRGProcessInspector.optionsKey: try JSONEncoder().encode(options)])
         let catalog = try self.catalog()
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog,
+                                     legacyDomain: [XRGProcessInspector.optionsKey: try JSONEncoder().encode(options)])
         let loaded = try #require(store.processOptions())
         #expect(loaded == options)
 
         // The same values load again from the written document...
-        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
         #expect(reopened.processOptions() == loaded)
 
         // ...and storing through the document backend round-trips too.
@@ -461,7 +475,7 @@ struct XRGSettingsStoreTests {
         reopened.storeProcessOptions(changed)
         #expect(reopened.value("graphs.processes.filter") == .string("changed"))
         #expect(reopened.processOptions() == changed)
-        let third = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let third = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
         #expect(third.processOptions() == changed)
     }
 
@@ -470,7 +484,7 @@ struct XRGSettingsStoreTests {
     @Test func unchangedSetWritesNothingAndNotifiesNobody() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         try store.set("general.window.title", .string("Once"))
         let bytes = try #require(documentBytes(fixture.documentURL))
         let stamp = try modificationDate(fixture.documentURL)
@@ -509,7 +523,7 @@ struct XRGSettingsStoreTests {
         let stamp = try modificationDate(fixture.documentURL)
 
         // Launch: hydration never writes back...
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         let settings = XRGSettings(store: store)
         #expect(settings.sensorsWindowOpen && settings.windowCollapsed && settings.windowTitle == "Restored")
         // ...and the restoration paths (openSensorWindow, the collapsed
@@ -520,7 +534,7 @@ struct XRGSettingsStoreTests {
         #expect(try modificationDate(fixture.documentURL) == stamp)
 
         // A relaunch over the same file is just as quiet.
-        let relaunched = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let relaunched = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         let restored = XRGSettings(store: relaunched)
         restored.sensorsWindowOpen = true
         restored.windowCollapsed = true
@@ -536,7 +550,7 @@ struct XRGSettingsStoreTests {
     @Test func typedSettingsFollowStoreChangesWithoutWritingBack() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         let settings = XRGSettings(store: store)
         #expect(settings.graphRefresh == 1)
 
@@ -632,10 +646,226 @@ struct XRGSettingsStoreTests {
         #expect(legacy === window.appSettings?.store)
         // The shipping window carries the document store, and the policy
         // resolves that store instead of the legacy domain.
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
         window.appSettings = XRGSettings(store: store)
         let resolved = try #require(XRGTemperatureView.policyStore(of: window))
         #expect(resolved === store && resolved.isDocumentBacked)
+    }
+
+    // MARK: The owner-write mode bit is checked, not just access (fix round 2, finding 1)
+
+    /// A destination whose mode lacks the owner-write bit is never replaced,
+    /// even when an ACL grants write access so `access(W_OK)` succeeds: the
+    /// mode bit itself must be present (ruling B).
+    @Test func aclWriteAccessWithOwnerWriteBitMissingIsRefused() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        try XRGSettingsDocument.defaults(catalog: catalog, platform: .macos).serialized()
+            .write(to: fixture.documentURL)
+        // Grant the current user write access through an ACL, then strip the
+        // owner-write mode bit: `access(W_OK)` succeeds, the mode bit is absent.
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = ["+a", "user:\(NSUserName()) allow write", fixture.documentURL.path]
+        try chmod.run(); chmod.waitUntilExit()
+        #expect(chmod.terminationStatus == 0)
+        try FileManager.default.setAttributes([.posixPermissions: 0o400],
+                                               ofItemAtPath: fixture.documentURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                        ofItemAtPath: fixture.documentURL.path) }
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        let stamp = try modificationDate(fixture.documentURL)
+
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
+        #expect(store.loadProblem == nil)
+        try store.set("general.window.title", .string("Held in memory"))
+        #expect(store.loadProblem != nil)  // the mode bit, not the ACL, decides
+        #expect(documentBytes(fixture.documentURL) == bytes)
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+        let mode = try #require(FileManager.default.attributesOfItem(atPath: fixture.documentURL.path)[.posixPermissions] as? Int)
+        #expect(mode == 0o400)
+    }
+
+    // MARK: Unmapped keys are an explicit allowlist (fix round 2, finding 2)
+
+    /// Only the allowlisted non-setting state (Sparkle `SU*`, AppKit
+    /// `NSWindow Frame *`, `unminimizedFrame`, `tempLocationsAutoconfigured`,
+    /// the recorded `aiTokens*` usage data) keeps its `NSUserDefaults` home
+    /// on the document backend; every other unmapped key is refused and
+    /// never written anywhere.
+    @Test func setLegacyValuesAllowsOnlyExcludedStateAndRefusesOtherUnmappedKeys() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let defaults = fixture.defaults
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
+        #expect(store.loadProblem == nil)
+        let documentBytesBefore = try #require(documentBytes(fixture.documentURL))
+
+        let refused = store.setLegacyValues([
+            "SUScheduledCheckInterval": 86400,
+            "NSWindow Frame XRGGraph": "{{1, 2}, {140, 700}}",
+            "unminimizedFrame": "{{10, 20}, {300, 400}}",
+            "tempLocationsAutoconfigured": true,
+            "aiTokensDailyPromptTokens": 41,
+            "aiTokensLastNotifyDate": Date(timeIntervalSince1970: 1),
+            "windowTitle": "Converted",  // mapped: goes to the document only
+            "completelyMadeUpKey": "refused",
+            "anotherUnknownLatch": 3,
+        ])
+
+        // The refused keys are reported back and never reach the domain...
+        #expect(refused.sorted() == ["anotherUnknownLatch", "completelyMadeUpKey"])
+        let domain = defaults.persistentDomain(forName: fixture.domain) ?? [:]
+        #expect((domain["SUScheduledCheckInterval"] as? NSNumber)?.intValue == 86400)
+        #expect((domain["aiTokensDailyPromptTokens"] as? NSNumber)?.intValue == 41)
+        #expect((domain["aiTokensLastNotifyDate"] as? Date) != nil)
+        #expect((domain["tempLocationsAutoconfigured"] as? NSNumber)?.boolValue == true)
+        #expect(domain["NSWindow Frame XRGGraph"] as? String == "{{1, 2}, {140, 700}}")
+        #expect(domain["unminimizedFrame"] as? String == "{{10, 20}, {300, 400}}")
+        #expect(domain["completelyMadeUpKey"] == nil)
+        #expect(domain["anotherUnknownLatch"] == nil)
+        // ...and never reach the document either.
+        #expect(store.value("general.window.title") == .string("Converted"))
+        let text = String(data: try #require(documentBytes(fixture.documentURL)), encoding: .utf8) ?? ""
+        #expect(documentBytes(fixture.documentURL) != documentBytesBefore)
+        #expect(!text.contains("completelyMadeUpKey"))
+        #expect(!text.contains("anotherUnknownLatch"))
+        // A refusal is not a load problem: the document stays the source of truth.
+        #expect(store.loadProblem == nil)
+    }
+
+    // MARK: The delegate's launch restoration and shutdown leave the file alone (fix round 2, finding 3)
+
+    /// The real delegate paths — `applicationDidFinishLaunching`'s collapsed
+    /// restore and sensors-window reopen, and the shutdown path through
+    /// `cleanupBeforeExiting` — leave a document-backed settings file's bytes
+    /// and mtime untouched.
+    @Test func documentBackedDelegateLaunchRestoreAndShutdownLeaveFileUnchanged() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        var previous = XRGSettingsDocument()
+        try previous.set("general.sensors_window.open", .bool(true), catalog: catalog)
+        try previous.set("general.window.collapsed", .bool(true), catalog: catalog)
+        try previous.set("general.window.title", .string("Restored"), catalog: catalog)
+        try previous.serialized().write(to: fixture.documentURL)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)],
+                                              ofItemAtPath: fixture.documentURL.path)
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        let stamp = try modificationDate(fixture.documentURL)
+
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
+        let settings = XRGSettings(store: store)
+        let window = XRGGraphWindow(contentRect: NSRect(x: 100, y: 200, width: 600, height: 900),
+                                     defaults: fixture.defaults, center: NotificationCenter(), scheduleTimers: false)
+        window.appSettings = settings
+        let background = XRGBackgroundView(frame: NSRect(origin: .zero, size: window.frame.size),
+                                           defaults: fixture.defaults)
+        window.contentView?.addSubview(background)
+        background.awakeFromNib()
+        var loadedNibs: [String] = []
+        let delegate = XRGAppDelegate(defaults: fixture.defaults,
+                                      loadNib: { name, _ in loadedNibs.append(name) },
+                                      presentWindow: { _, _ in },
+                                      activateApplication: {},
+                                      sensorProvider: { _ in [] })
+        delegate.xrgGraphWindow = window
+        window.controller = delegate
+
+        // The real restoration paths the delegate runs at launch: the
+        // collapsed window is re-collapsed and the sensors window reopened
+        // (the extracted `restoreLaunchState` the delegate calls).
+        delegate.restoreLaunchState()
+        #expect(loadedNibs == ["Sensors"])
+        #expect(window.minimized && background.clickedMinimized)
+        #expect(settings.sensorsWindowOpen && settings.windowCollapsed)
+        #expect(documentBytes(fixture.documentURL) == bytes)
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+
+        // Shutdown: the power-off path expands without persisting the latch.
+        delegate.workspaceWillPowerOff(Notification(name: NSWorkspace.willPowerOffNotification))
+        #expect(settings.windowCollapsed)  // the latch survived the exit
+        #expect(documentBytes(fixture.documentURL) == bytes)
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+        background.removeFromSuperview()
+        window.close()
+    }
+
+    // MARK: Durable-write failures leave the destination unchanged (fix round 2, finding 4)
+
+    /// The store's file write is a seam: a forced `open` or `fsync` failure
+    /// stops the replacement, removes the temporary file, surfaces the
+    /// problem through `loadProblem`, and leaves the destination's bytes
+    /// and mtime untouched.
+    @Test func durableWriteFailuresLeaveDestinationUnchanged() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        try XRGSettingsDocument.defaults(catalog: catalog, platform: .macos).serialized()
+            .write(to: fixture.documentURL)
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        let stamp = try modificationDate(fixture.documentURL)
+
+        // A failure before anything is written (the `open` the default write
+        // performs for its fsync).
+        var store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
+        store.durableWrite = { _, _ in
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO),
+                           userInfo: [NSLocalizedDescriptionKey: "forced open failure"])
+        }
+        try store.set("general.window.title", .string("Held by open failure"))
+        #expect(store.value("general.window.title") == .string("Held by open failure"))
+        #expect(store.loadProblem != nil)
+        #expect(documentBytes(fixture.documentURL) == bytes)
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+        #expect(try FileManager.default.contentsOfDirectory(
+            atPath: fixture.documentURL.deletingLastPathComponent().path) == ["settings.json"])
+
+        // A failure after the bytes are written but before the sync completes.
+        store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
+        store.durableWrite = { temporary, contents in
+            try contents.write(to: temporary)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO),
+                           userInfo: [NSLocalizedDescriptionKey: "forced fsync failure"])
+        }
+        try store.set("general.window.title", .string("Held by sync failure"))
+        #expect(store.value("general.window.title") == .string("Held by sync failure"))
+        #expect(store.loadProblem != nil)
+        #expect(documentBytes(fixture.documentURL) == bytes)
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+        #expect(try FileManager.default.contentsOfDirectory(
+            atPath: fixture.documentURL.deletingLastPathComponent().path) == ["settings.json"])
+    }
+
+    // MARK: Fresh installs are not upgrades (fix round 2, finding 5)
+
+    /// A fresh install — an empty or absent 0.2.2 persistent domain and no
+    /// settings.json — gets the catalog defaults (netMinGraphScale 0); only
+    /// an existing 0.2.2 installation migrates the effective registered
+    /// defaults (netMinGraphScale 1024).
+    @Test func freshInstallKeepsCatalogDefaultsAndUpgradeTakesEffectiveValues() throws {
+        let fresh = try Fixture(); defer { fresh.cleanUp() }
+        let catalog = try self.catalog()
+        // No 0.2.2 installation: the injected suite's persistent domain is empty.
+        let freshStore = XRGSettingsStore(fileURL: fresh.documentURL, defaults: fresh.defaults,
+                                          catalog: catalog, legacyDomain: [:])
+        #expect(freshStore.loadProblem == nil)
+        #expect(freshStore.value("graphs.network.minimum_scale") == .int(0))
+        #expect(freshStore.value("graphs.stock.visible") == .bool(false))
+        // The suite's persistent domain is never written (registration
+        // leakage from other suites in the test process rules out
+        // `object(forKey:)`; the persistent domain is the user's own).
+        #expect((fresh.defaults.persistentDomain(forName: fresh.domain) ?? [:])["netMinGraphScale"] == nil)
+
+        // An existing 0.2.2 installation: the domain is non-empty, so the
+        // effective registered defaults migrate (through the store).
+        let upgrade = try Fixture(); defer { upgrade.cleanUp() }
+        let legacy: [String: Any] = ["windowTitle": "My XRG"]
+        upgrade.seed(legacy)
+        let upgradeStore = XRGSettingsStore(fileURL: upgrade.documentURL, defaults: upgrade.defaults,
+                                            catalog: catalog, legacyDomain: legacy)
+        #expect(upgradeStore.loadProblem == nil)
+        #expect(upgradeStore.value("general.window.title") == .string("My XRG"))
+        #expect(upgradeStore.value("graphs.network.minimum_scale") == .int(1024))
+        #expect(upgradeStore.value("graphs.stock.visible") == .bool(true))
     }
 
     // MARK: Excluded keys stay in NSUserDefaults
@@ -651,10 +881,10 @@ struct XRGSettingsStoreTests {
             "tempLocationsAutoconfigured": true,
             "aiTokensDailyPromptTokens": 41,
         ]
-        for (key, value) in excluded { defaults.set(value, forKey: key) }
+        fixture.seed(excluded)
         let catalog = try self.catalog()
 
-        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog)
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
         #expect(store.value("general.window.title") == .string(""))
 
         // None of the excluded keys moved into the document...
