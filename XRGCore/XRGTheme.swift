@@ -23,6 +23,7 @@
 
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 struct XRGTheme {
     static let colorNames = ["background", "graphBG", "graphFG1", "graphFG2", "graphFG3", "border", "text"]
@@ -141,5 +142,36 @@ extension XRGBuiltinTheme {
             result[name + "Transparency"] = color[3]
         }
         return result
+    }
+}
+
+/// The save panel's XTF/portable format picker (0.2.2's Preferences save
+/// sheet, kept for the settings window's export action).
+@MainActor final class XRGThemeSaveFormat: NSObject {
+    weak var panel: NSSavePanel?
+    let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 290, height: 26), pullsDown: false)
+
+    init(panel: NSSavePanel) {
+        self.panel = panel
+        super.init()
+        picker.addItems(withTitles: ["Original XRG (.xtf)", "Portable Mac/Linux (.json)"])
+        picker.setAccessibilityLabel("Theme file format")
+        picker.target = self; picker.action = #selector(change(_:))
+        let label = NSTextField(labelWithString: "Format:")
+        let stack = NSStackView(views: [label, picker]); stack.orientation = .horizontal
+        stack.spacing = 8; stack.alignment = .centerY; stack.frame = NSRect(x: 0, y: 0, width: 390, height: 32)
+        panel.accessoryView = stack
+        change(picker)
+    }
+
+    @objc func change(_ sender: Any?) {
+        guard let panel else { return }
+        let portable = picker.indexOfSelectedItem == 1
+        let suffix = portable ? "json" : "xtf"
+        panel.allowedContentTypes = [portable ? .json : (.init(filenameExtension: "xtf") ?? .data)]
+        let name = panel.nameFieldStringValue
+        let known = ["xtf", "json"].contains((name as NSString).pathExtension.lowercased())
+        let stem = known ? (name as NSString).deletingPathExtension : name
+        panel.nameFieldStringValue = (stem.isEmpty ? "My Theme" : stem) + "." + suffix
     }
 }

@@ -63,9 +63,6 @@ func smokeCheck(_ condition: @autoclosure () -> Bool, _ message: String) throws 
     func getLatestTokenInfo() { updates += 1 }
     func viewSnapshot() -> XRGAITokenViewSnapshot { XRGAITokenViewSnapshot() }
 }
-private final class SmokePreferencesOwner: NSObject {
-    @objc var prefController: XRGPrefController?
-}
 
 @MainActor final class XRGApplicationSmokeScene {
     static let moduleNames = ["CPU", "GPU", "NPU", "Memory", "Battery", "Temperature", "Network", "Disk", "Weather", "Stock", "AI Tokens"]
@@ -161,38 +158,11 @@ private final class SmokePreferencesOwner: NSObject {
     }
 
     private func load(_ name: String, owner: XRGAppDelegate) throws {
-        if name == "Sensors" {
-            var objects: NSArray?
-            try smokeCheck(resources.loadNibNamed("SmokeSensors", owner: owner, topLevelObjects: &objects), "Sensor nib failed to load")
-            if let objects { nibObjects.append(objects) }
-            owner.sensorWindow?.isReleasedWhenClosed = false
-            return
-        }
-        guard name == "Preferences" else { throw XRGSmokeError.failed("Unexpected nib: \(name)") }
-        // Decode the existing fixture without attaching its default dependencies to the app.
-        let oldDelegate = NSApp.delegate; NSApp.delegate = nil
-        defer { NSApp.delegate = oldDelegate }
-        let nibOwner = SmokePreferencesOwner()
+        guard name == "Sensors" else { throw XRGSmokeError.failed("Unexpected nib: \(name)") }
         var objects: NSArray?
-        guard let nib = NSNib(nibNamed: "Preferences", bundle: resources),
-              nib.instantiate(withOwner: nibOwner, topLevelObjects: &objects),
-              let decoded = nibOwner.prefController,
-              let url = resources.url(forResource: "PreferencesOutletKeys", withExtension: "plist"),
-              let keys = try PropertyListSerialization.propertyList(from: Data(contentsOf: url), options: [], format: nil) as? [String]
-        else { throw XRGSmokeError.failed("Preferences fixture did not decode") }
+        try smokeCheck(resources.loadNibNamed("SmokeSensors", owner: owner, topLevelObjects: &objects), "Sensor nib failed to load")
         if let objects { nibObjects.append(objects) }
-        let temperature = self.temperature, defaults = self.defaults
-        let pref = XRGPrefController(defaults: defaults, center: center,
-                                    sensors: { temperature.locationKeys(includingUnknown: true).compactMap { temperature.sensor(forLocation: $0) } },
-                                    interfaces: { _ in ["fixture0"] })
-        for key in keys { pref.setValue(decoded.value(forKey: key), forKey: key) }
-        pref.AIPrefView = decoded.AIPrefView
-        func retarget(_ view: NSView) {
-            if let control = view as? NSControl, control.target === decoded { control.target = pref }
-            for child in view.subviews { retarget(child) }
-        }
-        for view in pref.panelViews.compactMap({ $0 }) { retarget(view) }
-        pref.xrgGraphWindow = window; pref.configure(); owner.prefController = pref
+        owner.sensorWindow?.isReleasedWhenClosed = false
     }
 
     func launched() throws {
@@ -224,18 +194,21 @@ private final class SmokePreferencesOwner: NSObject {
             try smokeCheck(panel.frame.width.isFinite && panel.frame.height.isFinite && panel.frame.width > 0 && panel.frame.height > 0, "Invalid panel layout")
         }
         delegate.openAIPreferences(nil)
-        guard let pref = delegate.prefController else { throw XRGSmokeError.failed("Missing preferences controller") }
-        try smokeCheck(pref.currentView === pref.AIPrefView, "AI action did not select the existing preferences panel")
-        for name in ["General", "Appearance", "CPU", "RAM", "Temperature", "Network", "Disk", "Weather", "Stocks", "AI"] {
-            delegate.showPrefs(withPanel: name)
-            try smokeCheck(pref.toolbar?.selectedItemIdentifier?.rawValue == name, "Preferences route failed: \(name)")
+        guard let settings = delegate.settingsWindowController else { throw XRGSmokeError.failed("Missing settings window controller") }
+        try smokeCheck(settings.currentSection == "ai", "AI action did not select the AI settings section")
+        for name in ["general", "appearance", "graphs", "sources", "weather", "stocks", "themes"] {
+            delegate.showSettings(section: name)
+            try smokeCheck(settings.currentSection == name, "Settings route failed: \(name)")
         }
-        try smokeCheck(inputs.nibs.filter { $0 == "Preferences" }.count == 1, "Preferences loaded more than once")
-        guard let cpu = pref.showCPUGraph, let action = cpu.action else { throw XRGSmokeError.failed("Missing CPU visibility action") }
-        for state: NSControl.StateValue in [.off, .on] {
-            cpu.state = state
-            try smokeCheck(NSApp.sendAction(action, to: cpu.target, from: cpu), "CPU visibility action was not delivered")
-            try smokeCheck(window.moduleManager?.getModule(byName: "CPU")?.isDisplayed == (state == .on), "CPU visibility did not change")
+        try smokeCheck(!inputs.nibs.contains("Preferences"), "The settings window loaded a nib")
+        // Instant apply reaches the live module manager through the store.
+        settings.show(section: "graphs")
+        guard let cpuToggle = settings.currentControls.first(where: { $0.entry.id == "graphs.cpu.visible" }) as? XRGSettingsToggleControl else {
+            throw XRGSmokeError.failed("Missing CPU visibility control")
+        }
+        for visible: Bool in [false, true] {
+            cpuToggle.click()
+            try smokeCheck(window.moduleManager?.getModule(byName: "CPU")?.isDisplayed == visible, "CPU visibility did not change")
         }
         var resized = window.frame; resized.size.width += 30; resized.size.height += 20
         window.setFrame(resized, display: false)
@@ -244,10 +217,10 @@ private final class SmokePreferencesOwner: NSObject {
         }
         delegate.openSensorWindow(nil); delegate.openSensorWindow(nil)
         try smokeCheck(delegate.sensorViewController?.dataSource === delegate, "Sensor data source was not connected")
-        try smokeCheck(inputs.nibs.sorted() == ["Preferences", "Sensors"], "Sensor nib did not load exactly once")
+        try smokeCheck(inputs.nibs.sorted() == ["Sensors"], "Sensor nib did not load exactly once")
         try smokeCheck(!delegate.sensorWindowSensors(includingUnknown: false).isEmpty, "Fixture sensors were not forwarded")
         try smokeCheck(inputs.errors.isEmpty, "Unexpected lifecycle errors: \(inputs.errors)")
-        for visible in [window, pref.window, delegate.sensorWindow].compactMap({ $0 }) {
+        for visible in [window, settings.window, delegate.sensorWindow].compactMap({ $0 }) {
             try smokeCheck(!visible.isVisible, "Smoke action presented a real window: \(visible.title)")
         }
     }
@@ -265,7 +238,7 @@ private final class SmokePreferencesOwner: NSObject {
         guard !stopped else { return }; stopped = true
         delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
         delegate.sensorViewController?.viewDidDisappear()
-        for auxiliary in [delegate.prefController?.window, delegate.sensorWindow].compactMap({ $0 }) {
+        for auxiliary in [delegate.settingsWindowController?.window, delegate.sensorWindow].compactMap({ $0 }) {
             auxiliary.delegate = nil; auxiliary.orderOut(nil); auxiliary.close()
         }
         for panel in panels { panel.removeFromSuperview() }

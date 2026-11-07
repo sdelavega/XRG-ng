@@ -73,8 +73,9 @@ struct XRGApplicationLifecycleTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appendingPathComponent("theme.xtf")
         scene.delegate.showPrefs(nil)
-        let pref = try #require(scene.delegate.prefController)
-        var theme = try pref.preferencesSnapshot(); theme["textTransparency"] = 0.4
+        _ = try #require(scene.delegate.settingsWindowController)
+        var theme = try XRGTheme.Builtin.classic.dictionary()
+        theme["textTransparency"] = 0.4
         try PropertyListSerialization.data(fromPropertyList: theme, format: .xml, options: 0).write(to: file)
         #expect(scene.delegate.application(NSApplication.shared, openFile: file.path))
         #expect(defaults.double(forKey: "textTransparency") == 0.4)
@@ -99,29 +100,30 @@ struct XRGApplicationLifecycleTests {
         #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: domain) ?? [:]).isEqual(to: before))
     }
 
-    @Test func graphOptionsApplyToTheLiveModulesAndKeepLegacyVisibilityControlsInSync() throws {
+    @Test func settingsWindowInstantApplyReplacesTheDraftGraphOptionsEditor() throws {
         let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
         scene.delegate.showPrefs(nil)
-        let pref = try #require(scene.delegate.prefController)
-        pref.selectPanel(named: "Graphs")
-        let editor = try #require(pref.graphsEditor)
-        editor.customHeight.state = .on; editor.heightField.integerValue = 128
-        editor.curvePicker.selectItem(at: 2); editor.moveGraphDown(nil)
-        #expect(defaults.data(forKey: XRGGraphPreferences.key) == nil)
-        #expect(editor.apply(nil))
-        let manager = try #require(scene.window.moduleManager)
-        #expect(manager.displayList().prefix(2).compactMap(\.name) == ["GPU", "CPU"])
-        #expect(scene.window.appSettings?.curveStyle(.cpu) == .pixel)
-        let index = try #require(editor.draft.orderedIDs.firstIndex(of: .network))
-        let checkbox = try #require(editor.table.view(atColumn: 0, row: index, makeIfNecessary: true) as? NSButton)
-        checkbox.state = .off
-        #expect(NSApp.sendAction(try #require(checkbox.action), to: checkbox.target, from: checkbox))
-        #expect(editor.apply(nil))
-        #expect(manager.getModule(byName: "Network")?.isDisplayed == false && pref.showNetGraph?.state == .off)
-        #expect(pref.persistPreferences() && !defaults.bool(forKey: "showNetworkGraph"))
+        let settings = try #require(scene.delegate.settingsWindowController)
+        settings.show(section: "graphs")
+        // Visibility through the window's toggle: instant apply, no draft.
+        let visibility = try #require(settings.currentControls.first { $0.entry.id == "graphs.cpu.visible" } as? XRGSettingsToggleControl)
+        visibility.click()
+        #expect(scene.window.appSettings?.moduleVisible(.cpu) == false)
+        #expect(defaults.bool(forKey: "showCPUGraph") == false)
+        // A height override through the window's number field.
+        let height = try #require(settings.currentControls.first { $0.entry.id == "graphs.cpu.height" } as? XRGSettingsNumberControl)
+        height.field.stringValue = "128"
+        height.fieldEdited()
         let restored = XRGSettings(defaults: defaults)
-        #expect(restored.graphPreferences[.cpu].height == 128 && restored.graphPreferences[.cpu].curve == .pixel)
+        #expect(restored.graphPreferences[.cpu].height == 128)
+        // A reset with confirmation restores the section's defaults.
+        var asked = 0
+        settings.confirmReset = { _ in asked += 1; return true }
+        let reset = try #require(settings.currentControls.first { $0.entry.id == "graphs.reset" } as? XRGSettingsActionControl)
+        reset.button.performClick()
+        #expect(asked == 1 && defaults.bool(forKey: "showCPUGraph") == true)
+        #expect(XRGSettings(defaults: defaults).graphPreferences[.cpu].height != 128)
     }
 
     @Test func injectedUnknownSensorPolicyAndLazyNibFailuresDoNotFallBackToGlobalHardware() throws {
@@ -132,7 +134,7 @@ struct XRGApplicationLifecycleTests {
                                       invalidThemeNotice: { _ in errors += 1 })
         #expect(delegate.sensorWindowIncludesUnknownSensors && delegate.sensorWindowSensors(includingUnknown: true).isEmpty)
         delegate.openAIPreferences(nil); delegate.openSensorWindow(nil)
-        #expect(loaded == ["Preferences", "Sensors"] && delegate.prefController == nil && delegate.sensorWindow == nil)
+        #expect(loaded == ["Sensors"] && delegate.settingsWindowController != nil && delegate.sensorWindow == nil)
         #expect(errors == 0)
     }
 }

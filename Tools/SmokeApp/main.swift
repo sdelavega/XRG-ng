@@ -56,16 +56,25 @@ import Darwin
                     try capture(scene.window.contentView, "layout-\(phase).png")
                     try capture(scene.window.npuView, "npu-\(phase).png")
                     scene.delegate.showPrefs(withPanel: "General")
-                    try capture(scene.delegate.prefController?.GeneralPrefView, "general-\(phase).png")
-                    guard let pref = scene.delegate.prefController, let orientation = pref.graphOrientation,
-                          let budget = pref.AIPrefView?.viewWithTag(1002) as? NSTextField else {
-                        throw XRGSmokeError.failed("Missing production preferences controls")
+                    let settings = scene.delegate.settingsWindowController
+                    try smokeCheck(settings != nil, "Settings window did not build")
+                    try capture(settings?.window?.contentView, "general-\(phase).png")
+                    guard let settings, let orientation = settings.currentControls.first(where: { $0.entry.id == "general.window.orientation" }) as? XRGSettingsChoiceControl,
+                          let title = settings.currentControls.first(where: { $0.entry.id == "general.window.title" }) as? XRGSettingsTextControl,
+                          let action = orientation.popUp.action else {
+                        throw XRGSmokeError.failed("Missing production settings controls")
                     }
-                    orientation.selectItem(at: 1)
-                    guard let action = orientation.action else { throw XRGSmokeError.failed("Orientation action is missing") }
-                    try smokeCheck(app.sendAction(action, to: orientation.target, from: orientation), "Orientation action was not delivered")
-                    pref.windowTitle?.stringValue = "XRG smoke restore"; budget.stringValue = "1337"
-                    try smokeCheck(pref.persistPreferences(), "Production preferences did not save")
+                    orientation.popUp.selectItem(withTitle: "Horizontal")
+                    try smokeCheck(app.sendAction(action, to: orientation.popUp.target, from: orientation.popUp), "Orientation action was not delivered")
+                    title.textField.stringValue = "XRG smoke restore"
+                    try smokeCheck(app.sendAction(#selector(XRGSettingsTextControl.edited), to: title, from: title.textField), "Title action was not delivered")
+                    settings.show(section: "ai")
+                    guard let budget = settings.currentControls.first(where: { $0.entry.id == "ai.tracking.daily_budget" }) as? XRGSettingsNumberControl else {
+                        throw XRGSmokeError.failed("Missing budget settings control")
+                    }
+                    budget.field.stringValue = "1337"
+                    try smokeCheck(app.sendAction(#selector(XRGSettingsNumberControl.fieldEdited), to: budget, from: budget.field), "Budget action was not delivered")
+                    try smokeCheck(defaults.integer(forKey: "aiTokensDailyBudget") == 1337, "Instant apply did not save the budget")
                     if let view = scene.window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                         view.cacheDisplay(in: view.bounds, to: bitmap)
                         if let png = bitmap.representation(using: .png, properties: [:]) {

@@ -236,7 +236,7 @@ def main():
                 if (report["architecture"] != architecture or report["translated"] is not translated or
                     report["phase"] != phase or report["orientation"] != orientation or report["moduleCount"] != 13 or not all(report[key] for key in
                         ("mainMenuConnected", "productionClassImages", "shippingPriority", "runtimeTimersAdvanced",
-                         "preferencesNibLoaded", "sensorsNibLoaded", "windowsHidden", "timersStopped", "appKitTerminationCallback"))):
+                         "settingsWindowLoaded", "sensorsNibLoaded", "windowsHidden", "timersStopped", "appKitTerminationCallback"))):
                     raise RuntimeError("Packaged app verification failed")
                 reports.append(report)
         if len({report["pid"] for report in reports}) != 4:

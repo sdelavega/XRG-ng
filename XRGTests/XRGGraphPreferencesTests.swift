@@ -58,47 +58,4 @@ struct XRGGraphPreferencesTests {
         value = XRGGraphPreferences(); value.overrides["unknown"] = XRGGraphOverride(); bad.append(value)
         for item in bad { #expect(throws: (any Error).self) { try item.encoded() } }
     }
-    @Test func graphEditorDraftApplyCancelInvalidInputAndExternalChangesAreTransactional() throws {
-        try withSettings { settings, defaults in
-            _ = NSApplication.shared
-            var visibility = Dictionary(uniqueKeysWithValues: XRGGraphID.allCases.map { ($0, true) })
-            var applies = 0
-            let editor = XRGGraphPreferencesEditor(manager: nil, settings: settings, visibility: { visibility }, apply: { value, next in
-                try settings.applyGraphPreferences(value); visibility = next; applies += 1
-            })
-            editor.customHeight.state = .on; editor.heightField.integerValue = 128
-            editor.curvePicker.selectItem(at: 4)
-            editor.moveGraphDown(nil)
-            #expect(editor.draft.order?.first == .gpu && settings.graphPreferences.order == nil)
-            #expect(defaults.data(forKey: XRGGraphPreferences.key) == nil)
-            editor.cancel(nil)
-            #expect(editor.draft == XRGGraphPreferences() && applies == 0)
-            editor.customHeight.state = .on; editor.heightField.stringValue = "not a height"
-            editor.refreshIfClean()
-            #expect(editor.heightField.stringValue == "not a height")
-            #expect(!editor.apply(nil) && applies == 0)
-            #expect(defaults.data(forKey: XRGGraphPreferences.key) == nil)
-            editor.heightField.integerValue = 128; editor.curvePicker.selectItem(at: 4)
-            let useColor = try #require(editor.subviews.compactMap { $0 as? NSButton }.first { $0.title == "Series 1" })
-            useColor.state = .on
-            let wells = editor.subviews.compactMap { $0 as? NSColorWell }
-            wells[1].color = .red
-            let opacity = editor.subviews.compactMap { $0 as? NSSlider }
-            opacity[1].doubleValue = 0.5
-            #expect(editor.apply(nil) && applies == 1)
-            #expect(settings.graphPreferences[.cpu].height == 128 && settings.graphPreferences[.cpu].curve == .hollow)
-            #expect(settings.graphPreferences[.cpu].colors[1] == [1, 0, 0, 0.5])
-            #expect(settings.graphColor(.gpu, component: 1) == .blue)
-            editor.heightField.integerValue = 144
-            editor.refreshIfClean()
-            #expect(editor.draft[.cpu].height == 144 && settings.graphPreferences[.cpu].height == 128)
-            editor.customHeight.state = .off
-            visibility[.weather] = false
-            #expect(!editor.apply(nil) && applies == 1)
-            #expect(settings.graphPreferences[.cpu].height == 128)
-            editor.cancel(nil)
-            #expect(editor.visibility[.weather] == false)
-            editor.resetSelected(nil); #expect(editor.apply(nil) && settings.graphPreferences[.cpu].isEmpty)
-        }
-    }
 }

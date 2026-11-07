@@ -87,7 +87,7 @@ public final class XRGModuleManager: NSObject {
     }
 
     /// Called only after a validated presentation change; hidden modules retain their order and overrides.
-    @nonobjc func presentationChanged() {
+    @nonobjc public func presentationChanged() {
         updateWindowMinimum(); window?.checkWindowSize()
         if let window { windowChanged(to: window.frame.size) }
         redisplayModules()

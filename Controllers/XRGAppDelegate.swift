@@ -28,7 +28,7 @@ import XRGCore
 @MainActor
 @objc(XRGAppDelegate)
 @objcMembers
-final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, XRGSensorWindowDataSource, XRGGraphWindowController, XRGPreferencesDataSource {
+final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, XRGSensorWindowDataSource, XRGGraphWindowController {
     private let budgetNotifications: XRGAIBudgetNotifications?
     private let defaults: UserDefaults
     private let loadNib: (String, XRGAppDelegate) -> Void
@@ -79,7 +79,6 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         }
     }
 
-    @IBOutlet var prefController: XRGPrefController?
     @IBOutlet var xrgGraphWindow: XRGGraphWindow?
     @IBOutlet var sensorWindow: NSWindow?
     @IBOutlet var sensorViewController: XRGSensorViewController?
@@ -93,18 +92,57 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         sensorProvider(includingUnknown)
     }
 
+    // MARK: Settings window (0.2.3: replaces the Preferences nib)
+
+    /// The Aether7b settings window, built lazily on first use.
+    public private(set) var settingsWindowController: XRGSettingsWindowController?
+
     @IBAction func showPrefs(_ sender: Any?) {
-        if prefController == nil {
-            loadNib("Preferences", self)
-        }
-        prefController?.setUpTemperaturePanel()
-        if let window = prefController?.window { presentWindow(window, sender) }
+        showSettings(section: "general")
     }
 
+    /// Open the settings window on one catalog section: renders it and
+    /// presents the window through the injectable presentation seam.
+    public func showSettings(section: String, sender: Any? = nil) {
+        if settingsWindowController == nil {
+            let store = xrgGraphWindow?.appSettings?.store ?? XRGSettingsStore.shared
+            let controller = XRGSettingsWindowController(store: store,
+                                                           catalog: store.catalog,
+                                                           sources: XRGHardwareSettingsSourceProvider())
+            controller.performCheckForUpdates = { [weak self] in self?.updater?.checkForUpdates(nil) }
+            controller.requestBudgetNotifications = { [weak self] in
+                guard let self, let budgetNotifications = self.budgetNotifications else {
+                    return await XRGAIBudgetNotifications.requestPermission()
+                }
+                return await XRGAIBudgetNotifications.requestPermission()
+            }
+            settingsWindowController = controller
+        }
+        settingsWindowController?.show(section: section)
+        if let window = settingsWindowController?.window { presentWindow(window, sender) }
+    }
+
+    /// The panel names the old Preferences toolbar used, routed to the new
+    /// window's sections (openAIPreferences and the AI menu item).
     @objc(showPrefsWithPanel:)
     func showPrefs(withPanel panelName: String) {
-        showPrefs(self)
-        prefController?.selectPanel(named: panelName)
+        showSettings(section: Self.section(forPanel: panelName))
+    }
+
+    static func section(forPanel panelName: String) -> String {
+        switch panelName.lowercased() {
+        case "general": return "general"
+        case "appearance", "color": return "appearance"
+        case "cpu": return "graphs"
+        case "ram", "memory": return "graphs"
+        case "temperature": return "sources"
+        case "network": return "graphs"
+        case "disk": return "graphs"
+        case "weather": return "weather"
+        case "stock", "stocks": return "stocks"
+        case "ai": return "ai"
+        default: return "general"
+        }
     }
 
     @IBAction func openAIPreferences(_ sender: Any?) {
@@ -142,7 +180,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         xrgGraphWindow?.cleanupBeforeExiting()
     }
 
-    func refreshGraphPalette() { prefController?.setUpColorPanel() }
+    func refreshGraphPalette() { settingsWindowController?.refresh() }
 
     /// The launch restoration: re-collapse the graph window if it was
     /// collapsed (restoring the expanded dimensions first, preserving the
@@ -175,8 +213,38 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         }
     }
 
+    /// Follow the settings store: every stored change (the settings window's
+    /// instant apply, a theme import, a section reset) syncs graph
+    /// visibility and presentation into the live module manager. Only
+    /// modules whose visibility actually changed are touched, and the
+    /// relayout is skipped entirely when nothing did (launch re-asserts
+    /// state through the same notification; it must not pay for a relayout).
+    /// Re-entrant notifications (the relayout persists module sizes) are
+    /// ignored.
+    private var syncingPresentation = false
+    func syncGraphPresentationFromStore() {
+        guard !syncingPresentation else { return }
+        syncingPresentation = true
+        defer { syncingPresentation = false }
+        guard let window = xrgGraphWindow, let manager = window.moduleManager, let settings = window.appSettings else { return }
+        var changed = false
+        for graph in XRGGraphID.allCases {
+            let visible = settings.moduleVisible(graph)
+            if manager.getModule(byName: graph.name)?.isDisplayed != visible {
+                manager.setModule(graph.name, isDisplayed: visible)
+                changed = true
+            }
+        }
+        if changed { manager.presentationChanged() }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let window = xrgGraphWindow else { return }
+        if let settings = window.appSettings {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(settingsStoreChanged(_:)),
+                name: XRGSettingsStore.didChange, object: settings.store)
+        }
         // The AI token observer is not main-actor confined; hand it the
         // shared document store before any accounting can start. A test
         // scene's injected suite keeps the observer on that suite.
@@ -217,6 +285,10 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         }
     }
 
+    @objc func settingsStoreChanged(_ note: Notification) {
+        syncGraphPresentationFromStore()
+    }
+
     /// Opens the GitHub Sponsors page from the Help menu's "Support XRG-ng…" item.
     @IBAction func openSponsors(_ sender: Any?) {
         NSWorkspace.shared.open(XRGSupportLink.url)
@@ -232,7 +304,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         do {
             try settings.loadTheme(from: URL(fileURLWithPath: filename), defaults: defaults)
             xrgGraphWindow?.display()
-            prefController?.setUpColorPanel()
+            refreshGraphPalette()
             return true
         } catch {
             invalidThemeNotice(error)

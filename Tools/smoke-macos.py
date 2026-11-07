@@ -71,7 +71,7 @@ def main():
         (contents / folder).mkdir(parents=True)
     shutil.copytree(framework, contents / "Frameworks/XRGCore.framework", symlinks=True)
     shutil.copytree(sparkle, contents / "Frameworks/Sparkle.framework", symlinks=True)
-    for name in ("Preferences.nib", "SmokeSensors.nib", "PreferencesOutletKeys.plist"):
+    for name in ("SmokeSensors.nib",):
         source, destination = fixture_resources / name, contents / "Resources" / name
         if source.is_dir():
             shutil.copytree(source, destination)
@@ -107,7 +107,7 @@ def main():
             if not (report["phase"] == phase and report["appKitLaunchNotification"]
                     and report["moduleCount"] == 13 and report["budget"] == 1337
                     and report["collapsed"] and report["shutdownTimersInvalidated"]
-                    and sorted(report["nibs"]) == ["Preferences", "Sensors"] and not report["failures"]):
+                    and sorted(report["nibs"]) == ["Sensors"] and not report["failures"]):
                 raise RuntimeError(f"Unexpected smoke results: {report}")
             if not (output / f"{phase}.png").is_file():
                 raise RuntimeError(f"Missing offscreen rendering for {phase}")

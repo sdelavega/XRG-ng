@@ -292,21 +292,4 @@ import Testing
         try await Task.sleep(for: .milliseconds(10))
         #expect(checks == 3)
     }
-
-    @Test func notificationPermissionIsRequestedOnlyByExplicitPreferencesAction() async throws {
-        let suite = "XRG.permissions." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        var requests = 0
-        let pref = XRGPrefController(defaults: defaults, notificationPermission: { requests += 1; return "Allowed in fixture" })
-        pref.setUpAIPanel(); pref.setUpAIPanel()
-        #expect(requests == 0)
-        let button = try #require(pref.AIPrefView?.viewWithTag(1008) as? NSButton)
-        #expect(button.target === pref && button.action == #selector(XRGPrefController.allowBudgetNotifications(_:)))
-        pref.allowBudgetNotifications(button); pref.allowBudgetNotifications(button)
-        #expect(!button.isEnabled)
-        for _ in 0..<100 { if button.isEnabled { break }; try await Task.sleep(for: .milliseconds(5)) }
-        #expect(requests == 1 && button.isEnabled)
-        #expect((pref.AIPrefView?.viewWithTag(1009) as? NSTextField)?.stringValue == "Allowed in fixture")
-    }
 }

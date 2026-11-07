@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Stephen de la Vega.
 import AppKit
 
-enum XRGGraphID: String, CaseIterable, Codable, Sendable {
+public enum XRGGraphID: String, CaseIterable, Codable, Sendable {
     case cpu, gpu, tpu, vram, memory, battery, temperature, fans, network, disk, weather, stock, ai
-    var name: String {
+    public var name: String {
         switch self {
         case .cpu: "CPU"
         case .gpu: "GPU"

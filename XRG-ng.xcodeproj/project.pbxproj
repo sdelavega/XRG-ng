@@ -16,19 +16,9 @@
 		273ECE6A15740DE700E65D82 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 273ECE6915740DE700E65D82 /* Cocoa.framework */; };
 		273ECF0215740EAF00E65D82 /* XRGTemperatureHardwareReader.m in Sources */ = {isa = PBXBuildFile; fileRef = 273ECE9E15740EAF00E65D82 /* XRGTemperatureHardwareReader.m */; };
 		273ECF0D15740EAF00E65D82 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 273ECEB615740EAF00E65D82 /* main.swift */; };
-		273ECF2A15740EAF00E65D82 /* Preferences-Appearance.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECED915740EAF00E65D82 /* Preferences-Appearance.tiff */; };
-		273ECF2B15740EAF00E65D82 /* Preferences-CPU.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEDA15740EAF00E65D82 /* Preferences-CPU.tiff */; };
-		273ECF2C15740EAF00E65D82 /* Preferences-Disk.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEDB15740EAF00E65D82 /* Preferences-Disk.tiff */; };
-		273ECF2D15740EAF00E65D82 /* Preferences-General.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEDC15740EAF00E65D82 /* Preferences-General.tiff */; };
-		273ECF2E15740EAF00E65D82 /* Preferences-Memory.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEDD15740EAF00E65D82 /* Preferences-Memory.tiff */; };
-		273ECF2F15740EAF00E65D82 /* Preferences-Network.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEDE15740EAF00E65D82 /* Preferences-Network.tiff */; };
-		273ECF3015740EAF00E65D82 /* Preferences-Stocks.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEDF15740EAF00E65D82 /* Preferences-Stocks.tiff */; };
-		273ECF3115740EAF00E65D82 /* Preferences-Temperature.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEE015740EAF00E65D82 /* Preferences-Temperature.tiff */; };
-		273ECF3215740EAF00E65D82 /* Preferences-Weather.tiff in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEE115740EAF00E65D82 /* Preferences-Weather.tiff */; };
 		273ECF3515740EAF00E65D82 /* xtf.icns in Resources */ = {isa = PBXBuildFile; fileRef = 273ECEE415740EAF00E65D82 /* xtf.icns */; };
 		273ECF531574106600E65D82 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 273ECF4F1574106600E65D82 /* InfoPlist.strings */; };
 		273ECF541574106600E65D82 /* MainMenu.nib in Resources */ = {isa = PBXBuildFile; fileRef = 273ECF501574106600E65D82 /* MainMenu.nib */; };
-		273ECF551574106600E65D82 /* Preferences.nib in Resources */ = {isa = PBXBuildFile; fileRef = 273ECF511574106600E65D82 /* Preferences.nib */; };
 		273ECF64157413D200E65D82 /* icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 273ECF63157413D200E65D82 /* icon.icns */; };
 		273ECF661574145100E65D82 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 273ECF651574145100E65D82 /* IOKit.framework */; };
 		278E90B923F21F6600874941 /* Sensors.xib in Resources */ = {isa = PBXBuildFile; fileRef = 278E90B823F21F6600874941 /* Sensors.xib */; };
@@ -60,7 +50,6 @@
 		273ECE6D15740DE700E65D82 /* CoreData.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreData.framework; path = System/Library/Frameworks/CoreData.framework; sourceTree = SDKROOT; };
 		273ECE6E15740DE700E65D82 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		273ECE8C15740EAF00E65D82 /* XRGAppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGAppDelegate.h; sourceTree = "<group>"; };
-		273ECE8E15740EAF00E65D82 /* XRGPrefController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGPrefController.h; sourceTree = "<group>"; };
 		273ECE9215740EAF00E65D82 /* XRGGraphWindow.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGGraphWindow.h; sourceTree = "<group>"; };
 		273ECE9715740EAF00E65D82 /* XRGCPUMiner.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGCPUMiner.h; sourceTree = "<group>"; };
 		273ECE9915740EAF00E65D82 /* XRGMemoryMiner.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGMemoryMiner.h; sourceTree = "<group>"; };
@@ -79,15 +68,6 @@
 		273ECEB215740EAF00E65D82 /* XRGWeatherView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGWeatherView.h; sourceTree = "<group>"; };
 		273ECEB615740EAF00E65D82 /* main.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		273ECEB815740EAF00E65D82 /* XRG-Prefix.pch */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "XRG-Prefix.pch"; sourceTree = "<group>"; };
-		273ECED915740EAF00E65D82 /* Preferences-Appearance.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Appearance.tiff"; sourceTree = "<group>"; };
-		273ECEDA15740EAF00E65D82 /* Preferences-CPU.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-CPU.tiff"; sourceTree = "<group>"; };
-		273ECEDB15740EAF00E65D82 /* Preferences-Disk.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Disk.tiff"; sourceTree = "<group>"; };
-		273ECEDC15740EAF00E65D82 /* Preferences-General.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-General.tiff"; sourceTree = "<group>"; };
-		273ECEDD15740EAF00E65D82 /* Preferences-Memory.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Memory.tiff"; sourceTree = "<group>"; };
-		273ECEDE15740EAF00E65D82 /* Preferences-Network.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Network.tiff"; sourceTree = "<group>"; };
-		273ECEDF15740EAF00E65D82 /* Preferences-Stocks.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Stocks.tiff"; sourceTree = "<group>"; };
-		273ECEE015740EAF00E65D82 /* Preferences-Temperature.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Temperature.tiff"; sourceTree = "<group>"; };
-		273ECEE115740EAF00E65D82 /* Preferences-Weather.tiff */ = {isa = PBXFileReference; lastKnownFileType = image.tiff; path = "Preferences-Weather.tiff"; sourceTree = "<group>"; };
 		273ECEE415740EAF00E65D82 /* xtf.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = xtf.icns; sourceTree = "<group>"; };
 		273ECEE815740EAF00E65D82 /* NSStringUtil.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = NSStringUtil.h; sourceTree = "<group>"; };
 		273ECEEA15740EAF00E65D82 /* XRGDataSet.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGDataSet.h; sourceTree = "<group>"; };
@@ -98,7 +78,6 @@
 		273ECEF815740EAF00E65D82 /* XRGURL.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = XRGURL.h; sourceTree = "<group>"; };
 		273ECF4F1574106600E65D82 /* InfoPlist.strings */ = {isa = PBXFileReference; fileEncoding = 10; lastKnownFileType = text.plist.strings; path = InfoPlist.strings; sourceTree = "<group>"; };
 		273ECF501574106600E65D82 /* MainMenu.nib */ = {isa = PBXFileReference; lastKnownFileType = wrapper.nib; path = MainMenu.nib; sourceTree = "<group>"; };
-		273ECF511574106600E65D82 /* Preferences.nib */ = {isa = PBXFileReference; lastKnownFileType = wrapper.nib; path = Preferences.nib; sourceTree = "<group>"; };
 		273ECF63157413D200E65D82 /* icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = icon.icns; sourceTree = "<group>"; };
 		273ECF651574145100E65D82 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		273ECF6D157803EF00E65D82 /* XRG-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "XRG-Info.plist"; sourceTree = SOURCE_ROOT; };
@@ -253,7 +232,6 @@
 			isa = PBXGroup;
 			children = (
 				273ECE8C15740EAF00E65D82 /* XRGAppDelegate.h */,
-				273ECE8E15740EAF00E65D82 /* XRGPrefController.h */,
 				273ECE9215740EAF00E65D82 /* XRGGraphWindow.h */,
 				27AB7CFC2558F031002F6773 /* XRGSensorViewController.h */,
 				FC9F0B02308E6333001445A9 /* XRGAppDelegate.swift */,
@@ -322,17 +300,7 @@
 				FCAB26003090000000000002 /* THIRD_PARTY_NOTICES.md */,
 				FCAB26003090000000000003 /* Credits.html */,
 				273ECF501574106600E65D82 /* MainMenu.nib */,
-				273ECF511574106600E65D82 /* Preferences.nib */,
 				278E90B823F21F6600874941 /* Sensors.xib */,
-				273ECED915740EAF00E65D82 /* Preferences-Appearance.tiff */,
-				273ECEDA15740EAF00E65D82 /* Preferences-CPU.tiff */,
-				273ECEDB15740EAF00E65D82 /* Preferences-Disk.tiff */,
-				273ECEDC15740EAF00E65D82 /* Preferences-General.tiff */,
-				273ECEDD15740EAF00E65D82 /* Preferences-Memory.tiff */,
-				273ECEDE15740EAF00E65D82 /* Preferences-Network.tiff */,
-				273ECEDF15740EAF00E65D82 /* Preferences-Stocks.tiff */,
-				273ECEE015740EAF00E65D82 /* Preferences-Temperature.tiff */,
-				273ECEE115740EAF00E65D82 /* Preferences-Weather.tiff */,
 				273ECEE415740EAF00E65D82 /* xtf.icns */,
 			);
 			path = Resources;
@@ -501,15 +469,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				273ECF2A15740EAF00E65D82 /* Preferences-Appearance.tiff in Resources */,
-				273ECF2B15740EAF00E65D82 /* Preferences-CPU.tiff in Resources */,
-				273ECF2C15740EAF00E65D82 /* Preferences-Disk.tiff in Resources */,
-				273ECF2D15740EAF00E65D82 /* Preferences-General.tiff in Resources */,
-				273ECF2E15740EAF00E65D82 /* Preferences-Memory.tiff in Resources */,
-				273ECF2F15740EAF00E65D82 /* Preferences-Network.tiff in Resources */,
-				273ECF3015740EAF00E65D82 /* Preferences-Stocks.tiff in Resources */,
-				273ECF3115740EAF00E65D82 /* Preferences-Temperature.tiff in Resources */,
-				273ECF3215740EAF00E65D82 /* Preferences-Weather.tiff in Resources */,
 				278E90B923F21F6600874941 /* Sensors.xib in Resources */,
 				273ECF3515740EAF00E65D82 /* xtf.icns in Resources */,
 				273ECF531574106600E65D82 /* InfoPlist.strings in Resources */,
@@ -518,7 +477,6 @@
 				FCAB26013090000000000002 /* THIRD_PARTY_NOTICES.md in Resources */,
 				FCAB26013090000000000003 /* Credits.html in Resources */,
 				273ECF541574106600E65D82 /* MainMenu.nib in Resources */,
-				273ECF551574106600E65D82 /* Preferences.nib in Resources */,
 				273ECF64157413D200E65D82 /* icon.icns in Resources */,
 				271FA60F15AC79A100E16233 /* Online Help in Resources */,
 			);

@@ -270,7 +270,7 @@ public final class XRGSettings: NSObject {
     }
 
     /// A graph's visibility (`show<Name>Graph` before 0.2.3).
-    @nonobjc func moduleVisible(_ graph: XRGGraphID) -> Bool { store.moduleVisible(graph) }
+    @nonobjc public func moduleVisible(_ graph: XRGGraphID) -> Bool { store.moduleVisible(graph) }
     @nonobjc func setModuleVisible(_ graph: XRGGraphID, _ visible: Bool) { store.setModuleVisible(graph, visible) }
 
     /// The collapsed state of the graph window (the `windowIsMinimized`
@@ -571,6 +571,40 @@ public final class XRGSettings: NSObject {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         try applyThemeData(XRGTheme.readFile(url), defaults: defaults)
+    }
+
+    /// The current colours and transparencies as a portable theme
+    /// document, for the settings window's export action.
+    @nonobjc public func portableThemeData() throws -> Data {
+        try XRGThemeDocument(name: themeName, colors: portableColors()).encoded()
+    }
+
+    /// The current colours and transparencies as a 0.2.2 XTF archive
+    /// (theme key archives plus alphas), for the settings window's export.
+    @nonobjc public func themeData() throws -> Data {
+        try PropertyListSerialization.data(fromPropertyList: themeDictionary(), format: .xml, options: 0)
+    }
+
+    @nonobjc public func themeDictionary() -> [String: Any] {
+        var values: [String: Any] = [:]
+        for (name, color, alpha) in [("background", backgroundColorStorage, backgroundTransparency),
+                                     ("graphBG", graphBGColorStorage, graphBGTransparency),
+                                     ("graphFG1", graphFG1ColorStorage, graphFG1Transparency),
+                                     ("graphFG2", graphFG2ColorStorage, graphFG2Transparency),
+                                     ("graphFG3", graphFG3ColorStorage, graphFG3Transparency),
+                                     ("border", borderColorStorage, borderTransparency),
+                                     ("text", textColorStorage, textTransparency)] {
+            values[name + "Transparency"] = Double(alpha)
+            if let archive = try? NSKeyedArchiver.archivedData(
+                withRootObject: color.withAlphaComponent(alpha), requiringSecureCoding: true) {
+                values[name + "Color"] = archive
+            }
+        }
+        return values
+    }
+
+    private func portableColors() throws -> [[Double]] {
+        try XRGTheme(dictionary: themeDictionary()).portableDocument(name: themeName, original: nil).colors
     }
 
     private func applyTheme(_ theme: XRGTheme, defaults: UserDefaults) throws {

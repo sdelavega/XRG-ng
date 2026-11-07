@@ -78,20 +78,17 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
         try require(abs(collapsed - (2 * border.doubleValue + text.doubleValue)) < 1, "Restored collapsed geometry is wrong")
     }
     try send(delegate, "openAIPreferences:")
-    guard let pref = try property(delegate, "prefController") as? NSObject,
-          let prefWindow = try property(pref, "window") as? NSWindow else { throw Failure.failed("Production Preferences nib did not connect") }
-    guard let aiPanel = try property(pref, "AIPrefView") as? NSView,
-          let currentPanel = try property(pref, "currentView") as? NSView else { throw Failure.failed("Missing AI preferences view") }
-    try require(currentPanel === aiPanel, "AI preference route failed")
-    for key in ["GeneralPrefView", "ColorPrefView", "CPUPrefView", "MemoryPrefView", "TemperaturePrefView",
-                "NetworkPrefView", "DiskPrefView", "WeatherPrefView", "StockPrefView"] {
-        try require(try property(pref, key) is NSView, "Missing preferences outlet: \(key)")
-    }
+    guard let settings = try property(delegate, "settingsWindowController") as? NSObject,
+          let settingsWindow = try property(settings, "window") as? NSWindow else { throw Failure.failed("Settings window did not connect") }
+    guard let currentSection = try property(settings, "currentSection") as? String else { throw Failure.failed("Missing settings section") }
+    try require(currentSection == "ai", "AI settings route failed: \(currentSection)")
+    try send(delegate, "showPrefs:")
+    try require((try property(settings, "currentSection") as? String) == "general", "General settings route failed")
     try send(delegate, "openSensorWindow:")
     try require(try property(delegate, "sensorWindow") is NSWindow, "Production Sensors nib did not connect")
     guard let sensor = try property(delegate, "sensorViewController") as? NSObject else { throw Failure.failed("Missing sensor controller outlet") }
     try require(try property(sensor, "dataSource") as? NSObject === delegate, "Sensor controller data source was not connected")
-    try require(!NSApp.windows.contains { $0.isVisible } && !prefWindow.isVisible, "A window became visible")
+    try require(!NSApp.windows.contains { $0.isVisible } && !settingsWindow.isVisible, "A window became visible")
     guard let background = try property(window, "backgroundView") as? NSObject else { throw Failure.failed("Missing background") }
     try send(background, "expandWindow")
     try send(background, "minimizeWindow")
@@ -101,7 +98,7 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
                                "translated": XRGPackagedSmokeTranslated() == 1,
                                "mainMenuConnected": true, "productionClassImages": true,
                                "shippingPriority": true, "runtimeTimersAdvanced": true,
-                               "preferencesNibLoaded": true, "sensorsNibLoaded": true,
+                               "settingsWindowLoaded": true, "sensorsNibLoaded": true,
                                "windowsHidden": true, "activationsSuppressed": XRGPackagedSmokeActivations(),
                                "orderingSuppressed": XRGPackagedSmokeOrdering()]
     XRGPackagedInstallTerminationHook(delegate)
