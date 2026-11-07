@@ -3,12 +3,13 @@
 //
 // The macOS settings window (0.2.3 spec §5): a full-height vibrancy sidebar
 // tinted with `--a7b-surface-chrome` under a full-size content view title
-// bar, a scrolling pane of flat opaque cards — one per catalog `group`,
-// each led by a `//` mono eyebrow — and one control per catalog entry, all
-// styled from `XRGAether7b` only. Changes apply and save instantly through
+// bar, the mockup's soft blurred aurora wash on the canvas, and a scrolling
+// pane of flat opaque cards — one per catalog `group`, each led by a `//`
+// mono eyebrow — with one control per catalog entry, all styled from
+// `XRGAether7b` only. Changes apply and save instantly through
 // `XRGSettingsStore.set` (decision D9); an invalid entry is not saved and
-// shows the danger rim and a mono reason; every section has a
-/// reset-with-confirmation; an unreadable settings file shows a banner with
+// shows the danger rim, dot and a mono reason; every section has a
+// reset-with-confirmation; an unreadable settings file shows a banner with
 // a Replace action; the appearance follows the system and reduced motion
 // disables animation. No nib: `MainMenu.nib`'s Preferences item routes here
 // through the app delegate.
@@ -47,15 +48,22 @@ public struct XRGFixtureSettingsSourceProvider: XRGSettingsSourceProvider {
     var interfaces: () -> [String] = { XRGNetMiner().networkInterfaces() }
     var gpuMemory: () -> [(String, String)] = { XRGHardwareSettingsSourceProvider.gpuMemoryReadings() }
     var fans: () -> [(String, String)] = { XRGTemperatureMiner.shared.fanValues().map { ($0.key, $0.name ?? $0.key) } }
-    var sensors: () -> [(String, String, XRGSensorGroup)] = {
-        let miner = XRGTemperatureMiner.shared
-        return miner.locationKeys(includingUnknown: true).compactMap { key in
-            miner.sensor(forLocation: key).map { ($0.key, $0.label(), miner.sensorGroup(forKey: key)) }
-        }
-    }
+    var sensors: (() -> [(String, String, XRGSensorGroup)])?
+    /// The unknown-sensor policy: the retained "Show unknown sensors"
+    /// setting decides, exactly as the sensor window and temperature view
+    /// do (review issue 5). The app delegate wires the live store in.
+    public var includeUnknownSensors: () -> Bool = { XRGTemperatureView.showUnknownSensors(nil) }
     var logicalCPUs: () -> Int = { ProcessInfo.processInfo.activeProcessorCount }
 
-    public init() {}
+    public init() {
+        sensors = { [weak self] in
+            let miner = XRGTemperatureMiner.shared
+            let includeUnknown = self?.includeUnknownSensors() ?? XRGTemperatureView.showUnknownSensors(nil)
+            return miner.locationKeys(includingUnknown: includeUnknown).compactMap { key in
+                miner.sensor(forLocation: key).map { ($0.key, $0.label(), miner.sensorGroup(forKey: key)) }
+            }
+        }
+    }
 
     public func options(kind: String) -> [(group: String, value: String, label: String)] {
         switch kind {
@@ -82,7 +90,7 @@ public struct XRGFixtureSettingsSourceProvider: XRGSettingsSourceProvider {
                                                      (.unidentified, "Unidentified Sensors"),
                                                      (.suspectedUnused, "Suspected Unused Sensors")]
             for (group, title) in order {
-                for sensor in sensors() where sensor.2 == group { list.append((title, sensor.0, sensor.1)) }
+                for sensor in (sensors?() ?? []) where sensor.2 == group { list.append((title, sensor.0, sensor.1)) }
             }
             return list.map { (group: $0.0, value: $0.1, label: $0.2) }
         default:
@@ -105,7 +113,7 @@ public struct XRGFixtureSettingsSourceProvider: XRGSettingsSourceProvider {
 
 /// The settings window. Sidebar sections in catalog order (D7), instant
 /// apply, danger validation, reset with confirmation, unreadable-file
-/// recovery.
+/// recovery, full keyboard navigation and accessibility activation.
 @MainActor @objcMembers
 public final class XRGSettingsWindowController: NSWindowController, NSWindowDelegate {
     public let store: XRGSettingsStore
@@ -117,13 +125,23 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     public var confirmReset: ((String) -> Bool)?
     /// The `general.updates.check_now` action.
     public var performCheckForUpdates: (() -> Void)?
-    /// The AI pane's "Allow Budget Notifications…" action from 0.2.2: the one
-    /// old-preferences affordance with no other surface (counter resets stay
-    /// in the AI Tokens graph's menu). Non-nil adds a row to the AI section.
+    /// The AI "Allow Budget Notifications…" action: the one old-preferences
+    /// affordance with no other surface (counter resets stay in the AI
+    /// Tokens graph's menu). Non-nil makes the catalog row functional;
+    /// nil keeps it visible but inert.
     public var requestBudgetNotifications: (() async -> String)?
     /// The themes import/export panel seams (tests inject deterministic URLs).
     public var chooseThemeImport: ((XRGSettingsWindowController) -> Void)?
     public var chooseThemeExport: ((XRGSettingsWindowController) -> Void)?
+    /// The Weather section's Station Listing link (the deleted controller's
+    /// action, coordinator ruling P1). Tests replace it to capture the URL.
+    public var openURL: ((URL) -> Bool)?
+    /// The Appearance section's "Choose font…" action: presenting the system
+    /// font panel over the current font (ruling P3). Tests replace it.
+    public var presentFontPanel: ((NSFont) -> Void)?
+    /// Called after the graph font changed through the font panel, so the
+    /// app delegate can relayout module minimums.
+    public var graphFontChanged: (() -> Void)?
     /// The theme import/export engine: settings over the same store.
     private var themeSettings: XRGSettings?
     var storeObserver: NSObjectProtocol?
@@ -131,6 +149,10 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     private(set) var sectionButtons: [XRGSettingsFlatButton] = []
     public private(set) var currentControls: [XRGSettingsEntryControl] = []
     let contentRoot = XRGSettingsRootView(frame: NSRect(x: 0, y: 0, width: 720, height: 560))
+    /// The mockup's aurora wash: one soft, low-alpha orb in the token
+    /// colour, anchored top-left over the canvas (fix V7 — never a
+    /// hard-edged disc).
+    private(set) var auroraWash: XRGAuroraWashView?
 
     public init(store: XRGSettingsStore, catalog: XRGSettingsCatalog, sources: any XRGSettingsSourceProvider) {
         self.store = store
@@ -150,8 +172,9 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         buildSidebar()
         render(section: currentSection)
         storeObserver = NotificationCenter.default.addObserver(
-            forName: XRGSettingsStore.didChange, object: store, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.storeChanged() }
+            forName: XRGSettingsStore.didChange, object: store, queue: .main) { [weak self] note in
+                let id = note.userInfo?["id"] as? String
+                MainActor.assumeIsolated { self?.storeChanged(id: id) }
             }
     }
     @available(*, unavailable) required public init?(coder: NSCoder) { fatalError("Programmatic window") }
@@ -185,7 +208,7 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         if section != currentSection || currentControls.isEmpty {
             render(section: section)
         } else {
-            storeChanged()
+            storeChanged(id: nil)
         }
     }
 
@@ -194,18 +217,41 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         render(section: currentSection)
     }
 
-    /// Follow a stored change without rebuilding: the current controls
-    /// re-present the store's values and their `depends` states. The
-    /// graph relayout persists module sizes through the same
-    /// notification, so a rebuild here would churn one render per curve.
-    func storeChanged() {
-        for control in currentControls { present(control: control) }
+    /// Follow a stored change without rebuilding: only the control whose
+    /// entry changed re-presents its value (and clears any error); every
+    /// other control keeps the user's in-flight text, error included, and
+    /// only re-evaluates its `depends` state (review issue 3). A nil id
+    /// (the same-section `show`, a whole-window refresh) re-presents
+    /// everything.
+    func storeChanged(id: String?) {
+        for control in currentControls {
+            if id == nil || control.entry.id == id {
+                present(control: control)
+            } else {
+                updateDependency(control: control)
+            }
+        }
+        if id == "sources.temperature.show_unknown" { reloadTemperatureSources() }
+    }
+
+    /// The unknown-sensor policy changed: refill every temperature picker.
+    func reloadTemperatureSources() {
+        for case let source as XRGSettingsSourceControl in currentControls
+        where source.entry.source == "temperature" {
+            source.load(options: sources.options(kind: "temperature"), noneLabel: "None")
+            present(control: source)
+        }
     }
 
     // MARK: Sidebar
 
     private func buildSidebar() {
         let dark = isDark
+        // The canvas paints the aurora wash's backdrop (fix V7): the
+        // content pane itself stays transparent, like the mockup's main
+        // pane, so the wash shows around the cards.
+        contentRoot.wantsLayer = true
+        contentRoot.layer?.backgroundColor = XRGAether7b.Color.bgCanvas(dark: dark).cgColor
         let vibrancy = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 190, height: contentRoot.frame.height))
         vibrancy.material = .underWindowBackground
         vibrancy.blendingMode = .behindWindow
@@ -217,6 +263,12 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         tint.wantsLayer = true
         tint.layer?.backgroundColor = XRGAether7b.Color.surfaceChrome(dark: dark).cgColor
         vibrancy.addSubview(tint)
+        // The aurora wash sits above the chrome tint and below the section
+        // buttons, spilling past the sidebar into the content pane, exactly
+        // the reference CSS's stacking.
+        let wash = XRGAuroraWashView(dark: dark)
+        vibrancy.addSubview(wash)
+        auroraWash = wash
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
@@ -233,6 +285,16 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
             stack.leadingAnchor.constraint(equalTo: vibrancy.leadingAnchor, constant: XRGAether7b.Space.s3),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: vibrancy.trailingAnchor, constant: -XRGAether7b.Space.s2),
             stack.topAnchor.constraint(equalTo: contentRoot.safeAreaLayoutGuide.topAnchor, constant: XRGAether7b.Space.s4),
+        ])
+        // The mockup's orb geometry: 60% of the window's width, square,
+        // anchored above-left (top -35%, left -15%), blurred to a wash.
+        NSLayoutConstraint.activate([
+            wash.widthAnchor.constraint(equalTo: contentRoot.widthAnchor, multiplier: 0.6),
+            wash.heightAnchor.constraint(equalTo: wash.widthAnchor),
+            wash.leadingAnchor.constraint(equalTo: contentRoot.leadingAnchor,
+                                          constant: contentRoot.frame.width * -0.15),
+            wash.topAnchor.constraint(equalTo: contentRoot.topAnchor,
+                                      constant: contentRoot.frame.height * -0.35),
         ])
         for section in XRGSettingsCatalog.sections {
             let button = XRGSettingsFlatButton(title: Self.sectionTitles[section] ?? section) { [weak self] in
@@ -251,7 +313,9 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     private func restyleSidebar() {
         guard let sidebar else { return }
         let dark = isDark
+        contentRoot.layer?.backgroundColor = XRGAether7b.Color.bgCanvas(dark: dark).cgColor
         sidebar.tint.layer?.backgroundColor = XRGAether7b.Color.surfaceChrome(dark: dark).cgColor
+        auroraWash?.restyle(dark: dark)
         for (index, button) in sectionButtons.enumerated() {
             let selected = XRGSettingsCatalog.sections[index] == currentSection
             button.style(background: selected ? XRGAether7b.Color.accentTint(dark: dark) : nil,
@@ -275,10 +339,10 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         currentControls = []
         restyleSidebar()
 
+        // The content pane is transparent: the canvas and its aurora wash
+        // show around the cards, like the mockup's main pane.
         let content = NSView(frame: .zero)
         content.translatesAutoresizingMaskIntoConstraints = false
-        content.wantsLayer = true
-        content.layer?.backgroundColor = XRGAether7b.Color.bgCanvas(dark: dark).cgColor
         content.identifier = NSUserInterfaceItemIdentifier("settings-content")
         contentRoot.addSubview(content)
         NSLayoutConstraint.activate([
@@ -294,12 +358,15 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         content.addSubview(scroll)
-        let pane = NSStackView()
+        // The document view is flipped: content pins to the top and every
+        // section opens from its first card (fix V1).
+        let pane = XRGSettingsPaneStack()
         pane.orientation = .vertical
         pane.alignment = .leading
         pane.spacing = XRGAether7b.Space.s3
-        pane.edgeInsets = NSEdgeInsets(top: XRGAether7b.Space.s4 + 20, left: XRGAether7b.Space.s6,
-                                       bottom: XRGAether7b.Space.s8, right: XRGAether7b.Space.s6)
+        let insets = NSEdgeInsets(top: XRGAether7b.Space.s12, left: XRGAether7b.Space.s6,
+                                  bottom: XRGAether7b.Space.s8, right: XRGAether7b.Space.s6)
+        pane.edgeInsets = insets
         pane.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = pane
         NSLayoutConstraint.activate([
@@ -308,19 +375,6 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             pane.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-        ])
-
-        // The aurora orb (exactly one, anchored top-left).
-        let orb = NSView(frame: .zero)
-        orb.translatesAutoresizingMaskIntoConstraints = false
-        orb.wantsLayer = true
-        orb.layer?.backgroundColor = XRGAether7b.Color.orb(dark: dark).cgColor
-        orb.layer?.cornerRadius = 140
-        contentRoot.addSubview(orb, positioned: .below, relativeTo: content)
-        NSLayoutConstraint.activate([
-            orb.widthAnchor.constraint(equalToConstant: 280), orb.heightAnchor.constraint(equalToConstant: 280),
-            orb.leadingAnchor.constraint(lessThanOrEqualTo: content.leadingAnchor, constant: -60),
-            orb.topAnchor.constraint(equalTo: content.topAnchor, constant: -120),
         ])
 
         // Section eyebrow and title.
@@ -351,32 +405,40 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
                 card.addRow(entry: entry, control: control, dark: dark)
             }
             pane.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: pane.widthAnchor, constant: -(2 * XRGAether7b.Space.s1)).isActive = true
-        }
-        // The AI pane's notification permission, kept from 0.2.2: the one
-        // old affordance with no other surface (spec §5: the catalog drives
-        // every setting; this is an action, not a setting).
-        if section == "ai", let requestBudgetNotifications {
-            let card = makeCard(title: "Notifications", dark: dark)
-            let button = XRGSettingsFlatButton(title: "Allow Budget Notifications…") { [weak self] in
-                self?.allowBudgetNotifications()
-            }
-            button.labelField.font = sansFont(XRGAether7b.TypeScale.sm.size, weight: .medium)
-            button.setAccessibilityLabel("Allow Budget Notifications")
-            let status = NSTextField(wrappingLabelWithString: "")
-            status.translatesAutoresizingMaskIntoConstraints = false
-            status.font = sansFont(XRGAether7b.TypeScale.xs.size)
-            status.textColor = XRGAether7b.Color.textMuted(dark: dark)
-            budgetNotificationStatus = status
-            card.rows.addArrangedSubview(button)
-            card.rows.addArrangedSubview(status)
-            button.bottomAnchor.constraint(equalTo: card.rows.bottomAnchor).isActive = true
-            pane.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: pane.widthAnchor, constant: -(2 * XRGAether7b.Space.s1)).isActive = true
+            // The card honours the pane's side insets: its right edge must
+            // land inside the scroll view (fix V2), never past it.
+            card.widthAnchor.constraint(equalTo: pane.widthAnchor,
+                                        constant: -(insets.left + insets.right)).isActive = true
+            if let status = card.notificationStatusLabel { budgetNotificationStatus = status }
         }
         scroll.layoutSubtreeIfNeeded()
         scroll.contentView.scroll(to: .zero)
+        wireKeyViewLoop()
     }
+
+    /// Link every focusable view into the window's key-view loop, sidebar
+    /// first, so Tab and Shift-Tab traverse the whole window in a
+    /// deterministic order (review issue 4). The loop is explicit — the
+    /// window stops auto-recalculating it from geometry.
+    func wireKeyViewLoop() {
+        window?.autorecalculatesKeyViewLoop = false
+        var sequence: [NSView] = sectionButtons
+        if store.loadProblem != nil,
+           let replace = findReplaceButton() {
+            sequence.append(replace)
+        }
+        for control in currentControls {
+            sequence.append(contentsOf: control.focusableViews())
+        }
+        for (view, next) in zip(sequence, sequence.dropFirst()) { view.nextKeyView = next }
+        window?.initialFirstResponder = sequence.first
+    }
+    private func findReplaceButton() -> XRGSettingsFlatButton? {
+        func walk(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { walk($0) } }
+        return walk(contentRoot).compactMap { $0 as? XRGSettingsFlatButton }
+            .first { $0.identifier?.rawValue == "replace-unreadable-file" }
+    }
+
     func allowBudgetNotifications() {
         guard let requestBudgetNotifications else { return }
         Task { [weak self] in
@@ -387,6 +449,9 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         }
     }
     private weak var budgetNotificationStatus: NSTextField?
+    /// The AI section's budget-notification status, for tests and the
+    /// accessibility report.
+    var budgetNotificationStatusText: String? { budgetNotificationStatus?.stringValue }
 
     private func makeBanner(dark: Bool) -> NSView {
         let banner = NSView(frame: .zero)
@@ -429,8 +494,7 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     }
 
     private func makeCard(title group: String, dark: Bool) -> XRGSettingsCardView {
-        let card = XRGSettingsCardView(group: group, dark: dark)
-        return card
+        XRGSettingsCardView(group: group, dark: dark)
     }
 
     // MARK: Controls
@@ -447,16 +511,25 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         case .text: control = XRGSettingsTextControl(entry: entry, dark: dark)
         case .source: control = XRGSettingsSourceControl(entry: entry, dark: dark)
         case .action: control = XRGSettingsActionControl(entry: entry, dark: dark)
-        case .order: control = XRGSettingsTextControl(entry: entry, dark: dark)
+        case .order: control = XRGSettingsOrderControl(entry: entry, dark: dark)
         }
         control.applyEdit = { [weak self] control, value in self?.apply(control: control, value: value) }
         present(control: control)
+        if entry.id == "appearance.font" {
+            // The font field is a read-only display of the current font
+            // (ruling P3): the "Choose font…" action edits it through the
+            // system font panel.
+            if let display = control as? XRGSettingsTextControl {
+                display.textField.isEditable = false
+                display.setAccessibilityValue(store.value("appearance.font").isTextualDescription)
+            }
+        }
         if let path = control as? XRGSettingsPathControl {
             path.onChoose = { [weak self] pathControl in self?.choosePath(pathControl) }
         }
         if let source = control as? XRGSettingsSourceControl {
             source.load(options: sources.options(kind: entry.source ?? ""),
-                        noneLabel: entry.control == .source && entry.source == "temperature" ? "None" : "Automatic")
+                         noneLabel: entry.control == .source && entry.source == "temperature" ? "None" : "Automatic")
             present(control: source)
         }
         if let action = control as? XRGSettingsActionControl {
@@ -472,16 +545,59 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         updateDependency(control: control)
     }
 
-    /// The user edited a control: save instantly, or show the danger reason.
+    /// The user edited a control: save instantly, or show the danger
+    /// reason. Selecting a built-in theme preset applies its palette and
+    /// name through the shared settings model (review issue 7); editing a
+    /// theme colour while a built-in is selected marks the theme Custom,
+    /// exactly the catalog documents.
     func apply(control: XRGSettingsEntryControl, value: XRGSettingsValue) {
         do {
             try store.set(control.entry.id, value)
             control.showError(nil)
+            applyPresetIfSelected(control: control, value: value)
+            markCustomPresetAfterPaletteEdit(control: control)
         } catch let error as XRGSettingsError {
             control.showError(Self.reason(for: error, entry: control.entry, catalog: catalog))
         } catch {
             control.showError("The value could not be saved.")
         }
+    }
+
+    /// The Themes preset: choosing a built-in applies its palette and its
+    /// name through the shared theme engine, like the deleted controller
+    /// did (review issue 7).
+    private func applyPresetIfSelected(control: XRGSettingsEntryControl, value: XRGSettingsValue) {
+        guard control.entry.id == "themes.preset", case .string(let name) = value,
+              let preset = XRGBuiltinTheme.allCases.first(where: { $0.name == name }) else { return }
+        do {
+            try themeEngine().applyThemeDictionary(preset.dictionary(), defaults: store.defaults)
+            try? store.set("themes.name", .string(preset.name))
+            // The palette writes arrive as their own notifications on the
+            // document backend; re-present everything so the legacy backend
+            // (and the controls' dependent states) follow too.
+            storeChanged(id: nil)
+        } catch {
+            control.showError("The built-in theme could not be applied.")
+        }
+    }
+
+    /// The palette ids, in the order the shared ABI's theme documents use.
+    private static let paletteIds = ["appearance.window.color", "appearance.graph_background.color",
+                                     "appearance.series1.color", "appearance.series2.color",
+                                     "appearance.series3.color", "appearance.border.color",
+                                     "appearance.text.color"]
+    private func markCustomPresetAfterPaletteEdit(control: XRGSettingsEntryControl) {
+        guard control.entry.id.hasPrefix("appearance."),
+              control.entry.id.hasSuffix(".color") || control.entry.id.hasSuffix(".transparency") else { return }
+        guard case .string(let presetName) = store.value("themes.preset"),
+              let preset = XRGBuiltinTheme.allCases.first(where: { $0.name == presetName }) else { return }
+        let effective = Self.paletteIds.map { id -> [Double] in
+            if case .color(let rgba) = store.value(id) { return rgba }
+            if let entry = catalog.entry(id), case .color(let fallback) = entry.defaultValue { return fallback }
+            return [0, 0, 0, 1]
+        }
+        guard effective != preset.rgba else { return }
+        try? store.set("themes.preset", .string("Custom"))
     }
 
     static func reason(for error: XRGSettingsError, entry: XRGSettingsEntry,
@@ -539,7 +655,52 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
             importTheme()
         } else if id == "themes.export" {
             exportTheme()
+        } else if id == "weather.station_list" {
+            openWeatherStationList()
+        } else if id == "appearance.choose_font" {
+            chooseGraphFont()
+        } else if id == "ai.notifications.allow" {
+            allowBudgetNotifications()
         }
+    }
+
+    /// The Weather section's Station Listing link: the deleted controller's
+    /// action, restored by the coordinator's ruling P1.
+    static let stationListingURL = URL(string: "https://download.gauchosoft.com/xrg/stations.txt")!
+    func openWeatherStationList() {
+        let open = openURL ?? { NSWorkspace.shared.open($0) }
+        _ = open(Self.stationListingURL)
+    }
+
+    /// The Appearance section's "Choose font…" action (ruling P3): open the
+    /// system font panel on the current graph font. The panel's
+    /// `changeFont:` arrives through the responder chain — this controller
+    /// is the settings window's delegate — and lands in `changeFont(_:)`
+    /// below, which writes the same `appearance.font` setting.
+    func chooseGraphFont() {
+        let font = themeEngine().graphFont ?? NSFont.systemFont(ofSize: 10)
+        if let presentFontPanel { presentFontPanel(font); return }
+        NSFontManager.shared.setSelectedFont(font, isMultiple: false)
+        NSFontPanel.shared.makeKeyAndOrderFront(nil)
+    }
+
+    /// The font panel's action, through the responder chain: convert the
+    /// current font and write the same setting the font field displays.
+    @objc public func changeFont(_ sender: NSFontManager?) {
+        guard let manager = sender else { return }
+        let old = themeEngine().graphFont ?? NSFont.systemFont(ofSize: 10)
+        applyGraphFont(manager.convert(old), old: old)
+    }
+
+    /// The write path behind the font panel's action: the typed settings
+    /// follow the new font and the same `appearance.font` setting the
+    /// read-only display shows is stored on both backends.
+    func applyGraphFont(_ new: NSFont, old: NSFont) {
+        guard new != old else { return }
+        let settings = themeEngine()
+        settings.graphFont = new
+        try? store.set("appearance.font", .string(XRGSettings.fontDescriptor(new)))
+        graphFontChanged?()
     }
 
     func askResetConfirmation(for section: String) -> Bool {
@@ -606,12 +767,61 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     }
 }
 
+/// The scroll pane's document view: flipped, so content pins to the top
+/// and every section opens from its first card (fix V1).
+@MainActor final class XRGSettingsPaneStack: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
+/// The mockup's aurora wash (fix V7): the reference CSS anchors one orb
+/// per canvas at 60% width and blurs it by 64 px — a soft, low-alpha wash
+/// in the token colour, never a hard-edged disc. The blur is approximated
+/// with a radial gradient that keeps a plateau and feathers to the token's
+/// zero-alpha edge; the view never accepts a hit test.
+@MainActor final class XRGAuroraWashView: NSView {
+    private let gradient = CAGradientLayer()
+
+    init(dark: Bool) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        gradient.type = .radial
+        gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1.0, y: 0.5)
+        layer?.addSublayer(gradient)
+        restyle(dark: dark)
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Programmatic view") }
+
+    override func layout() {
+        super.layout()
+        gradient.frame = bounds
+    }
+    /// The view is decoration only: clicks and accessibility hit tests
+    /// pass through to the controls below it in z-order.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func restyle(dark: Bool) {
+        let orb = XRGAether7b.Color.orb(dark: dark)
+        let transparent = orb.withAlphaComponent(0)
+        // A plateau out to ~55% of the radius, feathering to nothing at the
+        // edge — the shape blur(64px) gives a 60%-wide disc.
+        gradient.colors = [orb.cgColor, orb.cgColor, transparent.cgColor]
+        gradient.locations = [0, 0.55, 1]
+    }
+}
+
 /// One flat, opaque card per catalog group (spec §5): surface card
 /// background, hairline border, `radius-lg` corners, a `//` mono eyebrow.
+/// Every non-action row lays its control out in one right-aligned column
+/// with a wrapping label that takes the remaining width (the mockup's
+/// `flex:1` label), so no row's label pushes its control out of line
+/// (fix V5); action buttons align with the label column (fix V8).
 @MainActor final class XRGSettingsCardView: NSView {
     let eyebrowLabel: NSTextField
     let rows = NSStackView()
     var dark: Bool
+
     init(group: String, dark: Bool) {
         self.dark = dark
         eyebrowLabel = XRGAether7bStyle.eyebrow(group, dark: dark)
@@ -635,37 +845,63 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
             eyebrowLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: XRGAether7b.Space.s4),
             rows.topAnchor.constraint(equalTo: eyebrowLabel.bottomAnchor, constant: XRGAether7b.Space.s2),
             rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: XRGAether7b.Space.s4),
-            rows.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -XRGAether7b.Space.s4),
+            rows.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -XRGAether7b.Space.s4),
             rows.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -XRGAether7b.Space.s3),
         ])
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Programmatic view") }
 
     func addRow(entry: XRGSettingsEntry, control: XRGSettingsEntryControl, dark: Bool) {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.spacing = XRGAether7b.Space.s3
-        row.translatesAutoresizingMaskIntoConstraints = false
-        let label: NSView
-        if entry.control == .action {
-            label = NSView(frame: .zero)
+        switch entry.control {
+        case .order:
+            // The reorderable list spans the card below its label.
+            let label = XRGAether7bStyle.label(entry.label, dark: dark)
+            label.setAccessibilityLabel(entry.label)
+            rows.addArrangedSubview(label)
+            rows.addArrangedSubview(control)
+            label.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+            control.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+        case .action:
+            // An action button sits in the label column, never indented by
+            // a phantom label (fix V8). The budget-notification action also
+            // carries its permission status below the button.
+            rows.addArrangedSubview(control)
+            control.leadingAnchor.constraint(equalTo: rows.leadingAnchor).isActive = true
+            if entry.id == "ai.notifications.allow" {
+                let status = NSTextField(wrappingLabelWithString: "")
+                status.font = sansFont(XRGAether7b.TypeScale.xs.size)
+                status.textColor = XRGAether7b.Color.textMuted(dark: dark)
+                status.translatesAutoresizingMaskIntoConstraints = false
+                status.identifier = NSUserInterfaceItemIdentifier("budget-notification-status")
+                rows.addArrangedSubview(status)
+                status.leadingAnchor.constraint(equalTo: rows.leadingAnchor, constant: XRGAether7b.Space.s3).isActive = true
+                notificationStatusLabel = status
+            }
+        default:
+            let label = NSTextField(wrappingLabelWithString: entry.label)
+            label.font = sansFont(XRGAether7b.TypeScale.sm.size)
+            label.textColor = XRGAether7b.Color.textMain(dark: dark)
             label.translatesAutoresizingMaskIntoConstraints = false
-        } else {
-            let text = NSTextField(wrappingLabelWithString: entry.label)
-            text.font = sansFont(XRGAether7b.TypeScale.sm.size)
-            text.textColor = XRGAether7b.Color.textMain(dark: dark)
-            text.translatesAutoresizingMaskIntoConstraints = false
-            text.setAccessibilityLabel(entry.label)
-            label = text
+            label.setAccessibilityLabel(entry.label)
+            let row = NSView(frame: .zero)
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(label)
+            row.addSubview(control)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+                label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                control.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+                control.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                label.trailingAnchor.constraint(lessThanOrEqualTo: control.leadingAnchor,
+                                                constant: -XRGAether7b.Space.s3),
+                row.heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
+            ])
+            row.setAccessibilityLabel("\(entry.label)")
+            rows.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
         }
-        row.addArrangedSubview(label)
-        row.addArrangedSubview(control)
-        if entry.control != .action {
-            label.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
-            control.trailingAnchor.constraint(lessThanOrEqualTo: row.trailingAnchor).isActive = true
-        }
-        row.setAccessibilityLabel("\(entry.label)")
-        rows.addArrangedSubview(row)
-        row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
     }
+    /// The AI section's budget-notification status label, handed to the
+    /// controller after the row renders.
+    weak var notificationStatusLabel: NSTextField?
 }

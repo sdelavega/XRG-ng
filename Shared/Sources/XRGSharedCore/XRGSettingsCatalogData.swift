@@ -772,6 +772,18 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "appearance.choose_font",
+    "section": "appearance",
+    "group": "Typography",
+    "label": "Choose font…",
+    "help": "Pick the graph font in the system font panel.",
+    "control": "action",
+    "default": null,
+    "platforms": [
+      "macos"
+    ]
+  },
+  {
     "id": "appearance.reset",
     "section": "appearance",
     "group": "Reset",
@@ -5375,6 +5387,18 @@ public enum XRGSettingsCatalogData {
     }
   },
   {
+    "id": "ai.notifications.allow",
+    "section": "ai",
+    "group": "Notifications",
+    "label": "Allow Budget Notifications…",
+    "help": "Let XRG-ng post a notification when the AI budget is reached.",
+    "control": "action",
+    "default": null,
+    "platforms": [
+      "macos"
+    ]
+  },
+  {
     "id": "ai.sources.claude",
     "section": "ai",
     "group": "Providers",
@@ -5631,6 +5655,18 @@ public enum XRGSettingsCatalogData {
       "macos": "icao",
       "linux": "/weather/station"
     }
+  },
+  {
+    "id": "weather.station_list",
+    "section": "weather",
+    "group": "Station",
+    "label": "Station Listing",
+    "help": "Open the list of reporting stations in your browser.",
+    "control": "action",
+    "default": null,
+    "platforms": [
+      "macos"
+    ]
   },
   {
     "id": "weather.refresh",

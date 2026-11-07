@@ -75,6 +75,9 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     private let makeUpdateURL: () -> XRGURL
     private let updateNotice: (String, String) -> XRGUpdateChoice
     private let openURL: (URL) -> Bool
+    /// A document store a test scene injects to run the document-backed
+    /// production path over a fixture document.
+    private var injectedStore: XRGSettingsStore? = nil
     private let currentVersion: String
     private var runtimeStarted = false
     private var wakeObserver: (any NSObjectProtocol)?
@@ -132,10 +135,12 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
                   scheduleTimers: Bool = false, runtimeEnabled: Bool = false,
                   makeUpdateURL: @escaping () -> XRGURL = { XRGURL() }, version: String = "2.0",
                   updateNotice: @escaping (String, String) -> XRGUpdateChoice = { _, _ in .notYet },
-                  openURL: @escaping (URL) -> Bool = { _ in true }) {
+                  openURL: @escaping (URL) -> Bool = { _ in true },
+                  store: XRGSettingsStore? = nil) {
         self.defaults = defaults; wakeCenter = center; self.scheduleTimers = scheduleTimers
         self.runtimeEnabled = runtimeEnabled; animateResizing = false; self.makeUpdateURL = makeUpdateURL
         self.updateNotice = updateNotice; self.openURL = openURL; currentVersion = version
+        self.injectedStore = store
         super.init(contentRect: contentRect, styleMask: .borderless, backing: .buffered, defer: false)
         isReleasedWhenClosed = false; prepare()
     }
@@ -147,7 +152,11 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     }
 
     private func prepare() {
-        if defaults === UserDefaults.standard, Self.applicationBundle {
+        if let injectedStore {
+            // A test scene's document-backed store: the production path,
+            // over a fixture document (never the real settings file).
+            appSettings = XRGSettings(store: injectedStore)
+        } else if defaults === UserDefaults.standard, Self.applicationBundle {
             // The application's settings live in the shared document; the
             // 0.2.2 NSUserDefaults domain is read once, by the migration.
             appSettings = XRGSettings(store: XRGSettingsStore.shared)
@@ -370,25 +379,37 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     @IBAction public func setWindowTitle(_ sender: Any?) { guard let text = Self.text(sender) else { return }; appSettings?.windowTitle = text; backgroundView?.needsDisplay = true }
     @IBAction public func setBorderWidthAction(_ sender: Any?) {
         guard let control = sender as? NSControl else { return }
-        backgroundView?.expandWindow(); borderWidth = max(0, control.intValue)
+        applyBorderWidth(Int(max(0, control.intValue)))
+    }
+    /// Apply a border width to the live window: expand a collapsed window
+    /// first (the old preference action did), resize to the new minimum
+    /// and relayout. The settings window's instant-apply sync uses the
+    /// same path (review issue 1).
+    public func applyBorderWidth(_ width: Int) {
+        backgroundView?.expandWindow(); borderWidth = Int32(max(0, width))
         if let manager = moduleManager { minSize = manager.getMinSize(); checkWindowSize(); manager.windowChanged(to: frame.size) }
     }
     @IBAction public func setGraphOrientation(_ sender: Any?) {
         guard let index = Self.index(sender), (0...1).contains(index), let manager = moduleManager else { return }
-        let wasMinimized = minimized
-        if wasMinimized { backgroundView?.expandWindow() }
         let vertical = index == 0
-        if vertical != manager.graphOrientationVertical {
-            manager.graphOrientationVertical = vertical
-            let rotated = NSRect(x: frame.minX, y: frame.minY + frame.height - frame.width, width: frame.height, height: frame.width)
-            minSize = manager.getMinSize(); setFrame(rotated, display: true, animate: animateResizing)
-            manager.windowChanged(to: frame.size); backgroundView?.updateModuleLayout()
-        }
-        if wasMinimized { backgroundView?.minimizeWindow() }
+        applyGraphOrientation(vertical: vertical)
         appSettings?.graphOrientationVertical = vertical
         // The orientation action has always persisted immediately, in both
         // the legacy domain and the document.
         try? appSettings?.store.set("general.window.orientation", .string(vertical ? "vertical" : "horizontal"))
+    }
+    /// Apply a stored orientation to the live window: rotate the frame
+    /// when it changed, and relayout. The settings window's instant-apply
+    /// sync uses the same path (review issue 1).
+    public func applyGraphOrientation(vertical: Bool) {
+        guard let manager = moduleManager, manager.graphOrientationVertical != vertical else { return }
+        let wasMinimized = minimized
+        if wasMinimized { backgroundView?.expandWindow() }
+        manager.graphOrientationVertical = vertical
+        let rotated = NSRect(x: frame.minX, y: frame.minY + frame.height - frame.width, width: frame.height, height: frame.width)
+        minSize = manager.getMinSize(); setFrame(rotated, display: true, animate: animateResizing)
+        manager.windowChanged(to: frame.size); backgroundView?.updateModuleLayout()
+        if wasMinimized { backgroundView?.minimizeWindow() }
     }
     @IBAction public func setGraphRefreshActionPart2(_ sender: Any?) {
         guard let control = sender as? NSControl, control.doubleValue.isFinite, control.doubleValue > 0 else { return }

@@ -366,14 +366,17 @@ import Foundation
     /// Restore every entry of one section to its default. Other sections and
     /// unknown keys at either level are not touched. A section already at
     /// its defaults has nothing to remove: the file keeps its bytes and mtime.
+    /// Every backend posts per entry, so the live consumers (the settings
+    /// window's controls, the app delegate's presentation sync) reconcile
+    /// after a reset on either path (review issue 1).
     public func resetSection(_ section: String) {
+        let entries = catalog.entries(section: section, platform: .macos)
         switch backend {
         case .legacy:
-            for entry in catalog.entries(section: section, platform: .macos) {
+            for entry in entries {
                 if let key = Self.legacyKey(of: entry) { defaults.removeObject(forKey: key) }
             }
         case .document:
-            let entries = catalog.entries(section: section, platform: .macos)
             let storedSomething = entries.contains { locked.document.values[$0.id] != nil }
             locked.mutate { $0.resetSection(section, catalog: catalog, platform: .macos) }
             if storedSomething, loadProblem == nil {
@@ -381,8 +384,8 @@ import Foundation
                     loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
                 }
             }
-            for entry in entries { post(entry.id) }
         }
+        for entry in entries { post(entry.id) }
     }
 
     /// The user confirmed replacing an unreadable settings file: write the

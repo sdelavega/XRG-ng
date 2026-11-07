@@ -106,9 +106,16 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     public func showSettings(section: String, sender: Any? = nil) {
         if settingsWindowController == nil {
             let store = xrgGraphWindow?.appSettings?.store ?? XRGSettingsStore.shared
+            let provider = XRGHardwareSettingsSourceProvider()
+            // The retained unknown-sensor policy drives the temperature
+            // pickers, exactly as it drives the sensor window (review
+            // issue 5).
+            provider.includeUnknownSensors = { [weak self] in
+                XRGTemperatureView.showUnknownSensors(XRGTemperatureView.policyStore(of: self?.xrgGraphWindow))
+            }
             let controller = XRGSettingsWindowController(store: store,
                                                            catalog: store.catalog,
-                                                           sources: XRGHardwareSettingsSourceProvider())
+                                                           sources: provider)
             controller.performCheckForUpdates = { [weak self] in self?.updater?.checkForUpdates(nil) }
             controller.requestBudgetNotifications = { [weak self] in
                 guard let self, let budgetNotifications = self.budgetNotifications else {
@@ -116,6 +123,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
                 }
                 return await XRGAIBudgetNotifications.requestPermission()
             }
+            controller.graphFontChanged = { [weak self] in self?.moduleManager?.graphFontChanged() }
             settingsWindowController = controller
         }
         settingsWindowController?.show(section: section)
@@ -214,28 +222,72 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     }
 
     /// Follow the settings store: every stored change (the settings window's
-    /// instant apply, a theme import, a section reset) syncs graph
-    /// visibility and presentation into the live module manager. Only
-    /// modules whose visibility actually changed are touched, and the
-    /// relayout is skipped entirely when nothing did (launch re-asserts
-    /// state through the same notification; it must not pay for a relayout).
-    /// Re-entrant notifications (the relayout persists module sizes) are
-    /// ignored.
+    /// instant apply, a theme import, a section reset) reconciles the live
+    /// window and module manager with the store — visibility, orientation,
+    /// border width, window level, shadow, title and the layout-affecting
+    /// graph settings (heights and the order). The relayout is skipped
+    /// entirely when nothing layout-affecting changed (launch re-asserts
+    /// state through the same notification; it must not pay for a
+    /// relayout), modules that are not registered are skipped explicitly
+    /// (an absent module is not a hidden one), and the module sizes the
+    /// relayout persists in return are layout FEEDBACK, never layout
+    /// input. Re-entrant notifications are ignored (review issue 1).
     private var syncingPresentation = false
-    func syncGraphPresentationFromStore() {
+    @objc func settingsStoreChanged(_ note: Notification) {
+        syncGraphPresentationFromStore(changedID: note.userInfo?["id"] as? String)
+    }
+    func syncGraphPresentationFromStore(changedID: String? = nil) {
         guard !syncingPresentation else { return }
         syncingPresentation = true
         defer { syncingPresentation = false }
         guard let window = xrgGraphWindow, let manager = window.moduleManager, let settings = window.appSettings else { return }
-        var changed = false
+        // The module sizes a relayout writes back are feedback, not input:
+        // they must never trigger another pass.
+        if let changedID, changedID.hasSuffix(".size_width") || changedID.hasSuffix(".size_height") { return }
+        let store = settings.store
+        var layoutChanged = false
         for graph in XRGGraphID.allCases {
+            guard let module = manager.getModule(byName: graph.name) else { continue }
             let visible = settings.moduleVisible(graph)
-            if manager.getModule(byName: graph.name)?.isDisplayed != visible {
+            if module.isDisplayed != visible {
                 manager.setModule(graph.name, isDisplayed: visible)
-                changed = true
+                layoutChanged = true
             }
         }
-        if changed { manager.presentationChanged() }
+        // Live presentation the old preference actions set explicitly.
+        let vertical = store.value("general.window.orientation") != .string("horizontal")
+        if manager.graphOrientationVertical != vertical {
+            window.applyGraphOrientation(vertical: vertical)
+            layoutChanged = true
+        }
+        let border = store.intSetting("general.window.border_width")
+        if window.borderWidth != border {
+            if window.minimized { window.backgroundView?.expandWindow() }
+            window.borderWidth = Int32(max(0, border))
+            layoutChanged = true
+        }
+        if changedID == nil || changedID == "general.window.level" {
+            let level = { if case .string(let name) = store.settingsValue("general.window.level") { return name }; return "normal" }()
+            window.setWindowLevelHelper(["normal", "floating", "background"].firstIndex(of: level) ?? 0)
+        }
+        if changedID == nil || changedID == "general.window.drop_shadow" {
+            window.hasShadow = store.boolSetting("general.window.drop_shadow")
+        }
+        if changedID == nil || changedID == "general.window.title" {
+            window.backgroundView?.needsDisplay = true
+        }
+        // Heights and the order only change the layout; colour, style and
+        // effect changes only need a redraw (the views read them live).
+        if let changedID {
+            if changedID == "graphs.order" || changedID.hasSuffix(".height") { layoutChanged = true }
+            if changedID.hasPrefix("appearance.")
+                || (changedID.hasPrefix("graphs.") && (changedID.contains(".color.") || changedID.hasSuffix(".style") || changedID.hasSuffix(".effect"))) {
+                manager.redisplayModules()
+            }
+        } else {
+            layoutChanged = true
+        }
+        if layoutChanged { manager.presentationChanged() }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -283,10 +335,6 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         if let helpMenu = XRGSupportLink.helpMenu() {
             _ = XRGSupportLink.insert(into: helpMenu, target: self, action: #selector(openSponsors(_:)))
         }
-    }
-
-    @objc func settingsStoreChanged(_ note: Notification) {
-        syncGraphPresentationFromStore()
     }
 
     /// Opens the GitHub Sponsors page from the Help menu's "Support XRG-ng…" item.

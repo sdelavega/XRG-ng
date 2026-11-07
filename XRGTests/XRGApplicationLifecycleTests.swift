@@ -103,27 +103,124 @@ struct XRGApplicationLifecycleTests {
     @Test func settingsWindowInstantApplyReplacesTheDraftGraphOptionsEditor() throws {
         let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
+        scene.delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        try scene.launched()
         scene.delegate.showPrefs(nil)
         let settings = try #require(scene.delegate.settingsWindowController)
         settings.show(section: "graphs")
-        // Visibility through the window's toggle: instant apply, no draft.
+        let manager = try #require(scene.window.moduleManager)
+        // Visibility through the window's toggle: instant apply, no draft —
+        // asserted LIVE, against the module the layout serves (review
+        // issue 11), not only against the stored values.
         let visibility = try #require(settings.currentControls.first { $0.entry.id == "graphs.cpu.visible" } as? XRGSettingsToggleControl)
         visibility.click()
         #expect(scene.window.appSettings?.moduleVisible(.cpu) == false)
+        #expect(manager.getModule(byName: "CPU")?.isDisplayed == false)
         #expect(defaults.bool(forKey: "showCPUGraph") == false)
-        // A height override through the window's number field.
+        visibility.click()
+        #expect(manager.getModule(byName: "CPU")?.isDisplayed == true)
+        // A height override through the window's number field reaches the
+        // live layout: the module's served height becomes the override.
         let height = try #require(settings.currentControls.first { $0.entry.id == "graphs.cpu.height" } as? XRGSettingsNumberControl)
+        let before = try #require(manager.getModule(byName: "CPU")?.currentSize.height)
         height.field.stringValue = "128"
         height.fieldEdited()
         let restored = XRGSettings(defaults: defaults)
         #expect(restored.graphPreferences[.cpu].height == 128)
-        // A reset with confirmation restores the section's defaults.
+        #expect(manager.getModule(byName: "CPU")?.currentSize.height == 128)
+        #expect(manager.getModule(byName: "CPU")?.currentSize.height != before)
+        // A reset with confirmation restores the section's defaults — live.
         var asked = 0
         settings.confirmReset = { _ in asked += 1; return true }
         let reset = try #require(settings.currentControls.first { $0.entry.id == "graphs.reset" } as? XRGSettingsActionControl)
-        reset.button.performClick()
+        #expect(reset.button.accessibilityPerformPress())
         #expect(asked == 1 && defaults.bool(forKey: "showCPUGraph") == true)
         #expect(XRGSettings(defaults: defaults).graphPreferences[.cpu].height != 128)
+        #expect(manager.getModule(byName: "CPU")?.isDisplayed == true)
+        #expect(manager.getModule(byName: "CPU")?.currentSize.height != 128)
+    }
+
+    /// Review issue 1: every settings-window edit reconciles the live
+    /// window and module manager — orientation, border width, window
+    /// level, shadow, heights and the order all reach the live layout —
+    /// on the document-backed production path, and the persisted module
+    /// sizes a relayout feeds back never loop.
+    @Test func settingsWindowEditsReachTheLiveWindowAndManagerOnTheDocumentPath() throws {
+        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        // A document store over a fixture document under the task's scratch:
+        // never the real com.sdelavega.xrg domain, never the real settings.json.
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("xrg-0.2.3-task-9", isDirectory: true)
+            .appendingPathComponent(domain, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = XRGSettingsStore(fileURL: root.appendingPathComponent("settings.json"), defaults: defaults,
+                                      catalog: try #require(try? XRGSettingsCatalog.load()),
+                                      legacyDomain: defaults.persistentDomain(forName: domain) ?? [:])
+        let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources, store: store); defer { scene.shutdown() }
+        scene.delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        try scene.launched()
+        let manager = try #require(scene.window.moduleManager)
+        scene.delegate.showSettings(section: "general", sender: nil)
+        let settings = try #require(scene.delegate.settingsWindowController)
+        #expect(settings.store.isDocumentBacked)
+        settings.show(section: "general")
+
+        // Border width reaches the live window and the layout follows it.
+        #expect(scene.window.borderWidth == 4)
+        let border = try #require(settings.currentControls.first { $0.entry.id == "general.window.border_width" } as? XRGSettingsNumberControl)
+        border.field.stringValue = "8"
+        border.fieldEdited()
+        #expect(scene.window.borderWidth == 8, "an edit did not reach the live border width")
+        #expect(store.value("general.window.border_width") == .int(8))
+        #expect(try String(contentsOf: root.appendingPathComponent("settings.json"), encoding: .utf8)
+            .contains("\"general.window.border_width\": 8"))
+
+        // Window level and shadow reach the live window.
+        let level = try #require(settings.currentControls.first { $0.entry.id == "general.window.level" } as? XRGSettingsChoiceControl)
+        level.popUp.selectItem(withTitle: "Floating")
+        #expect(NSApp.sendAction(try #require(level.popUp.action), to: level.popUp.target, from: level.popUp))
+        #expect(scene.window.level == .floating)
+        let shadow = try #require(settings.currentControls.first { $0.entry.id == "general.window.drop_shadow" } as? XRGSettingsToggleControl)
+        #expect(!scene.window.hasShadow)
+        #expect(shadow.accessibilityPerformPress())
+        #expect(scene.window.hasShadow)
+
+        // Orientation rotates the live layout (and back).
+        let orientation = try #require(settings.currentControls.first { $0.entry.id == "general.window.orientation" } as? XRGSettingsChoiceControl)
+        let frame = scene.window.frame
+        orientation.popUp.selectItem(withTitle: "Horizontal")
+        #expect(NSApp.sendAction(try #require(orientation.popUp.action), to: orientation.popUp.target, from: orientation.popUp))
+        #expect(manager.graphOrientationVertical == false)
+        // The rotation swaps the axes; the window may then grow to the
+        // horizontal layout's minimum (checkWindowSize).
+        #expect(scene.window.frame.size.height == frame.width)
+        #expect(scene.window.frame.size.width >= frame.height)
+
+        // Visibility, a height override and the order reach the live modules.
+        settings.show(section: "graphs")
+        let visibility = try #require(settings.currentControls.first { $0.entry.id == "graphs.battery.visible" } as? XRGSettingsToggleControl)
+        #expect(visibility.accessibilityPerformPress())
+        #expect(manager.getModule(byName: "Battery")?.isDisplayed == false)
+        #expect(manager.getModule(byName: "Battery")?.currentSize == .zero)
+        let height = try #require(settings.currentControls.first { $0.entry.id == "graphs.cpu.height" } as? XRGSettingsNumberControl)
+        height.field.stringValue = "128"
+        height.fieldEdited()
+        #expect(manager.getModule(byName: "CPU")?.currentSize.height == 128)
+        let order = try #require(settings.currentControls.first { $0.entry.id == "graphs.order" } as? XRGSettingsOrderControl)
+        #expect(try #require(order.rows.first?.down).accessibilityPerformPress())
+        #expect(manager.displayList().prefix(2).compactMap(\.name) == ["GPU", "CPU"])
+
+        // A section reset restores every live piece.
+        var asked = 0
+        settings.confirmReset = { _ in asked += 1; return true }
+        let reset = try #require(settings.currentControls.first { $0.entry.id == "graphs.reset" } as? XRGSettingsActionControl)
+        #expect(reset.button.accessibilityPerformPress())
+        #expect(asked == 1)
+        #expect(manager.getModule(byName: "Battery")?.isDisplayed == true)
+        #expect(manager.getModule(byName: "Battery")?.currentSize != .zero)
+        #expect(manager.getModule(byName: "CPU")?.currentSize.height != 128)
+        #expect(manager.displayList().prefix(2).compactMap(\.name) == ["CPU", "GPU"])
     }
 
     @Test func injectedUnknownSensorPolicyAndLazyNibFailuresDoNotFallBackToGlobalHardware() throws {

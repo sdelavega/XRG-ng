@@ -225,6 +225,8 @@ pub const RADIUS_SM: f32 = 6.0;
 pub const RADIUS_MD: f32 = 8.0;
 /// Radius lg: 12 px.
 pub const RADIUS_LG: f32 = 12.0;
+/// Radius pill: 9999 px.
+pub const RADIUS_PILL: f32 = 9999.0;
 
 /// Type xs: 12 px / 16 px line height.
 pub const TYPE_XS: (f32, f32) = (12.0, 16.0);

@@ -200,7 +200,7 @@ def space_entries(tokens):
 def radius_entries(tokens):
     """(name, px value) for every generated radius, read from the token file."""
     radius = tokens["radius"]
-    return [(name, radius[name]["$value"]["value"]) for name in ("sm", "md", "lg")]
+    return [(name, radius[name]["$value"]["value"]) for name in ("sm", "md", "lg", "pill")]
 
 
 def duration_entries(tokens):

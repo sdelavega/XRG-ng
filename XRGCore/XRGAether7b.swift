@@ -155,6 +155,7 @@ public enum XRGAether7b {
         public static let sm: CGFloat = 6.0
         public static let md: CGFloat = 8.0
         public static let lg: CGFloat = 12.0
+        public static let pill: CGFloat = 9999.0
     }
 
     /// Type scale entries as (size, line-height) pairs.

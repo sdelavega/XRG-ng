@@ -339,6 +339,15 @@ public final class XRGSettings: NSObject {
         store = XRGSettingsStore.legacy(defaults: defaults)
         super.init()
         finishSetup()
+        // The settings window's instant-apply edits reach this suite
+        // through the store; the cached graph preferences follow them so
+        // the live module manager relayouts on order/height edits in every
+        // scene, legacy backend included (the scalar stored properties
+        // keep 0.2.2's behaviour untouched).
+        storeObserver = NotificationCenter.default.addObserver(
+            forName: XRGSettingsStore.didChange, object: store, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshGraphPreferences() }
+            }
     }
 
     /// The settings over the application's shared document: every stored
@@ -496,6 +505,13 @@ public final class XRGSettings: NSObject {
         graphPreferencesStorage = store.graphPreferences()
     }
 
+    /// Refresh only the cached graph preferences, the path shared by both
+    /// backends: the legacy suite serves the blob live, the document is
+    /// rebuilt from its per-field entries.
+    private func refreshGraphPreferences() {
+        graphPreferencesStorage = store.graphPreferences()
+    }
+
     /// A write-through is a document write only: the legacy backend keeps
     /// 0.2.2's in-memory behaviour (`XRGWindowPreferences.apply` restores
     /// stored values without touching the suite).
@@ -533,9 +549,15 @@ public final class XRGSettings: NSObject {
     private static let effectNames = ["normal", "scanlines", "pixel_grid", "retro_dots"]
     private static let timeframeNames = ["1", "3", "6", "12"]
     private static func effectIndex(_ index: Int) -> Int { max(0, min(3, index)) }
-    private static func fontDescriptor(_ font: NSFont) -> String {
+    /// The font's `name size` descriptor form, the stored shape of the
+    /// graph font (`appearance.font`).
+    @nonobjc static func fontDescriptor(_ font: NSFont) -> String {
         let size = font.pointSize == font.pointSize.rounded() ? String(Int(font.pointSize)) : String(Double(font.pointSize))
-        return font.fontName == ".AppleSystemUIFont" ? "System \(size)" : "\(font.fontName) \(size)"
+        // The system font's internal name varies by release (.AppleSystemUIFont,
+        // .SFNS-Regular, ...); every one of them is "System <size>" in the
+        // stored descriptor, so hydration never depends on the private name.
+        let systemFont = font.fontName.hasPrefix(".AppleSystemUIFont") || font.fontName.hasPrefix(".SFNS")
+        return systemFont ? "System \(size)" : "\(font.fontName) \(size)"
     }
 
     private func textAttributes(_ dictionary: NSMutableDictionary) -> [NSAttributedString.Key: Any] {

@@ -78,12 +78,12 @@ func smokeCheck(_ condition: @autoclosure () -> Bool, _ message: String) throws 
     private var nibObjects: [NSArray] = []
     private var stopped = false
 
-    init(defaults: UserDefaults, resources: Bundle) throws {
+    init(defaults: UserDefaults, resources: Bundle, store: XRGSettingsStore? = nil) throws {
         _ = NSApplication.shared
         self.defaults = defaults; self.resources = resources
         try smokeCheck(defaults.object(forKey: "checkForUpdates") as? Bool == false, "Smoke preferences must explicitly disable update requests")
         window = XRGGraphWindow(contentRect: NSRect(x: 100, y: 200, width: 600, height: 900),
-                                defaults: defaults, center: center, runtimeEnabled: true)
+                                defaults: defaults, center: center, runtimeEnabled: true, store: store)
         guard let settings = window.appSettings else { throw XRGSmokeError.failed("Missing settings") }
         let source = inputs
         temperature = XRGTemperatureMiner(reader: SmokeTemperatureReader(), clock: { source.time })
