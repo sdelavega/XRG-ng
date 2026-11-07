@@ -139,32 +139,32 @@ public enum XRGAether7b {
 
     /// Spacing scale (4 px base).
     public enum Space {
-        public static let s1: CGFloat = 4
-        public static let s2: CGFloat = 8
-        public static let s3: CGFloat = 12
-        public static let s4: CGFloat = 16
-        public static let s6: CGFloat = 24
-        public static let s8: CGFloat = 32
-        public static let s12: CGFloat = 48
-        public static let s16: CGFloat = 64
-        public static let touchMin: CGFloat = 44
+        public static let s1: CGFloat = 4.0
+        public static let s2: CGFloat = 8.0
+        public static let s3: CGFloat = 12.0
+        public static let s4: CGFloat = 16.0
+        public static let s6: CGFloat = 24.0
+        public static let s8: CGFloat = 32.0
+        public static let s12: CGFloat = 48.0
+        public static let s16: CGFloat = 64.0
+        public static let touchMin: CGFloat = 44.0
     }
 
     /// Corner radii.
     public enum Radius {
-        public static let sm: CGFloat = 6
-        public static let md: CGFloat = 8
-        public static let lg: CGFloat = 12
+        public static let sm: CGFloat = 6.0
+        public static let md: CGFloat = 8.0
+        public static let lg: CGFloat = 12.0
     }
 
     /// Type scale entries as (size, line-height) pairs.
     public enum TypeScale {
-        public static let xs: (size: CGFloat, lineHeight: CGFloat) = (12, 16)
-        public static let sm: (size: CGFloat, lineHeight: CGFloat) = (13, 20)
-        public static let md: (size: CGFloat, lineHeight: CGFloat) = (15, 24)
-        public static let lg: (size: CGFloat, lineHeight: CGFloat) = (17, 28)
-        public static let xl: (size: CGFloat, lineHeight: CGFloat) = (22, 28)
-        public static let xxl: (size: CGFloat, lineHeight: CGFloat) = (34, 40)
+        public static let xs: (size: CGFloat, lineHeight: CGFloat) = (12.0, 16.0)
+        public static let sm: (size: CGFloat, lineHeight: CGFloat) = (13.0, 20.0)
+        public static let md: (size: CGFloat, lineHeight: CGFloat) = (15.0, 24.0)
+        public static let lg: (size: CGFloat, lineHeight: CGFloat) = (17.0, 28.0)
+        public static let xl: (size: CGFloat, lineHeight: CGFloat) = (22.0, 28.0)
+        public static let xxl: (size: CGFloat, lineHeight: CGFloat) = (34.0, 40.0)
     }
 
     /// Motion durations in seconds and the standard easing curve.

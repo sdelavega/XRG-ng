@@ -6,8 +6,10 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 TOOLS = Path(__file__).resolve().parents[1]
@@ -68,21 +70,21 @@ class Aether7bTokenTests(unittest.TestCase):
                 lambda t: t["radius"].update(
                     {"sm": {"$value": {"value": 7, "unit": "px"}}}
                 ),
-                ["public static let sm: CGFloat = 7"],
+                ["public static let sm: CGFloat = 7.0"],
                 ["RADIUS_SM: f32 = 7.0"],
             ),
             (
                 lambda t: t["radius"].update(
                     {"md": {"$value": {"value": 9, "unit": "px"}}}
                 ),
-                ["public static let md: CGFloat = 9"],
+                ["public static let md: CGFloat = 9.0"],
                 ["RADIUS_MD: f32 = 9.0"],
             ),
             (
                 lambda t: t["radius"].update(
                     {"lg": {"$value": {"value": 14, "unit": "px"}}}
                 ),
-                ["public static let lg: CGFloat = 14"],
+                ["public static let lg: CGFloat = 14.0"],
                 ["RADIUS_LG: f32 = 14.0"],
             ),
             (
@@ -132,6 +134,55 @@ class Aether7bTokenTests(unittest.TestCase):
                     self.assertIn(literal, rust)
                 tokens.clear()
                 tokens.update(copy.deepcopy(original))
+
+    def test_decimal_token_values_emit_valid_literals(self):
+        """Decimal JSON token values must emit valid Swift and Rust literals.
+
+        Radii written 6.0, 6.5 and 6 in a token file must all become valid
+        float literals (6.0, 6.5, 6.0) in both languages — never a
+        double-suffixed "6.0.0" or a bare float a later ".0" append corrupts.
+        """
+        tokens = json.loads(TOKENS.read_text())
+        tokens["radius"]["sm"]["$value"]["value"] = 6.0
+        tokens["radius"]["md"]["$value"]["value"] = 6.5
+        tokens["radius"]["lg"]["$value"]["value"] = 6
+        # Every other token-driven number must survive decimal input too.
+        tokens["space"]["2"]["$value"]["value"] = 4.5
+        tokens["font"]["size"]["sm"]["$value"]["value"] = 13.5
+        tokens["motion"]["duration"]["fast"]["$value"]["value"] = 140.0
+        tokens["motion"]["duration"]["slow"]["$value"]["value"] = 320.5
+        with tempfile.TemporaryDirectory() as tmp:
+            token_file = Path(tmp) / "decimal-aether7b.tokens.json"
+            token_file.write_text(json.dumps(tokens))
+            from_file = json.loads(token_file.read_text())
+        swift = aether7b_tokens.generate_swift(from_file)
+        rust = aether7b_tokens.generate_rust(from_file)
+        for literal in (
+            "pub const RADIUS_SM: f32 = 6.0;",
+            "pub const RADIUS_MD: f32 = 6.5;",
+            "pub const RADIUS_LG: f32 = 6.0;",
+            "pub const SPACE_S2: f32 = 4.5;",
+            "pub const TYPE_SM: (f32, f32) = (13.5, 20.0);",
+            "pub const MOTION_FAST: Duration = Duration::from_millis(140);",
+            "pub const MOTION_SLOW: Duration = Duration::from_nanos(320500000);",
+        ):
+            self.assertIn(literal, rust)
+        for literal in (
+            "public static let sm: CGFloat = 6.0",
+            "public static let md: CGFloat = 6.5",
+            "public static let lg: CGFloat = 6.0",
+            "public static let s2: CGFloat = 4.5",
+            "public static let sm: (size: CGFloat, lineHeight: CGFloat) "
+            "= (13.5, 20.0)",
+        ):
+            self.assertIn(literal, swift)
+        # Regex guard for environments without rustc/swiftc: no emitted
+        # literal may carry a second suffix ("6.0.0", "6.5.0").
+        for output in (rust, swift):
+            self.assertIsNone(
+                re.search(r"\d+\.\d+\.0\b", output),
+                "double-suffixed float literal in generated output",
+            )
 
     def test_check_rejects_crlf_copy(self):
         """A CRLF rewrite of a generated file must fail --check byte for byte."""

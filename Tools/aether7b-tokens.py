@@ -10,6 +10,7 @@ Run with --check to verify the generated files are current instead of writing.
 import argparse
 import difflib
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -144,7 +145,7 @@ def generate_swift(tokens):
         ]
     )
     for name, value in space_entries(tokens):
-        lines.append(f"        public static let {name}: CGFloat = {value}")
+        lines.append(f"        public static let {name}: CGFloat = {float_literal(value)}")
     lines.extend(
         [
             "    }",
@@ -154,7 +155,7 @@ def generate_swift(tokens):
         ]
     )
     for name, value in radius_entries(tokens):
-        lines.append(f"        public static let {name}: CGFloat = {value}")
+        lines.append(f"        public static let {name}: CGFloat = {float_literal(value)}")
     lines.extend(
         [
             "    }",
@@ -166,7 +167,7 @@ def generate_swift(tokens):
     for name, size, line_height in type_entries(tokens):
         lines.append(
             f"        public static let {name}: (size: CGFloat, lineHeight: CGFloat) "
-            f"= ({size}, {line_height})"
+            f"= ({float_literal(size)}, {float_literal(line_height)})"
         )
     lines.extend(
         [
@@ -214,8 +215,29 @@ def ease_entries(tokens):
 
 
 def float_literal(value):
-    """A stable float literal, e.g. 1 -> 1.0, 0.22 -> 0.22."""
-    return repr(float(value))
+    """A stable, valid float literal, e.g. 1 -> 1.0, 0.22 -> 0.22, 6.5 -> 6.5.
+
+    Works for Swift and Rust alike, and refuses non-finite values rather
+    than emitting an `inf`/`nan` literal neither language accepts.
+    """
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"token value {value!r} is not a finite number")
+    return repr(number)
+
+
+def rust_duration_expr(milliseconds):
+    """A const `Duration` expression for a token duration in milliseconds.
+
+    `Duration::from_millis` takes a u64, so a float literal such as 140.0
+    would not compile; integral values (however JSON spells them) become
+    integer literals, fractional ones go through the equally const
+    `from_nanos`.
+    """
+    millis = float(milliseconds)
+    if millis.is_integer():
+        return f"Duration::from_millis({int(millis)})"
+    return f"Duration::from_nanos({round(millis * 1_000_000)})"
 
 
 def type_entries(tokens):
@@ -267,20 +289,24 @@ def generate_rust(tokens):
         lines.append("")
     for name, value in space_entries(tokens):
         lines.append(f"/// Space {name}: {value} px.")
-        lines.append(f"pub const SPACE_{name.upper()}: f32 = {value}.0;")
+        lines.append(f"pub const SPACE_{name.upper()}: f32 = {float_literal(value)};")
     lines.append("")
     for name, value in radius_entries(tokens):
         lines.append(f"/// Radius {name}: {value} px.")
-        lines.append(f"pub const RADIUS_{name.upper()}: f32 = {value}.0;")
+        lines.append(f"pub const RADIUS_{name.upper()}: f32 = {float_literal(value)};")
     lines.append("")
     for name, size, line_height in type_entries(tokens):
         lines.append(f"/// Type {name}: {size} px / {line_height} px line height.")
-        lines.append(f"pub const TYPE_{name.upper()}: (f32, f32) = ({size}.0, {line_height}.0);")
+        lines.append(
+            f"pub const TYPE_{name.upper()}: (f32, f32) = "
+            f"({float_literal(size)}, {float_literal(line_height)});"
+        )
     lines.append("")
     for name, milliseconds in duration_entries(tokens):
         lines.append(f"/// Motion {name}: {milliseconds} ms.")
         lines.append(
-            f"pub const MOTION_{name.upper()}: Duration = Duration::from_millis({milliseconds});"
+            f"pub const MOTION_{name.upper()}: Duration = "
+            f"{rust_duration_expr(milliseconds)};"
         )
     ease = ", ".join(float_literal(value) for value in ease_entries(tokens))
     lines.append("/// Standard easing curve (cubic-bezier from the token file).")
