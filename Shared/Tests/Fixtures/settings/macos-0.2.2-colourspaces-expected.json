@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "id": "appearance.text.color",
+      "problem": "unsupported-color-space:adobe-rgb"
+    }
+  ],
+  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"appearance.border.color\": [\n      0.5723067531639353,\n      0.5723067531639353,\n      0.5723067531639353,\n      0.85\n    ],\n    \"appearance.graph_background.color\": [\n      0.5,\n      0.5,\n      0.5,\n      0.85\n    ],\n    \"appearance.series1.color\": [\n      0.1,\n      0.2,\n      0.3,\n      0.85\n    ],\n    \"appearance.series2.color\": [\n      0.843985836961484,\n      0.4811084286661587,\n      0.2574337443683396,\n      0.85\n    ],\n    \"appearance.series3.color\": [\n      0.5723067531639353,\n      0.5723067531639353,\n      0.5723067531639353,\n      0.85\n    ],\n    \"appearance.window.color\": [\n      0.8595697933986142,\n      0.37040228688550164,\n      0.12343446308517256,\n      0.85\n    ]\n  },\n  \"version\": 1\n}\n"
+}

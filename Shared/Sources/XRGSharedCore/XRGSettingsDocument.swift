@@ -269,9 +269,10 @@ private struct JSONTextParser {
 
 /// One problem found while loading a settings document. `problem` is one of
 /// the four constant strings: `malformed`, `unsupported-version`,
-/// `invalid-value`, `unknown-format`; `id` names the settings key an
-/// `invalid-value` diagnostic is about, and is nil for document-level
-/// problems.
+/// `invalid-value`, `unknown-format` — or, from migration only, an
+/// `unsupported-color-space:<name>` string naming an archived colour space
+/// the reader cannot convert; `id` names the settings key such a
+/// diagnostic is about, and is nil for document-level problems.
 public struct XRGSettingsDiagnostic: Codable, Equatable, Sendable {
     public static let malformed = "malformed"
     public static let unsupportedVersion = "unsupported-version"

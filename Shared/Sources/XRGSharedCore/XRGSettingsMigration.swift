@@ -227,13 +227,26 @@ public enum XRGSettingsMigration {
 
     // MARK: Migration pipeline
 
+    /// The colour space `nsColorArchive` could not convert, so `store` can
+    /// report a diagnostic naming it instead of a bare `invalid-value`: which
+    /// space an archive carried is the finding. Set immediately before the
+    /// transform returns nil, consumed (cleared) by the very next `store` —
+    /// a synchronous set/consume pair inside one migration call, which the
+    /// app runs once at launch, never concurrently; hence the unchecked
+    /// global (strict-concurrency builds read this comment).
+    private nonisolated(unsafe) static var unconvertibleColorSpaceName: String?
+
     private static func store(_ value: XRGSettingsValue?, for entry: XRGSettingsEntry,
                               into document: inout XRGSettingsDocument,
                               diagnostics: inout [XRGSettingsDiagnostic], catalog: XRGSettingsCatalog) {
         guard let value else {
-            diagnostics.append(XRGSettingsDiagnostic(id: entry.id, problem: XRGSettingsDiagnostic.invalidValue))
+            let problem = unconvertibleColorSpaceName.map { "unsupported-color-space:\($0)" }
+                ?? XRGSettingsDiagnostic.invalidValue
+            unconvertibleColorSpaceName = nil
+            diagnostics.append(XRGSettingsDiagnostic(id: entry.id, problem: problem))
             return
         }
+        unconvertibleColorSpaceName = nil
         do {
             // Storing the entry's default removes the value again, so only
             // real customisations are ever written to the document. Migrated
@@ -671,34 +684,94 @@ public enum XRGSettingsMigration {
               let archive = KeyedArchive(data),
               Self.archiveClassName(of: archive.root, objects: archive.objects) == "NSColor",
               case .object(let fields) = archive.root else { return nil }
-        if fields["NSComponents"] != nil || fields["NSCustomColorSpace"] != nil {
-            // A color archived in its own space. AppKit records the original
-            // sRGB channels in NSComponents and keeps NSRGB only as a legacy
-            // fallback, so NSComponents is the value to read (xtf.rs again).
-            guard case .int(1)? = fields["NSColorSpace"] else { return nil }
-            if let exposure = fields["NSLinearExposure"], exposure != .data(Data("0".utf8)) {
-                return nil
-            }
-            guard let space = archiveReferenced("NSCustomColorSpace", in: fields, objects: archive.objects),
-                  case .object(let spaceFields) = space,
-                  var rgba = colorComponents(fields["NSComponents"], rgb: true) else { return nil }
-            switch spaceFields["NSID"] {
-            case .int(7): break  // the standard sRGB space
-            case .int(12): rgba.replaceSubrange(0..<3, with: displayP3ToSRGB(rgba))
-            default: return nil
-            }
-            return .color(rgba)
+        // `NSLinearExposure` rides along with ICC-backed spaces (a generic
+        // gamma 2.2 grey archives "1") but does not change the components, so
+        // it is opaque here and never gates the migration.
+        if let space = archiveReferenced("NSCustomColorSpace", in: fields, objects: archive.objects),
+           case .object(let spaceFields) = space {
+            return colorSpaceComponents(spaceFields, fields).map { .color($0) }
         }
-        switch fields["NSColorSpace"] {
-        case .int(1), .int(2):
-            guard fields["NSWhite"] == nil else { return nil }
-            return colorComponents(fields["NSRGB"], rgb: true).map { .color($0) }
-        case .int(3), .int(4):
-            guard fields["NSRGB"] == nil else { return nil }
-            return colorComponents(fields["NSWhite"], rgb: false).map { .color($0) }
+        // The legacy forms carry no space object; `NSColorSpace`'s own numbering
+        // (NSCalibratedRGBColorSpace=1, NSDeviceRGBColorSpace=2,
+        // NSCalibratedWhiteColorSpace=3, NSDeviceWhiteColorSpace=4,
+        // NSDeviceCMYKColorSpace=5) names the space.
+        switch archiveInt(fields["NSColorSpace"]) {
+        case 1?:
+            // The calibrated space is the generic one (NSColor.h).
+            guard let rgba = colorComponents(fields["NSRGB"], rgb: true),
+                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return nil }
+            return .color(genericRGBToSRGB(rgba))
+        case 2?:
+            guard let rgba = colorComponents(fields["NSRGB"], rgb: true),
+                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return nil }
+            return .color(rgba)
+        case 3?:
+            guard let rgba = colorComponents(fields["NSWhite"], rgb: false),
+                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return nil }
+            return .color(genericGreyToSRGB(rgba))
+        case 4?:
+            guard let rgba = colorComponents(fields["NSWhite"], rgb: false),
+                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return nil }
+            return .color(rgba)
+        case 5?:
+            unconvertibleColorSpaceName = "device-cmyk"
+            return nil
         default:
+            if let space = archiveInt(fields["NSColorSpace"]) {
+                unconvertibleColorSpaceName = "ns-color-space-\(space)"
+            }
             return nil
         }
+    }
+
+    /// The document colour an archived `NSColorSpace` names, converted into
+    /// the document's sRGB. The ids are the archiver's internal
+    /// `CGColorSpaceID` numbering, which it writes either as `NSID` or — for
+    /// the ICC-profiled spaces — as `NSSpaceID` (macOS 26 archives an sRGB
+    /// colour with `NSID 7` and a Display P3 one with `NSSpaceID 12`); both
+    /// field names are accepted for every id. The components are read from
+    /// `NSComponents` where the archiver writes them, else `NSRGB`/`NSWhite`;
+    /// a grey colour's `NSWhite` can be its calibrated rendering (a generic
+    /// gamma 2.2 grey archives 0.5 as "0.4246723652"), so the space's own
+    /// components win whenever the archive carries them. Returns nil (with
+    /// `unconvertibleColorSpaceName` left unset for a space it knows) when the
+    /// archive is malformed, or names the space when it cannot be converted.
+    private static func colorSpaceComponents(_ spaceFields: [String: ArchiveValue],
+                                              _ fields: [String: ArchiveValue]) -> [Double]? {
+        let id = archiveInt(spaceFields["NSID"]) ?? archiveInt(spaceFields["NSSpaceID"])
+        switch id {
+        case 7?:    // sRGB: the document's own space
+            return colorComponents(fields["NSComponents"], rgb: true)
+        case 12?:   // Display P3
+            guard var rgba = colorComponents(fields["NSComponents"], rgb: true) else { return nil }
+            rgba.replaceSubrange(0..<3, with: displayP3ToSRGB(rgba))
+            return rgba
+        case 1?:    // Generic RGB
+            guard let rgba = colorComponents(fields["NSRGB"] ?? fields["NSComponents"], rgb: true),
+                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return nil }
+            return genericRGBToSRGB(rgba)
+        case 2?:    // Generic Grey
+            guard let rgba = colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false),
+                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return nil }
+            return genericGreyToSRGB(rgba)
+        case 9?:    // Generic Grey Gamma 2.2: macOS 26 renders its greys as sRGB
+            return colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false)
+        case 5?:    // Device Grey
+            return colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false)
+        case 8?:    // Adobe RGB (1998)
+            unconvertibleColorSpaceName = "adobe-rgb"
+            return nil
+        default:
+            unconvertibleColorSpaceName = id.map { "color-space-\($0)" } ?? "unnamed"
+            return nil
+        }
+    }
+
+    /// The `Int` an archived object field carries, nil when it is not an
+    /// integer the platform can represent exactly.
+    private static func archiveInt(_ value: ArchiveValue?) -> Int? {
+        guard case .int(let raw)? = value else { return nil }
+        return Int(exactly: raw)
     }
 
     private static func fontArchive(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
@@ -737,7 +810,7 @@ public enum XRGSettingsMigration {
         return rgba
     }
 
-    /// Display P3 channels to bounded sRGB, CSS Color 4's matrices, as the
+    /// Display P3 channels to bounded sRGB, CSS Color 4's P3→sRGB matrix, as the
     /// Rust XTF decoder does it.
     private static func displayP3ToSRGB(_ rgb: [Double]) -> [Double] {
         let matrix: [[Double]] = [
@@ -750,6 +823,51 @@ public enum XRGSettingsMigration {
             min(1, max(0, zip(row, linear).map { $0.0 * $0.1 }.reduce(0, +)))
         }
         return converted.map { $0 <= 0.0031308 ? $0 * 12.92 : 1.055 * pow($0, 1 / 2.4) - 0.055 }
+    }
+
+    /// Generic RGB (the calibrated space, NSColor.h) channels to bounded
+    /// sRGB, with the standard matrices:
+    ///
+    ///     linear = c ** 1.8
+    ///     M = sRGB(D65)⁻¹ · Bradford(D50→D65) · [rXYZ gXYZ bXYZ]
+    ///     srgb = encode(clamp(M · linear))    // clamped only after conversion
+    ///
+    /// `sRGB(D65)` and the Bradford cone matrix are CSS Color 4's constants;
+    /// the primaries `[rXYZ gXYZ bXYZ]` are the ICC PCS tags of Apple's
+    /// Generic RGB Profile (/System/Library/ColorSync/Profiles/Generic RGB
+    /// Profile.icc), which are D50-adapted, so Bradford adapts them to sRGB's
+    /// D65 white first. The profile's curve is the classic 1.8 gamma. The
+    /// product, to full double precision:
+    ///
+    ///     M = [ 1.025264015903568   -0.026551657962031315  0.0012841603452191097 ]
+    ///         [ 0.019397881509373611  0.94802193968336967   0.032581367105521619 ]
+    ///         [ -0.00177326804993563 -0.0014400168347385826 1.0032120110741125 ]
+    ///
+    /// which reproduces macOS 26 ColorSync's own generic-RGB→sRGB conversions
+    /// to within 2e-5 (probed: primaries, greys and mixed colours).
+    private static func genericRGBToSRGB(_ rgba: [Double]) -> [Double] {
+        let matrix: [[Double]] = [
+            [1.025264015903568, -0.026551657962031315, 0.0012841603452191097],
+            [0.019397881509373611, 0.94802193968336967, 0.032581367105521619],
+            [-0.00177326804993563, -0.0014400168347385826, 1.0032120110741125],
+        ]
+        let linear = (0..<3).map { pow(rgba[$0], 1.8) }
+        let converted = matrix.map { row in
+            min(1, max(0, zip(row, linear).map { $0.0 * $0.1 }.reduce(0, +)))
+        }
+        let encoded = converted.map { $0 <= 0.0031308 ? $0 * 12.92 : 1.055 * pow($0, 1 / 2.4) - 0.055 }
+        return encoded + [rgba[3]]
+    }
+
+    /// A grey from the 1.8-gamma generic grey space (Generic Grey, and the
+    /// legacy calibrated white) to sRGB: the grey is linearised with the 1.8
+    /// gamma and encoded with CSS Color 4's sRGB transfer curve, on all three
+    /// channels (ColorSync converts these greys exactly this way on
+    /// macOS 26, probed to 1e-8 along the grey axis).
+    private static func genericGreyToSRGB(_ rgba: [Double]) -> [Double] {
+        let linear = min(1, max(0, pow(rgba[0], 1.8)))
+        let grey = linear <= 0.0031308 ? linear * 12.92 : 1.055 * pow(linear, 1 / 2.4) - 0.055
+        return [grey, grey, grey, rgba[3]]
     }
 
     private static func archiveClassName(of root: ArchiveValue, objects: [ArchiveValue]) -> String? {

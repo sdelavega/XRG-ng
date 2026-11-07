@@ -36,6 +36,28 @@ import Testing
 ///   real archives' channels were read out of the exported bytes with an
 ///   independent plist dumper, never with the code under test; only
 ///   differing values are in the pinned canonical bytes.
+/// - `macos-0.2.2-colourspaces-defaults.plist` is a real export of another
+///   disposable domain (`com.sdelavega.xrg.task-4-colourspaces`, deleted
+///   right after the export), written by the same released-0.2.2 archiving
+///   call `XRGPrefController.themeDictionary` makes
+///   (`NSKeyedArchiver.archivedData(withRootObject:
+///   color.withAlphaComponent(alpha), requiringSecureCoding: true)`,
+///   XRGPrefController.swift:639) for one colour per colour space an
+///   NSColorPanel colour well can hand the app on macOS 26: Display P3,
+///   generic gamma 2.2 grey, sRGB, generic RGB, generic grey, calibrated
+///   white, and Adobe RGB 1998 (the one the reader cannot convert).
+///   `macos-0.2.2-colourspaces-expected.json` was derived by hand: each
+///   colour's channels were read out of the exported bytes with an
+///   independent Python plist dumper and converted to sRGB with the
+///   standard matrices (shown in the migration source's comments), never
+///   with the code under test.
+/// - `macos-0.2.2-colourspaces-synthetic.plist` is a hand-built table of
+///   keyed archives (a Python `plistlib` writer, matching
+///   `NSKeyedArchiver`'s binary-plist shape) covering both field spellings
+///   (`NSID`, `NSSpaceID`) of every supported space id, the legacy
+///   `NSColorSpace` shapes a 0.2.2 well can archive, and two unconvertible
+///   spaces; its expected values are inlined in the test, hand-derived the
+///   same way.
 /// - `linux-v40.json` is a hand-written, customised version-40 file in the
 ///   shape Rust's serde model writes — unset optional overrides omitted,
 ///   exactly as `skip_serializing_if` leaves them out, never as explicit
@@ -71,6 +93,87 @@ struct SettingsMigrationTests {
     }
 
     // MARK: macOS defaults -> document
+
+    @Test func colourWellSpacesMigrateToSRGB() throws {
+        // A colour well archives whatever colour NSColorPanel handed it, in
+        // that colour's own space (review fix round 2): the fixture is a real
+        // export of a disposable domain, every colour archived exactly as the
+        // released 0.2.2 encoder path (XRGPrefController.swift:639) archives
+        // it, with `withAlphaComponent` carrying the transparency slider's
+        // value. The expected sRGB values are hand-derived from the standard
+        // matrices (CSS Color 4's P3→sRGB matrix; Apple's Generic RGB Profile
+        // primaries Bradford-adapted D50→D65 with the 1.8 gamma; the 1.8 gamma
+        // for the generic and calibrated greys) — never by the code under
+        // test.
+        let catalog = try XRGSettingsCatalog.load()
+        let defaults = try loadDefaultsPlist("macos-0.2.2-colourspaces-defaults")
+        let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(defaults, catalog: catalog)
+        let expected = try expectedFile("macos-0.2.2-colourspaces-expected.json")
+        #expect(diagnostics == expected.diagnostics,
+                "only the Adobe RGB colour may fail, naming its space")
+        #expect(document.serialized() == Data(try #require(expected.document).utf8),
+                "the colour spaces did not migrate to the hand-derived sRGB values")
+
+        // The Display P3 colour survives as converted sRGB (0.8, 0.4, 0.2 in
+        // P3 is 0.8596, 0.3704, 0.1234 in sRGB), not as the default.
+        #expect(document.values["appearance.window.color"]
+                    == .color([0.8595697933986142, 0.37040228688550164, 0.12343446308517256, 0.85]))
+        // The grey colour survives the same way: a generic gamma 2.2 grey
+        // 0.5 is sRGB 0.5 on every channel.
+        #expect(document.values["appearance.graph_background.color"] == .color([0.5, 0.5, 0.5, 0.85]))
+        // The Adobe RGB colour cannot be converted: it falls back per key
+        // with a diagnostic naming the space.
+        #expect(document.values["appearance.text.color"] == nil)
+        #expect(diagnostics == [XRGSettingsDiagnostic(id: "appearance.text.color",
+                                                      problem: "unsupported-color-space:adobe-rgb")])
+    }
+
+    @Test func everyArchivedSpaceIDFormMigrates() throws {
+        // The archiver writes the space id either as `NSID` or — for the
+        // ICC-profiled spaces — as `NSSpaceID` (macOS 26 archives sRGB as
+        // `NSID 7`, Display P3 as `NSSpaceID 12`), and the legacy forms carry
+        // no space object at all. The synthetic fixture is a table of
+        // hand-built archives (a Python plist writer, documented in the
+        // fixture) covering both field spellings of every supported id, the
+        // legacy shapes, and two spaces that cannot be converted. Every case
+        // migrates under `borderColor` with a valid key alongside (review fix
+        // round 2's per-key contract).
+        let catalog = try XRGSettingsCatalog.load()
+        let table = try loadDefaultsPlist("macos-0.2.2-colourspaces-synthetic")
+        let cases: [(String, XRGSettingsValue?, String?)] = [
+            ("spaceIDSRGB", .color([0.1, 0.2, 0.3, 0.9]), nil),
+            ("nsidP3", .color([0.8595697933986142, 0.37040228688550164, 0.12343446308517256, 0.9]), nil),
+            ("spaceIDGenericRGB", .color([0.843985836961484, 0.4811084286661587, 0.2574337443683396, 0.9]), nil),
+            ("spaceIDGenericGrey",
+             .color([0.5723067531639353, 0.5723067531639353, 0.5723067531639353, 0.9]), nil),
+            ("nsidGamma22Grey", .color([0.5, 0.5, 0.5, 0.9]), nil),
+            ("deviceRGB", .color([0.1, 0.2, 0.3, 0.9]), nil),
+            ("deviceWhite", .color([0.5, 0.5, 0.5, 0.9]), nil),
+            ("calibratedRGB",
+             .color([0.12800222011705584, 0.26328739354840786, 0.37305951570422197, 0.9]), nil),
+            ("unknownSpace", nil, "unsupported-color-space:color-space-16"),
+            ("deviceCMYK", nil, "unsupported-color-space:device-cmyk"),
+        ]
+        for (name, value, problem) in cases {
+            let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                ["borderColor": try #require(table[name] as? Data, "\(name) is in the table"),
+                 "borderWidth": 6], catalog: catalog)
+            if let value {
+                #expect(diagnostics.isEmpty, "\(name) was reported as invalid")
+                #expect(document.values["appearance.border.color"] == value,
+                        "\(name) did not migrate to its hand-derived sRGB value")
+            } else {
+                #expect(diagnostics == [XRGSettingsDiagnostic(id: "appearance.border.color",
+                                                              problem: try #require(problem))],
+                        "\(name) must fall back with a diagnostic naming the space")
+                #expect(document.values["appearance.border.color"] == nil,
+                        "\(name) must take the entry's default")
+            }
+            // The per-key contract: a valid key in the same domain migrates.
+            #expect(document.values["general.window.border_width"] == .int(6),
+                   "\(name): the valid key in the same domain must still migrate")
+        }
+    }
 
     @Test func macDefaultsMigrateToExpectedDocument() throws {
         let catalog = try XRGSettingsCatalog.load()
