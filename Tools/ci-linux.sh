@@ -11,6 +11,7 @@ swift --version
 rustc --version
 pkg-config --modversion xkbcommon
 python3 Tools/settings-catalog-embed.py --check
+python3 Tools/aether7b-tokens.py --check
 # Tests already build the dynamic product. A second build needlessly re-enters
 # Swift 6.4.1's planner (which has crashed in libdispatch on hosted x86_64).
 # Keep one build, then require and exercise that exact artifact below.

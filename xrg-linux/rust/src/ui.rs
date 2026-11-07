@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Native egui shell. Workers publish copied data; painting never collects it.
+pub mod aether7b;
 mod collapse;
 #[cfg(target_os = "linux")]
 #[path = "ui/compositor.rs"]
