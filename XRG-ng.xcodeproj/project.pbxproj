@@ -130,13 +130,26 @@
 		FC3010260000000000000001 /* XRGSMCNative.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Data Miners/XRGSMCNative.h"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		FC0000000000000000000103 /* Exceptions for "Theme compatibility fixtures" in "XRGTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				stocks/empty-result.json,
+				stocks/error-not-found.json,
+				stocks/history-1y.json,
+				stocks/malformed.json,
+				stocks/quote-15m.json,
+			);
+			target = FC9F0AE1308E5E96001445A9 /* XRGTests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FC9F0AE3308E5E96001445A9 /* XRGTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = XRGTests; sourceTree = "<group>"; };
 		FC9F0AF2308E61FC001445A9 /* XRGCore */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = XRGCore; sourceTree = "<group>"; };
 		FC0000000000000000000101 /* Shared Swift */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Shared/Sources/XRGSharedCore; sourceTree = "<group>"; };
-		FC0000000000000000000102 /* Theme compatibility fixtures */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Shared/Tests/Fixtures; sourceTree = "<group>"; };
+		FC0000000000000000000102 /* Theme compatibility fixtures */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Shared/Tests/Fixtures; sourceTree = "<group>"; exceptions = (FC0000000000000000000103 /* Exceptions for "Theme compatibility fixtures" in "XRGTests" target */); };
 /* End PBXFileSystemSynchronizedRootGroup section */
-
 /* Begin PBXFrameworksBuildPhase section */
 		273ECE6215740DE700E65D82 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;

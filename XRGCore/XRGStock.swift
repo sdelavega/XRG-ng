@@ -41,31 +41,6 @@ public final class XRGStock: NSObject, @unchecked Sendable {
         let change: Double
     }
 
-    private struct Response: Decodable {
-        let chart: Chart
-        struct Chart: Decodable { let result: [Result]? }
-        struct Result: Decodable {
-            let meta: Meta?
-            let indicators: Indicators?
-        }
-        struct Meta: Decodable {
-            let regularMarketPrice: Double?
-            let previousClose: Double?
-        }
-        struct Indicators: Decodable {
-            let quote: [Prices]?
-        }
-        struct Prices: Decodable { let close: [Price]? }
-        struct Price: Decodable {
-            let value: Double?
-            init(from decoder: any Decoder) throws {
-                let container = try decoder.singleValueContainer()
-                let number = try? container.decode(Double.self)
-                value = number.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
-            }
-        }
-    }
-
     public override init() {
         transport = { url in
             let (data, response) = try await URLSession.shared.data(from: url)
@@ -108,29 +83,7 @@ public final class XRGStock: NSObject, @unchecked Sendable {
     /// URLComponents encodes the symbol as one path segment, including indices.
     private var urls: (URL, URL)? {
         guard let ticker else { return nil }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        guard let encoded = ticker.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
-        var history = URLComponents()
-        history.scheme = "https"
-        history.host = "query1.finance.yahoo.com"
-        history.percentEncodedPath = "/v7/finance/chart/" + encoded
-        history.queryItems = [
-            URLQueryItem(name: "range", value: "1y"),
-            URLQueryItem(name: "interval", value: "1d"),
-            URLQueryItem(name: "indicators", value: "quote"),
-            URLQueryItem(name: "includeTimestamps", value: "true")
-        ]
-        var quote = history
-        quote.percentEncodedPath = "/v8/finance/chart/" + encoded
-        quote.queryItems = [
-            URLQueryItem(name: "region", value: "US"),
-            URLQueryItem(name: "lang", value: "en-US"),
-            URLQueryItem(name: "includePrePost", value: "false"),
-            URLQueryItem(name: "interval", value: "15m"),
-            URLQueryItem(name: "range", value: "1d")
-        ]
-        guard let historyURL = history.url, let quoteURL = quote.url else { return nil }
-        return (historyURL, quoteURL)
+        return XRGStockChart.urls(ticker: ticker)
     }
 
     @objc public func resetData() {
@@ -158,26 +111,16 @@ public final class XRGStock: NSObject, @unchecked Sendable {
             async let historyData = try? transport(historyURL)
             async let quoteData = try? transport(quoteURL)
             let (first, second) = await (historyData, quoteData)
-            let prices = first.flatMap(Self.parseHistory) ?? []
+            let prices = first.flatMap { XRGStockChart.parse(history: $0)?.closes } ?? []
             let quote = second.flatMap(Self.parseQuote)
             self?.finish(id: id, history: prices, quote: quote)
         }
     }
 
-    private static func result(_ data: Data) -> Response.Result? {
-        (try? JSONDecoder().decode(Response.self, from: data))?.chart.result?.first
-    }
-
-    private static func parseHistory(_ data: Data) -> [Double]? {
-        result(data)?.indicators?.quote?.first?.close?.compactMap(\.value)
-    }
-
     private static func parseQuote(_ data: Data) -> Quote? {
-        guard let meta = result(data)?.meta,
-              let price = meta.regularMarketPrice, let previous = meta.previousClose,
-              price.isFinite, price >= 0, previous.isFinite, previous >= 0,
-              (price - previous).isFinite else { return nil }
-        return Quote(price: price, change: price - previous)
+        guard let chart = XRGStockChart.parse(quote: data),
+              let price = chart.price, let change = chart.change else { return nil }
+        return Quote(price: price, change: change)
     }
 
     private func finish(id: UUID, history: [Double], quote: Quote?) {
