@@ -3,3 +3,9 @@
 # normalise their line breaks; keep both files on LF everywhere.
 Shared/Settings/*.json text eol=lf
 Shared/Sources/XRGSharedCore/XRGSettingsCatalogData.swift text eol=lf
+# The Aether7b generator compares its generated files byte for byte with
+# UTF-8/LF output in --check, and the test suite pins the vendored JSON
+# (minus its $source line) to the upstream SHA-256; keep all three on LF.
+Shared/Design/aether7b.tokens.json text eol=lf
+XRGCore/XRGAether7b.swift text eol=lf
+xrg-linux/rust/src/ui/aether7b.rs text eol=lf

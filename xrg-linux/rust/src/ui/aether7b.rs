@@ -245,5 +245,5 @@ pub const MOTION_FAST: Duration = Duration::from_millis(140);
 pub const MOTION_BASE: Duration = Duration::from_millis(200);
 /// Motion slow: 320 ms.
 pub const MOTION_SLOW: Duration = Duration::from_millis(320);
-/// Standard easing curve (cubic-bezier 0.22, 1, 0.36, 1).
+/// Standard easing curve (cubic-bezier from the token file).
 pub const EASE: [f32; 4] = [0.22, 1.0, 0.36, 1.0];

@@ -153,7 +153,7 @@ def generate_swift(tokens):
             "    public enum Radius {",
         ]
     )
-    for name, value in [("sm", 6), ("md", 8), ("lg", 12)]:
+    for name, value in radius_entries(tokens):
         lines.append(f"        public static let {name}: CGFloat = {value}")
     lines.extend(
         [
@@ -176,9 +176,12 @@ def generate_swift(tokens):
             "    public enum Motion {",
         ]
     )
-    for name, value in [("fast", 0.140), ("base", 0.200), ("slow", 0.320)]:
-        lines.append(f"        public static let {name}: TimeInterval = {value:.3f}")
-    lines.append("        public static let ease: [CGFloat] = [0.22, 1.0, 0.36, 1.0]")
+    for name, milliseconds in duration_entries(tokens):
+        lines.append(
+            f"        public static let {name}: TimeInterval = {milliseconds / 1000:.3f}"
+        )
+    ease = ", ".join(float_literal(value) for value in ease_entries(tokens))
+    lines.append(f"        public static let ease: [CGFloat] = [{ease}]")
     lines.extend(["    }", "}", ""])
     return "\n".join(lines)
 
@@ -191,6 +194,28 @@ def space_entries(tokens):
         entries.append((f"s{number}", value))
     entries.append(("touchMin", scale["touchMin"]["$value"]["value"]))
     return entries
+
+
+def radius_entries(tokens):
+    """(name, px value) for every generated radius, read from the token file."""
+    radius = tokens["radius"]
+    return [(name, radius[name]["$value"]["value"]) for name in ("sm", "md", "lg")]
+
+
+def duration_entries(tokens):
+    """(name, milliseconds) for every generated motion duration."""
+    duration = tokens["motion"]["duration"]
+    return [(name, duration[name]["$value"]["value"]) for name in ("fast", "base", "slow")]
+
+
+def ease_entries(tokens):
+    """The standard easing curve as a list of floats."""
+    return [float(value) for value in tokens["motion"]["easing"]["standard"]["$value"]]
+
+
+def float_literal(value):
+    """A stable float literal, e.g. 1 -> 1.0, 0.22 -> 0.22."""
+    return repr(float(value))
 
 
 def type_entries(tokens):
@@ -244,19 +269,22 @@ def generate_rust(tokens):
         lines.append(f"/// Space {name}: {value} px.")
         lines.append(f"pub const SPACE_{name.upper()}: f32 = {value}.0;")
     lines.append("")
-    for name, value in [("SM", 6), ("MD", 8), ("LG", 12)]:
-        lines.append(f"/// Radius {name.lower()}: {value} px.")
-        lines.append(f"pub const RADIUS_{name}: f32 = {value}.0;")
+    for name, value in radius_entries(tokens):
+        lines.append(f"/// Radius {name}: {value} px.")
+        lines.append(f"pub const RADIUS_{name.upper()}: f32 = {value}.0;")
     lines.append("")
     for name, size, line_height in type_entries(tokens):
         lines.append(f"/// Type {name}: {size} px / {line_height} px line height.")
         lines.append(f"pub const TYPE_{name.upper()}: (f32, f32) = ({size}.0, {line_height}.0);")
     lines.append("")
-    for name, value in [("FAST", 140), ("BASE", 200), ("SLOW", 320)]:
-        lines.append(f"/// Motion {name.lower()}: {value} ms.")
-        lines.append(f"pub const MOTION_{name}: Duration = Duration::from_millis({value});")
-    lines.append("/// Standard easing curve (cubic-bezier 0.22, 1, 0.36, 1).")
-    lines.append("pub const EASE: [f32; 4] = [0.22, 1.0, 0.36, 1.0];")
+    for name, milliseconds in duration_entries(tokens):
+        lines.append(f"/// Motion {name}: {milliseconds} ms.")
+        lines.append(
+            f"pub const MOTION_{name.upper()}: Duration = Duration::from_millis({milliseconds});"
+        )
+    ease = ", ".join(float_literal(value) for value in ease_entries(tokens))
+    lines.append("/// Standard easing curve (cubic-bezier from the token file).")
+    lines.append(f"pub const EASE: [f32; 4] = [{ease}];")
     lines.append("")
     return "\n".join(lines)
 
@@ -280,17 +308,18 @@ def main(argv=None):
     if not args.check:
         for path, content in targets:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            path.write_bytes(content.encode("utf-8"))
             print(f"wrote {path.relative_to(ROOT)}")
         return 0
 
     stale = []
     for path, content in targets:
-        current = (
-            path.read_text() if path.exists() else "(missing file)"
-        )
-        if current != content:
+        expected = content.encode("utf-8")
+        current_bytes = path.read_bytes() if path.exists() else b""
+        if current_bytes != expected:
             stale.append(path)
+            # Decode only for the display diff; the verdict above is on bytes.
+            current = current_bytes.decode("utf-8", errors="replace")
             sys.stdout.writelines(
                 difflib.unified_diff(
                     current.splitlines(keepends=True),
