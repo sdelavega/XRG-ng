@@ -275,13 +275,15 @@ impl ThemeDocument {
     /// Publish a new theme atomically, without replacing a concurrently created file.
     pub fn save_new(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
-        atomic_write_policy(
+        atomic_write_new(
             path,
             &serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?,
             false,
-            false,
         )
     }
+    /// Replace an existing theme file atomically — the write the user
+    /// confirmed in the file picker. A read-only destination inside a
+    /// writable directory is replaced, unlike the settings document.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
         atomic_write(
@@ -1080,7 +1082,7 @@ impl Store {
             return Ok(());
         }
         let settings = document::linux_view(&self.document)?;
-        atomic_write_bounded(&self.path, &self.document, true, true, DOCUMENT_LIMIT)?;
+        atomic_write_settings(&self.path, &self.document)?;
         self.settings = settings;
         self.expected = Some(self.document.clone());
         self.blocked = false;
@@ -1173,7 +1175,7 @@ impl Store {
         if read_optional(&self.path, DOCUMENT_LIMIT)? != self.expected {
             return Err("Settings changed on disk; reopen the app before saving".into());
         }
-        atomic_write_bounded(&self.path, &document, true, true, DOCUMENT_LIMIT)?;
+        atomic_write_settings(&self.path, &document)?;
         self.document = document;
         self.settings = settings;
         self.expected = Some(self.document.clone());
@@ -1230,7 +1232,7 @@ impl Store {
             ));
         }
         self.document = document.clone();
-        match atomic_write_bounded(&self.path, &document, true, true, DOCUMENT_LIMIT) {
+        match atomic_write_settings(&self.path, &document) {
             Ok(()) => {
                 self.expected = Some(document);
             }
@@ -1253,19 +1255,64 @@ impl Store {
         ));
     }
 }
+/// Whether the atomic writer may replace an existing destination file its
+/// owner made read-only. POSIX rename replaces such a file whenever the
+/// directory allows it, so every writer states its policy explicitly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WritePolicy {
+    /// The settings document: never replaced without its owner's write
+    /// permission, whatever the directory or the caller's privileges allow.
+    ProtectReadOnly,
+    /// A replacement the user explicitly confirmed (theme export) or a
+    /// private state file the app owns (AI accounting): the writer's
+    /// previous semantics, so a read-only file in a writable directory is
+    /// replaced.
+    ReplaceAllowed,
+}
+/// Replace an existing theme file the user confirmed overwriting.
 fn atomic_write(path: &Path, bytes: &[u8], create_parent: bool) -> Result<(), String> {
-    atomic_write_policy(path, bytes, create_parent, true)
+    atomic_write_bounded(
+        path,
+        bytes,
+        create_parent,
+        true,
+        LIMIT,
+        WritePolicy::ReplaceAllowed,
+    )
 }
-fn atomic_write_policy(
-    path: &Path,
-    bytes: &[u8],
-    create_parent: bool,
-    replace: bool,
-) -> Result<(), String> {
-    atomic_write_bounded(path, bytes, create_parent, replace, LIMIT)
+/// Publish a new theme, without replacing a concurrently created file.
+fn atomic_write_new(path: &Path, bytes: &[u8], create_parent: bool) -> Result<(), String> {
+    atomic_write_bounded(
+        path,
+        bytes,
+        create_parent,
+        false,
+        LIMIT,
+        WritePolicy::ReplaceAllowed,
+    )
 }
+/// Write the AI accounting state, a private file the app itself owns.
 pub(crate) fn atomic_write_state(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    atomic_write_bounded(path, bytes, true, true, 1_048_576)
+    atomic_write_bounded(
+        path,
+        bytes,
+        true,
+        true,
+        1_048_576,
+        WritePolicy::ReplaceAllowed,
+    )
+}
+/// Write the settings document: the one destination its owner's read-only
+/// mode protects from replacement, even inside a writable directory.
+fn atomic_write_settings(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    atomic_write_bounded(
+        path,
+        bytes,
+        true,
+        true,
+        DOCUMENT_LIMIT,
+        WritePolicy::ProtectReadOnly,
+    )
 }
 fn atomic_write_bounded(
     path: &Path,
@@ -1273,6 +1320,7 @@ fn atomic_write_bounded(
     create_parent: bool,
     replace: bool,
     limit: usize,
+    policy: WritePolicy,
 ) -> Result<(), String> {
     if bytes.len() > limit {
         return Err(format!("Settings/state file exceeds {} bytes", limit));
@@ -1290,9 +1338,10 @@ fn atomic_write_bounded(
         return Err("Destination must be a regular file, without symlinks".into());
     }
     // POSIX rename would replace a destination regardless of the file's own
-    // mode, whatever the writable directory allows: a file its owner made
-    // read-only is never replaced.
-    if destination_not_writable(path) {
+    // mode, whatever the writable directory allows. Only a ProtectReadOnly
+    // writer refuses — the settings document; a confirmed theme replacement
+    // and the app-owned accounting state keep their previous semantics.
+    if policy == WritePolicy::ProtectReadOnly && destination_not_writable(path) {
         return Err(format!(
             "Destination is not writable by its owner: {}",
             path.display()
@@ -1344,10 +1393,11 @@ fn atomic_write_bounded(
     }
     Err("Could not create a unique settings temporary file".into())
 }
-/// Whether an existing file lacks its owner's write permission, so the
-/// atomic write refuses to replace it. The file's own mode decides — not
-/// the uid — so a read-only destination is never rewritten, whatever the
-/// directory permissions or the caller's privileges allow.
+/// Whether an existing file lacks its owner's write permission, so a
+/// ProtectReadOnly writer refuses to replace it. The file's own mode
+/// decides — not the uid — so a read-only settings document is never
+/// rewritten, whatever the directory permissions or the caller's
+/// privileges allow.
 #[cfg(unix)]
 fn destination_not_writable(path: &Path) -> bool {
     fs::symlink_metadata(path)

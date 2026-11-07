@@ -58,6 +58,25 @@ fn concurrent_new_exports_publish_exactly_one_complete_private_file() {
     assert_eq!(fs::read_dir(&s.0).unwrap().count(), 1);
 }
 #[test]
+fn confirmed_replacement_of_a_read_only_theme_file_succeeds() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Scratch::new();
+    let path = s.0.join("theme.json");
+    theme("original").save_new(&path).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o444);
+    fs::set_permissions(&path, permissions).unwrap();
+    // The owner's read-only mode protects the settings document, never a
+    // theme the user explicitly confirmed replacing ("Replace file") in a
+    // writable directory: the previous replacement semantics.
+    theme("replacement").save(&path).unwrap();
+    assert_eq!(ThemeDocument::load(&path).unwrap().name, "replacement");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+#[test]
 fn new_export_preserves_existing_files_and_links_until_explicit_replacement() {
     use std::os::unix::fs::symlink;
     let s = Scratch::new();
