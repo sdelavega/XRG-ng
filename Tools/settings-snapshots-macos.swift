@@ -91,6 +91,9 @@ enum SettingsSnapshots {
                 controller.show(section: section)
                 controller.refresh()
                 guard let content = window.contentView else { continue }
+                // Lay the section out before the bitmap capture: the
+                // bitmap path renders what is laid out, and never waits.
+                content.layoutSubtreeIfNeeded()
                 let pngName = "\(section)-\(name).png"
                 guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {
                     fail("no bitmap for \(pngName)")

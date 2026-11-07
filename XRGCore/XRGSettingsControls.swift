@@ -131,6 +131,11 @@ import AppKit
     let haloLayer = CALayer()
     /// Whether the control's widget currently holds keyboard focus.
     public private(set) var isFocusedControl = false
+    /// A read-only display control (ruling P3's font field): the flag is an
+    /// enduring property of the control itself, so the `depends`-driven
+    /// enablement path can never re-open the widget for edits (finding N4 —
+    /// any settings notification used to make the font display editable).
+    public var isReadOnlyDisplay = false
     /// Constraints keeping the control sized while no error shows.
     private var idleConstraints: [NSLayoutConstraint] = []
     /// Constraints spreading the rim + dot + reason when an error shows.
@@ -166,7 +171,9 @@ import AppKit
         dotView.translatesAutoresizingMaskIntoConstraints = false
         dotView.wantsLayer = true
         dotView.layer?.backgroundColor = XRGAether7b.Color.statusDanger(dark: dark).cgColor
-        dotView.layer?.cornerRadius = XRGAether7b.Radius.pill
+        // The mockup's status dot is a 7 pt pill: the CSS-clamped radius,
+        // never the raw 9999 token (W1).
+        dotView.layer?.cornerRadius = XRGAether7bStyle.pillRadius(for: CGSize(width: 7, height: 7))
         dotView.isHidden = true
         dotView.setAccessibilityHidden(true)
         addSubview(dotView)
@@ -198,6 +205,9 @@ import AppKit
         super.layout()
         let inset = -2.0
         haloLayer.frame = rimView.bounds.insetBy(dx: inset, dy: inset)
+        // Pill radii are re-clamped at layout time (W1): a layer whose size
+        // changed can never keep a degenerate 9999 pt radius.
+        dotView.layer?.cornerRadius = XRGAether7bStyle.pillRadius(for: dotView.bounds.size)
     }
 
     // MARK: Theme plumbing
@@ -301,6 +311,18 @@ import AppKit
     }
     static let eyebrowTracking = 0.9
 
+    /// The corner radius a pill layer actually draws (W1): CSS clamps
+    /// `border-radius` to half the box's shortest side, so the mockup's
+    /// 9999 px pill token on a 34×20 track *is* 10 pt there — and the raw
+    /// 9999 value degenerates the bitmap renderer (`cacheDisplay`, the
+    /// snapshot path) into one uniform fill covering the whole capture.
+    /// Every pill layer therefore draws this clamped radius, refreshed at
+    /// layout time so a resized layer can never regress.
+    static func pillRadius(for size: CGSize) -> CGFloat {
+        max(0, min(size.width, size.height) / 2)
+    }
+
+
     /// An `// EYEBROW` mono label (CSS-rendered slashes in the mockup).
     static func eyebrow(_ text: String, dark: Bool, size: CGFloat = 12.0) -> NSTextField {
         let label = NSTextField(labelWithString: "")
@@ -355,39 +377,175 @@ import AppKit
     }
 }
 
-/// A slider with the token focus treatment: no native focus ring — the
-/// 2 px Carolina halo draws from tokens while the slider holds focus.
-@MainActor public final class XRGSettingsSlider: NSSlider {
+/// The mockup's token slider (issue 9: control chrome is not exempt):
+/// macOS 26's NSSlider is SwiftUI-hosted and composites its own
+/// system-tinted track layers — no public API restyles them — so the
+/// window draws its slider itself: an accent-tint track, an accent-fill
+/// progress portion and a pill knob, all token colours, with the keyboard
+/// contract (arrows step by the entry's catalog step, Shift ×10) and
+/// accessibility increment/decrement. The focus treatment is the 2 px
+/// Carolina halo drawn from tokens.
+@MainActor public final class XRGSettingsSliderView: NSControl {
+    public var minValue: Double = 0
+    public var maxValue: Double = 1
+    /// The keyboard and accessibility step: the entry's catalog step.
+    public var increment: Double = 0.1
+    private let trackLayer = CALayer()
+    private let fillLayer = CALayer()
+    private let knobLayer = CALayer()
     private let haloLayer = CALayer()
+    private var isDarkAppearance = false
+    private var isDragging = false
+    private var internalValue: Double = 0
     public private(set) var isFocused = false
 
+    /// NSControl's own double-value slot, bridged to the internal value
+    /// the track draws.
+    public override var doubleValue: Double {
+        get { internalValue }
+        set {
+            internalValue = min(maxValue, max(minValue, newValue))
+            layoutSlider()
+        }
+    }
+
+    public init(dark: Bool) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        isDarkAppearance = dark
+        wantsLayer = true
+        for layer in [trackLayer, fillLayer, knobLayer] { self.layer?.addSublayer(layer) }
+        haloLayer.borderWidth = 2
+        haloLayer.borderColor = XRGAether7bPalette.focusHalo.cgColor
+        haloLayer.isHidden = true
+        self.layer?.addSublayer(haloLayer)
+        setAccessibilityRole(.slider)
+        focusRingType = .none
+        restyle()
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Programmatic view") }
+
+    /// Restyle from the token palette for this appearance.
+    public func applyAppearance(dark: Bool) {
+        isDarkAppearance = dark
+        restyle()
+    }
+    private func restyle() {
+        trackLayer.backgroundColor = XRGAether7b.Color.accentTint(dark: isDarkAppearance).cgColor
+        fillLayer.backgroundColor = XRGAether7b.Color.accentFill(dark: isDarkAppearance).cgColor
+        knobLayer.backgroundColor = XRGAether7b.Color.accentFill(dark: isDarkAppearance).cgColor
+        knobLayer.borderColor = XRGAether7b.Color.iceSpecular.cgColor
+        knobLayer.borderWidth = 1
+    }
+
+    public override var acceptsFirstResponder: Bool { isEnabled }
     public override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        if accepted { setSliderFocused(true) }
-        return accepted
+        isFocused = true
+        haloLayer.isHidden = false
+        setAccessibilityFocused(true)
+        layoutSlider()
+        return true
     }
     public override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        if resigned { setSliderFocused(false) }
-        return resigned
+        isFocused = false
+        haloLayer.isHidden = true
+        setAccessibilityFocused(false)
+        layoutSlider()
+        return true
     }
-    private func setSliderFocused(_ focused: Bool) {
-        guard focused != isFocused else { return }
-        isFocused = focused
-        if focused {
-            wantsLayer = true
-            haloLayer.borderWidth = 2
-            haloLayer.borderColor = XRGAether7bPalette.focusHalo.cgColor
-            haloLayer.frame = bounds.insetBy(dx: -2, dy: -2)
-            layer?.addSublayer(haloLayer)
-        } else {
-            haloLayer.removeFromSuperlayer()
-        }
-        setAccessibilityFocused(focused)
-    }
+
     public override func layout() {
         super.layout()
-        haloLayer.frame = bounds.insetBy(dx: -2, dy: -2)
+        layoutSlider()
+    }
+
+    /// The track, its played portion and the pill knob — every radius is
+    /// the CSS-clamped pill (W1), never the raw token.
+    private func layoutSlider() {
+        let trackHeight: CGFloat = 4
+        let knobSize: CGFloat = 14
+        let bounds = self.bounds
+        guard bounds.width > knobSize, bounds.height >= knobSize else { return }
+        let centerY = bounds.midY
+        trackLayer.frame = CGRect(x: 0, y: centerY - trackHeight / 2, width: bounds.width, height: trackHeight)
+        trackLayer.cornerRadius = XRGAether7bStyle.pillRadius(for: trackLayer.bounds.size)
+        let span = max(0.001, maxValue - minValue)
+        let fraction = max(0, min(1, (internalValue - minValue) / span))
+        let fillWidth = max(0, (bounds.width - knobSize) * fraction)
+        fillLayer.frame = CGRect(x: knobSize / 2, y: centerY - trackHeight / 2, width: fillWidth, height: trackHeight)
+        fillLayer.cornerRadius = XRGAether7bStyle.pillRadius(for: fillLayer.bounds.size)
+        let knobX = knobSize / 2 + (bounds.width - knobSize) * fraction
+        knobLayer.frame = CGRect(x: knobX - knobSize / 2, y: centerY - knobSize / 2, width: knobSize, height: knobSize)
+        knobLayer.cornerRadius = XRGAether7bStyle.pillRadius(for: knobLayer.bounds.size)
+        let inset = -2.0
+        haloLayer.frame = bounds.insetBy(dx: inset, dy: inset)
+        haloLayer.cornerRadius = XRGAether7bStyle.pillRadius(for: haloLayer.bounds.size)
+        setAccessibilityValue(String(format: "%.4g", internalValue))
+    }
+
+    private func value(at point: NSPoint) -> Double {
+        let span = max(0.001, maxValue - minValue)
+        let usable = max(1, bounds.width - 14)
+        let x = min(max(0, point.x - 7), usable)
+        return minValue + (x / usable) * span
+    }
+    private func submit() {
+        if let action, let target { NSApp.sendAction(action, to: target, from: self) }
+    }
+
+    // The whole slider is its own hit target.
+    public override func hitTest(_ point: NSPoint) -> NSView? {
+        guard isEnabled else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return bounds.contains(local) ? self : nil
+    }
+
+    public override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        isDragging = true
+        doubleValue = value(at: convert(event.locationInWindow, from: nil))
+        submit()
+    }
+    public override func mouseDragged(with event: NSEvent) {
+        guard isEnabled, isDragging else { return }
+        doubleValue = value(at: convert(event.locationInWindow, from: nil))
+        submit()
+    }
+    public override func mouseUp(with event: NSEvent) {
+        isDragging = false
+    }
+
+    public override func keyDown(with event: NSEvent) {
+        guard isEnabled, !event.isARepeat else { super.keyDown(with: event); return }
+        let step = event.modifierFlags.contains(.shift) ? increment * 10 : increment
+        switch event.specialKey {
+        case .leftArrow, .downArrow:
+            doubleValue = internalValue - step; submit()
+        case .rightArrow, .upArrow:
+            doubleValue = internalValue + step; submit()
+        case .tab:
+            // Explicit key-view chain, like the flat button (see there).
+            if event.modifierFlags.contains(.shift) {
+                if let preceding = settingsPrecedingKeyView { window?.makeFirstResponder(preceding) }
+                else { window?.selectKeyView(preceding: self) }
+            } else if let next = nextKeyView { window?.makeFirstResponder(next) }
+            else { window?.selectKeyView(following: self) }
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    public override func accessibilityPerformIncrement() -> Bool {
+        guard isEnabled else { return false }
+        doubleValue = internalValue + increment
+        submit()
+        return true
+    }
+    public override func accessibilityPerformDecrement() -> Bool {
+        guard isEnabled else { return false }
+        doubleValue = internalValue - increment
+        submit()
+        return true
     }
 }
 
@@ -448,9 +606,17 @@ import AppKit
     }
 
     // The whole button is its own hit target: the label is a subview that
-    // would otherwise swallow the click.
+    // would otherwise swallow the click. The point arrives in the
+    // SUPerview's coordinate system (NSView.hitTest's documented contract,
+    // verified: a leaf at (50, 30) receives the click in its superview's
+    // coordinates), so it must be converted before the bounds check —
+    // the pre-fix comparison rejected every correctly placed click on a
+    // nonzero-origin button (finding N1: later sidebar buttons, later
+    // segments, row controls).
     public override func hitTest(_ point: NSPoint) -> NSView? {
-        isEnabled && bounds.contains(point) ? self : nil
+        guard isEnabled else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return bounds.contains(local) ? self : nil
     }
 
     // MARK: Activation
@@ -494,7 +660,16 @@ import AppKit
             isPressed = false
             restyle()
         case "\t" where !event.modifierFlags.contains(.shift):
-            window?.selectKeyView(following: self)
+            // The window's key-view loop is explicit (wireKeyViewLoop):
+            // step along it directly. NSWindow.selectKeyView(following:)
+            // consults the auto-recalculated geometric loop instead and
+            // lands on unrelated controls (probed: an order-row button's
+            // Tab jumped to the section's first text field).
+            if let next = nextKeyView {
+                window?.makeFirstResponder(next)
+            } else {
+                window?.selectKeyView(following: self)
+            }
         case "\t":
             if let preceding = settingsPrecedingKeyView {
                 window?.makeFirstResponder(preceding)
@@ -558,9 +733,15 @@ import AppKit
 
 /// A borderless token-styled pop-up: no system bezel (the rim provides
 /// the border), mono type, the native focus ring replaced by the rim's
-/// token focus halo.
+/// token focus halo. The closed pop-up's title is drawn by a private
+/// `NSButtonTextField` in the system label colour by default — the one
+/// piece of control chrome AppKit composites inside the button (issue 9:
+/// control chrome is not exempt), so the window restyles it from tokens
+/// whenever the pop-up realizes, selects or re-themes.
 @MainActor public final class XRGSettingsPopUpButton: NSPopUpButton {
     weak var focusOwner: XRGSettingsEntryControl?
+    private var titleDark = false
+
     public override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted { focusOwner?.setFocused(true) }
@@ -570,6 +751,43 @@ import AppKit
         let resigned = super.resignFirstResponder()
         if resigned { focusOwner?.setFocused(false) }
         return resigned
+    }
+
+    /// Style the title from the token palette for this appearance. Called
+    /// by the owning control at build time and on every theme change; the
+    /// pop-up reapplies on its own whenever AppKit rebuilds the internal
+    /// text field or moves it into the window.
+    func applyTitleColour(dark: Bool) {
+        titleDark = dark
+        restyleTitleFields()
+    }
+    private func restyleTitleFields() {
+        for case let field as NSTextField in subviews {
+            field.textColor = XRGAether7b.Color.textMain(dark: titleDark)
+        }
+    }
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        restyleTitleFields()
+    }
+    public override func layout() {
+        super.layout()
+        // The internal title field is created and reconfigured lazily, so
+        // every layout pass restyles it: the audit reads the property after
+        // layout, and the draw follows the field's own colour.
+        restyleTitleFields()
+    }
+    public override func selectItem(at index: Int) {
+        super.selectItem(at: index)
+        restyleTitleFields()
+    }
+    public override func select(_ item: NSMenuItem?) {
+        super.select(item)
+        restyleTitleFields()
+    }
+    public override func selectItem(withTitle title: String) {
+        super.selectItem(withTitle: title)
+        restyleTitleFields()
     }
 }
 
@@ -597,11 +815,14 @@ import AppKit
         translatesAutoresizingMaskIntoConstraints = false
         trackView.translatesAutoresizingMaskIntoConstraints = false
         trackView.wantsLayer = true
-        trackView.layer?.cornerRadius = XRGAether7b.Radius.pill
+        // The mockup's pill track: the CSS-clamped radius (10 pt on a
+        // 34×20 track), never the raw 9999 token (W1 — the bitmap path
+        // degenerates on it and paints the whole capture one colour).
+        trackView.layer?.cornerRadius = XRGAether7bStyle.pillRadius(for: CGSize(width: 34, height: 20))
         trackView.layer?.borderWidth = 1
         knobView.translatesAutoresizingMaskIntoConstraints = false
         knobView.wantsLayer = true
-        knobView.layer?.cornerRadius = XRGAether7b.Radius.pill
+        knobView.layer?.cornerRadius = XRGAether7bStyle.pillRadius(for: CGSize(width: 14, height: 14))
         trackView.addSubview(knobView)
         addSubview(trackView)
         setAccessibilityRole(.checkBox)
@@ -611,8 +832,21 @@ import AppKit
             trackView.centerYAnchor.constraint(equalTo: rimView.centerYAnchor),
             trackView.leadingAnchor.constraint(equalTo: rimView.leadingAnchor, constant: XRGAether7b.Space.s2),
             rimView.widthAnchor.constraint(equalToConstant: 50), rimView.heightAnchor.constraint(equalToConstant: 24),
+            // The wrapper's trailing edge IS the visible switch (V5): the
+            // row pins this edge to its own trailing edge, so every switch
+            // lands in one right-hand column — a wrapper of unbound width
+            // left the rim floating at its leading edge.
+            rimView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         layoutTrack()
+    }
+
+    public override func layout() {
+        super.layout()
+        // Pill radii are re-clamped at layout time (W1): a resized track or
+        // knob can never keep a degenerate radius.
+        trackView.layer?.cornerRadius = XRGAether7bStyle.pillRadius(for: trackView.bounds.size)
+        knobView.layer?.cornerRadius = XRGAether7bStyle.pillRadius(for: knobView.bounds.size)
     }
 
     func layoutTrack() {
@@ -627,9 +861,14 @@ import AppKit
     }
 
     // The whole control is its own hit target: the knob and track are
-    // subviews that would otherwise swallow the click.
+    // subviews that would otherwise swallow the click. The point arrives in
+    // the superview's coordinate system (finding N1), so it is converted
+    // before the bounds check — the pre-fix comparison rejected clicks on
+    // any toggle not sitting at its row's origin.
     public override func hitTest(_ point: NSPoint) -> NSView? {
-        isEnabledControl && bounds.contains(point) ? self : nil
+        guard isEnabledControl else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return bounds.contains(local) ? self : nil
     }
 
     // The whole control is the focusable element: keyboard focus moves
@@ -643,7 +882,12 @@ import AppKit
         case " ", "\r", "\n":
             click()
         case "\t" where !event.modifierFlags.contains(.shift):
-            window?.selectKeyView(following: self)
+            // Explicit chain, like the flat button (see the note there).
+            if let next = nextKeyView {
+                window?.makeFirstResponder(next)
+            } else {
+                window?.selectKeyView(following: self)
+            }
         case "\t":
             if let preceding = settingsPrecedingKeyView {
                 window?.makeFirstResponder(preceding)
@@ -694,6 +938,7 @@ import AppKit
     }
     public override func themeDidChange(dark: Bool) {
         popUp.contentTintColor = XRGAether7b.Color.textMain(dark: dark)
+        popUp.applyTitleColour(dark: dark)
     }
     public override func enabledDidChange(_ enabled: Bool) { popUp.isEnabled = enabled }
 
@@ -705,6 +950,7 @@ import AppKit
         popUp.focusRingType = .none
         popUp.font = monoFont(XRGAether7b.TypeScale.sm.size)
         popUp.contentTintColor = XRGAether7b.Color.textMain(dark: dark)
+        popUp.applyTitleColour(dark: dark)
         popUp.addItems(withTitles: options.map(\.label))
         for (index, option) in options.enumerated() { popUp.item(at: index)?.toolTip = option.value.isTextualDescription }
         popUp.focusOwner = self
@@ -714,6 +960,9 @@ import AppKit
             popUp.trailingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: -XRGAether7b.Space.s1),
             popUp.centerYAnchor.constraint(equalTo: rimView.centerYAnchor),
             rimView.widthAnchor.constraint(greaterThanOrEqualToConstant: 120), rimView.heightAnchor.constraint(equalToConstant: 26),
+            // The wrapper closes around the rim (V2): the row's trailing
+            // alignment then lands on the visible menu.
+            rimView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         present(entry.defaultValue)
         popUp.target = self
@@ -772,6 +1021,9 @@ import AppKit
         if let last = buttons.last {
             rimView.trailingAnchor.constraint(equalTo: last.trailingAnchor, constant: XRGAether7b.Space.s1).isActive = true
         }
+        // The wrapper closes around the rim (V2): the row's trailing
+        // alignment then lands on the visible segments.
+        rimView.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
         present(entry.defaultValue)
     }
     func pickedSegment(_ index: Int) {
@@ -815,12 +1067,19 @@ import AppKit
 /// nothing, never the entry's default (review issue 2).
 @MainActor public final class XRGSettingsNumberControl: XRGSettingsEntryControl {
     public var field = NSTextField()
-    public let slider: NSSlider?
+    public let slider: XRGSettingsSliderView?
     let unitLabel = NSTextField(labelWithString: "")
     let rangeLabel = NSTextField(labelWithString: "")
     /// The bytes/s unit selector (only for entries stored in bytes/s).
     public private(set) var unitSelector: XRGSettingsPopUpButton?
     var selectedMultiplier: Int64 = 1
+    /// The exact stored bytes/s value last presented or edited, held
+    /// independently of the field's text (finding N2): the pre-fix unit
+    /// switch re-derived the bytes by parsing the display text, which
+    /// loses fractional presentations — 512 B/s shown as "0.5" KB/s parsed
+    /// back as invalid and displayed the default 0 — and multiplied an
+    /// overflowing integer unchecked.
+    var exactBytes: Int64?
     public var fieldMin: Double { entry.range?.min ?? 0 }
     public var fieldMax: Double { entry.range?.max ?? 100 }
     /// Whether the entry's range carries a real upper bound.
@@ -840,20 +1099,27 @@ import AppKit
             return nil
         }
     }
-    public override func value() -> XRGSettingsValue { parseValue() ?? entry.defaultValue }
+    public override func value() -> XRGSettingsValue {
+        // A bytes/s entry presents through its unit selector: the value is
+        // the exact bytes it holds, never the (possibly fractional) text
+        // the chosen unit is displaying.
+        if unitSelector != nil, let exactBytes { return .int(exactBytes) }
+        return parseValue() ?? entry.defaultValue
+    }
     public override func present(_ value: XRGSettingsValue) {
-        switch value {
-        case .int(let number): field.stringValue = String(number)
-        case .double(let number): field.stringValue = Self.format(number)
-        default: field.stringValue = ""
-        }
         if let unitSelector {
-            // Present the stored bytes/s in the largest unit that divides it.
             let bytes = Self.storedBytes(of: value)
+            exactBytes = bytes
             let unit = Self.scaleUnit(forBytes: bytes)
             selectedMultiplier = unit.multiplier
             unitSelector.selectItem(withTitle: unit.label)
             field.stringValue = Self.fieldText(forBytes: bytes, multiplier: unit.multiplier)
+        } else {
+            switch value {
+            case .int(let number): field.stringValue = String(number)
+            case .double(let number): field.stringValue = Self.format(number)
+            default: field.stringValue = ""
+            }
         }
         slider?.doubleValue = numericValue ?? fieldMin
     }
@@ -887,6 +1153,8 @@ import AppKit
         unitLabel.textColor = XRGAether7b.Color.textMuted(dark: dark)
         rangeLabel.textColor = XRGAether7b.Color.textMuted(dark: dark)
         unitSelector?.contentTintColor = XRGAether7b.Color.textMain(dark: dark)
+        unitSelector?.applyTitleColour(dark: dark)
+        slider?.applyAppearance(dark: dark)
     }
     public override func enabledDidChange(_ enabled: Bool) {
         field.isEditable = enabled
@@ -897,12 +1165,12 @@ import AppKit
     public override init(entry: XRGSettingsEntry, dark: Bool) {
         let step = entry.range?.step
         if let step {
-            let slider = XRGSettingsSlider(value: 0, minValue: entry.range?.min ?? 0, maxValue: entry.range?.max ?? 1,
-                                           target: nil, action: nil)
-            slider.allowsTickMarkValuesOnly = false
-            slider.focusRingType = .none
+            let slider = XRGSettingsSliderView(dark: dark)
+            slider.minValue = entry.range?.min ?? 0
+            slider.maxValue = entry.range?.max ?? 1
+            slider.increment = step
+            slider.setAccessibilityLabel(entry.label)
             self.slider = slider
-            _ = step
         } else {
             self.slider = nil
         }
@@ -928,6 +1196,7 @@ import AppKit
             selector.focusRingType = .none
             selector.font = monoFont(XRGAether7b.TypeScale.xs.size)
             selector.contentTintColor = XRGAether7b.Color.textMain(dark: dark)
+            selector.applyTitleColour(dark: dark)
             selector.focusOwner = self
             selector.addItems(withTitles: XRGSettingsNumberControlConstants.scaleUnits.map(\.label))
             selector.setAccessibilityLabel("\(entry.label) unit")
@@ -955,7 +1224,13 @@ import AppKit
         // trailing bound collapses and the field renders nowhere (fix V4).
         rimView.trailingAnchor.constraint(greaterThanOrEqualTo: rangeAnchor,
                                          constant: storedInBytes ? XRGAether7b.Space.s1 : XRGAether7b.Space.s2).isActive = true
-        // The range, shown beside the field (mockup: "200 ms – 10 s") —
+        // The horizontal chain continues to the right of the rim — the
+        // range text, then the slider — so no two contents overlap, and
+        // the wrapper's trailing edge closes around the rightmost one
+        // (V2): the row's trailing alignment then lands on what the user
+        // actually sees, never on an unbound wrapper.
+        var rightmost: NSLayoutXAxisAnchor = rimView.trailingAnchor
+        // The range, shown beside the rim (mockup: "200 ms – 10 s") —
         // only when the catalog's max is a real bound; the max-safe-integer
         // sentinel means "no meaningful upper bound" and shows nothing.
         if let range = entry.range {
@@ -969,20 +1244,25 @@ import AppKit
                 rangeLabel.translatesAutoresizingMaskIntoConstraints = false
                 rangeLabel.setAccessibilityLabel("\(entry.label) range \(minText) to \(maxText)")
                 addSubview(rangeLabel)
-                rangeLabel.leadingAnchor.constraint(equalTo: rangeAnchor, constant: XRGAether7b.Space.s2).isActive = true
+                rangeLabel.leadingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: XRGAether7b.Space.s3).isActive = true
                 rangeLabel.centerYAnchor.constraint(equalTo: field.centerYAnchor).isActive = true
+                rightmost = rangeLabel.trailingAnchor
             }
         }
         if let slider {
             slider.translatesAutoresizingMaskIntoConstraints = false
-            slider.controlSize = .small
             slider.widthAnchor.constraint(equalToConstant: 150).isActive = true
+            slider.heightAnchor.constraint(equalToConstant: 20).isActive = true
             addSubview(slider)
-            slider.leadingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: XRGAether7b.Space.s3).isActive = true
+            slider.leadingAnchor.constraint(equalTo: rightmost, constant: XRGAether7b.Space.s3).isActive = true
             slider.centerYAnchor.constraint(equalTo: field.centerYAnchor).isActive = true
+            rightmost = slider.trailingAnchor
             slider.target = self
             slider.action = #selector(sliderEdited(_:))
         }
+        // The wrapper closes around the chain's rightmost content (V2):
+        // the row's trailing alignment lands on the visible assembly.
+        trailingAnchor.constraint(equalTo: rightmost).isActive = true
         present(entry.defaultValue)
     }
     static func durationText(_ seconds: Double, unit: String?) -> String {
@@ -993,48 +1273,63 @@ import AppKit
     }
     /// The user edited the field: text that does not parse is rejected
     /// before submission — the store is never offered a phantom default.
+    /// A bytes/s entry accepts the number in the unit the selector shows
+    /// (fractions included — "1.5" KB/s is 1536 B/s) and converts back with
+    /// checked arithmetic on every path: a value that cannot be whole
+    /// bytes, or that overflows the stored integer, is refused with the
+    /// danger reason and saves nothing (finding N2).
     @objc public func fieldEdited() {
         guard isEnabledControl else { return }
+        guard let text = field.stringValue.trimmingCharacters(in: .whitespaces).nilIfEmpty else {
+            showError("Enter a number.")
+            return
+        }
+        if let selector = unitSelector {
+            guard let display = Double(text), display.isFinite else {
+                showError("Enter a number.")
+                return
+            }
+            let units = XRGSettingsNumberControlConstants.scaleUnits
+            let multiplier = units.indices.contains(selector.indexOfSelectedItem)
+                ? units[selector.indexOfSelectedItem].multiplier : selectedMultiplier
+            let scaled = display * Double(multiplier)
+            guard scaled.isFinite, scaled == scaled.rounded() else {
+                showError("Enter a whole number of bytes per second.")
+                return
+            }
+            guard let bytes = Int64(exactly: scaled) else {
+                showError("The value is too large.")
+                return
+            }
+            exactBytes = bytes
+            submit(.int(bytes))
+            return
+        }
         guard let parsed = parseValue() else {
             showError(entry.control == .integer ? "Enter a whole number." : "Enter a number.")
             return
         }
-        if let selector = unitSelector {
-            let units = XRGSettingsNumberControlConstants.scaleUnits
-            let multiplier = units.indices.contains(selector.indexOfSelectedItem)
-                ? units[selector.indexOfSelectedItem].multiplier : selectedMultiplier
-            let quotient: Int64
-            switch parsed {
-            case .int(let number): quotient = number
-            case .double(let number): quotient = Int64(number)
-            default: quotient = 0
-            }
-            let scaled = quotient.multipliedReportingOverflow(by: multiplier)
-            if scaled.overflow {
-                showError("The value is too large.")
-                return
-            }
-            submit(.int(scaled.partialValue))
-            return
-        }
         submit(parsed)
     }
-    /// The unit selector changed: keep the stored bytes/s value and
-    /// re-present the field in the chosen unit. Nothing is submitted
-    /// until the number itself is edited.
+    /// The unit selector changed: re-present the exact stored bytes/s in
+    /// the chosen unit — the bytes are the value the store holds, never
+    /// re-derived by parsing the field's display text (finding N2), and
+    /// fractional displays are first-class. Nothing is submitted until the
+    /// number itself is edited.
     @objc func unitEdited(_ sender: NSPopUpButton) {
         let units = XRGSettingsNumberControlConstants.scaleUnits
         guard units.indices.contains(sender.indexOfSelectedItem) else { return }
         let newMultiplier = units[sender.indexOfSelectedItem].multiplier
         guard newMultiplier != selectedMultiplier else { return }
-        // The number the user sees, in the unit they were using.
-        let currentBytes = Self.storedBytes(of: value()) * selectedMultiplier
+        let bytes = exactBytes ?? Self.storedBytes(of: value())
         selectedMultiplier = newMultiplier
-        field.stringValue = Self.fieldText(forBytes: currentBytes, multiplier: newMultiplier)
+        field.stringValue = Self.fieldText(forBytes: bytes, multiplier: newMultiplier)
     }
-    @objc func sliderEdited(_ sender: NSSlider) {
-        guard isEnabledControl, let step = entry.range?.step else { return }
-        let stepped = (sender.doubleValue / step).rounded() * step
+    @objc func sliderEdited(_ sender: Any?) {
+        guard isEnabledControl, let step = entry.range?.step, let slider else { return }
+        // Snap to the entry's step, like the old slider did.
+        let raw = slider.doubleValue
+        let stepped = (raw / step).rounded() * step
         present(.double(min(fieldMax, max(fieldMin, stepped))))
         submit(value())
     }
@@ -1048,11 +1343,119 @@ import AppKit
 
 // MARK: - Color
 
+/// The token-styled colour well (issue 9: control chrome is not exempt):
+/// macOS 26's `NSColorWell` is a SwiftUI-hosted view whose chrome — a
+/// private white-on-10% overlay and border sublayers — no public API can
+/// recolour, so the window owns this well's chrome itself. The swatch,
+/// the user's picked colour, is the one colour-content exemption the token
+/// rule allows. Clicking opens the shared colour panel and follows its
+/// changes; the focus treatment is the enclosing rim's token halo.
+@MainActor public final class XRGSettingsColorWellView: NSControl {
+    /// The well's colour: the user's picked content, drawn as the swatch.
+    public var color: NSColor {
+        didSet { applySwatch() }
+    }
+    weak var focusOwner: XRGSettingsEntryControl?
+    private var isDarkAppearance = false
+
+    public init(dark: Bool) {
+        self.color = .clear
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        isDarkAppearance = dark
+        wantsLayer = true
+        layer?.cornerRadius = XRGAether7b.Radius.sm
+        layer?.borderColor = XRGAether7b.Color.borderStrong(dark: dark).cgColor
+        layer?.borderWidth = 1
+        setAccessibilityRole(.colorWell)
+        focusRingType = .none
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Programmatic view") }
+
+    /// Restyle the well's chrome (its swatch follows `color` alone).
+    public func applyAppearance(dark: Bool) {
+        isDarkAppearance = dark
+        layer?.borderColor = XRGAether7b.Color.borderStrong(dark: dark).cgColor
+        applySwatch()
+    }
+    private func applySwatch() {
+        layer?.backgroundColor = (color.usingColorSpace(.sRGB) ?? NSColor.clear).cgColor
+        setAccessibilityValue(color.description)
+    }
+
+    // The whole well is its own hit target, like every settings control.
+    public override func hitTest(_ point: NSPoint) -> NSView? {
+        guard isEnabled else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        return bounds.contains(local) ? self : nil
+    }
+
+    public override var acceptsFirstResponder: Bool { isEnabled }
+    public override func becomeFirstResponder() -> Bool {
+        focusOwner?.setFocused(true)
+        return true
+    }
+    public override func resignFirstResponder() -> Bool {
+        focusOwner?.setFocused(false)
+        return true
+    }
+
+    /// Open the shared colour panel on the current colour and follow the
+    /// panel's changes — the same interaction NSColorWell offers. Mouse,
+    /// keyboard and accessibility presses all take this one path.
+    public func openColourPanel() {
+        guard isEnabled else { return }
+        let panel = NSColorPanel.shared
+        panel.setTarget(self)
+        panel.setAction(#selector(panelColourChanged(_:)))
+        panel.color = color
+        panel.makeKeyAndOrderFront(nil)
+    }
+    @objc func panelColourChanged(_ sender: NSColorPanel) {
+        color = sender.color
+        if let action, let target { NSApp.sendAction(action, to: target, from: self) }
+    }
+
+    public override func performClick(_ sender: Any?) { openColourPanel() }
+    public override func mouseUp(with event: NSEvent) {
+        guard isEnabled else { return }
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { openColourPanel() }
+    }
+    public override func keyDown(with event: NSEvent) {
+        guard isEnabled, !event.isARepeat else { super.keyDown(with: event); return }
+        switch event.characters {
+        case " ", "\r", "\n":
+            openColourPanel()
+        case "\t" where !event.modifierFlags.contains(.shift):
+            // Explicit chain, like the flat button (see the note there).
+            if let next = nextKeyView {
+                window?.makeFirstResponder(next)
+            } else {
+                window?.selectKeyView(following: self)
+            }
+        case "\t":
+            if let preceding = settingsPrecedingKeyView {
+                window?.makeFirstResponder(preceding)
+            } else {
+                window?.selectKeyView(preceding: self)
+            }
+        default:
+            super.keyDown(with: event)
+        }
+    }
+    public override func accessibilityPerformPress() -> Bool {
+        openColourPanel()
+        return isEnabled
+    }
+}
+
 /// A colour well with an "Inherit" affordance: pressing it stores `null`
 /// — the unset value the palette inherits from — without resetting any
-/// unrelated setting (review issue 8).
+/// unrelated setting (review issue 8). The wrapper encloses the trailing
+/// Inherit button (V2), so the row's trailing alignment lands on the
+/// whole assembly.
 @MainActor public final class XRGSettingsColorControl: XRGSettingsEntryControl {
-    public let well = NSColorWell()
+    public let well: XRGSettingsColorWellView
     public let inheritButton: XRGSettingsFlatButton
     /// False while the entry is unset (`.null`: empty inherits the palette).
     var hasColor = false
@@ -1068,6 +1471,7 @@ import AppKit
     public override func themeDidChange(dark: Bool) {
         inheritButton.style(background: nil, text: XRGAether7b.Color.textMain(dark: dark),
                             border: XRGAether7b.Color.borderStrong(dark: dark), dark: dark)
+        well.applyAppearance(dark: dark)
     }
     public override func enabledDidChange(_ enabled: Bool) {
         well.isEnabled = enabled
@@ -1075,10 +1479,8 @@ import AppKit
     }
     public override init(entry: XRGSettingsEntry, dark: Bool) {
         inheritButton = XRGSettingsFlatButton(title: "Inherit")
+        well = XRGSettingsColorWellView(dark: dark)
         super.init(entry: entry, dark: dark)
-        well.translatesAutoresizingMaskIntoConstraints = false
-        well.color = .black
-        well.focusRingType = .none
         rimView.addSubview(well)
         NSLayoutConstraint.activate([
             well.leadingAnchor.constraint(equalTo: rimView.leadingAnchor, constant: XRGAether7b.Space.s1),
@@ -1100,8 +1502,12 @@ import AppKit
         NSLayoutConstraint.activate([
             inheritButton.leadingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: XRGAether7b.Space.s2),
             inheritButton.centerYAnchor.constraint(equalTo: rimView.centerYAnchor),
+            // The wrapper encloses the trailing Inherit button (V2): the
+            // row's trailing alignment lands on the button, not past it.
+            inheritButton.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         present(entry.defaultValue)
+        well.focusOwner = self
         well.target = self
         well.action = #selector(changedColor)
     }
@@ -1150,6 +1556,8 @@ import AppKit
             chooseButton.leadingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: XRGAether7b.Space.s2),
             chooseButton.centerYAnchor.constraint(equalTo: pathField.centerYAnchor),
             rimView.widthAnchor.constraint(equalToConstant: 180), rimView.heightAnchor.constraint(equalToConstant: 26),
+            // The wrapper encloses the trailing Choose… button (V2).
+            chooseButton.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         chooseButton.target = self
         chooseButton.action = #selector(choose(_:))
@@ -1172,7 +1580,12 @@ import AppKit
         textField.textColor = XRGAether7b.Color.textMain(dark: dark)
         textField.backgroundColor = XRGAether7b.Color.surfaceCard(dark: dark)
     }
-    public override func enabledDidChange(_ enabled: Bool) { textField.isEditable = enabled }
+    public override func enabledDidChange(_ enabled: Bool) {
+        // A read-only display (ruling P3's font field) stays read-only
+        // whatever the dependency state does (finding N4: enablement used
+        // to re-open it on every settings notification).
+        textField.isEditable = enabled && !isReadOnlyDisplay
+    }
     public override init(entry: XRGSettingsEntry, dark: Bool) {
         super.init(entry: entry, dark: dark)
         textField = XRGAether7bStyle.field(dark)
@@ -1183,6 +1596,9 @@ import AppKit
             textField.trailingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: -XRGAether7b.Space.s1),
             textField.centerYAnchor.constraint(equalTo: rimView.centerYAnchor),
             rimView.widthAnchor.constraint(greaterThanOrEqualToConstant: 150), rimView.heightAnchor.constraint(equalToConstant: 26),
+            // The wrapper closes around the rim (V2): read-only or not,
+            // the row's trailing alignment lands on the visible field.
+            rimView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         present(entry.defaultValue)
         textField.target = self
@@ -1220,6 +1636,7 @@ import AppKit
     }
     public override func themeDidChange(dark: Bool) {
         popUp.contentTintColor = XRGAether7b.Color.textMain(dark: dark)
+        popUp.applyTitleColour(dark: dark)
     }
     public override func enabledDidChange(_ enabled: Bool) { popUp.isEnabled = enabled }
     public override init(entry: XRGSettingsEntry, dark: Bool) {
@@ -1229,6 +1646,7 @@ import AppKit
         popUp.focusRingType = .none
         popUp.font = monoFont(XRGAether7b.TypeScale.sm.size)
         popUp.contentTintColor = XRGAether7b.Color.textMain(dark: dark)
+        popUp.applyTitleColour(dark: dark)
         popUp.focusOwner = self
         rimView.addSubview(popUp)
         NSLayoutConstraint.activate([
@@ -1236,6 +1654,8 @@ import AppKit
             popUp.trailingAnchor.constraint(equalTo: rimView.trailingAnchor, constant: -XRGAether7b.Space.s1),
             popUp.centerYAnchor.constraint(equalTo: rimView.centerYAnchor),
             rimView.widthAnchor.constraint(greaterThanOrEqualToConstant: 140), rimView.heightAnchor.constraint(equalToConstant: 26),
+            // The wrapper closes around the rim (V2).
+            rimView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
     }
     /// Fill the picker from the provider's options for this entry's kind.
@@ -1274,11 +1694,21 @@ import AppKit
 /// The reorderable graph list (coordinator ruling P4): one row per graph,
 /// named, with keyboard-operable Move up / Move down buttons, writing the
 /// existing `order` setting. The per-graph reset of the old draft editor
-/// is gone; the section reset remains.
+/// is gone; the section reset remains. Every row shares one name column
+/// (W2: the Move buttons line up in one column, however long a graph's
+/// name is), a move rebuilds the list with exactly one row per graph
+/// (finding N3: the pre-fix rebuild left the old row containers in the
+/// stack and appended fresh ones, accumulating empty rows), preserves
+/// keyboard focus on the moved graph's button, and re-wires the window's
+/// key-view loop so Tab and Shift-Tab keep working afterwards.
 @MainActor public final class XRGSettingsOrderControl: XRGSettingsEntryControl {
     var ids: [String] = []
     var rows: [(name: NSTextField, up: XRGSettingsFlatButton, down: XRGSettingsFlatButton)] = []
     let listStack = NSStackView()
+    /// Re-wires the window's key-view loop after a rebuild (finding N3):
+    /// the controller installs this; the buttons a rebuild creates must
+    /// rejoin the loop or keyboard navigation dies after the first move.
+    var keyLoopInvalidated: (() -> Void)?
 
     public override func value() -> XRGSettingsValue { .string(ids.joined(separator: ",")) }
     static func displayName(of id: String) -> String {
@@ -1305,6 +1735,11 @@ import AppKit
 
     public override init(entry: XRGSettingsEntry, dark: Bool) {
         super.init(entry: entry, dark: dark)
+        // The list IS the control: the base class's empty rim box would
+        // render as a zero-width chrome layer (the audit's radius rule
+        // flags degenerate-sized chrome), so it stays hidden — the rows,
+        // not a rim, carry the visual.
+        rimView.isHidden = true
         listStack.orientation = .vertical
         listStack.alignment = .leading
         listStack.spacing = XRGAether7b.Space.s1
@@ -1320,13 +1755,26 @@ import AppKit
     }
 
     private func rebuild(ids newIds: [String]) {
-        ids = newIds
-        for row in rows {
-            row.name.removeFromSuperview()
-            row.up.removeFromSuperview()
-            row.down.removeFromSuperview()
+        // Preserve keyboard focus across the rebuild: remember which
+        // graph's button holds it, then refocus the matching button of
+        // the rebuilt row (finding N3: the focused button used to be
+        // destroyed by the rebuild, dropping focus on the floor).
+        let firstResponder = window?.firstResponder
+        var focused: (id: String, isUp: Bool)?
+        for (index, row) in rows.enumerated() where ids.indices.contains(index) {
+            if firstResponder === row.up { focused = (ids[index], true) }
+            if firstResponder === row.down { focused = (ids[index], false) }
         }
+        // Remove the previous row containers themselves — arranged
+        // subviews AND views — so the list holds exactly one row per
+        // graph after every move (finding N3's accumulating empties).
+        for row in listStack.arrangedSubviews {
+            listStack.removeArrangedSubview(row)
+            row.removeFromSuperview()
+        }
+        ids = newIds
         rows = []
+        var previousName: NSTextField?
         for (index, id) in ids.enumerated() {
             let name = NSTextField(labelWithString: Self.displayName(of: id))
             name.font = sansFont(XRGAether7b.TypeScale.sm.size)
@@ -1353,9 +1801,24 @@ import AppKit
             row.widthAnchor.constraint(equalTo: listStack.widthAnchor).isActive = true
             up.widthAnchor.constraint(equalToConstant: 84).isActive = true
             down.widthAnchor.constraint(equalToConstant: 92).isActive = true
+            // One shared name column (W2): every row's name is as wide as
+            // the widest, so the Move buttons start at one x and form one
+            // column, like the other rows' controls.
+            if let previousName {
+                name.widthAnchor.constraint(equalTo: previousName.widthAnchor).isActive = true
+            }
+            previousName = name
             rows.append((name, up, down))
         }
         refreshButtonStates()
+        // The rebuilt buttons must rejoin the window's key-view loop, or
+        // Tab and Shift-Tab stop at the destroyed chain (finding N3).
+        if window != nil { keyLoopInvalidated?() }
+        if let focused, let newIndex = ids.firstIndex(of: focused.id),
+           rows.indices.contains(newIndex) {
+            let button = focused.isUp ? rows[newIndex].up : rows[newIndex].down
+            if button.isEnabled { window?.makeFirstResponder(button) }
+        }
     }
 
     private func refreshButtonStates() {
@@ -1369,8 +1832,12 @@ import AppKit
         guard isEnabledControl else { return }
         let target = index + delta
         guard rows.indices.contains(index), rows.indices.contains(target) else { return }
-        ids.swapAt(index, target)
-        rebuild(ids: ids)
+        // The rebuild's focus capture pairs the OLD ids with the OLD rows,
+        // so the moved order is passed in — `ids` must still describe the
+        // rows that are on screen when the capture runs.
+        var moved = ids
+        moved.swapAt(index, target)
+        rebuild(ids: moved)
         submit(value())
     }
     public override func focusableViews() -> [NSView] { rows.flatMap { [$0.up, $0.down] } }
@@ -1392,6 +1859,10 @@ import AppKit
     public override init(entry: XRGSettingsEntry, dark: Bool) {
         button = XRGSettingsFlatButton(title: entry.label)
         super.init(entry: entry, dark: dark)
+        // The button IS the control: the base class's empty rim box would
+        // render as zero-width chrome (the audit's radius rule flags
+        // degenerate-sized chrome), so it stays hidden.
+        rimView.isHidden = true
         button.style(background: nil, text: XRGAether7b.Color.textMain(dark: dark),
                      border: XRGAether7b.Color.borderStrong(dark: dark), dark: dark)
         addSubview(button)
@@ -1400,6 +1871,9 @@ import AppKit
             button.centerYAnchor.constraint(equalTo: rimView.centerYAnchor),
             topAnchor.constraint(equalTo: button.topAnchor),
             bottomAnchor.constraint(equalTo: button.bottomAnchor),
+            // The wrapper closes around the visible button (V2/V8): the
+            // row's leading alignment lands on the button itself.
+            button.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         button.onClick = { [weak self] in
             guard let self else { return }

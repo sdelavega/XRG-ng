@@ -211,6 +211,22 @@ struct XRGApplicationLifecycleTests {
         #expect(try #require(order.rows.first?.down).accessibilityPerformPress())
         #expect(manager.displayList().prefix(2).compactMap(\.name) == ["GPU", "CPU"])
 
+        // A curve-style edit repaints the LIVE window (review issue 11: the
+        // live style assertions were missing) — the views read the style at
+        // draw time, so the change must leave the content view needing
+        // display, and the typed settings follow it.
+        let liveContent = try #require(scene.window.contentView)
+        manager.redisplayModules()
+        liveContent.needsDisplay = false
+        let style = try #require(settings.currentControls.first { $0.entry.id == "graphs.cpu.style" } as? XRGSettingsChoiceControl)
+        style.popUp.selectItem(withTitle: "Pixel")
+        #expect(NSApp.sendAction(try #require(style.popUp.action), to: style.popUp.target, from: style.popUp))
+        #expect(store.value("graphs.cpu.style") == .string("pixel"))
+        #expect(scene.window.appSettings?.curveStyle(.cpu) == .pixel,
+                "the typed live settings did not follow the style edit")
+        #expect(liveContent.needsDisplay, "a style edit did not repaint the live window")
+        liveContent.needsDisplay = false
+
         // A section reset restores every live piece.
         var asked = 0
         settings.confirmReset = { _ in asked += 1; return true }

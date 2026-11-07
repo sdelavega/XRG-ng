@@ -90,28 +90,34 @@ struct XRGSettingsWindowTests {
     @MainActor private func walkAll(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap { walkAll($0) }
     }
-    /// Every view the audit visits (review issue 9): the whole subtree the
-    /// window builds — no control class excluded — with the stock AppKit
-    /// controls it embeds audited at their own chrome (tint, bezel,
-    /// borderless state) and their private internals (the pop-up's
-    /// NSButtonTextField, the colour well's swatch layers, the scroll
-    /// pocket's fills) not descended into, because those draw system
-    /// colours the window never sets.
-    @MainActor private func walkViews(_ window: XRGSettingsWindowController) -> [NSView] {
-        auditedWalk(content(window))
-    }
-    @MainActor private func auditedWalk(_ view: NSView) -> [NSView] {
-        switch view {
-        case is NSPopUpButton, is NSColorWell, is NSSlider, is NSScroller, is NSVisualEffectView:
-            return [view]
-        case let scroll as NSScrollView:
-            var views: [NSView] = [scroll]
-            views.append(contentsOf: auditedWalk(scroll.contentView))
-            views.append(contentsOf: scroll.subviews.filter { $0 is NSScroller }.flatMap { auditedWalk($0) })
-            return views
-        default:
-            return [view] + view.subviews.flatMap { auditedWalk($0) }
+    /// Every view the audit visits (review issue 9): the WHOLE subtree the
+    /// window builds — no control class excluded; the vibrancy sidebar,
+    /// pop-ups, colour wells and sliders are descended into like any other
+    /// view. Each visit records whether the view actually DRAWS (a view
+    /// inside a hidden ancestor cannot): colour properties are asserted
+    /// only for views that draw, because AppKit's own hidden internals
+    /// (the scroll pocket's mask, for instance) hold system colours the
+    /// window never sets and never shows. Corner radii are asserted for
+    /// every layer in the tree, drawing or not — the degenerate radius
+    /// (W1) lived in layers regardless of visibility.
+    @MainActor private func auditViews(_ window: XRGSettingsWindowController) -> [(view: NSView, draws: Bool)] {
+        var visits: [(NSView, Bool)] = []
+        func visit(_ view: NSView, parentDraws: Bool) {
+            let draws = parentDraws && !view.isHidden
+            visits.append((view, draws))
+            for sub in view.subviews { visit(sub, parentDraws: draws) }
         }
+        visit(content(window), parentDraws: true)
+        return visits
+    }
+    /// Every layer below a view's layer, the view's own layer first —
+    /// the focus halos, the aurora gradient and every pill live in
+    /// sublayers (review issue 9: the audit used to inspect only
+    /// `view.layer` itself).
+    @MainActor private func auditLayers(_ layer: CALayer, draws: Bool) -> [(layer: CALayer, draws: Bool)] {
+        var visits: [(CALayer, Bool)] = [(layer, draws)]
+        for sub in layer.sublayers ?? [] { visits.append(contentsOf: auditLayers(sub, draws: draws)) }
+        return visits
     }
     @MainActor private func walkControls(_ window: XRGSettingsWindowController) -> [XRGSettingsEntryControl] {
         walkAll(content(window)).compactMap { $0 as? XRGSettingsEntryControl }
@@ -290,7 +296,7 @@ struct XRGSettingsWindowTests {
         #expect(number.reasonLabel.frame.maxY <= number.bounds.height + 1 && number.reasonLabel.frame.minY >= 0,
                 "the reason label is not laid out inside the control")
         #expect(number.bounds.contains(number.dotView.frame), "the danger dot is not visible")
-        let views = walkViews(window)
+        let views = walkAll(content(window))
         let dangerLabels = views.compactMap { $0 as? NSTextField }.filter {
             $0.identifier?.rawValue == "reason-\(number.entry.id)"
         }
@@ -360,12 +366,17 @@ struct XRGSettingsWindowTests {
         #expect(restored.isEnabled && restored.field.isEditable)
     }
 
-    /// Review issue 9: the token audit walks the whole window — no control
-    /// subtree is excluded. Pop-up bezels are off, focus rings are the
-    /// token halo, radii are generated tokens, and every colour the window
-    /// sets is an Aether7b value for the current appearance. The colour
-    /// well's swatch is the user's content, not chrome: it is compared
-    /// against the colour the user chose, not against the palette.
+    /// Review issue 9: the token audit walks the whole window — every
+    /// descendant, the vibrancy sidebar, pop-ups, colour wells and sliders
+    /// included, and every layer below each view (focus halos, the aurora
+    /// gradient). Pop-up bezels are off, radii are generated tokens or the
+    /// CSS-clamped pill, and no layer may hold a degenerate radius (W1's
+    /// bitmap poison). Every colour the window sets is an Aether7b value
+    /// for the current appearance; the one allowance is the colour well's
+    /// swatch content — the colour the user picked. AppKit-private chrome
+    /// that never draws (hidden scroll-pocket internals) carries system
+    /// colours the window cannot set and never shows: colour properties
+    /// are asserted only on views that draw.
     @Test(arguments: [false, true])
     func onlyAether7bColours(dark: Bool) throws {
         var fixture = try Fixture(); defer { fixture.cleanUp() }
@@ -378,57 +389,79 @@ struct XRGSettingsWindowTests {
             window.refresh()
             window.window?.contentView?.layoutSubtreeIfNeeded()
             var failures: [String] = []
-            func nearestWell(of view: NSView) -> NSColorWell? {
+            func nearestWell(of view: NSView) -> XRGSettingsColorWellView? {
                 var current: NSView? = view
                 while let candidate = current {
-                    if let found = candidate as? NSColorWell { return found }
+                    if let found = candidate as? XRGSettingsColorWellView { return found }
                     current = candidate.superview
                 }
                 return nil
             }
-            func check(_ colour: NSColor?, _ what: String, of view: NSView, in well: NSColorWell?) {
+            func check(_ colour: NSColor?, _ what: String, of view: NSView, in well: XRGSettingsColorWellView?) {
                 guard let colour else { return }
                 if XRGAether7bPalette.isAether7b(colour, dark: dark) { return }
                 // The one allowance, per property: the colour well's swatch
                 // content, which the user picked (an unset well is clear).
-                if let well, view !== well {
+                if let well, view === well || view.isDescendant(of: well) {
                     let content = well.color.usingColorSpace(.sRGB)
                     let mine = colour.usingColorSpace(.sRGB)
                     if let content, let mine,
                        content.alphaComponent < 0.01 || mine.alphaComponent < 0.01
-                        || (abs(content.redComponent - mine.redComponent) < 0.003
-                            && abs(content.greenComponent - mine.greenComponent) < 0.003
-                            && abs(content.blueComponent - mine.blueComponent) < 0.003
-                            && abs(content.alphaComponent - mine.alphaComponent) < 0.005) { return }
+                       || (abs(content.redComponent - mine.redComponent) < 0.003
+                           && abs(content.greenComponent - mine.greenComponent) < 0.003
+                           && abs(content.blueComponent - mine.blueComponent) < 0.003
+                           && abs(content.alphaComponent - mine.alphaComponent) < 0.005) { return }
                 }
                 failures.append("\(section): \(what) on \(type(of: view)) is \(colour)")
             }
-            for view in walkViews(window) {
+            // Radii: generated tokens, the halo outsets (md/sm + the 2 px
+            // Carolina ring) or the CSS-clamped pill — and never larger
+            // than half the layer's shorter side, which is what degenerated
+            // the bitmap renderer into W1's solid block.
+            let tokenRadii: [CGFloat] = [XRGAether7b.Radius.sm, XRGAether7b.Radius.md, XRGAether7b.Radius.lg,
+                                         XRGAether7b.Radius.md + 2, XRGAether7b.Radius.sm + 2]
+            func radiusIsLegal(_ radius: CGFloat, of layer: CALayer) -> Bool {
+                let shorterSide = min(layer.bounds.width, layer.bounds.height)
+                let pill = max(0, shorterSide / 2)
+                if radius > pill + 0.5 { return false }
+                return tokenRadii.contains { abs($0 - radius) < 0.01 } || abs(radius - pill) < 0.5
+            }
+            for (view, draws) in auditViews(window) {
                 let well = nearestWell(of: view)
                 if let layer = view.layer {
-                    if let background = layer.backgroundColor {
-                        check(NSColor(cgColor: background), "layer background", of: view, in: well)
-                    }
-                    // CALayer's border and shadow colours default to opaque
-                    // black while their widths and opacities are zero: only a
-                    // border or shadow that draws is a colour the window set.
-                    if layer.borderWidth > 0, let border = layer.borderColor {
-                        check(NSColor(cgColor: border), "layer border", of: view, in: well)
-                    }
-                    if layer.shadowOpacity > 0, let shadow = layer.shadowColor {
-                        check(NSColor(cgColor: shadow), "layer shadow", of: view, in: well)
-                    }
-                    if let gradient = layer as? CAGradientLayer {
-                        for colour in gradient.colors ?? [] {
-                            check(NSColor(cgColor: colour as! CGColor), "gradient colour", of: view, in: well)
+                    for (l, lDraws) in auditLayers(layer, draws: draws) {
+                        if lDraws {
+                            if let background = l.backgroundColor {
+                                check(NSColor(cgColor: background), "layer background", of: view, in: well)
+                            }
+                            // CALayer's border and shadow colours default to opaque
+                            // black while their widths and opacities are zero: only a
+                            // border or shadow that draws is a colour the window set.
+                            if l.borderWidth > 0, let border = l.borderColor {
+                                check(NSColor(cgColor: border), "layer border", of: view, in: well)
+                            }
+                            if l.shadowOpacity > 0, let shadow = l.shadowColor {
+                                check(NSColor(cgColor: shadow), "layer shadow", of: view, in: well)
+                            }
+                            if let gradient = l as? CAGradientLayer {
+                                for colour in gradient.colors ?? [] {
+                                    check(NSColor(cgColor: colour as! CGColor), "gradient colour", of: view, in: well)
+                                }
+                            }
+                        }
+                        // The radius contract holds for every layer that
+                        // can actually render — positive-sized, drawing,
+                        // with no hidden ancestor: hidden or degenerate-
+                        // sized layers cannot poison a capture, and W1's
+                        // degenerate radius lived on fully visible layers.
+                        if l.cornerRadius > 0, lDraws,
+                           min(l.bounds.width, l.bounds.height) > 0.5 {
+                            #expect(radiusIsLegal(l.cornerRadius, of: l),
+                                    "non-token or degenerate corner radius \(l.cornerRadius) on \(type(of: view)) (layer bounds \(l.bounds)) in \(section)")
                         }
                     }
-                    if layer.cornerRadius > 0 {
-                        #expect([XRGAether7b.Radius.sm, XRGAether7b.Radius.md,
-                                 XRGAether7b.Radius.lg, XRGAether7b.Radius.pill].contains(layer.cornerRadius),
-                                "non-token corner radius \(layer.cornerRadius) on \(type(of: view)) in \(section)")
-                    }
                 }
+                guard draws else { continue }
                 if let button = view as? NSButton, let tint = button.contentTintColor {
                     check(tint, "content tint", of: view, in: well)
                 }
@@ -440,9 +473,7 @@ struct XRGSettingsWindowTests {
                     }
                 }
                 // The system bezel must be gone from the pop-ups (V6): the
-                // rim is the border, never a double one. And every control
-                // the window creates draws the token focus halo instead of a
-                // native focus ring.
+                // rim is the border, never a double one.
                 if let popUp = view as? NSPopUpButton {
                     #expect(!popUp.isBordered, "a pop-up kept its system bezel in \(section)")
                 }
@@ -559,7 +590,7 @@ struct XRGSettingsWindowTests {
         #expect(store.loadProblem != nil)
         let window = controller(fixture, store: store)
         window.show(section: "general")
-        let views = walkViews(window)
+        let views = walkAll(content(window))
         let banner = try #require(views.first { $0.identifier?.rawValue == "unreadable-file-banner" })
         let replace = try #require(views.first { $0.identifier?.rawValue == "replace-unreadable-file" } as? XRGSettingsFlatButton)
         #expect(views.contains { $0.identifier?.rawValue == "settings-load-problem" && !($0 as? NSTextField)!.stringValue.isEmpty })
@@ -575,7 +606,7 @@ struct XRGSettingsWindowTests {
         #expect(store.loadProblem == nil)
         let written = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.documentURL)) as? [String: Any]
         #expect((written?["settings"] as? [String: Any])?["general.window.sticky_edges"] as? Bool == false)
-        #expect(walkViews(window).contains { $0.identifier?.rawValue == "unreadable-file-banner" } == false)
+        #expect(walkAll(content(window)).contains { $0.identifier?.rawValue == "unreadable-file-banner" } == false)
         _ = banner
     }
 
@@ -864,6 +895,331 @@ struct XRGSettingsWindowTests {
         #expect(window.budgetNotificationStatusText == "Permission granted")
     }
 
+    // MARK: Fix round 2 (issues 3/4/9/11, findings N1–N4, W1, W2)
+
+    /// Review issue 3: the error state grows its OWN row — the reason label
+    /// stays inside the row's bounds and the rows below never overlap it.
+    /// The pre-fix rows pinned only the control's centre and a minimum
+    /// height, so the reason text spilled over the next row.
+    @Test func validationGrowsItsRowInsteadOfOverlappingTheNext() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "general")
+        let nsWindow = try #require(window.window)
+        let number = try #require(try control(window, "general.window.border_width") as? XRGSettingsNumberControl)
+        number.field.stringValue = "99"
+        number.fieldEdited()
+        #expect(number.errorReason != nil)
+        nsWindow.contentView?.layoutSubtreeIfNeeded()
+        let row = try #require(number.superview, "the control has no row")
+        let stack = try #require(row.superview, "the row has no container")
+        // The reason label lies inside its row.
+        let reasonFrame = number.reasonLabel.convert(number.reasonLabel.bounds, to: row)
+        #expect(row.bounds.insetBy(dx: -1, dy: -1).contains(reasonFrame),
+                "the reason label escapes its row: \(reasonFrame) in \(row.bounds)")
+        // And the row's frame grew with the control: no row overlaps another.
+        let rowFrames = stack.subviews
+            .filter { $0 !== stack }
+            .map { $0.convert($0.bounds, to: stack) }
+            .sorted { $0.minY < $1.minY }
+        for (lower, upper) in zip(rowFrames, rowFrames.dropFirst()) {
+            #expect(lower.maxY <= upper.minY + 0.5,
+                    "rows overlap: \(lower) reaches into \(upper)")
+        }
+        // Repairing collapses the row back.
+        number.field.stringValue = "4"
+        number.fieldEdited()
+        nsWindow.contentView?.layoutSubtreeIfNeeded()
+        #expect(number.errorReason == nil)
+    }
+
+    /// Finding N1: AppKit delivers hit-test points in the superview's
+    /// coordinate system. A click on any correctly positioned control at a
+    /// NONZERO origin — a later sidebar button, a later segment, a toggle
+    /// right-aligned inside its row — must reach and activate it.
+    @Test func clicksReachNonZeroOriginControls() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "general")
+        try #require(window.window).contentView?.layoutSubtreeIfNeeded()
+        // A later sidebar button (its origin inside the stack is nonzero).
+        let stocks = try #require(window.sectionButtons.first { $0.identifier?.rawValue == "section-stocks" })
+        #expect(stocks.frame.origin != .zero, "the sidebar button sits at its stack's origin — the test proves nothing")
+        try deliverClick(on: stocks, in: window)
+        #expect(window.currentSection == "stocks", "the click on a later sidebar button did not switch sections")
+        // A later segment button (nonzero x inside the segmented rim).
+        window.show(section: "graphs")
+        let segmented = try #require(try control(window, "graphs.network.display_mode") as? XRGSettingsSegmentedControl)
+        let last = try #require(segmented.buttons.last)
+        #expect(last.frame.origin != .zero, "the last segment sits at its rim's origin — the test proves nothing")
+        let expected = try #require(segmented.options.last).value
+        try deliverClick(on: last, in: window)
+        #expect(store.value("graphs.network.display_mode") == expected,
+                "the click on a later segment did not select it")
+        // A toggle right-aligned inside its row (nonzero origin in the row).
+        window.show(section: "general")
+        let sticky = try #require(try control(window, "general.window.sticky_edges") as? XRGSettingsToggleControl)
+        #expect(sticky.frame.minX > 4, "the toggle sits at its row's origin — the test proves nothing")
+        try deliverClick(on: sticky, in: window)
+        #expect(sticky.isOn == false && store.value("general.window.sticky_edges") == .bool(false),
+                "the click on a row-aligned toggle did not flip it")
+    }
+
+    /// Finding N2: the bytes/s unit selector keeps the exact stored bytes
+    /// independently of the displayed text — 512 B/s shows "0.5" KB/s and
+    /// back without losing the value, fractional edits in a larger unit
+    /// store whole bytes, fractional byte counts are refused, and every
+    /// conversion is checked (a huge integer under GB/s cannot overflow).
+    @Test func minimumScaleUnitsRoundTripExactBytes() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        try store.set("graphs.network.minimum_scale", .int(512))
+        window.show(section: "graphs")
+        let presented = try #require(try control(window, "graphs.network.minimum_scale") as? XRGSettingsNumberControl)
+        let selector = try #require(presented.unitSelector)
+        #expect(presented.field.stringValue == "512")
+        #expect(selector.selectedItem?.title == "bytes/s")
+        let file = try String(contentsOf: fixture.documentURL, encoding: .utf8)
+        // KB/s presents the fraction; bytes/s presents it back; the stored
+        // value never moves and nothing is submitted.
+        selector.selectItem(withTitle: "KB/s")
+        presented.unitEdited(selector)
+        #expect(presented.field.stringValue == "0.5", "512 B/s did not present as 0.5 KB/s")
+        selector.selectItem(withTitle: "bytes/s")
+        presented.unitEdited(selector)
+        #expect(presented.field.stringValue == "512", "the round trip lost the exact bytes")
+        #expect(presented.value() == .int(512))
+        #expect(store.value("graphs.network.minimum_scale") == .int(512))
+        #expect(try String(contentsOf: fixture.documentURL, encoding: .utf8) == file)
+        // A fractional edit in KB/s stores whole bytes.
+        selector.selectItem(withTitle: "KB/s")
+        presented.unitEdited(selector)
+        presented.field.stringValue = "1.5"
+        presented.fieldEdited()
+        #expect(store.value("graphs.network.minimum_scale") == .int(1536))
+        // A fractional byte count is refused and saves nothing.
+        selector.selectItem(withTitle: "bytes/s")
+        presented.unitEdited(selector)
+        let before = try String(contentsOf: fixture.documentURL, encoding: .utf8)
+        presented.field.stringValue = "0.5"
+        presented.fieldEdited()
+        #expect(presented.errorReason?.isEmpty == false, "0.5 bytes/s was not refused")
+        #expect(store.value("graphs.network.minimum_scale") == .int(1536))
+        #expect(try String(contentsOf: fixture.documentURL, encoding: .utf8) == before)
+        // An overflowing value under GB/s is refused, not wrapped.
+        selector.selectItem(withTitle: "GB/s")
+        presented.unitEdited(selector)
+        presented.field.stringValue = "99999999999999999999999"
+        presented.fieldEdited()
+        #expect(presented.errorReason == "The value is too large.",
+                "the overflow was not refused with the stated reason")
+        #expect(store.value("graphs.network.minimum_scale") == .int(1536))
+        #expect(try String(contentsOf: fixture.documentURL, encoding: .utf8) == before)
+        // Repairing presents in the stored value's largest dividing unit.
+        selector.selectItem(withTitle: "bytes/s")
+        presented.unitEdited(selector)
+        presented.field.stringValue = "2048"
+        presented.fieldEdited()
+        #expect(store.value("graphs.network.minimum_scale") == .int(2048))
+        window.show(section: "graphs")
+        let repaired = try #require(try control(window, "graphs.network.minimum_scale") as? XRGSettingsNumberControl)
+        #expect(repaired.field.stringValue == "2" && repaired.unitSelector?.selectedItem?.title == "KB/s")
+    }
+
+    /// Finding N3: repeated moves keep exactly one row container per graph,
+    /// preserve keyboard focus on the moved graph's button, and Tab /
+    /// Shift-Tab keep walking the rebuilt buttons — without reopening the
+    /// section.
+    @Test func reorderMovesKeepRowsFocusAndKeyboardNavigationAlive() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "graphs")
+        let nsWindow = try #require(window.window)
+        let order = try #require(try control(window, "graphs.order") as? XRGSettingsOrderControl)
+        try focus(try #require(order.rows[0].down), in: window)
+        // Three keyboard moves in a row.
+        for _ in 0..<3 { try deliverKey(" ", keyCode: 49, to: window) }
+        // One row container per graph — the pre-fix rebuild left the old
+        // containers behind and appended fresh ones.
+        #expect(order.listStack.arrangedSubviews.count == 14,
+                "empty row containers accumulated: \(order.listStack.arrangedSubviews.count)")
+        #expect(order.rows.count == 14)
+        #expect(order.rows.map(\.name.stringValue)[3] == "CPU", "three moves did not walk CPU down three rows")
+        #expect(store.value("graphs.order") == .string("gpu,npu,vram,cpu,memory,battery,temperature,fans,network,disk,weather,stock,ai,processes"))
+        // Focus survived on the moved graph's Move down button.
+        #expect(nsWindow.firstResponder === order.rows[3].down,
+                "keyboard focus did not survive the rebuild on the moved graph")
+        // The rebuilt buttons rejoined the key-view loop: Tab walks on,
+        // Shift-Tab walks back, without reopening the section.
+        let expectedNext = order.rows[3].down.nextKeyView
+        try deliverKey("\t", keyCode: 48, to: window)
+        #expect(nsWindow.firstResponder === expectedNext, "Tab did not continue into the rebuilt rows")
+        try deliverKey("\t", keyCode: 48, to: window, shift: true)
+        #expect(nsWindow.firstResponder === order.rows[3].down, "Shift-Tab did not walk back")
+        // A fourth move by VoiceOver press still works after all that.
+        #expect(try #require(order.rows[3].down).accessibilityPerformPress())
+        #expect(order.rows.map(\.name.stringValue)[4] == "CPU")
+        #expect(order.listStack.arrangedSubviews.count == 14, "a move after keyboard navigation accumulated rows")
+    }
+
+    /// W2: every graph-order row shares one name column, so the Move up /
+    /// Move down buttons line up vertically in their own columns.
+    @Test func graphOrderMoveButtonsShareOneColumn() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "graphs")
+        let nsWindow = try #require(window.window)
+        nsWindow.contentView?.layoutSubtreeIfNeeded()
+        let order = try #require(try control(window, "graphs.order") as? XRGSettingsOrderControl)
+        let ups = order.rows.map { $0.up.convert($0.up.bounds, to: order).minX }
+        let downs = order.rows.map { $0.down.convert($0.down.bounds, to: order).minX }
+        #expect(ups.allSatisfy { abs($0 - ups[0]) < 1.5 },
+                "the Move up buttons do not share one column: \(ups)")
+        #expect(downs.allSatisfy { abs($0 - downs[0]) < 1.5 },
+                "the Move down buttons do not share one column: \(downs)")
+        // The names share one column width, whatever each graph is called.
+        let names = order.rows.map { $0.name.frame.width }
+        #expect(names.allSatisfy { abs($0 - names[0]) < 1.5 },
+                "the name column is not one shared width: \(names)")
+    }
+
+    /// Finding N4: the read-only font display (ruling P3) stays read-only —
+    /// an unrelated settings notification, a font change of its own, and a
+    /// same-section reopen must all leave it uneditable.
+    @Test func readOnlyFontDisplayStaysReadOnlyThroughNotifications() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "appearance")
+        let display = try #require(try control(window, "appearance.font") as? XRGSettingsTextControl)
+        #expect(!display.textField.isEditable, "the font display is editable from the start")
+        // An unrelated change re-presents and re-enables the section's
+        // controls — the font display must not re-open.
+        try store.set("appearance.antialiasing", .bool(false))
+        #expect(!display.textField.isEditable, "an unrelated notification re-opened the font display")
+        // The font's own change drives the same path.
+        let current = window.themeEngine().graphFont ?? NSFont.systemFont(ofSize: 10)
+        window.applyGraphFont(NSFont.systemFont(ofSize: 17), old: current)
+        #expect(!display.textField.isEditable, "changing the font re-opened the font display")
+        #expect(store.value("appearance.font") == .string("System 17"))
+        // And reopening the section keeps it read-only.
+        window.show(section: "appearance")
+        let reopened = try #require(try control(window, "appearance.font") as? XRGSettingsTextControl)
+        #expect(!reopened.textField.isEditable, "a section reopen re-opened the font display")
+        #expect(reopened.textField.stringValue == "System 17")
+    }
+
+    /// W1, proof (b): the window opened ON SCREEN renders every section's
+    /// first card through the bitmap path — the controls are present,
+    /// visible and inside the card's bounds, and the bitmap the snapshot
+    /// tool draws from the live view shows their ink inside the first
+    /// card. The degenerate pill radius used to paint one uniform colour
+    /// over the whole capture instead, with no labels or controls.
+    @Test func liveWindowRendersEverySectionsFirstCard() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        let nsWindow = try #require(window.window)
+        // ON SCREEN, the way the user opens it.
+        nsWindow.setFrame(NSRect(x: 120, y: 120, width: 760, height: 560), display: true)
+        nsWindow.makeKeyAndOrderFront(nil)
+        defer { nsWindow.orderOut(nil) }
+        let content = try #require(nsWindow.contentView)
+        for section in XRGSettingsCatalog.sections {
+            window.show(section: section)
+            content.layoutSubtreeIfNeeded()
+            let pane = try #require(walkAll(content).compactMap { $0 as? XRGSettingsPaneStack }.first)
+            let cards = walkAll(pane).compactMap { $0 as? XRGSettingsCardView }
+            let first = try #require(cards.first, "no cards rendered in \(section)")
+            let controls = walkAll(first).compactMap { $0 as? XRGSettingsEntryControl }
+            #expect(!controls.isEmpty, "the first card of \(section) holds no controls")
+            for control in controls {
+                // Present, visible, inside the card: the W1 symptom was a
+                // card whose controls were painted over by a uniform block.
+                #expect(!control.isHidden && !control.isHiddenOrHasHiddenAncestor,
+                        "a control of \(section)'s first card is hidden")
+                #expect(control.alphaValue > 0.01,
+                        "a control of \(section)'s first card is transparent")
+                #expect(control.bounds.width > 0 && control.bounds.height > 0,
+                        "a control of \(section)'s first card has no size")
+                let frame = control.superview.map { $0.convert(control.frame, to: first) } ?? control.frame
+                #expect(first.bounds.insetBy(dx: -1, dy: -1).contains(frame),
+                        "a control of \(section)'s first card escapes the card: \(frame) in \(first.bounds)")
+            }
+            // The bitmap path over the LIVE view shows the card's ink: at
+            // least one percent of the card's pixels differ from the card's
+            // own surface — labels, rims and controls. The poisoned capture
+            // was one uniform colour and failed exactly here.
+            guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {
+                #expect(Bool(false), "no bitmap for \(section)")
+                continue
+            }
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            let cardFrame = first.convert(first.bounds, to: content)
+            let scale = CGFloat(bitmap.pixelsWide) / max(1, content.bounds.width)
+            guard let surface = first.layer?.backgroundColor.flatMap(NSColor.init(cgColor:)) else {
+                #expect(Bool(false), "the first card of \(section) has no surface colour")
+                continue
+            }
+            var ink = 0, sampled = 0
+            var inkBuckets: Set<String> = []
+            for y in stride(from: 0, to: Int(cardFrame.height * scale), by: 2) {
+                for x in stride(from: 0, to: Int(cardFrame.width * scale), by: 2) {
+                    let bitmapX = Int(cardFrame.minX * scale) + x
+                    // The bitmap's rows start at the content's visual top.
+                    let bitmapY = Int((content.bounds.height - cardFrame.maxY) * scale) + y
+                    guard bitmapX >= 0, bitmapY >= 0, bitmapX < bitmap.pixelsWide, bitmapY < bitmap.pixelsHigh,
+                          let pixel = bitmap.colorAt(x: bitmapX, y: bitmapY)?.usingColorSpace(.sRGB) else { continue }
+                    sampled += 1
+                    let delta = max(abs(pixel.redComponent - surface.redComponent),
+                                    abs(pixel.greenComponent - surface.greenComponent),
+                                    abs(pixel.blueComponent - surface.blueComponent))
+                    if delta > 0.09 {
+                        ink += 1
+                        // Real cards draw many chrome colours (labels, the
+                        // eyebrow accent, rims, toggles); W1's poisoned
+                        // capture was ONE flat fill with hairlines.
+                        inkBuckets.insert("\(Int(pixel.redComponent * 16))/\(Int(pixel.greenComponent * 16))/\(Int(pixel.blueComponent * 16))")
+                    }
+                }
+            }
+            #expect(sampled > 500, "too little of \(section)'s first card was sampled: \(sampled)")
+            #expect(Double(ink) >= 0.01 * Double(sampled),
+                    "\(section)'s first card shows no controls in the bitmap path (ink \(ink)/\(sampled))")
+            #expect(inkBuckets.count >= 3,
+                    "\(section)'s first card renders as a flat block in the bitmap path (\(inkBuckets.count) ink colours)")
+            // Every card leads with a "// GROUP" eyebrow in the accent
+            // colour: W1's flat fill buried it, so its accent pixels are
+            // the sharpest proof the card actually renders. (The flat-fill
+            // share alone cannot discriminate: a healthy sparse card runs
+            // as high as 97.5% surface while the poison covered ~99%.)
+            let accent = XRGAether7b.Color.accentActive(dark: XRGAether7bPalette.isDark(content))
+                .usingColorSpace(.sRGB) ?? NSColor.black
+            var eyebrow = 0
+            for y in stride(from: 0, to: Int(30 * scale), by: 2) {
+                for x in stride(from: 0, to: Int(cardFrame.width * scale), by: 2) {
+                    let bitmapX = Int(cardFrame.minX * scale) + x
+                    let bitmapY = Int((content.bounds.height - cardFrame.maxY) * scale) + y
+                    guard bitmapX >= 0, bitmapY >= 0, bitmapX < bitmap.pixelsWide, bitmapY < bitmap.pixelsHigh,
+                          let pixel = bitmap.colorAt(x: bitmapX, y: bitmapY)?.usingColorSpace(.sRGB) else { continue }
+                    // Small mono glyphs subpixel-blend toward the card
+                    // surface, so the match tolerance is loose — the flat
+                    // poison fill left ZERO such pixels.
+                    if abs(pixel.redComponent - accent.redComponent) < 0.15,
+                       abs(pixel.greenComponent - accent.greenComponent) < 0.15,
+                       abs(pixel.blueComponent - accent.blueComponent) < 0.15 { eyebrow += 1 }
+                }
+            }
+            #expect(eyebrow >= 15,
+                    "\(section)'s first card eyebrow is missing in the bitmap path (\(eyebrow) accent pixels)")
+        }
+    }
+
     // MARK: Layout (fixes V1, V2, V3, V5, V8)
 
     /// Every section opens from its top, cards fit the content pane,
@@ -880,12 +1236,12 @@ struct XRGSettingsWindowTests {
         for section in ["stocks", "graphs"] {
             window.show(section: section)
             nsWindow.contentView?.layoutSubtreeIfNeeded()
-            let clip = try #require(walkViews(window).compactMap { $0 as? NSClipView }.first)
+            let clip = try #require(walkAll(content(window)).compactMap { $0 as? NSClipView }.first)
             #expect(clip.documentVisibleRect.minY <= 36, "\(section) did not open from the top")
         }
         window.show(section: "general")
         nsWindow.contentView?.layoutSubtreeIfNeeded()
-        let pane = try #require(walkViews(window).compactMap { $0 as? XRGSettingsPaneStack }.first)
+        let pane = try #require(walkAll(content(window)).compactMap { $0 as? XRGSettingsPaneStack }.first)
         let cards = walkAll(pane).compactMap { $0 as? XRGSettingsCardView }
         #expect(!cards.isEmpty)
         for card in cards {
@@ -900,6 +1256,16 @@ struct XRGSettingsWindowTests {
             if !trailing.isEmpty {
                 #expect(trailing.allSatisfy { abs($0 - trailing[0]) < 1.5 },
                         "the controls do not sit in one column: \(trailing)")
+            }
+            // V2: every wrapper closes around its VISIBLE contents — the
+            // column above must be made of real controls, not stretched
+            // wrappers whose contents float anywhere inside them.
+            for control in walkAll(card).compactMap({ $0 as? XRGSettingsEntryControl }) {
+                let visible = control.subviews.filter { !$0.isHidden && !$0.isHiddenOrHasHiddenAncestor }
+                guard !visible.isEmpty else { continue }
+                let widest = visible.map { $0.frame.maxX }.max() ?? 0
+                #expect(abs(control.bounds.width - widest) < 1.5,
+                        "the wrapper of \(control.entry.id) does not enclose its trailing content: \(control.bounds.width) vs \(widest)")
             }
             // An action button aligns with the label column (V8).
             let rowLabels = walkAll(card).compactMap { $0 as? NSTextField }

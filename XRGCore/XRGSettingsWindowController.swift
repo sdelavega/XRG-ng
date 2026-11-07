@@ -518,11 +518,20 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         if entry.id == "appearance.font" {
             // The font field is a read-only display of the current font
             // (ruling P3): the "Choose font…" action edits it through the
-            // system font panel.
+            // system font panel. Read-only-ness is an enduring property of
+            // the control (finding N4): the dependency refreshes that
+            // follow any settings notification must never re-open it.
             if let display = control as? XRGSettingsTextControl {
+                display.isReadOnlyDisplay = true
                 display.textField.isEditable = false
                 display.setAccessibilityValue(store.value("appearance.font").isTextualDescription)
             }
+        }
+        if let order = control as? XRGSettingsOrderControl {
+            // A rebuilt order list rejoins the window's key-view loop
+            // (finding N3: moves used to leave the keyboard chain behind
+            // with the destroyed buttons).
+            order.keyLoopInvalidated = { [weak self] in self?.wireKeyViewLoop() }
         }
         if let path = control as? XRGSettingsPathControl {
             path.onChoose = { [weak self] pathControl in self?.choosePath(pathControl) }
@@ -895,6 +904,14 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
                 label.trailingAnchor.constraint(lessThanOrEqualTo: control.leadingAnchor,
                                                 constant: -XRGAether7b.Space.s3),
                 row.heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
+                // The row's height follows the control's FULL height, error
+                // dot and reason label included (review issue 3): an
+                // expanded control grows its own row instead of overlapping
+                // the rows below — the pre-fix rows pinned only the
+                // control's centre and a minimum height.
+                row.bottomAnchor.constraint(greaterThanOrEqualTo: control.bottomAnchor,
+                                            constant: XRGAether7b.Space.s1),
+                row.bottomAnchor.constraint(greaterThanOrEqualTo: label.bottomAnchor),
             ])
             row.setAccessibilityLabel("\(entry.label)")
             rows.addArrangedSubview(row)
