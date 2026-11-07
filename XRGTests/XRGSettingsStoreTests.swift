@@ -690,7 +690,7 @@ struct XRGSettingsStoreTests {
 
     /// Only the allowlisted non-setting state (Sparkle `SU*`, AppKit
     /// `NSWindow Frame *`, `unminimizedFrame`, `tempLocationsAutoconfigured`,
-    /// the recorded `aiTokens*` usage data) keeps its `NSUserDefaults` home
+    /// the eleven recorded AI usage keys) keeps its `NSUserDefaults` home
     /// on the document backend; every other unmapped key is refused and
     /// never written anywhere.
     @Test func setLegacyValuesAllowsOnlyExcludedStateAndRefusesOtherUnmappedKeys() throws {
@@ -731,6 +731,62 @@ struct XRGSettingsStoreTests {
         #expect(!text.contains("completelyMadeUpKey"))
         #expect(!text.contains("anotherUnknownLatch"))
         // A refusal is not a load problem: the document stays the source of truth.
+        #expect(store.loadProblem == nil)
+    }
+
+    // MARK: The recorded AI usage keys are allowlisted by exact key (fix round 3)
+
+    /// The recorded AI usage data is allowlisted by EXACT key — the eleven
+    /// keys docs/settings-inventory.md enumerates (the three daily counters,
+    /// the three by-model and three by-provider dictionaries, and the
+    /// `aiTokensDailyDate` / `aiTokensLastNotifyDate` dates) — never by
+    /// prefix: an unknown key sharing the `aiTokens` prefix is refused like
+    /// any other unmapped key and reaches neither the persistent domain nor
+    /// the document, while every recorded key keeps its `NSUserDefaults` home.
+    @Test func recordedAIUsageKeysAreAllowedAndUnknownAITokensKeysAreRefused() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let defaults = fixture.defaults
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
+        #expect(store.loadProblem == nil)
+        let documentBytesBefore = try #require(documentBytes(fixture.documentURL))
+
+        let refused = store.setLegacyValues([
+            "aiTokensDailyUnclassifiedTokens": 3,
+            "aiTokensDailyPromptTokens": 41,
+            "aiTokensDailyCompletionTokens": 7,
+            "aiTokensDailyModelUnclassifiedTokens": ["gpt": 1],
+            "aiTokensDailyModelPromptTokens": ["gpt": 2],
+            "aiTokensDailyModelCompletionTokens": ["gpt": 3],
+            "aiTokensDailyProviderUnclassifiedTokens": ["openai": 1],
+            "aiTokensDailyProviderPromptTokens": ["openai": 2],
+            "aiTokensDailyProviderCompletionTokens": ["openai": 3],
+            "aiTokensDailyDate": Date(timeIntervalSince1970: 100),
+            "aiTokensLastNotifyDate": Date(timeIntervalSince1970: 200),
+            "aiTokensMadeUpSetting": "shares the prefix but is not recorded usage",
+        ])
+
+        // The made-up key sharing the prefix is refused and absent from the
+        // persistent domain; every recorded key is still allowed and lands.
+        #expect(refused == ["aiTokensMadeUpSetting"])
+        let domain = defaults.persistentDomain(forName: fixture.domain) ?? [:]
+        #expect(domain["aiTokensMadeUpSetting"] == nil)
+        #expect((domain["aiTokensDailyUnclassifiedTokens"] as? NSNumber)?.intValue == 3)
+        #expect((domain["aiTokensDailyPromptTokens"] as? NSNumber)?.intValue == 41)
+        #expect((domain["aiTokensDailyCompletionTokens"] as? NSNumber)?.intValue == 7)
+        #expect((domain["aiTokensDailyModelUnclassifiedTokens"] as? [String: Any])?.count == 1)
+        #expect((domain["aiTokensDailyModelPromptTokens"] as? [String: Any])?.count == 1)
+        #expect((domain["aiTokensDailyModelCompletionTokens"] as? [String: Any])?.count == 1)
+        #expect((domain["aiTokensDailyProviderUnclassifiedTokens"] as? [String: Any])?.count == 1)
+        #expect((domain["aiTokensDailyProviderPromptTokens"] as? [String: Any])?.count == 1)
+        #expect((domain["aiTokensDailyProviderCompletionTokens"] as? [String: Any])?.count == 1)
+        #expect((domain["aiTokensDailyDate"] as? Date)?.timeIntervalSince1970 == 100)
+        #expect((domain["aiTokensLastNotifyDate"] as? Date)?.timeIntervalSince1970 == 200)
+        // Nothing in the call maps to the catalog, so the document is
+        // untouched — the refused key never reaches it either.
+        #expect(documentBytes(fixture.documentURL) == documentBytesBefore)
+        let text = String(data: try #require(documentBytes(fixture.documentURL)), encoding: .utf8) ?? ""
+        #expect(!text.contains("aiTokensMadeUpSetting"))
         #expect(store.loadProblem == nil)
     }
 

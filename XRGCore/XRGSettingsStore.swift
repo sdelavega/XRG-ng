@@ -278,13 +278,26 @@ import Foundation
     /// AppKit's `NSWindow Frame *` autodrive keys, the graph window's
     /// `unminimizedFrame` restore rectangle, the temperature sensor
     /// auto-configuration latch `tempLocationsAutoconfigured`, and the
-    /// recorded AI usage data (the `aiTokens*` daily counters and by-model/
-    /// by-provider dictionaries, and the `aiTokensDailyDate` /
-    /// `aiTokensLastNotifyDate` dates). This is the EXPLICIT allowlist: any
-    /// other key the catalog does not map is refused — never written to the
-    /// domain, never converted into the document (fix round 2, finding 2).
-    static let excludedLegacyPrefixes = ["SU", "NSWindow Frame ", "aiTokens"]
-    static let excludedLegacyKeys = ["unminimizedFrame", "tempLocationsAutoconfigured"]
+    /// recorded AI usage data — allowlisted by EXACT key, the eleven keys
+    /// docs/settings-inventory.md enumerates (the three daily counters, the
+    /// by-model and by-provider dictionaries, and the `aiTokensDailyDate` /
+    /// `aiTokensLastNotifyDate` dates), never by prefix: an unknown
+    /// `aiTokens*` key is refused like any other unmapped key (fix round 3).
+    /// This is the EXPLICIT allowlist: any other key the catalog does not
+    /// map is refused — never written to the domain, never converted into
+    /// the document (fix round 2, finding 2).
+    static let excludedLegacyPrefixes = ["SU", "NSWindow Frame "]
+    static let excludedLegacyKeys = [
+        "unminimizedFrame", "tempLocationsAutoconfigured",
+        // The recorded AI usage data: the exact keys the observer writes.
+        "aiTokensDailyUnclassifiedTokens", "aiTokensDailyPromptTokens",
+        "aiTokensDailyCompletionTokens",
+        "aiTokensDailyModelUnclassifiedTokens", "aiTokensDailyModelPromptTokens",
+        "aiTokensDailyModelCompletionTokens",
+        "aiTokensDailyProviderUnclassifiedTokens", "aiTokensDailyProviderPromptTokens",
+        "aiTokensDailyProviderCompletionTokens",
+        "aiTokensDailyDate", "aiTokensLastNotifyDate",
+    ]
 
     /// Whether one raw 0.2.2 defaults key is allowlisted excluded state.
     static func isExcludedLegacyKey(_ key: String) -> Bool {
