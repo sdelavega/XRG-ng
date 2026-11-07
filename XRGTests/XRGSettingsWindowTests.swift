@@ -15,6 +15,13 @@ import Testing
 /// (issue 7), colour inheritance (issue 8), a token audit without subtree
 /// exclusions (issue 9), the catalog-driven notification action
 /// (issue 10) and the parity restorations (rulings P1, P3, P4, P5).
+/// Fix round 3 adds: the audit's colour-content exemption bound to the
+/// exact swatch-fill property (remaining issue 9), focus restored to the
+/// moved graph's enabled opposite-direction button after an endpoint move
+/// (remaining P4/N3), Tab/Shift-Tab traversal that skips disabled and
+/// hidden views with bounded wrapping, the slider's held-key adjustment
+/// and numeric accessibility element, the colour well's own catalog label
+/// and meaningful value, and number fields of one consistent width.
 /// Every fixture uses a temp-directory store and a disposable defaults suite.
 @Suite(.serialized) @MainActor
 struct XRGSettingsWindowTests {
@@ -373,7 +380,10 @@ struct XRGSettingsWindowTests {
     /// CSS-clamped pill, and no layer may hold a degenerate radius (W1's
     /// bitmap poison). Every colour the window sets is an Aether7b value
     /// for the current appearance; the one allowance is the colour well's
-    /// swatch content — the colour the user picked. AppKit-private chrome
+    /// swatch content — EXACTLY the background of the well's own layer,
+    /// matching the colour the user picked (clear while the entry
+    /// inherits); the well's chrome and every other property are never
+    /// exempt (the negative test below proves both). AppKit-private chrome
     /// that never draws (hidden scroll-pocket internals) carries system
     /// colours the window cannot set and never shows: colour properties
     /// are asserted only on views that draw.
@@ -388,114 +398,125 @@ struct XRGSettingsWindowTests {
             window.show(section: section)
             window.refresh()
             window.window?.contentView?.layoutSubtreeIfNeeded()
-            var failures: [String] = []
-            func nearestWell(of view: NSView) -> XRGSettingsColorWellView? {
-                var current: NSView? = view
-                while let candidate = current {
-                    if let found = candidate as? XRGSettingsColorWellView { return found }
-                    current = candidate.superview
-                }
-                return nil
-            }
-            func check(_ colour: NSColor?, _ what: String, of view: NSView, in well: XRGSettingsColorWellView?) {
-                guard let colour else { return }
-                if XRGAether7bPalette.isAether7b(colour, dark: dark) { return }
-                // The one allowance, per property: the colour well's swatch
-                // content, which the user picked (an unset well is clear).
-                if let well, view === well || view.isDescendant(of: well) {
-                    let content = well.color.usingColorSpace(.sRGB)
-                    let mine = colour.usingColorSpace(.sRGB)
-                    if let content, let mine,
-                       content.alphaComponent < 0.01 || mine.alphaComponent < 0.01
-                       || (abs(content.redComponent - mine.redComponent) < 0.003
-                           && abs(content.greenComponent - mine.greenComponent) < 0.003
-                           && abs(content.blueComponent - mine.blueComponent) < 0.003
-                           && abs(content.alphaComponent - mine.alphaComponent) < 0.005) { return }
-                }
-                failures.append("\(section): \(what) on \(type(of: view)) is \(colour)")
-            }
-            // Radii: generated tokens, the halo outsets (md/sm + the 2 px
-            // Carolina ring) or the CSS-clamped pill — and never larger
-            // than half the layer's shorter side, which is what degenerated
-            // the bitmap renderer into W1's solid block.
-            let tokenRadii: [CGFloat] = [XRGAether7b.Radius.sm, XRGAether7b.Radius.md, XRGAether7b.Radius.lg,
-                                         XRGAether7b.Radius.md + 2, XRGAether7b.Radius.sm + 2]
-            func radiusIsLegal(_ radius: CGFloat, of layer: CALayer) -> Bool {
-                let shorterSide = min(layer.bounds.width, layer.bounds.height)
-                let pill = max(0, shorterSide / 2)
-                if radius > pill + 0.5 { return false }
-                return tokenRadii.contains { abs($0 - radius) < 0.01 } || abs(radius - pill) < 0.5
-            }
-            for (view, draws) in auditViews(window) {
-                let well = nearestWell(of: view)
-                if let layer = view.layer {
-                    for (l, lDraws) in auditLayers(layer, draws: draws) {
-                        if lDraws {
-                            if let background = l.backgroundColor {
-                                check(NSColor(cgColor: background), "layer background", of: view, in: well)
-                            }
-                            // CALayer's border and shadow colours default to opaque
-                            // black while their widths and opacities are zero: only a
-                            // border or shadow that draws is a colour the window set.
-                            if l.borderWidth > 0, let border = l.borderColor {
-                                check(NSColor(cgColor: border), "layer border", of: view, in: well)
-                            }
-                            if l.shadowOpacity > 0, let shadow = l.shadowColor {
-                                check(NSColor(cgColor: shadow), "layer shadow", of: view, in: well)
-                            }
-                            if let gradient = l as? CAGradientLayer {
-                                for colour in gradient.colors ?? [] {
-                                    check(NSColor(cgColor: colour as! CGColor), "gradient colour", of: view, in: well)
-                                }
-                            }
-                        }
-                        // The radius contract holds for every layer that
-                        // can actually render — positive-sized, drawing,
-                        // with no hidden ancestor: hidden or degenerate-
-                        // sized layers cannot poison a capture, and W1's
-                        // degenerate radius lived on fully visible layers.
-                        if l.cornerRadius > 0, lDraws,
-                           min(l.bounds.width, l.bounds.height) > 0.5 {
-                            #expect(radiusIsLegal(l.cornerRadius, of: l),
-                                    "non-token or degenerate corner radius \(l.cornerRadius) on \(type(of: view)) (layer bounds \(l.bounds)) in \(section)")
-                        }
-                    }
-                }
-                guard draws else { continue }
-                if let button = view as? NSButton, let tint = button.contentTintColor {
-                    check(tint, "content tint", of: view, in: well)
-                }
-                if let field = view as? NSTextField {
-                    check(field.textColor, "text colour", of: view, in: well)
-                    if field.isEditable { check(field.backgroundColor, "field background", of: view, in: well) }
-                    field.attributedStringValue.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: field.attributedStringValue.length)) { value, _, _ in
-                        if let colour = value as? NSColor { check(colour, "attributed text", of: view, in: well) }
-                    }
-                }
-                // The system bezel must be gone from the pop-ups (V6): the
-                // rim is the border, never a double one.
-                if let popUp = view as? NSPopUpButton {
-                    #expect(!popUp.isBordered, "a pop-up kept its system bezel in \(section)")
-                }
-                switch view {
-                case is XRGSettingsFlatButton:
-                    // The flat button's focus treatment is the token halo;
-                    // its chrome is layer-drawn, so no cell machinery can
-                    // draw a native ring (the keyboard test asserts the halo
-                    // appears on focus and leaves on resign).
-                    #expect(view.wantsLayer, "the flat button is not layer-backed chrome")
-                default:
-                    break
-                }
-                // Note: NSControl.focusRingType cannot gate this audit on the
-                // macOS 26 SDK — the getter answers `.default` whatever the
-                // setter stored (probed against NSTextField, NSSlider and
-                // NSPopUpButton), so the bezel removal (isBordered, above)
-                // and the keyboard test's token-halo assertions carry the
-                // focus contract instead.
-            }
-            #expect(failures.isEmpty, "non-token colours: \(failures.joined(separator: "\n"))")
+            let failures = tokenAuditFailures(window, dark: dark, section: section)
+            #expect(failures.isEmpty, "non-token colours in \(section): \(failures.joined(separator: "\n"))")
         }
+    }
+
+    /// The audit itself (review issue 9), over the section the window has
+    /// rendered: every descendant view, every layer, every drawable colour
+    /// must be an Aether7b value for this appearance. Returns the colour
+    /// failures so the negative test can drive the same walk.
+    @MainActor private func tokenAuditFailures(_ window: XRGSettingsWindowController, dark: Bool,
+                                               section: String) -> [String] {
+        var failures: [String] = []
+        func check(_ colour: NSColor?, _ what: String, of view: NSView, swatchExempt: Bool = false) {
+            guard let colour else { return }
+            if swatchExempt || XRGAether7bPalette.isAether7b(colour, dark: dark) { return }
+            failures.append("\(section): \(what) on \(type(of: view)) is \(colour)")
+        }
+        // Radii: generated tokens, the halo outsets (md/sm + the 2 px
+        // Carolina ring) or the CSS-clamped pill — and never larger
+        // than half the layer's shorter side, which is what degenerated
+        // the bitmap renderer into W1's solid block.
+        let tokenRadii: [CGFloat] = [XRGAether7b.Radius.sm, XRGAether7b.Radius.md, XRGAether7b.Radius.lg,
+                                     XRGAether7b.Radius.md + 2, XRGAether7b.Radius.sm + 2]
+        func radiusIsLegal(_ radius: CGFloat, of layer: CALayer) -> Bool {
+            let shorterSide = min(layer.bounds.width, layer.bounds.height)
+            let pill = max(0, shorterSide / 2)
+            if radius > pill + 0.5 { return false }
+            return tokenRadii.contains { abs($0 - radius) < 0.01 } || abs(radius - pill) < 0.5
+        }
+        for (view, draws) in auditViews(window) {
+            if let layer = view.layer {
+                for (l, lDraws) in auditLayers(layer, draws: draws) {
+                    if lDraws {
+                        if let background = l.backgroundColor {
+                            // The ONE allowance, exactly (remaining issue 9):
+                            // the colour well's swatch fill — the background of
+                            // the well's OWN layer, matching the colour the
+                            // user picked (clear while the entry inherits).
+                            // Nothing else rides the exemption: not the well's
+                            // border, not any sublayer, not any other view, and
+                            // no colour-matching shortcut (a border that
+                            // happens to equal the swatch still fails — the
+                            // negative test proves it).
+                            let swatchExempt: Bool
+                            if let well = view as? XRGSettingsColorWellView, l === well.layer,
+                               let picked = well.color.usingColorSpace(.sRGB),
+                               let mine = NSColor(cgColor: background)?.usingColorSpace(.sRGB),
+                               abs(picked.redComponent - mine.redComponent) < 0.003,
+                               abs(picked.greenComponent - mine.greenComponent) < 0.003,
+                               abs(picked.blueComponent - mine.blueComponent) < 0.003,
+                               abs(picked.alphaComponent - mine.alphaComponent) < 0.005 {
+                                swatchExempt = true
+                            } else {
+                                swatchExempt = false
+                            }
+                            check(NSColor(cgColor: background), "layer background", of: view,
+                                  swatchExempt: swatchExempt)
+                        }
+                        // CALayer's border and shadow colours default to opaque
+                        // black while their widths and opacities are zero: only a
+                        // border or shadow that draws is a colour the window set.
+                        if l.borderWidth > 0, let border = l.borderColor {
+                            check(NSColor(cgColor: border), "layer border", of: view)
+                        }
+                        if l.shadowOpacity > 0, let shadow = l.shadowColor {
+                            check(NSColor(cgColor: shadow), "layer shadow", of: view)
+                        }
+                        if let gradient = l as? CAGradientLayer {
+                            for colour in gradient.colors ?? [] {
+                                check(NSColor(cgColor: colour as! CGColor), "gradient colour", of: view)
+                            }
+                        }
+                    }
+                    // The radius contract holds for every layer that
+                    // can actually render — positive-sized, drawing,
+                    // with no hidden ancestor: hidden or degenerate-
+                    // sized layers cannot poison a capture, and W1's
+                    // degenerate radius lived on fully visible layers.
+                    if l.cornerRadius > 0, lDraws,
+                       min(l.bounds.width, l.bounds.height) > 0.5 {
+                        #expect(radiusIsLegal(l.cornerRadius, of: l),
+                                "non-token or degenerate corner radius \(l.cornerRadius) on \(type(of: view)) (layer bounds \(l.bounds)) in \(section)")
+                    }
+                }
+            }
+            guard draws else { continue }
+            if let button = view as? NSButton, let tint = button.contentTintColor {
+                check(tint, "content tint", of: view)
+            }
+            if let field = view as? NSTextField {
+                check(field.textColor, "text colour", of: view)
+                if field.isEditable { check(field.backgroundColor, "field background", of: view) }
+                field.attributedStringValue.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: field.attributedStringValue.length)) { value, _, _ in
+                    if let colour = value as? NSColor { check(colour, "attributed text", of: view) }
+                }
+            }
+            // The system bezel must be gone from the pop-ups (V6): the
+            // rim is the border, never a double one.
+            if let popUp = view as? NSPopUpButton {
+                #expect(!popUp.isBordered, "a pop-up kept its system bezel in \(section)")
+            }
+            switch view {
+            case is XRGSettingsFlatButton:
+                // The flat button's focus treatment is the token halo;
+                // its chrome is layer-drawn, so no cell machinery can
+                // draw a native ring (the keyboard test asserts the halo
+                // appears on focus and leaves on resign).
+                #expect(view.wantsLayer, "the flat button is not layer-backed chrome")
+            default:
+                break
+            }
+            // Note: NSControl.focusRingType cannot gate this audit on the
+            // macOS 26 SDK — the getter answers `.default` whatever the
+            // setter stored (probed against NSTextField, NSSlider and
+            // NSPopUpButton), so the bezel removal (isBordered, above)
+            // and the keyboard test's token-halo assertions carry the
+            // focus contract instead.
+        }
+        return failures
     }
 
     /// Review issue 4: the full interaction contract — Tab and Shift-Tab
@@ -1218,6 +1239,350 @@ struct XRGSettingsWindowTests {
             #expect(eyebrow >= 15,
                     "\(section)'s first card eyebrow is missing in the bitmap path (\(eyebrow) accent pixels)")
         }
+    }
+
+    // MARK: Fix round 3 (remaining issue 9 and P4/N3; new keyboard,
+    // slider, colour-well and number-width findings)
+
+    /// Remaining issue 9: the colour-content exemption is EXACT — the
+    /// well's own layer background (the swatch the user picked, clear
+    /// while the entry inherits) and nothing else. Chrome never rides the
+    /// exemption: a non-token border fails for a clear well AND for a
+    /// populated one — even when the border colour MATCHES the swatch,
+    /// which the pre-fix per-property comparison waved through.
+    @Test func auditExemptsOnlyTheColourWellsSwatchFill() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        // Pin the light appearance: the audit checks the LIGHT palette, and
+        // the controls build from the window's effective appearance (which
+        // follows the system — dark, on this machine).
+        window.window?.appearance = NSAppearance(named: .aqua)
+        window.show(section: "appearance")
+        window.window?.contentView?.layoutSubtreeIfNeeded()
+        let colour = try #require(try control(window, "appearance.series2.color") as? XRGSettingsColorControl)
+        // A CLEAR well first: Inherit unsets the entry, so the swatch fill
+        // is the only thing the exemption may cover.
+        #expect(colour.inheritButton.accessibilityPerformPress())
+        #expect(try #require(colour.well.color.usingColorSpace(.sRGB)).alphaComponent < 0.01)
+        #expect(tokenAuditFailures(window, dark: false, section: "appearance").isEmpty,
+                "the unset well failed the audit before any mutation")
+        // A non-token border on the CLEAR well must fail: the pre-fix
+        // exemption let ANY colour through beneath an unset well.
+        let magenta = NSColor(srgbRed: 0.83, green: 0.12, blue: 0.55, alpha: 1)
+        colour.well.layer?.borderColor = magenta.cgColor
+        var failures = tokenAuditFailures(window, dark: false, section: "appearance")
+        #expect(failures.contains { $0.contains("layer border") && $0.contains("XRGSettingsColorWellView") },
+                "a non-token border passed the audit on a clear well: \(failures)")
+        // A POPULATED well: the swatch fill stays exempt (it IS the user's
+        // colour), and a border that MATCHES the swatch colour still fails —
+        // the exemption is bound to the one property, never to the colour.
+        let teal = NSColor(srgbRed: 0.13, green: 0.73, blue: 0.53, alpha: 1)
+        colour.well.color = teal
+        colour.well.layer?.borderColor = teal.cgColor
+        failures = tokenAuditFailures(window, dark: false, section: "appearance")
+        #expect(failures.contains { $0.contains("layer border") && $0.contains("XRGSettingsColorWellView") },
+                "a border matching the swatch passed the audit on a populated well: \(failures)")
+        #expect(!failures.contains { $0.contains("layer background") && $0.contains("XRGSettingsColorWellView") },
+                "the swatch fill itself is not exempt: \(failures)")
+        // Repairing the chrome clears the well from the audit entirely —
+        // the exact swatch exemption is the only thing keeping it legal.
+        colour.well.applyAppearance(dark: false)
+        #expect(tokenAuditFailures(window, dark: false, section: "appearance")
+            .filter { $0.contains("XRGSettingsColorWellView") }.isEmpty)
+    }
+
+    /// Remaining P4/N3: moving a graph to either ENDPOINT keeps the
+    /// keyboard on the moved graph — its own direction button is disabled
+    /// there, so focus follows to its enabled opposite-direction button —
+    /// and Tab / Shift-Tab keep walking from the new focus afterwards.
+    @Test func reorderEndpointMovesKeepFocusAndTabWalking() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "graphs")
+        let nsWindow = try #require(window.window)
+        let order = try #require(try control(window, "graphs.order") as? XRGSettingsOrderControl)
+        // The TOP endpoint: the second graph's Move up lands it on the
+        // first row, where its replacement Move up is disabled — focus
+        // follows to the moved graph's enabled Move down.
+        try focus(order.rows[1].up, in: window)
+        try deliverKey(" ", keyCode: 49, to: window)
+        #expect(order.ids[0] == "gpu", "the second graph did not move to the top")
+        #expect(order.rows[0].up.isEnabled == false, "the moved graph's up button is not disabled at the top")
+        #expect(nsWindow.firstResponder === order.rows[0].down,
+                "focus did not reach the moved graph's enabled opposite-direction button")
+        // Tab walks on from there, and Shift-Tab walks back.
+        try deliverKey("\t", keyCode: 48, to: window)
+        #expect(nsWindow.firstResponder === order.rows[1].up, "Tab did not walk on from the top endpoint")
+        try deliverKey("\t", keyCode: 48, to: window, shift: true)
+        #expect(nsWindow.firstResponder === order.rows[0].down, "Shift-Tab did not walk back to the moved graph")
+        // The BOTTOM endpoint: the penultimate graph's Move down lands it
+        // on the last row, where its replacement Move down is disabled —
+        // focus follows to its enabled Move up.
+        let last = order.rows.count - 1
+        try focus(order.rows[last - 1].down, in: window)
+        try deliverKey(" ", keyCode: 49, to: window)
+        #expect(order.ids[last] == "ai", "the penultimate graph did not move to the bottom")
+        #expect(order.rows[last].down.isEnabled == false, "the moved graph's down button is not disabled at the bottom")
+        #expect(nsWindow.firstResponder === order.rows[last].up,
+                "focus did not reach the moved graph's enabled opposite-direction button at the bottom")
+        try deliverKey("\t", keyCode: 48, to: window, shift: true)
+        #expect(nsWindow.firstResponder === order.rows[last - 1].down,
+                "Shift-Tab did not walk on from the bottom endpoint")
+        try deliverKey("\t", keyCode: 48, to: window)
+        #expect(nsWindow.firstResponder === order.rows[last].up, "Tab did not walk back to the moved graph")
+    }
+
+    /// Review (new): direct Tab traversal walks the window's explicit
+    /// key-view chain to the next view that can actually TAKE focus —
+    /// disabled controls (a `depends` flip after the wiring ran leaves
+    /// them in the chain but ineligible) and hidden views are skipped in
+    /// both directions, with bounded wrapping at the ends. Covers the
+    /// both reorder boundaries (Shift-Tab from the first Move down, Tab
+    /// from the last Move up), a disabled dependency, and the wrap.
+    @Test func tabTraversalSkipsDisabledControlsInBothDirections() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "graphs")
+        let nsWindow = try #require(window.window)
+        nsWindow.contentView?.layoutSubtreeIfNeeded()
+        let order = try #require(try control(window, "graphs.order") as? XRGSettingsOrderControl)
+        // Reorder boundary 1: Shift-Tab from the first row's Move down must
+        // skip the disabled first Move up and reach the sidebar's last button.
+        let lastSidebar = try #require(window.sectionButtons.last)
+        try focus(try #require(order.rows.first?.down), in: window)
+        try deliverKey("\t", keyCode: 48, to: window, shift: true)
+        #expect(nsWindow.firstResponder === lastSidebar,
+                "Shift-Tab did not skip the disabled first Move up")
+        // Reorder boundary 2: Tab from the last row's Move up must skip the
+        // disabled last Move down and reach the next control — the refresh
+        // interval's field, through its field editor like any text field.
+        let refresh = try #require(try control(window, "graphs.refresh") as? XRGSettingsNumberControl)
+        try focus(try #require(order.rows.last?.up), in: window)
+        try deliverKey("\t", keyCode: 48, to: window)
+        let editor = try #require(nsWindow.fieldEditor(false, for: refresh.field))
+        #expect(nsWindow.firstResponder === editor,
+                "Tab did not skip the disabled last Move down")
+        // Bounded wrapping: Tab from the section's LAST focusable (the reset
+        // action) wraps around to the window's FIRST (the first sidebar
+        // button); Shift-Tab from the first wraps back to the reset action.
+        let reset = try #require(try control(window, "graphs.reset") as? XRGSettingsActionControl)
+        try focus(reset.button, in: window)
+        try deliverKey("\t", keyCode: 48, to: window)
+        #expect(nsWindow.firstResponder === window.sectionButtons.first,
+                "Tab did not wrap to the window's first focusable")
+        try focus(try #require(window.sectionButtons.first), in: window)
+        try deliverKey("\t", keyCode: 48, to: window, shift: true)
+        #expect(nsWindow.firstResponder === reset.button,
+                "Shift-Tab did not wrap to the section's last focusable")
+        // A disabled dependency: the bring-to-front toggle joins the chain at
+        // render time (expand-on-hover is on by default), then the dependency
+        // flips OFF — it stays in the chain but can no longer take focus, so
+        // Tab and Shift-Tab must skip it in both directions.
+        window.show(section: "general")
+        let expand = try #require(try control(window, "general.window.expand_on_hover") as? XRGSettingsToggleControl)
+        let bring = try #require(try control(window, "general.window.bring_to_front_on_expand") as? XRGSettingsToggleControl)
+        let summary = try #require(try control(window, "general.window.show_summary") as? XRGSettingsToggleControl)
+        #expect(bring.isEnabled, "bring-to-front did not join the chain enabled")
+        try store.set("general.window.expand_on_hover", .bool(false))
+        #expect(!bring.isEnabled, "the dependency did not disable bring-to-front")
+        try focus(expand, in: window)
+        try deliverKey("\t", keyCode: 48, to: window)
+        #expect(nsWindow.firstResponder === summary, "Tab stopped at the disabled dependent control")
+        try focus(summary, in: window)
+        try deliverKey("\t", keyCode: 48, to: window, shift: true)
+        #expect(nsWindow.firstResponder === expand, "Shift-Tab stopped at the disabled dependent control")
+    }
+
+    /// Review (new): the custom slider keeps adjusting while an arrow key
+    /// is HELD (repeated key-down events), and its accessibility element
+    /// carries the numbers VoiceOver needs — a NUMERIC value, the minimum
+    /// and maximum bounds, and the orientation. The pre-fix slider rejected
+    /// repeats and exposed a formatted string with no bounds at all.
+    @Test func sliderAcceptsHeldKeysAndExposesNumericAccessibility() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "graphs")
+        let nsWindow = try #require(window.window)
+        let refresh = try #require(try control(window, "graphs.refresh") as? XRGSettingsNumberControl)
+        let slider = try #require(refresh.slider)
+        #expect(slider.minValue == 0.2 && slider.maxValue == 10 && slider.increment == 0.1)
+        // Held arrow keys keep adjusting: the first press steps once, a
+        // repeated (held) key-down steps again — the pre-fix guard rejected
+        // repeats and froze the value after one step.
+        try focus(slider, in: window)
+        let start = slider.doubleValue
+        try deliverKey("\u{F703}", keyCode: 124, to: window)
+        #expect(abs(slider.doubleValue - (start + 0.1)) < 0.0001, "the first arrow press did not step")
+        let held = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                                 timestamp: 0, windowNumber: nsWindow.windowNumber,
+                                                 context: nil, characters: "\u{F703}",
+                                                 charactersIgnoringModifiers: "\u{F703}",
+                                                 isARepeat: true, keyCode: 124))
+        nsWindow.sendEvent(held)
+        #expect(abs(slider.doubleValue - (start + 0.2)) < 0.0001,
+                "a held arrow key stopped adjusting the slider")
+        // The store followed every step.
+        func storedNumber() -> Double? {
+            switch store.value("graphs.refresh") {
+            case .double(let v): return v
+            case .int(let v): return Double(v)
+            default: return nil
+            }
+        }
+        let stored = storedNumber()
+        #expect(stored != nil && abs(stored! - (start + 0.2)) < 0.0001,
+                "the held-key adjustments did not save: \(String(describing: stored))")
+        // The exposed accessibility element: slider role, NUMERIC value,
+        // numeric bounds, horizontal orientation.
+        #expect(slider.accessibilityRole() == .slider)
+        #expect(slider.accessibilityOrientation() == .horizontal,
+                "the slider does not report its orientation")
+        #expect(try #require(slider.accessibilityMinValue() as? NSNumber).doubleValue == 0.2,
+                "the slider exposes no numeric minimum")
+        #expect(try #require(slider.accessibilityMaxValue() as? NSNumber).doubleValue == 10,
+                "the slider exposes no numeric maximum")
+        #expect(try #require(slider.accessibilityValue() as? NSNumber).doubleValue == slider.doubleValue,
+                "the accessibility value is not the slider's number")
+        // VoiceOver increment still steps by the catalog step.
+        #expect(slider.accessibilityPerformIncrement())
+        #expect(abs(slider.doubleValue - (start + 0.3)) < 0.0001)
+    }
+
+    /// Review (custom-control parity): the colour well's focusable element
+    /// carries its OWN catalog label and a colour VoiceOver can use — hex
+    /// with the opacity, or "Inherited" while the entry is unset — keyboard
+    /// activation opens the shared colour panel targeted at the well, the
+    /// panel's changes reach the store, and focus returns to the well after
+    /// the panel interaction.
+    @Test func colourWellIsLabelledValuedAndKeyboardOperable() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "appearance")
+        let nsWindow = try #require(window.window)
+        let colour = try #require(try control(window, "appearance.series2.color") as? XRGSettingsColorControl)
+        let well = colour.well
+        // The focusable element itself is labelled from the catalog (the
+        // pre-fix well had no label — only the enclosing wrapper did).
+        let entry = try #require(store.catalog.entry("appearance.series2.color"))
+        #expect(well.accessibilityLabel() == entry.label,
+                "the well's focusable element has no catalog label")
+        #expect(well.accessibilityRole() == .colorWell)
+        // A populated well reports its colour as hex plus opacity.
+        well.color = NSColor(srgbRed: 0.8, green: 0.3, blue: 0.2, alpha: 1)
+        #expect(well.accessibilityValue() as? String == "#CC4D33, 100% opacity",
+                "the well's value is not a usable colour: \(well.accessibilityValue() ?? "nil")")
+        // An unset (inherited) well says so.
+        #expect(colour.inheritButton.accessibilityPerformPress())
+        #expect(well.accessibilityValue() as? String == "Inherited",
+                "the unset well does not report Inherited")
+        // Keyboard activation: Space on the focused well opens the shared
+        // colour panel — `openColourPanel` is one path that targets the
+        // panel at the well AND opens it on the well's own colour (clear:
+        // the entry inherits), so an opened panel holding the well's colour
+        // is the wiring's observable proof (NSColorPanel's target and action
+        // are write-only on this SDK).
+        nsWindow.makeKeyAndOrderFront(nil)
+        try focus(well, in: window)
+        try deliverKey(" ", keyCode: 49, to: window)
+        let panel = NSColorPanel.shared
+        #expect(panel.isVisible, "Space did not open the colour panel")
+        let panelColour = try #require(panel.color.usingColorSpace(.sRGB))
+        #expect(panelColour.alphaComponent < 0.01,
+                "the panel did not open on the well's colour")
+        // A panel colour change reaches the well and the store through the
+        // panel action path — the same method the panel's target invokes.
+        panel.color = NSColor(srgbRed: 0.25, green: 0.5, blue: 0.75, alpha: 1)
+        well.panelColourChanged(panel)
+        func storedRGBA() -> [Double]? {
+            if case .color(let rgba) = store.value("appearance.series2.color") { return rgba }
+            return nil
+        }
+        let stored = storedRGBA()
+        #expect(stored != nil && abs(stored![0] - 0.25) < 0.002 && abs(stored![2] - 0.75) < 0.002,
+                "the panel's colour did not reach the store: \(String(describing: stored))")
+        #expect(well.accessibilityValue() as? String == "#4080BF, 100% opacity",
+                "the well's value did not follow the panel")
+        // Closing the panel returns the settings window's focus to the well,
+        // and the well still takes and shows focus.
+        panel.orderOut(nil)
+        nsWindow.makeKeyAndOrderFront(nil)
+        #expect(nsWindow.firstResponder === well, "focus did not return to the well")
+        try focus(well, in: window)
+        #expect(colour.isFocusedControl && !colour.haloLayer.isHidden,
+                "the well does not take and show focus after the colour panel")
+        panel.orderOut(nil)
+    }
+
+    /// Cosmetic (round 3): number fields keep ONE consistent width — the
+    /// rim closes around the field (and its unit label or unit selector)
+    /// exactly, so the field box never stretches into the row's label gap,
+    /// and the range text and slider chain on after the closed field box.
+    /// AppKit's constraint anchors work in ALIGNMENT-rect space (labels and
+    /// pop-ups inset their alignment rects inside their frames), so the
+    /// closed-width arithmetic is done there too.
+    @Test func numberFieldsKeepOneConsistentWidth() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        let nsWindow = try #require(window.window)
+        func alignmentWidth(_ view: NSView) -> CGFloat {
+            view.alignmentRect(forFrame: view.bounds).width
+        }
+        /// A view's alignment rectangle, converted into the control's space.
+        func alignmentRect(in control: XRGSettingsEntryControl, of view: NSView) -> CGRect {
+            view.convert(view.alignmentRect(forFrame: view.bounds), to: control)
+        }
+        var fields = 0
+        for section in XRGSettingsCatalog.sections {
+            window.show(section: section)
+            nsWindow.contentView?.layoutSubtreeIfNeeded()
+            for number in walkControls(window).compactMap({ $0 as? XRGSettingsNumberControl }) {
+                fields += 1
+                // One consistent field width everywhere.
+                #expect(abs(alignmentWidth(number.field) - 72) < 0.5,
+                        "\(number.entry.id): the field width is \(alignmentWidth(number.field))")
+                // The rim closes around the field box exactly: the pre-fix
+                // open-ended rim let the wrapping row label stretch it left
+                // to fill the label gap — a 72 pt field rendered in rims up
+                // to 442 pt wide (measured on the pre-fix tree), with the
+                // range text and slider adrift.
+                let expected: CGFloat
+                if number.unitSelector != nil {
+                    expected = XRGAether7b.Space.s2 + 72 + XRGAether7b.Space.s2
+                        + alignmentWidth(number.unitSelector!) + XRGAether7b.Space.s1
+                } else if number.unitLabel.superview != nil {
+                    expected = XRGAether7b.Space.s2 + 72 + XRGAether7b.Space.s2
+                        + alignmentWidth(number.unitLabel) + XRGAether7b.Space.s2
+                } else {
+                    expected = XRGAether7b.Space.s2 + 72 + XRGAether7b.Space.s2
+                }
+                #expect(abs(number.rimView.bounds.width - expected) < 1.5,
+                        "\(number.entry.id): the field box stretched to \(number.rimView.bounds.width) instead of closing at \(expected)")
+                // The range text and the slider follow the closed field box:
+                // each chains on at the spacing token from the box's edge.
+                if number.rangeLabel.superview != nil {
+                    let rangeMinX = alignmentRect(in: number, of: number.rangeLabel).minX
+                    #expect(abs(rangeMinX - number.rimView.bounds.width - XRGAether7b.Space.s3) < 1.5,
+                            "\(number.entry.id): the range text does not follow the field box")
+                }
+                if let slider = number.slider {
+                    let anchorMaxX: CGFloat
+                    if number.rangeLabel.superview != nil {
+                        anchorMaxX = alignmentRect(in: number, of: number.rangeLabel).maxX
+                    } else {
+                        anchorMaxX = number.rimView.bounds.width
+                    }
+                    #expect(abs(alignmentRect(in: number, of: slider).minX - anchorMaxX - XRGAether7b.Space.s3) < 1.5,
+                            "\(number.entry.id): the slider does not follow the field box")
+                }
+            }
+        }
+        #expect(fields > 10, "only \(fields) number fields were checked")
     }
 
     // MARK: Layout (fixes V1, V2, V3, V5, V8)

@@ -480,7 +480,6 @@ import AppKit
         let inset = -2.0
         haloLayer.frame = bounds.insetBy(dx: inset, dy: inset)
         haloLayer.cornerRadius = XRGAether7bStyle.pillRadius(for: haloLayer.bounds.size)
-        setAccessibilityValue(String(format: "%.4g", internalValue))
     }
 
     private func value(at point: NSPoint) -> Double {
@@ -516,24 +515,38 @@ import AppKit
     }
 
     public override func keyDown(with event: NSEvent) {
-        guard isEnabled, !event.isARepeat else { super.keyDown(with: event); return }
-        let step = event.modifierFlags.contains(.shift) ? increment * 10 : increment
+        guard isEnabled else { super.keyDown(with: event); return }
         switch event.specialKey {
-        case .leftArrow, .downArrow:
-            doubleValue = internalValue - step; submit()
-        case .rightArrow, .upArrow:
-            doubleValue = internalValue + step; submit()
+        case .leftArrow, .downArrow, .rightArrow, .upArrow:
+            // A held arrow keeps adjusting: repeated key-down events ARE
+            // the keyboard's "keep going", and the pre-fix rejection froze
+            // the value after the first step (review, slider parity).
+            let step = event.modifierFlags.contains(.shift) ? increment * 10 : increment
+            if event.specialKey == .leftArrow || event.specialKey == .downArrow {
+                doubleValue = internalValue - step
+            } else {
+                doubleValue = internalValue + step
+            }
+            submit()
         case .tab:
-            // Explicit key-view chain, like the flat button (see there).
-            if event.modifierFlags.contains(.shift) {
-                if let preceding = settingsPrecedingKeyView { window?.makeFirstResponder(preceding) }
-                else { window?.selectKeyView(preceding: self) }
-            } else if let next = nextKeyView { window?.makeFirstResponder(next) }
-            else { window?.selectKeyView(following: self) }
+            guard !event.isARepeat else { return }
+            // Explicit key-view chain, skipping ineligible targets (see the
+            // flat button's note).
+            settingsAdvanceFocus(forward: !event.modifierFlags.contains(.shift))
         default:
             super.keyDown(with: event)
         }
     }
+
+    // MARK: Accessibility (review, slider parity)
+    // A plain NSControl provides none of the slider's numbers by default:
+    // the element reports a NUMERIC value with explicit min and max bounds
+    // and the horizontal orientation, instead of a formatted string with
+    // no bounds for VoiceOver to announce.
+    public override func accessibilityValue() -> Any? { NSNumber(value: internalValue) }
+    public override func accessibilityMinValue() -> Any? { NSNumber(value: minValue) }
+    public override func accessibilityMaxValue() -> Any? { NSNumber(value: maxValue) }
+    public override func accessibilityOrientation() -> NSAccessibilityOrientation { .horizontal }
 
     public override func accessibilityPerformIncrement() -> Bool {
         guard isEnabled else { return false }
@@ -659,23 +672,18 @@ import AppKit
             performClick()
             isPressed = false
             restyle()
-        case "\t" where !event.modifierFlags.contains(.shift):
-            // The window's key-view loop is explicit (wireKeyViewLoop):
-            // step along it directly. NSWindow.selectKeyView(following:)
-            // consults the auto-recalculated geometric loop instead and
-            // lands on unrelated controls (probed: an order-row button's
-            // Tab jumped to the section's first text field).
-            if let next = nextKeyView {
-                window?.makeFirstResponder(next)
-            } else {
-                window?.selectKeyView(following: self)
-            }
         case "\t":
-            if let preceding = settingsPrecedingKeyView {
-                window?.makeFirstResponder(preceding)
-            } else {
-                window?.selectKeyView(preceding: self)
-            }
+            // The window's key-view loop is explicit (wireKeyViewLoop), so
+            // Tab walks it directly — to the next view that can actually
+            // TAKE focus. NSWindow.selectKeyView(following:) consults the
+            // auto-recalculated geometric loop instead and lands on
+            // unrelated controls (probed: an order-row button's Tab jumped
+            // to the section's first text field), and the pre-fix walk
+            // handed focus to the IMMEDIATE neighbour and stalled whenever
+            // that neighbour was disabled — the reorder chain keeps the
+            // disabled first Move up and last Move down wired in, and a
+            // `depends` flip can disable any control after the wiring ran.
+            settingsAdvanceFocus(forward: !event.modifierFlags.contains(.shift))
         default:
             super.keyDown(with: event)
         }
@@ -881,19 +889,10 @@ import AppKit
         switch event.characters {
         case " ", "\r", "\n":
             click()
-        case "\t" where !event.modifierFlags.contains(.shift):
-            // Explicit chain, like the flat button (see the note there).
-            if let next = nextKeyView {
-                window?.makeFirstResponder(next)
-            } else {
-                window?.selectKeyView(following: self)
-            }
         case "\t":
-            if let preceding = settingsPrecedingKeyView {
-                window?.makeFirstResponder(preceding)
-            } else {
-                window?.selectKeyView(preceding: self)
-            }
+            // Explicit chain, skipping ineligible targets (see the flat
+            // button's note).
+            settingsAdvanceFocus(forward: !event.modifierFlags.contains(.shift))
         default:
             super.keyDown(with: event)
         }
@@ -1220,9 +1219,14 @@ import AppKit
             unitLabel.centerYAnchor.constraint(equalTo: field.centerYAnchor).isActive = true
             rangeAnchor = unitLabel.trailingAnchor
         }
-        // The rim closes around the field (and selector): a rim without a
-        // trailing bound collapses and the field renders nowhere (fix V4).
-        rimView.trailingAnchor.constraint(greaterThanOrEqualTo: rangeAnchor,
+        // The rim closes around the field (and selector) EXACTLY (fix V4,
+        // tightened for the round-3 cosmetic finding): the pre-fix lower
+        // bound left the rim's width underdetermined, and the wrapping row
+        // label stretched the field box left to fill the label gap — a
+        // 72 pt field rendered in rims up to 442 pt wide, with the range
+        // text and slider adrift. The equality pins ONE consistent field
+        // width; the range text and slider chain on after the closed box.
+        rimView.trailingAnchor.constraint(equalTo: rangeAnchor,
                                          constant: storedInBytes ? XRGAether7b.Space.s1 : XRGAether7b.Space.s2).isActive = true
         // The horizontal chain continues to the right of the rim — the
         // range text, then the slider — so no two contents overlap, and
@@ -1380,7 +1384,21 @@ import AppKit
     }
     private func applySwatch() {
         layer?.backgroundColor = (color.usingColorSpace(.sRGB) ?? NSColor.clear).cgColor
-        setAccessibilityValue(color.description)
+        setAccessibilityValue(accessibilityColorDescription)
+    }
+
+    /// A colour VoiceOver can use: the swatch as hex with its opacity, or
+    /// "Inherited" while the entry is unset — never `NSColor.description`'s
+    /// device dump, which announced nothing useful (review: the well's
+    /// value was meaningless).
+    public var accessibilityColorDescription: String {
+        guard let rgba = color.usingColorSpace(.sRGB), rgba.alphaComponent > 0.005 else { return "Inherited" }
+        let hex = String(format: "#%02X%02X%02X",
+                         Int((rgba.redComponent * 255).rounded()),
+                         Int((rgba.greenComponent * 255).rounded()),
+                         Int((rgba.blueComponent * 255).rounded()))
+        let opacity = Int((rgba.alphaComponent * 100).rounded())
+        return "\(hex), \(opacity)% opacity"
     }
 
     // The whole well is its own hit target, like every settings control.
@@ -1427,18 +1445,11 @@ import AppKit
         case " ", "\r", "\n":
             openColourPanel()
         case "\t" where !event.modifierFlags.contains(.shift):
-            // Explicit chain, like the flat button (see the note there).
-            if let next = nextKeyView {
-                window?.makeFirstResponder(next)
-            } else {
-                window?.selectKeyView(following: self)
-            }
+            // Explicit chain, skipping ineligible targets (see the flat
+            // button's note).
+            settingsAdvanceFocus(forward: true)
         case "\t":
-            if let preceding = settingsPrecedingKeyView {
-                window?.makeFirstResponder(preceding)
-            } else {
-                window?.selectKeyView(preceding: self)
-            }
+            settingsAdvanceFocus(forward: false)
         default:
             super.keyDown(with: event)
         }
@@ -1510,6 +1521,10 @@ import AppKit
         well.focusOwner = self
         well.target = self
         well.action = #selector(changedColor)
+        // The focusable well element carries its OWN catalog label (review:
+        // only the enclosing wrapper was labelled, so VoiceOver announced
+        // the swatch with no name).
+        well.setAccessibilityLabel(entry.label)
     }
     @objc func changedColor() { hasColor = true; submit(value()) }
     public override func focusableViews() -> [NSView] { [well, inheritButton] }
@@ -1816,7 +1831,15 @@ import AppKit
         if window != nil { keyLoopInvalidated?() }
         if let focused, let newIndex = ids.firstIndex(of: focused.id),
            rows.indices.contains(newIndex) {
-            let button = focused.isUp ? rows[newIndex].up : rows[newIndex].down
+            // A move that reaches an endpoint disables the moved graph's own
+            // direction button (the first row's Move up, the last row's Move
+            // down): follow focus to its ENABLED opposite-direction button
+            // instead, so the keyboard never loses the moved graph (the
+            // remaining P4/N3 — the pre-fix code declined and dropped focus
+            // on the floor at both endpoints).
+            let preferred = focused.isUp ? rows[newIndex].up : rows[newIndex].down
+            let opposite = focused.isUp ? rows[newIndex].down : rows[newIndex].up
+            let button = preferred.isEnabled ? preferred : opposite
             if button.isEnabled { window?.makeFirstResponder(button) }
         }
     }
@@ -1886,19 +1909,51 @@ import AppKit
 // MARK: - Small helpers
 
 @MainActor extension NSView {
-    /// The settings window's key-view loop is explicit (it wires the chain
-    /// and stops the automatic recalculation), and AppKit's
-    /// `previousValidKeyView` does not walk the explicit forward chain, so
-    /// Shift-Tab steps backward along it here.
-    var settingsPrecedingKeyView: NSView? {
-        guard let window = window, let start = window.initialFirstResponder else { return nil }
-        var current: NSView? = start
-        var predecessor: NSView? = nil
-        while let candidate = current, candidate !== self {
-            predecessor = candidate
-            current = candidate.nextKeyView
+    /// The settings window's key-view loop is explicit (`wireKeyViewLoop`
+    /// wires the chain and stops the automatic recalculation), so Tab and
+    /// Shift-Tab walk it here — to the next view that can actually TAKE
+    /// focus. Disabled controls stay wired in the chain (their enablement
+    /// follows `depends` after the wiring ran, and the reorder list keeps
+    /// its endpoint buttons in it), so the walk skips anything disabled or
+    /// hidden in either direction, wrapping end-to-end within one bounded
+    /// lap of the chain. The pre-fix walk handed focus to the IMMEDIATE
+    /// neighbour and stalled whenever that neighbour was disabled
+    /// (Shift-Tab from the first Move down, Tab from the last Move up).
+    @discardableResult
+    func settingsAdvanceFocus(forward: Bool) -> Bool {
+        guard let window else { return false }
+        // The chain the controller wired, from its first view on.
+        var chain: [NSView] = []
+        var current: NSView? = window.initialFirstResponder
+        var seen = Set<ObjectIdentifier>()
+        while let view = current, seen.insert(ObjectIdentifier(view)).inserted {
+            chain.append(view)
+            current = view.nextKeyView
         }
-        return predecessor
+        guard let here = chain.firstIndex(where: { $0 === self }) else {
+            // Not in the explicit chain: AppKit's own loop.
+            if forward { window.selectKeyView(following: self) } else { window.selectKeyView(preceding: self) }
+            return true
+        }
+        func eligible(_ view: NSView) -> Bool {
+            guard !view.isHidden, !view.isHiddenOrHasHiddenAncestor else { return false }
+            if let control = view as? NSControl, !control.isEnabled { return false }
+            // The number/text/path fields report disablement through their
+            // owning control: their own `isEnabled` stays on so the token
+            // colours keep drawing, only `isEditable` closes.
+            if let field = view as? XRGSettingsField, field.focusOwner?.isEnabled == false { return false }
+            return view.acceptsFirstResponder
+        }
+        // Bounded: at most one lap around the chain, wrapping end to end,
+        // and on to the next candidate if a focus target refuses.
+        for step in 1...max(1, chain.count) {
+            let wrapped = ((here + (forward ? step : -step)) % chain.count + chain.count) % chain.count
+            let candidate = chain[wrapped]
+            if candidate !== self, eligible(candidate), window.makeFirstResponder(candidate) {
+                return true
+            }
+        }
+        return false
     }
 }
 
