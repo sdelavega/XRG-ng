@@ -122,6 +122,45 @@ int32_t xrg_provider_details_parse(const uint8_t *bytes, uint32_t length, uint32
     uint8_t *output, uint32_t capacity);
 /* Newline-delimited model names; returns byte count or -1. */
 int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *output, uint32_t capacity);
+/* Additive ABI v2: the shared settings model and the stock chart. Inputs are
+ * UTF-8 JSON, outputs canonical UTF-8 JSON in caller buffers. The return
+ * value is the byte count written; -1 rejects invalid arguments, non-UTF-8
+ * names, oversized input or input the model refuses (a document that does
+ * not load); -2 means the output buffer was too small, leaving the required
+ * size in *needed (when given) and the output untouched. Settings documents
+ * and version-40 files are limited to 1 MiB, ids and sections to 256 bytes,
+ * set values to 8 KiB, tickers to 256 bytes, chart responses to 8 MiB.
+ * xrg_settings_catalog writes {"sections":[...],"entries":[...]}: the section
+ * list in sidebar order and, in display order, the entries whose platforms
+ * include the requested one (platform 0 macOS, 1 Linux). xrg_settings_load
+ * writes {"document":...,"diagnostics":[...],"unreadable":bool} where the
+ * document is the canonical bytes as a JSON string, null when unreadable.
+ * xrg_settings_set writes {"document":...} or
+ * {"error":{"kind":"unknown-id"|"wrong-type"|"out-of-range"|"not-an-option"|
+ * "dependency-not-met","min":...,"max":...}} with the bounds present only for
+ * out-of-range. xrg_settings_reset_section writes {"document":...} after
+ * restoring both platforms' entries of one catalog section, leaving unknown
+ * keys and other sections untouched. xrg_settings_migrate_linux_v40 writes
+ * {"document":...,"diagnostics":[...]}, refusing bytes that are not a JSON
+ * object. xrg_settings_linux_view writes the version-40-shaped view the Rust
+ * serde model deserialises. xrg_stock_chart_parse (kind 0 history, 1 quote)
+ * writes {"price":...,"change":...,"closes":[...]}, null on the side the
+ * parse does not fill; unparseable responses are -1. xrg_stock_urls writes
+ * {"history":...,"quote":...}. */
+int32_t xrg_settings_catalog(uint32_t platform, uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_settings_load(const uint8_t *doc, uint32_t len, uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_settings_set(const uint8_t *doc, uint32_t len,
+    const uint8_t *id, uint32_t idLen, const uint8_t *value, uint32_t valueLen,
+    uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_settings_reset_section(const uint8_t *doc, uint32_t len,
+    const uint8_t *section, uint32_t sectionLen, uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_settings_migrate_linux_v40(const uint8_t *v40, uint32_t len,
+    uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_settings_linux_view(const uint8_t *doc, uint32_t len,
+    uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_stock_chart_parse(uint32_t kind, const uint8_t *bytes, uint32_t len,
+    uint8_t *out, uint32_t cap, uint32_t *needed);
+int32_t xrg_stock_urls(const uint8_t *ticker, uint32_t len, uint8_t *out, uint32_t cap, uint32_t *needed);
 #ifdef __cplusplus
 }
 #endif

@@ -43,7 +43,7 @@ struct SharedCoreTests {
         #expect(rates.sample(counter: .max, key: "rx", time: .nan).rate == 0)
     }
     @Test func bridgeBoundsAndFiniteValues() throws {
-        #expect(abiVersion() == 1)
+        #expect(abiVersion() == 2)
         #expect(historyCreate(0) == nil)
         let handle = try #require(historyCreate(3))
         defer { historyFree(handle) }

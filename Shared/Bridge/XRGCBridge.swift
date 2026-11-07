@@ -5,7 +5,7 @@ import Foundation
 // ABI v1: opaque retained handles, fixed-width scalars and caller-owned buffers.
 // Each handle is confined to one thread. The caller must pass a live handle from
 // the matching create function and release it exactly once. No Swift layout escapes.
-@c(xrg_shared_abi_version) public func abiVersion() -> UInt32 { 1 }
+@c(xrg_shared_abi_version) public func abiVersion() -> UInt32 { 2 }
 
 @c(xrg_sampling_settings) public func samplingSettings(_ output: UnsafeMutablePointer<UInt32>?, _ capacity: UInt32) -> Int32 {
     guard let output, capacity >= 4 else { return -1 }
@@ -361,4 +361,221 @@ private struct WeatherHistoryRow: Encodable {
     let values = history.values(minutes: Int(minutes), interval: interval)!
     for channel in 0..<history.channels { for slot in 0..<bins { output[channel * bins + slot] = values[channel][slot] } }
     return Int32(required)
+}
+
+// Additive ABI v2: the shared settings model and the stock chart. Every entry
+// point speaks UTF-8 JSON through caller-provided buffers: the return value is
+// the byte count written, -1 rejects invalid arguments, non-UTF-8 names,
+// oversized input or input the model refuses, and -2 means the buffer was too
+// small, leaving the required size in *needed without touching the output.
+
+/// Canonical JSON for one ABI response: sorted keys, no whitespace, so the
+/// bytes a platform receives do not depend on dictionary ordering.
+private func settingsJSON<T: Encodable>(_ value: T) -> Data? {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return try? encoder.encode(value)
+}
+
+/// Copy a UTF-8 response into the caller's buffer: the byte count, or -2 with
+/// the required size in *needed. Nothing is written unless it all fits.
+private func settingsWrite(_ data: Data, _ output: UnsafeMutablePointer<UInt8>?,
+                           _ capacity: UInt32, _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard data.count <= Int32.max else { return -1 }
+    if let output, Int(capacity) >= data.count {
+        for (index, byte) in data.enumerated() { output[index] = byte }
+        return Int32(data.count)
+    }
+    if let needed { needed.pointee = UInt32(data.count) }
+    return -2
+}
+
+private struct SettingsCatalogJSON: Encodable {
+    let sections: [String]
+    let entries: [XRGSettingsEntry]
+}
+private struct SettingsLoadJSON: Encodable {
+    let document: String?
+    let diagnostics: [XRGSettingsDiagnostic]
+    let unreadable: Bool
+}
+private struct SettingsMigrateJSON: Encodable {
+    let document: String
+    let diagnostics: [XRGSettingsDiagnostic]
+}
+private struct SettingsMutationJSON: Encodable {
+    let document: String?
+    let error: SettingsErrorJSON?
+}
+private struct SettingsErrorJSON: Encodable {
+    let kind: String
+    let min: Double?
+    let max: Double?
+
+    init(kind: String, min: Double?, max: Double?) {
+        self.kind = kind
+        self.min = min
+        self.max = max
+    }
+
+    /// The wire form of one core refusal, with the bounds an out-of-range
+    /// value carries.
+    init(_ error: XRGSettingsError) {
+        switch error {
+        case .unknownId: self.init(kind: "unknown-id", min: nil, max: nil)
+        case .wrongType: self.init(kind: "wrong-type", min: nil, max: nil)
+        case .outOfRange(let min, let max): self.init(kind: "out-of-range", min: min, max: max)
+        case .notAnOption: self.init(kind: "not-an-option", min: nil, max: nil)
+        case .dependencyNotMet: self.init(kind: "dependency-not-met", min: nil, max: nil)
+        }
+    }
+}
+private struct StockChartJSON: Encodable {
+    let price: Double?
+    let change: Double?
+    let closes: [Double]?
+}
+private struct StockURLsJSON: Encodable {
+    let history: String
+    let quote: String
+}
+
+/// The catalog entries a platform renders, in display order, with the
+/// section list. `platform` is 0 for macOS, 1 for Linux.
+@c(xrg_settings_catalog) public func settingsCatalog(_ platform: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard platform <= 1, let catalog = try? XRGSettingsCatalog.load(),
+          let data = settingsJSON(SettingsCatalogJSON(sections: XRGSettingsCatalog.sections,
+              entries: catalog.entries.filter { $0.platforms.contains(platform == 0 ? .macos : .linux) }))
+    else { return -1 }
+    return settingsWrite(data, output, capacity, needed)
+}
+
+/// A settings document in: the canonical document bytes and the load's
+/// diagnostics out. An unreadable document is reported, not refused.
+@c(xrg_settings_load) public func settingsLoad(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, let doc, let catalog = try? XRGSettingsCatalog.load() else { return -1 }
+    switch XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog) {
+    case .ok(let document, let diagnostics):
+        guard let bytes = String(data: document.serialized(), encoding: .utf8),
+              let data = settingsJSON(SettingsLoadJSON(document: bytes, diagnostics: diagnostics,
+                                                      unreadable: false)) else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    case .unreadable(let diagnostic):
+        guard let data = settingsJSON(SettingsLoadJSON(document: nil, diagnostics: [diagnostic],
+                                                       unreadable: true)) else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    }
+}
+
+/// Store one value: the new document, or the core's refusal with its kind
+/// and, for an out-of-range value, the entry's bounds.
+@c(xrg_settings_set) public func settingsSet(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ id: UnsafePointer<UInt8>?, _ idLen: UInt32,
+    _ value: UnsafePointer<UInt8>?, _ valueLen: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, idLen <= 256, valueLen <= 8192, let doc, let id, let value,
+          let catalog = try? XRGSettingsCatalog.load(),
+          let idText = String(bytes: UnsafeBufferPointer(start: id, count: Int(idLen)), encoding: .utf8),
+          let valueText = String(bytes: UnsafeBufferPointer(start: value, count: Int(valueLen)), encoding: .utf8),
+          let json = JSONValue.parse(valueText),
+          case .ok(var document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+    else { return -1 }
+    guard let settingsValue = XRGSettingsValue(json: json) else {
+        // A shape no control can hold, reported as the type refusal `set`
+        // itself would give.
+        guard let data = settingsJSON(SettingsMutationJSON(document: nil,
+            error: SettingsErrorJSON(kind: "wrong-type", min: nil, max: nil))) else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    }
+    do {
+        try document.set(idText, settingsValue, catalog: catalog)
+        guard let bytes = String(data: document.serialized(), encoding: .utf8),
+              let data = settingsJSON(SettingsMutationJSON(document: bytes, error: nil)) else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    } catch let error as XRGSettingsError {
+        guard let data = settingsJSON(SettingsMutationJSON(document: nil, error: SettingsErrorJSON(error)))
+        else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    } catch { return -1 }
+}
+
+/// Restore one section to its defaults; unknown keys at either level, and
+/// every other section, are untouched. The section must be one of the
+/// catalog's, and the document must load.
+@c(xrg_settings_reset_section) public func settingsResetSection(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ section: UnsafePointer<UInt8>?, _ sectionLen: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, sectionLen <= 256, let doc, let section,
+          let catalog = try? XRGSettingsCatalog.load(),
+          let name = String(bytes: UnsafeBufferPointer(start: section, count: Int(sectionLen)), encoding: .utf8),
+          XRGSettingsCatalog.sections.contains(name),
+          case .ok(var document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+    else { return -1 }
+    // The ABI names no platform, so both platforms' entries of the section
+    // return to their default: a stored value of either survives neither.
+    document.resetSection(name, catalog: catalog, platform: .macos)
+    document.resetSection(name, catalog: catalog, platform: .linux)
+    guard let bytes = String(data: document.serialized(), encoding: .utf8),
+          let data = settingsJSON(SettingsMutationJSON(document: bytes, error: nil)) else { return -1 }
+    return settingsWrite(data, output, capacity, needed)
+}
+
+/// A version-40 Linux settings file in: the migrated document and its
+/// diagnostics out. Bytes that are not a JSON object are refused.
+@c(xrg_settings_migrate_linux_v40) public func settingsMigrateLinuxV40(_ v40: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, let v40, let catalog = try? XRGSettingsCatalog.load(),
+          let (document, diagnostics) = try? XRGSettingsMigration.fromLinuxV40(
+              Data(bytes: v40, count: Int(len)), catalog: catalog),
+          let bytes = String(data: document.serialized(), encoding: .utf8),
+          let data = settingsJSON(SettingsMigrateJSON(document: bytes, diagnostics: diagnostics))
+    else { return -1 }
+    return settingsWrite(data, output, capacity, needed)
+}
+
+/// The version-40-shaped view of a document, exactly what the Rust serde
+/// model deserialises. An unreadable document is refused.
+@c(xrg_settings_linux_view) public func settingsLinuxView(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, let doc, let catalog = try? XRGSettingsCatalog.load(),
+          case .ok(let document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+    else { return -1 }
+    return settingsWrite(XRGSettingsMigration.linuxView(document, catalog: catalog), output, capacity, needed)
+}
+
+/// Yahoo chart responses: kind 0 is the one-year daily history (closes only),
+/// kind 1 the intraday quote (price and change only); the side a parse does
+/// not fill is null. A response that does not parse is refused.
+@c(xrg_stock_chart_parse) public func stockChartParse(_ kind: UInt32, _ bytes: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 8_388_608, let bytes, kind <= 1 else { return -1 }
+    let data = Data(bytes: bytes, count: Int(len))
+    let chart = kind == 0 ? XRGStockChart.parse(history: data) : XRGStockChart.parse(quote: data)
+    guard let chart, let response = settingsJSON(kind == 0
+        ? StockChartJSON(price: nil, change: nil, closes: chart.closes)
+        : StockChartJSON(price: chart.price, change: chart.change, closes: nil)) else { return -1 }
+    return settingsWrite(response, output, capacity, needed)
+}
+
+/// The history and quote URLs for a ticker, percent-encoded exactly as the
+/// macOS 0.2.2 stock module built them.
+@c(xrg_stock_urls) public func stockUrls(_ ticker: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 256, let ticker,
+          let text = String(bytes: UnsafeBufferPointer(start: ticker, count: Int(len)), encoding: .utf8),
+          let urls = XRGStockChart.urls(ticker: text),
+          let data = settingsJSON(StockURLsJSON(history: urls.history.absoluteString,
+                                                 quote: urls.quote.absoluteString))
+    else { return -1 }
+    return settingsWrite(data, output, capacity, needed)
 }

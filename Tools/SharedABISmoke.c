@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 int main(void) {
-    assert(xrg_shared_abi_version() == 1);
+    assert(xrg_shared_abi_version() == 2);
     uint32_t sampling[4] = {99, 99, 99, 99};
     assert(xrg_sampling_settings(sampling, 3) == -1 && sampling[0] == 99);
     assert(xrg_sampling_settings(sampling, 4) == 4);

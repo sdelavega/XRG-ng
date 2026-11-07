@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 //! Versioned Linux presentation preferences. Paths are explicit for isolated tests.
+pub mod document;
 pub mod network_scale;
 mod window_collapse;
 mod window_size;
@@ -490,6 +491,31 @@ pub enum Layout {
     Vertical,
     Horizontal,
 }
+/// The shared Stocks settings, as the Linux view of the unified settings
+/// document carries them (ruling R2). No `Module::Stocks` exists yet; the
+/// fields ride along until the Stocks graph joins the module list.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct StockSettings {
+    /// Comma-separated ticker symbols to graph.
+    pub symbols: String,
+    /// How much history the chart shows, in months.
+    pub timeframe: u32,
+    /// Use twice as many lines to show the last day's change.
+    pub show_change: bool,
+    /// Add the Dow as a secondary curve and closing price.
+    pub show_djia: bool,
+}
+impl Default for StockSettings {
+    fn default() -> Self {
+        Self {
+            symbols: "AAPL".into(),
+            timeframe: 12,
+            show_change: true,
+            show_djia: true,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -525,6 +551,8 @@ pub struct Settings {
     pub ai_show_model_breakdown: bool,
     #[serde(default)]
     pub weather: crate::weather::Preferences,
+    #[serde(default)]
+    pub stocks: StockSettings,
 }
 fn default_graph_width() -> u32 {
     140
@@ -574,6 +602,7 @@ impl Default for Settings {
             ai: crate::ai::Preferences::default(),
             ai_show_model_breakdown: default_ai_model_breakdown(),
             weather: crate::weather::Preferences::default(),
+            stocks: StockSettings::default(),
         }
     }
 }

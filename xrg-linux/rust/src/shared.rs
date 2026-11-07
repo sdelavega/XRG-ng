@@ -126,12 +126,27 @@ unsafe extern "C" {
         total: *mut u64,
     ) -> i32;
     fn xrg_codex_record_parse(bytes: *const u8, length: u32, tokens: *mut u64) -> i32;
+    fn xrg_stock_chart_parse(
+        kind: u32,
+        bytes: *const u8,
+        length: u32,
+        output: *mut u8,
+        capacity: u32,
+        needed: *mut u32,
+    ) -> i32;
+    fn xrg_stock_urls(
+        ticker: *const u8,
+        length: u32,
+        output: *mut u8,
+        capacity: u32,
+        needed: *mut u32,
+    ) -> i32;
 }
 
 pub fn check_abi() {
     assert_eq!(
         unsafe { xrg_shared_abi_version() },
-        1,
+        2,
         "Incompatible Swift core"
     );
 }
@@ -637,6 +652,95 @@ pub fn model_names(bytes: &[u8]) -> Option<Vec<String>> {
     } else {
         text.split('\n').map(str::to_owned).collect()
     })
+}
+
+/// A Yahoo chart parse through the shared core. A history parse fills only
+/// `closes`; a quote parse fills only `price` and `change`; the side a parse
+/// does not fill is `None`. Unparseable responses are refused.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub struct StockChart {
+    pub price: Option<f64>,
+    pub change: Option<f64>,
+    pub closes: Option<Vec<f64>>,
+}
+/// The one-year daily closes of a chart history response.
+pub fn stock_history(bytes: &[u8]) -> Option<StockChart> {
+    stock_chart(0, bytes)
+}
+/// The intraday price and its change from the previous close.
+pub fn stock_quote(bytes: &[u8]) -> Option<StockChart> {
+    stock_chart(1, bytes)
+}
+fn stock_chart(kind: u32, bytes: &[u8]) -> Option<StockChart> {
+    let length = u32::try_from(bytes.len()).ok()?;
+    let mut output = vec![0u8; 8192];
+    loop {
+        let mut needed = 0;
+        let count = unsafe {
+            xrg_stock_chart_parse(
+                kind,
+                bytes.as_ptr(),
+                length,
+                output.as_mut_ptr(),
+                output.len() as u32,
+                &mut needed,
+            )
+        };
+        if count == -2 {
+            let reported = needed as usize;
+            if reported <= output.len() {
+                return None;
+            }
+            output.resize(reported, 0);
+            continue;
+        }
+        if count < 0 {
+            return None;
+        }
+        if count as usize > output.len() {
+            return None;
+        }
+        return serde_json::from_slice(&output[..count as usize]).ok();
+    }
+}
+/// The history and quote URLs of a ticker, percent-encoded exactly as the
+/// macOS 0.2.2 stock module built them: (history, quote).
+pub fn stock_urls(ticker: &str) -> Option<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct StockURLs {
+        history: String,
+        quote: String,
+    }
+    let length = u32::try_from(ticker.len()).ok()?;
+    let mut output = vec![0u8; 1024];
+    loop {
+        let mut needed = 0;
+        let count = unsafe {
+            xrg_stock_urls(
+                ticker.as_ptr(),
+                length,
+                output.as_mut_ptr(),
+                output.len() as u32,
+                &mut needed,
+            )
+        };
+        if count == -2 {
+            let reported = needed as usize;
+            if reported <= output.len() {
+                return None;
+            }
+            output.resize(reported, 0);
+            continue;
+        }
+        if count < 0 {
+            return None;
+        }
+        if count as usize > output.len() {
+            return None;
+        }
+        let urls: StockURLs = serde_json::from_slice(&output[..count as usize]).ok()?;
+        return Some((urls.history, urls.quote));
+    }
 }
 
 pub fn metrics_sample(text: &str) -> Option<(u64, Option<f64>)> {
