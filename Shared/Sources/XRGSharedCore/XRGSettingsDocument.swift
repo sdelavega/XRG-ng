@@ -446,6 +446,22 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         }
     }
 
+    /// Store a migrated value. The entry's own rules apply — type, bounds,
+    /// options — but `depends` does not: migration converts one coherent
+    /// legacy state, whose entries may legitimately have been saved in any
+    /// order, so a control that depends on another is stored with its own
+    /// value and the settings windows render the disabled combination. Used
+    /// by `XRGSettingsMigration`; interactive changes go through `set`.
+    mutating func storeMigrated(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) throws(XRGSettingsError) {
+        guard let entry = catalog.entry(id) else { throw .unknownId }
+        if let error = Self.validate(value, for: entry) { throw error }
+        if XRGSettingsValue.sameValue(value, entry.defaultValue) {
+            values.removeValue(forKey: id)
+        } else {
+            values[id] = value
+        }
+    }
+
     /// Restore every entry of one section to its default for `platform`.
     /// Other sections, and unknown keys at either level, are not touched.
     public mutating func resetSection(_ section: String, catalog: XRGSettingsCatalog, platform: XRGSettingsPlatform) {
@@ -563,7 +579,10 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         }
     }
 
-    private static func render(_ json: JSONValue, indent: String) -> String {
+    /// Canonical rendering of a JSON tree, sorted keys and two-space indent:
+    /// shared with the migration, which renders the Linux view in the same
+    /// canonical form (only arrays keep their order; objects sort).
+    static func render(_ json: JSONValue, indent: String) -> String {
         switch json {
         case .null: return "null"
         case .bool(let value): return value ? "true" : "false"

@@ -1,0 +1,187 @@
+{
+  "version": 40,
+  "theme": {
+    "kind": "custom",
+    "theme": {
+      "format": "xrg-ng-theme",
+      "version": 1,
+      "name": "Aurora",
+      "colors": [
+        [0.0, 0.05, 0.1, 0.8],
+        [0.02, 0.08, 0.12, 0.85],
+        [0.1, 0.9, 0.5, 1.0],
+        [0.9, 0.7, 0.1, 1.0],
+        [0.8, 0.2, 0.9, 1.0],
+        [0.1, 0.1, 0.15, 0.4],
+        [0.95, 0.97, 1.0, 1.0]
+      ]
+    }
+  },
+  "modules": [
+    {
+      "id": "memory",
+      "visible": true,
+      "style": "pixel",
+      "colors": {
+        "background": [0.1, 0.1, 0.12, 0.9],
+        "series": [[0.2, 0.8, 1.0, 1.0], null, null]
+      },
+      "height": 110
+    },
+    {
+      "id": "cpu",
+      "visible": true,
+      "style": "dot"
+    },
+    {
+      "id": "weather",
+      "visible": false,
+      "style": "solid",
+      "colors": {
+        "series": [null, [0.9, 0.9, 0.4, 1.0], null]
+      },
+      "height": 70
+    },
+    {
+      "id": "ai",
+      "visible": true,
+      "style": "solid"
+    },
+    {
+      "id": "gpu",
+      "visible": true,
+      "style": "solid",
+      "colors": {
+        "background": [0.05, 0.05, 0.1, 1.0]
+      }
+    },
+    {
+      "id": "tpu",
+      "visible": true,
+      "style": "solid",
+      "height": 64
+    },
+    {
+      "id": "gpu_memory",
+      "visible": true,
+      "style": "solid",
+      "height": 80
+    },
+    {
+      "id": "battery",
+      "visible": true,
+      "style": "solid"
+    },
+    {
+      "id": "temperature",
+      "visible": true,
+      "style": "solid"
+    },
+    {
+      "id": "network",
+      "visible": true,
+      "style": "solid"
+    },
+    {
+      "id": "disk",
+      "visible": true,
+      "style": "solid"
+    },
+    {
+      "id": "processes",
+      "visible": true,
+      "style": "dot"
+    },
+    {
+      "id": "fans",
+      "visible": true,
+      "style": "hollow"
+    }
+  ],
+  "graph_height": 120,
+  "graph_width": 180,
+  "sampling_interval_ms": 500,
+  "window_opacity": 0.85,
+  "window_size": {
+    "width": 640,
+    "height": 720
+  },
+  "window_collapse": {
+    "collapsed": true,
+    "expand_on_hover": true,
+    "anchor": "end"
+  },
+  "network_min_scale": 2048,
+  "activity_bars": {
+    "visible": true,
+    "style": "pixel",
+    "color": [0.3, 0.9, 0.4, 1.0],
+    "use_series_colors": false
+  },
+  "layout": "horizontal",
+  "temperature_units": "fahrenheit",
+  "metrics": {
+    "battery_mode": "power",
+    "cpu": 2,
+    "cpu_history_samples": 300,
+    "cpu_history_minutes": 5,
+    "history_samples": {
+      "memory": 240,
+      "gpu": 120
+    },
+    "history_minutes": {
+      "network": 3,
+      "temperature": 10
+    },
+    "network": "wlp3s0",
+    "disk": "nvme0n1",
+    "gpu": "gpu-ada-99",
+    "xe_pmu": true,
+    "temperature": "coretemp-1",
+    "fan": "acme-fan-0",
+    "temperature_extra": ["acme-temp-9", null],
+    "fan_extra": [null, "acme-fan-2"]
+  },
+  "processes": {
+    "sort": "name",
+    "uid": 1000,
+    "filter": "xrg",
+    "limit": 100
+  },
+  "ai": {
+    "accounting": {
+      "enabled": true,
+      "auto_reset": false,
+      "daily_budget": 500000,
+      "notify_percent": 95,
+      "notifications": true,
+      "by_model": false,
+      "by_provider": true
+    },
+    "history_samples": 180,
+    "history_minutes": 7,
+    "enabled": [true, false, true, true],
+    "ollama": false,
+    "claude_source": "database",
+    "claude_logs": null,
+    "claude_database": "/home/anon/.claude/records.db",
+    "codex_logs": "/home/anon/.codex/sessions",
+    "gemini_logs": null,
+    "hermes_database": "/home/anon/.hermes/store.db",
+    "metrics_url": "http://127.0.0.1:9999/metrics",
+    "ollama_url": "http://127.0.0.1:11500"
+  },
+  "ai_show_model_breakdown": false,
+  "weather": {
+    "enabled": true,
+    "history_hours": 12,
+    "secondary": "humidity",
+    "station": "KSEA",
+    "units": "us",
+    "temperature_units": null,
+    "distance_units": "metric",
+    "pressure_units": "us",
+    "wind_units": "mph",
+    "refresh_minutes": 20
+  }
+}

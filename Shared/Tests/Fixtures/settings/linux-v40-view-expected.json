@@ -1,0 +1,367 @@
+{
+  "activity_bars": {
+    "color": [
+      0.3,
+      0.9,
+      0.4,
+      1
+    ],
+    "style": "pixel",
+    "use_series_colors": false,
+    "visible": true
+  },
+  "ai": {
+    "accounting": {
+      "auto_reset": false,
+      "by_model": false,
+      "by_provider": true,
+      "daily_budget": 500000,
+      "enabled": true,
+      "notifications": true,
+      "notify_percent": 95
+    },
+    "claude_database": "/home/anon/.claude/records.db",
+    "claude_logs": null,
+    "claude_source": "database",
+    "codex_logs": "/home/anon/.codex/sessions",
+    "enabled": [
+      true,
+      false,
+      true,
+      true
+    ],
+    "gemini_logs": null,
+    "hermes_database": "/home/anon/.hermes/store.db",
+    "history_minutes": 7,
+    "history_samples": 180,
+    "metrics_url": "http://127.0.0.1:9999/metrics",
+    "ollama": false,
+    "ollama_url": "http://127.0.0.1:11500"
+  },
+  "ai_show_model_breakdown": false,
+  "graph_height": 120,
+  "graph_width": 180,
+  "layout": "horizontal",
+  "metrics": {
+    "battery_mode": "power",
+    "cpu": 2,
+    "cpu_history_minutes": 5,
+    "cpu_history_samples": 300,
+    "disk": "nvme0n1",
+    "fan": "acme-fan-0",
+    "fan_extra": [
+      null,
+      "acme-fan-2"
+    ],
+    "gpu": "gpu-ada-99",
+    "history_minutes": {
+      "network": 3,
+      "temperature": 10
+    },
+    "history_samples": {
+      "gpu": 120,
+      "memory": 240
+    },
+    "network": "wlp3s0",
+    "temperature": "coretemp-1",
+    "temperature_extra": [
+      "acme-temp-9",
+      null
+    ],
+    "xe_pmu": true
+  },
+  "modules": [
+    {
+      "colors": {
+        "background": [
+          0.1,
+          0.1,
+          0.12,
+          0.9
+        ],
+        "series": [
+          [
+            0.2,
+            0.8,
+            1,
+            1
+          ],
+          null,
+          null
+        ]
+      },
+      "height": 110,
+      "id": "memory",
+      "style": "pixel",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "cpu",
+      "style": "dot",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          [
+            0.9,
+            0.9,
+            0.4,
+            1
+          ],
+          null
+        ]
+      },
+      "height": 70,
+      "id": "weather",
+      "style": "solid",
+      "visible": false
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "ai",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": [
+          0.05,
+          0.05,
+          0.1,
+          1
+        ],
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "gpu",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": 64,
+      "id": "tpu",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": 80,
+      "id": "gpu_memory",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "battery",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "temperature",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "network",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "disk",
+      "style": "solid",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "processes",
+      "style": "dot",
+      "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "fans",
+      "style": "hollow",
+      "visible": true
+    }
+  ],
+  "network_min_scale": 2048,
+  "processes": {
+    "filter": "xrg",
+    "limit": 100,
+    "sort": "name",
+    "uid": 1000
+  },
+  "sampling_interval_ms": 500,
+  "stocks": {
+    "show_change": true,
+    "show_djia": true,
+    "symbols": "AAPL",
+    "timeframe": 12
+  },
+  "temperature_units": "fahrenheit",
+  "theme": {
+    "kind": "custom",
+    "theme": {
+      "colors": [
+        [
+          0,
+          0.05,
+          0.1,
+          0.8
+        ],
+        [
+          0.02,
+          0.08,
+          0.12,
+          0.85
+        ],
+        [
+          0.1,
+          0.9,
+          0.5,
+          1
+        ],
+        [
+          0.9,
+          0.7,
+          0.1,
+          1
+        ],
+        [
+          0.8,
+          0.2,
+          0.9,
+          1
+        ],
+        [
+          0.1,
+          0.1,
+          0.15,
+          0.4
+        ],
+        [
+          0.95,
+          0.97,
+          1,
+          1
+        ]
+      ],
+      "format": "xrg-ng-theme",
+      "name": "Aurora",
+      "version": 1
+    }
+  },
+  "version": 40,
+  "weather": {
+    "distance_units": "metric",
+    "enabled": true,
+    "history_hours": 12,
+    "pressure_units": "us",
+    "refresh_minutes": 20,
+    "secondary": "humidity",
+    "station": "KSEA",
+    "temperature_units": null,
+    "units": "us",
+    "wind_units": "mph"
+  },
+  "window_collapse": {
+    "anchor": "end",
+    "collapsed": true,
+    "expand_on_hover": true
+  },
+  "window_opacity": 0.85,
+  "window_size": {
+    "height": 720,
+    "width": 640
+  }
+}
