@@ -44,13 +44,14 @@ public enum XRGSettingsMigration {
         // interactive settings window.
         for entry in catalog.entries.sorted(by: { XRGSettingsDocument.precedes($0.id, $1.id) }) {
             guard let key = macKey(of: entry), let raw = defaults[key] else { continue }
-            let value: XRGSettingsValue?
+            let outcome: TransformOutcome
             if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
-                value = transform(raw, entry)
+                outcome = transform(raw, entry)
             } else {
-                value = macIdentity(raw)
+                outcome = TransformOutcome(macIdentity(raw))
             }
-            store(value, for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
+            store(outcome.value, unconvertibleColorSpace: outcome.unconvertibleColorSpace,
+                  for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
         }
         return (document, diagnostics)
     }
@@ -93,7 +94,8 @@ public enum XRGSettingsMigration {
                 guard let raw else { continue }
                 value = XRGSettingsValue(json: raw)
             }
-            store(value, for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
+            store(value, unconvertibleColorSpace: nil,
+                  for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
         }
         return (document, diagnostics)
     }
@@ -227,26 +229,40 @@ public enum XRGSettingsMigration {
 
     // MARK: Migration pipeline
 
-    /// The colour space `nsColorArchive` could not convert, so `store` can
-    /// report a diagnostic naming it instead of a bare `invalid-value`: which
-    /// space an archive carried is the finding. Set immediately before the
-    /// transform returns nil, consumed (cleared) by the very next `store` —
-    /// a synchronous set/consume pair inside one migration call, which the
-    /// app runs once at launch, never concurrently; hence the unchecked
-    /// global (strict-concurrency builds read this comment).
-    private nonisolated(unsafe) static var unconvertibleColorSpaceName: String?
+    /// The outcome of one macOS transform: the converted value, and — when
+    /// the value could not be converted because the archived colour's space
+    /// is unsupported — that space's diagnostic name. Both travel together
+    /// from the transform into `store` as one local value: no shared or
+    /// static state, so concurrent migrations (a regression test runs 200
+    /// at once) can never read or clear each other's findings.
+    private struct TransformOutcome {
+        var value: XRGSettingsValue?
+        var unconvertibleColorSpace: String?
 
-    private static func store(_ value: XRGSettingsValue?, for entry: XRGSettingsEntry,
+        init(_ value: XRGSettingsValue?, unconvertibleColorSpace: String? = nil) {
+            self.value = value
+            self.unconvertibleColorSpace = unconvertibleColorSpace
+        }
+    }
+
+    /// Lifts a plain transform into a `TransformOutcome` with no diagnostic:
+    /// every transform but `nsColorArchive` converts or fails without naming
+    /// a colour space.
+    private static func outcome(_ transform: @escaping (Any, XRGSettingsEntry) -> XRGSettingsValue?)
+        -> (Any, XRGSettingsEntry) -> TransformOutcome {
+        { raw, entry in TransformOutcome(transform(raw, entry)) }
+    }
+
+    private static func store(_ value: XRGSettingsValue?, unconvertibleColorSpace: String?,
+                              for entry: XRGSettingsEntry,
                               into document: inout XRGSettingsDocument,
                               diagnostics: inout [XRGSettingsDiagnostic], catalog: XRGSettingsCatalog) {
         guard let value else {
-            let problem = unconvertibleColorSpaceName.map { "unsupported-color-space:\($0)" }
+            let problem = unconvertibleColorSpace.map { "unsupported-color-space:\($0)" }
                 ?? XRGSettingsDiagnostic.invalidValue
-            unconvertibleColorSpaceName = nil
             diagnostics.append(XRGSettingsDiagnostic(id: entry.id, problem: problem))
             return
         }
-        unconvertibleColorSpaceName = nil
         do {
             // Storing the entry's default removes the value again, so only
             // real customisations are ever written to the document. Migrated
@@ -413,33 +429,33 @@ public enum XRGSettingsMigration {
 
     // MARK: macOS transforms (docs/settings-inventory.md, "macOS transforms")
 
-    private static func macosTransform(named name: String) -> ((Any, XRGSettingsEntry) -> XRGSettingsValue?)? {
+    private static func macosTransform(named name: String) -> ((Any, XRGSettingsEntry) -> TransformOutcome)? {
         switch name {
-        case "cpuMonitorSource": return cpuMonitorSource
-        case "gpuMonitorSource": return gpuMonitorSource
-        case "hardwareSourceSlot": return hardwareSourceSlot
-        case "graphPreferenceHeight": return graphPreferenceHeight
-        case "graphPreferenceCurve": return graphPreferenceCurve
-        case "graphPreferenceEffect": return graphPreferenceEffect
-        case "graphPreferenceColor": return graphPreferenceColor
-        case "graphOrder": return graphOrder
-        case "processInspectorField": return processInspectorField
+        case "cpuMonitorSource": return outcome(cpuMonitorSource)
+        case "gpuMonitorSource": return outcome(gpuMonitorSource)
+        case "hardwareSourceSlot": return outcome(hardwareSourceSlot)
+        case "graphPreferenceHeight": return outcome(graphPreferenceHeight)
+        case "graphPreferenceCurve": return outcome(graphPreferenceCurve)
+        case "graphPreferenceEffect": return outcome(graphPreferenceEffect)
+        case "graphPreferenceColor": return outcome(graphPreferenceColor)
+        case "graphOrder": return outcome(graphOrder)
+        case "processInspectorField": return outcome(processInspectorField)
         case "nsColorArchive": return nsColorArchive
-        case "fontArchive": return fontArchive
-        case "orientationFlag": return orientationFlag
-        case "windowLevelIndex": return windowLevelIndex
-        case "collapseAnchorIndex": return collapseAnchorIndex
-        case "fahrenheitCelsiusIndex": return fahrenheitCelsiusIndex
-        case "milesKilometersIndex": return milesKilometersIndex
-        case "inchesHectopascalsIndex": return inchesHectopascalsIndex
-        case "secondaryIndex": return secondaryIndex
-        case "stockTimeframeIndex": return stockTimeframeIndex
-        case "graphStyleIndex": return graphStyleIndex
-        case "gpuPlotMode": return gpuPlotMode
-        case "zeroToNull": return zeroToNull
-        case "networkInterfaceAll": return networkInterfaceAll
-        case "temperatureSensorSlot": return temperatureSensorSlot
-        case "themePreset": return themePreset
+        case "fontArchive": return outcome(fontArchive)
+        case "orientationFlag": return outcome(orientationFlag)
+        case "windowLevelIndex": return outcome(windowLevelIndex)
+        case "collapseAnchorIndex": return outcome(collapseAnchorIndex)
+        case "fahrenheitCelsiusIndex": return outcome(fahrenheitCelsiusIndex)
+        case "milesKilometersIndex": return outcome(milesKilometersIndex)
+        case "inchesHectopascalsIndex": return outcome(inchesHectopascalsIndex)
+        case "secondaryIndex": return outcome(secondaryIndex)
+        case "stockTimeframeIndex": return outcome(stockTimeframeIndex)
+        case "graphStyleIndex": return outcome(graphStyleIndex)
+        case "gpuPlotMode": return outcome(gpuPlotMode)
+        case "zeroToNull": return outcome(zeroToNull)
+        case "networkInterfaceAll": return outcome(networkInterfaceAll)
+        case "temperatureSensorSlot": return outcome(temperatureSensorSlot)
+        case "themePreset": return outcome(themePreset)
         default: return nil
         }
     }
@@ -679,17 +695,20 @@ public enum XRGSettingsMigration {
         return .string(builtin ? name : "Custom")
     }
 
-    private static func nsColorArchive(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
+    private static func nsColorArchive(_ raw: Any, _ entry: XRGSettingsEntry) -> TransformOutcome {
         guard let data = raw as? Data, data.count <= 64 * 1024,
               let archive = KeyedArchive(data),
               Self.archiveClassName(of: archive.root, objects: archive.objects) == "NSColor",
-              case .object(let fields) = archive.root else { return nil }
+              case .object(let fields) = archive.root else {
+            return TransformOutcome(nil)
+        }
         // `NSLinearExposure` rides along with ICC-backed spaces (a generic
         // gamma 2.2 grey archives "1") but does not change the components, so
         // it is opaque here and never gates the migration.
         if let space = archiveReferenced("NSCustomColorSpace", in: fields, objects: archive.objects),
            case .object(let spaceFields) = space {
-            return colorSpaceComponents(spaceFields, fields).map { .color($0) }
+            let (components, name) = colorSpaceComponents(spaceFields, fields)
+            return TransformOutcome(components.map { .color($0) }, unconvertibleColorSpace: name)
         }
         // The legacy forms carry no space object; `NSColorSpace`'s own numbering
         // (NSCalibratedRGBColorSpace=1, NSDeviceRGBColorSpace=2,
@@ -699,28 +718,25 @@ public enum XRGSettingsMigration {
         case 1?:
             // The calibrated space is the generic one (NSColor.h).
             guard let rgba = colorComponents(fields["NSRGB"], rgb: true),
-                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return nil }
-            return .color(genericRGBToSRGB(rgba))
+                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return TransformOutcome(nil) }
+            return TransformOutcome(.color(genericRGBToSRGB(rgba)))
         case 2?:
             guard let rgba = colorComponents(fields["NSRGB"], rgb: true),
-                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return nil }
-            return .color(rgba)
+                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return TransformOutcome(nil) }
+            return TransformOutcome(.color(rgba))
         case 3?:
             guard let rgba = colorComponents(fields["NSWhite"], rgb: false),
-                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return nil }
-            return .color(genericGreyToSRGB(rgba))
+                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return TransformOutcome(nil) }
+            return TransformOutcome(.color(genericGreyToSRGB(rgba)))
         case 4?:
             guard let rgba = colorComponents(fields["NSWhite"], rgb: false),
-                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return nil }
-            return .color(rgba)
+                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return TransformOutcome(nil) }
+            return TransformOutcome(.color(rgba))
         case 5?:
-            unconvertibleColorSpaceName = "device-cmyk"
-            return nil
+            return TransformOutcome(nil, unconvertibleColorSpace: "device-cmyk")
         default:
-            if let space = archiveInt(fields["NSColorSpace"]) {
-                unconvertibleColorSpaceName = "ns-color-space-\(space)"
-            }
-            return nil
+            return TransformOutcome(nil, unconvertibleColorSpace:
+                archiveInt(fields["NSColorSpace"]).map { "ns-color-space-\($0)" })
         }
     }
 
@@ -733,37 +749,36 @@ public enum XRGSettingsMigration {
     /// `NSComponents` where the archiver writes them, else `NSRGB`/`NSWhite`;
     /// a grey colour's `NSWhite` can be its calibrated rendering (a generic
     /// gamma 2.2 grey archives 0.5 as "0.4246723652"), so the space's own
-    /// components win whenever the archive carries them. Returns nil (with
-    /// `unconvertibleColorSpaceName` left unset for a space it knows) when the
-    /// archive is malformed, or names the space when it cannot be converted.
+    /// components win whenever the archive carries them. Returns (nil, nil)
+    /// when the archive is malformed, (nil, name) — the diagnostic name —
+    /// when the space cannot be converted, (components, nil) otherwise.
     private static func colorSpaceComponents(_ spaceFields: [String: ArchiveValue],
-                                              _ fields: [String: ArchiveValue]) -> [Double]? {
+                                              _ fields: [String: ArchiveValue])
+        -> (components: [Double]?, unconvertibleColorSpace: String?) {
         let id = archiveInt(spaceFields["NSID"]) ?? archiveInt(spaceFields["NSSpaceID"])
         switch id {
         case 7?:    // sRGB: the document's own space
-            return colorComponents(fields["NSComponents"], rgb: true)
+            return (colorComponents(fields["NSComponents"], rgb: true), nil)
         case 12?:   // Display P3
-            guard var rgba = colorComponents(fields["NSComponents"], rgb: true) else { return nil }
+            guard var rgba = colorComponents(fields["NSComponents"], rgb: true) else { return (nil, nil) }
             rgba.replaceSubrange(0..<3, with: displayP3ToSRGB(rgba))
-            return rgba
+            return (rgba, nil)
         case 1?:    // Generic RGB
             guard let rgba = colorComponents(fields["NSRGB"] ?? fields["NSComponents"], rgb: true),
-                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return nil }
-            return genericRGBToSRGB(rgba)
+                  fields["NSWhite"] == nil, fields["NSCMYK"] == nil else { return (nil, nil) }
+            return (genericRGBToSRGB(rgba), nil)
         case 2?:    // Generic Grey
             guard let rgba = colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false),
-                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return nil }
-            return genericGreyToSRGB(rgba)
+                  fields["NSRGB"] == nil, fields["NSCMYK"] == nil else { return (nil, nil) }
+            return (genericGreyToSRGB(rgba), nil)
         case 9?:    // Generic Grey Gamma 2.2: macOS 26 renders its greys as sRGB
-            return colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false)
+            return (colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false), nil)
         case 5?:    // Device Grey
-            return colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false)
+            return (colorComponents(fields["NSComponents"] ?? fields["NSWhite"], rgb: false), nil)
         case 8?:    // Adobe RGB (1998)
-            unconvertibleColorSpaceName = "adobe-rgb"
-            return nil
+            return (nil, "adobe-rgb")
         default:
-            unconvertibleColorSpaceName = id.map { "color-space-\($0)" } ?? "unnamed"
-            return nil
+            return (nil, id.map { "color-space-\($0)" } ?? "unnamed")
         }
     }
 

@@ -511,6 +511,50 @@ struct SettingsMigrationTests {
             "a dictionary claiming more references than it holds")
     }
 
+    // MARK: concurrency
+
+    @Test func concurrentMigrationsKeepTheirOwnDiagnostics() async throws {
+        // Review fix round 3: the unsupported colour-space name once travelled
+        // from `nsColorArchive` to `store` through a static, so concurrent
+        // migrations could clear or steal each other's findings. The name now
+        // travels inside each call's own conversion result, so 200 concurrent
+        // migrations — mixing a domain whose Adobe RGB colour cannot convert
+        // with a domain carrying an unrelated invalid key — must each see
+        // exactly their own diagnostics.
+        let catalog = try XRGSettingsCatalog.load()
+        let adobeDomain = try loadDefaultsPlist("macos-0.2.2-colourspaces-defaults")
+        let expectedAdobeDiagnostics = [
+            XRGSettingsDiagnostic(id: "appearance.text.color", problem: "unsupported-color-space:adobe-rgb"),
+        ]
+        let expectedInvalidDiagnostics = [
+            XRGSettingsDiagnostic(id: "general.window.level", problem: "invalid-value"),
+        ]
+        let mismatches = await withTaskGroup(of: Int.self) { group in
+            for index in 0..<200 {
+                let expectsAdobe = index.isMultiple(of: 2)
+                group.addTask {
+                    let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                        expectsAdobe ? adobeDomain : ["windowLevel": 9, "borderWidth": 6],
+                        catalog: catalog)
+                    guard diagnostics == (expectsAdobe ? expectedAdobeDiagnostics
+                                                        : expectedInvalidDiagnostics) else { return 1 }
+                    if expectsAdobe {
+                        // The unconvertible colour falls back per key; every
+                        // other colour in the same domain migrates.
+                        return document.values["appearance.text.color"] == nil ? 0 : 1
+                    }
+                    // The unrelated valid key in the same domain still migrates.
+                    return document.values["general.window.border_width"] == .int(6) ? 0 : 1
+                }
+            }
+            var mismatches = 0
+            for await mismatch in group { mismatches += mismatch }
+            return mismatches
+        }
+        #expect(mismatches == 0,
+                "a concurrent migration saw another migration's diagnostics")
+    }
+
     // MARK: hand-built malformed archives
 
     /// The bytes of a binary property list in the exact shape NSKeyedArchiver
