@@ -150,6 +150,34 @@ fn the_conformance_corpus_loads_identically_through_the_abi() {
 }
 
 #[test]
+fn an_oversized_settings_file_loads_as_unreadable_without_panicking() {
+    shared::check_abi();
+    // Exactly 2 MiB: a document that would load (its only extra member is
+    // an unknown root key, preserved verbatim) but for the ABI's 1 MiB
+    // input bound. Loading must answer "unreadable" — never panic — so the
+    // caller runs on defaults and keeps the file untouched.
+    let prefix = br#"{"format": "xrg-ng-settings", "padding": ""#;
+    let suffix = br#", "settings": {}, "version": 1}"#;
+    let mut bytes = prefix.to_vec();
+    bytes.extend(std::iter::repeat_n(
+        b'a',
+        2 * 1024 * 1024 - prefix.len() - suffix.len(),
+    ));
+    bytes.extend_from_slice(suffix);
+    assert_eq!(bytes.len(), 2 * 1024 * 1024);
+    match document::load(&bytes) {
+        document::Loaded::Unreadable { diagnostic } => assert_eq!(
+            diagnostic,
+            document::Diagnostic {
+                id: None,
+                problem: "the settings file exceeds the 1 MiB the settings ABI accepts".into()
+            }
+        ),
+        document::Loaded::Ok { .. } => panic!("an oversized file must not load"),
+    }
+}
+
+#[test]
 fn set_reports_the_catalogs_bounds_and_kinds() {
     let defaults = defaults_document();
     let canonical_defaults = br#"{
@@ -251,6 +279,43 @@ fn set_reports_the_catalogs_bounds_and_kinds() {
 }
 
 #[test]
+fn oversized_set_requests_are_not_invalid_documents() {
+    // Against a valid document, an id over the ABI's 256-byte bound and a
+    // string value over its 8 KiB bound are request problems: the error
+    // must not invite document-replacement recovery.
+    let defaults = defaults_document();
+    let long_id = "i".repeat(300 * 1024);
+    let long_value = "v".repeat(9 * 1024);
+    // A text value the catalog accepts (text controls carry no bound) whose
+    // JSON encoding escapes past the 8 KiB wire bound.
+    let escaped_value = "\\".repeat(4300);
+    for result in [
+        document::set(&defaults, &long_id, &serde_json::json!(1)),
+        document::set(
+            &defaults,
+            "graphs.processes.filter",
+            &serde_json::json!(long_value),
+        ),
+        document::set(
+            &defaults,
+            "graphs.processes.filter",
+            &serde_json::json!(escaped_value),
+        ),
+    ] {
+        assert_eq!(result, Err(document::SetError::RequestTooLarge));
+    }
+    // A document that does not load still reports exactly that.
+    assert_eq!(
+        document::set(
+            b"not json",
+            "graphs.processes.filter",
+            &serde_json::json!("")
+        ),
+        Err(document::SetError::InvalidDocument)
+    );
+}
+
+#[test]
 fn reset_section_restores_only_that_section() {
     let bytes = fs::read(fixtures().join("unknown-keys.json")).unwrap();
     let reset = document::reset_section(&bytes, "general").unwrap();
@@ -333,6 +398,38 @@ fn the_linux_migration_and_view_round_trip_through_the_model() {
     assert!(document::migrate_v40(b"[1, 2, 3]").is_err());
     assert!(document::migrate_v40(b"null").is_err());
     assert!(document::linux_view(b"not json").is_err());
+}
+
+#[test]
+fn a_core_valid_view_larger_than_the_legacy_rust_limit_loads() {
+    shared::check_abi();
+    // A text control has no catalog bound, so the core accepts a process
+    // filter far longer than the legacy Rust model's 128 KiB file limit.
+    // The view the core renders is authoritative: it must deserialise
+    // without a Rust-side size limit or validator.
+    let filter = "x".repeat(140_000);
+    let bytes = format!(
+        r#"{{"format": "xrg-ng-settings", "settings": {{"graphs.processes.filter": "{filter}"}}, "version": 1}}"#
+    )
+    .into_bytes();
+    let document = match document::load(&bytes) {
+        document::Loaded::Ok {
+            document,
+            diagnostics,
+        } => {
+            assert!(diagnostics.is_empty(), "the long filter is core-valid");
+            document
+        }
+        document::Loaded::Unreadable { .. } => panic!("the long-filter document must load"),
+    };
+    let raw = raw_linux_view(&document);
+    assert!(
+        raw.len() > 128 * 1024,
+        "the view must exceed the legacy 128 KiB limit ({} bytes)",
+        raw.len()
+    );
+    let settings = document::linux_view(&document).expect("the core's view must load");
+    assert_eq!(settings.processes.filter, filter);
 }
 
 #[test]

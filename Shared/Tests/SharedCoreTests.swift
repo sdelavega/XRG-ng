@@ -55,6 +55,47 @@ struct SharedCoreTests {
         #expect(historyCopy(handle, &destination, 3) == 3)
         #expect(destination == [2, 3, 4, 99])
     }
+    @Test func settingsSetDistinguishesRefusedRequestsFromUnreadableDocuments() throws {
+        let document = Data(#"{"format": "xrg-ng-settings", "settings": {}, "version": 1}"#.utf8)
+        func respond(doc: Data, id: Data, value: Data) throws -> (Int32, Any?) {
+            var output = [UInt8](repeating: 42, count: 512)
+            var needed: UInt32 = 0
+            let status = doc.withUnsafeBytes { rawDoc in
+                id.withUnsafeBytes { rawId in
+                    value.withUnsafeBytes { rawValue in
+                        settingsSet(rawDoc.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(doc.count),
+                                    rawId.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(id.count),
+                                    rawValue.baseAddress!.assumingMemoryBound(to: UInt8.self), UInt32(value.count),
+                                    &output, UInt32(output.count), &needed)
+                    }
+                }
+            }
+            return (status, status > 0 ? try JSONSerialization.jsonObject(with: Data(output[0..<Int(status)])) : nil)
+        }
+        // A value over the 8 KiB bound and an id over the 256-byte bound are
+        // reported through the wire as request-too-large, not refused: the
+        // document itself is fine.
+        let id = Data("graphs.processes.filter".utf8)
+        let longValue = Data(("\"" + String(repeating: "v", count: 9 * 1024) + "\"").utf8)
+        let (valueStatus, valueResponse) = try respond(doc: document, id: id, value: longValue)
+        #expect(valueStatus > 0)
+        let valueRefusal = try #require(valueResponse as? [String: Any])
+        #expect((valueRefusal["error"] as? [String: Any])?["kind"] as? String == "request-too-large")
+        let longId = Data(String(repeating: "i", count: 300 * 1024).utf8)
+        let (idStatus, idResponse) = try respond(doc: document, id: longId, value: Data("1".utf8))
+        #expect(idStatus > 0)
+        let idRefusal = try #require(idResponse as? [String: Any])
+        #expect((idRefusal["error"] as? [String: Any])?["kind"] as? String == "request-too-large")
+        // A document that does not load is still -1, and a bounded set still
+        // answers with the new document.
+        let (refused, _) = try respond(doc: Data("not json".utf8), id: id, value: Data("\"\"".utf8))
+        #expect(refused == -1)
+        let (okStatus, okResponse) = try respond(doc: document, id: Data("general.window.border_width".utf8),
+                                                 value: Data("8".utf8))
+        #expect(okStatus > 0)
+        let stored = try #require(okResponse as? [String: Any])
+        #expect(stored["document"] is String)
+    }
     @Test func parsersRejectMalformedOrOverflowingData() {
         let metrics = XRGLocalProviderParser.metrics(from: "tokens_input_total{model=\"a b\"} 7\ncost_total 0.25\ntokens_output_total NaN\n")
         #expect(metrics.tokens == 7 && metrics.cost == 0.25)

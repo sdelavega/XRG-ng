@@ -64,11 +64,16 @@ pub struct Diagnostic {
     pub problem: String,
 }
 
-/// Why the core refused to store a value, mirroring the core's refusals.
+/// Why a value was not stored. Only `InvalidDocument` says the caller should
+/// fall back to a fresh document: every other refusal is a request or
+/// transport problem the same document can be asked about again.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SetError {
     /// The document bytes are not a loadable settings document.
     InvalidDocument,
+    /// The id or the value exceeds what the settings ABI accepts; the
+    /// document itself is fine.
+    RequestTooLarge,
     /// The id is not in the catalog.
     UnknownId,
     /// The value cannot have this control's shape.
@@ -80,6 +85,9 @@ pub enum SetError {
     NotAnOption,
     /// The entry's `depends` requirement does not hold.
     DependencyNotMet,
+    /// The request could not be encoded, or the pinned shared core answered
+    /// in a shape it never produces: a binding problem, not a document one.
+    Transport,
 }
 
 /// The result of loading or migrating a document, mirroring the core's load:
@@ -177,6 +185,7 @@ impl From<WireError> for SetError {
     fn from(wire: WireError) -> Self {
         match wire.kind.as_str() {
             "unknown-id" => Self::UnknownId,
+            "request-too-large" => Self::RequestTooLarge,
             "wrong-type" => Self::WrongType,
             "out-of-range" => Self::OutOfRange {
                 min: wire.min.unwrap_or_default(),
@@ -184,15 +193,24 @@ impl From<WireError> for SetError {
             },
             "not-an-option" => Self::NotAnOption,
             "dependency-not-met" => Self::DependencyNotMet,
-            // The ABI version pin (shared::check_abi) keeps the kind set closed.
-            _ => unreachable!("the shared core reported an unknown settings refusal"),
+            // A kind outside the pinned ABI's set: the core, not the request.
+            _ => Self::Transport,
         }
     }
 }
 
+/// Why a settings ABI call did not answer with a response.
+enum CallError {
+    /// The core refused the request (-1): for the entry points that take a
+    /// document, that document does not load.
+    Rejected,
+    /// The core broke the buffer contract the pinned ABI never breaks.
+    Transport(&'static str),
+}
+
 /// One settings ABI call that answers UTF-8 JSON into a caller buffer,
 /// retried with the size the core reports when the buffer is too small.
-fn json_call(call: impl Fn(*mut u8, u32, &mut u32) -> i32) -> Result<Vec<u8>, String> {
+fn json_call(call: impl Fn(*mut u8, u32, &mut u32) -> i32) -> Result<Vec<u8>, CallError> {
     let mut output = vec![0u8; 8192];
     loop {
         let mut needed = 0;
@@ -200,17 +218,21 @@ fn json_call(call: impl Fn(*mut u8, u32, &mut u32) -> i32) -> Result<Vec<u8>, St
         if written == -2 {
             let reported = needed as usize;
             if reported <= output.len() {
-                return Err("the shared core reported a size no larger buffer satisfies".into());
+                return Err(CallError::Transport(
+                    "the shared core reported a size no larger buffer satisfies",
+                ));
             }
             output.resize(reported, 0);
             continue;
         }
         if written < 0 {
-            return Err("the shared core rejected the settings request".into());
+            return Err(CallError::Rejected);
         }
         let count = written as usize;
         if count > output.len() {
-            return Err("the shared core wrote past the buffer it was given".into());
+            return Err(CallError::Transport(
+                "the shared core wrote past the buffer it was given",
+            ));
         }
         output.truncate(count);
         return Ok(output);
@@ -236,6 +258,17 @@ fn loaded_from(response: &[u8]) -> Result<Loaded, String> {
     })
 }
 
+/// The unreadable result for a problem found on the Rust side of the ABI:
+/// the caller runs on defaults and must keep the file untouched.
+fn unreadable(problem: &str) -> Loaded {
+    Loaded::Unreadable {
+        diagnostic: Diagnostic {
+            id: None,
+            problem: problem.to_owned(),
+        },
+    }
+}
+
 /// The settings catalog for Linux.
 pub fn catalog() -> Result<Catalog, String> {
     // platform 1 is Linux in the shared ABI.
@@ -246,27 +279,44 @@ pub fn catalog() -> Result<Catalog, String> {
 }
 
 /// Load a settings document: the canonical bytes and its diagnostics, or the
-/// document-level problem that makes the file unreadable.
+/// document-level problem that makes the file unreadable. Loading never
+/// panics: input the ABI refuses, and any ABI failure, are unreadable
+/// results, so the file is kept and the defaults are used.
 pub fn load(bytes: &[u8]) -> Loaded {
-    assert!(
-        bytes.len() <= INPUT_LIMIT,
-        "settings documents are bounded to 1 MiB"
-    );
-    let length = u32::try_from(bytes.len()).expect("bounded by the input limit");
-    let response = json_call(|out, cap, needed| unsafe {
+    // The header's documented input bound, mirrored so an oversized file
+    // never crosses the ABI: it is unreadable, not wrong.
+    let length = match u32::try_from(bytes.len()) {
+        Ok(length) if bytes.len() <= INPUT_LIMIT => length,
+        _ => {
+            return unreadable("the settings file exceeds the 1 MiB the settings ABI accepts");
+        }
+    };
+    let response = match json_call(|out, cap, needed| unsafe {
         xrg_settings_load(bytes.as_ptr(), length, out, cap, needed)
-    })
-    .expect("the shared core refused a bounded settings document");
-    loaded_from(&response).expect("the shared core answered without a document")
+    }) {
+        Ok(response) => response,
+        Err(CallError::Rejected) => return unreadable("the shared core refused the settings file"),
+        Err(CallError::Transport(problem)) => return unreadable(problem),
+    };
+    match loaded_from(&response) {
+        Ok(loaded) => loaded,
+        Err(problem) => unreadable(&problem),
+    }
 }
 
 /// Store one value in a document, enforcing the entry's rules: the new
-/// canonical bytes, or the core's refusal.
+/// canonical bytes, or the refusal. Only `InvalidDocument` means the
+/// document bytes do not load; the request and transport failures are their
+/// own kinds, so a caller never mistakes a refused request for a file it
+/// must replace.
 pub fn set(doc: &[u8], id: &str, value: &serde_json::Value) -> Result<Vec<u8>, SetError> {
+    // The document is the document: one too large to cross is as unusable
+    // as one that does not load, exactly as `load` reports it. The request
+    // parts are requests: too large to cross is a request problem.
     let doc_len = u32::try_from(doc.len()).map_err(|_| SetError::InvalidDocument)?;
-    let id_len = u32::try_from(id.len()).map_err(|_| SetError::InvalidDocument)?;
-    let value_json = serde_json::to_vec(value).expect("a JSON value always serialises");
-    let value_len = u32::try_from(value_json.len()).map_err(|_| SetError::InvalidDocument)?;
+    let id_len = u32::try_from(id.len()).map_err(|_| SetError::RequestTooLarge)?;
+    let value_json = serde_json::to_vec(value).map_err(|_| SetError::Transport)?;
+    let value_len = u32::try_from(value_json.len()).map_err(|_| SetError::RequestTooLarge)?;
     let response = json_call(|out, cap, needed| unsafe {
         xrg_settings_set(
             doc.as_ptr(),
@@ -280,14 +330,17 @@ pub fn set(doc: &[u8], id: &str, value: &serde_json::Value) -> Result<Vec<u8>, S
             needed,
         )
     })
-    .map_err(|_| SetError::InvalidDocument)?;
-    let wire: Wire = serde_json::from_slice(&response).map_err(|_| SetError::InvalidDocument)?;
+    .map_err(|failure| match failure {
+        CallError::Rejected => SetError::InvalidDocument,
+        CallError::Transport(_) => SetError::Transport,
+    })?;
+    let wire: Wire = serde_json::from_slice(&response).map_err(|_| SetError::Transport)?;
     if let Some(error) = wire.error {
         return Err(error.into());
     }
     wire.document
         .map(String::into_bytes)
-        .ok_or(SetError::InvalidDocument)
+        .ok_or(SetError::Transport)
 }
 
 /// Restore every entry of one catalog section to its default, in the document
@@ -308,7 +361,10 @@ pub fn reset_section(doc: &[u8], section: &str) -> Result<Vec<u8>, String> {
             needed,
         )
     })
-    .map_err(|_| "the settings document did not load".to_owned())?;
+    .map_err(|failure| match failure {
+        CallError::Rejected => "the settings document did not load".to_owned(),
+        CallError::Transport(problem) => problem.to_owned(),
+    })?;
     let wire: Wire = serde_json::from_slice(&response).map_err(|error| error.to_string())?;
     wire.document
         .map(String::into_bytes)
@@ -323,18 +379,29 @@ pub fn migrate_v40(v40: &[u8]) -> Result<Loaded, String> {
     let response = json_call(|out, cap, needed| unsafe {
         xrg_settings_migrate_linux_v40(v40.as_ptr(), length, out, cap, needed)
     })
-    .map_err(|_| "the version-40 input is not a JSON object".to_owned())?;
+    .map_err(|failure| match failure {
+        CallError::Rejected => "the version-40 input is not a JSON object".to_owned(),
+        CallError::Transport(problem) => problem.to_owned(),
+    })?;
     loaded_from(&response)
 }
 
-/// The version-40-shaped view of a document, deserialised into the Rust
-/// model: the shape the platform's own serde `Settings` reads.
+/// The version-40-shaped view of a document, deserialised straight into the
+/// Rust serde model. The view the core renders is authoritative: nothing
+/// re-validates it or bounds its size, so every core-valid document loads
+/// here, whatever the legacy model's own file limit was. (`Settings::parse`,
+/// with its 128 KiB bound, its old-format upgrade chain and its validator,
+/// belongs to the old local-file upgrade path, never to the core's output.)
 pub fn linux_view(doc: &[u8]) -> Result<Settings, String> {
     let length =
         u32::try_from(doc.len()).map_err(|_| "the settings document is too large".to_owned())?;
     let view = json_call(|out, cap, needed| unsafe {
         xrg_settings_linux_view(doc.as_ptr(), length, out, cap, needed)
     })
-    .map_err(|_| "the settings document did not load".to_owned())?;
-    Settings::parse(&view)
+    .map_err(|failure| match failure {
+        CallError::Rejected => "the settings document did not load".to_owned(),
+        CallError::Transport(problem) => problem.to_owned(),
+    })?;
+    serde_json::from_slice(&view)
+        .map_err(|error| format!("the shared core's Linux view is not the model's shape: {error}"))
 }

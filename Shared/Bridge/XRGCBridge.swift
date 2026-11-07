@@ -471,37 +471,54 @@ private struct StockURLsJSON: Encodable {
     }
 }
 
+/// Write one refusal of `xrg_settings_set` as its wire response.
+private func settingsRefusal(_ error: SettingsErrorJSON,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard let data = settingsJSON(SettingsMutationJSON(document: nil, error: error)) else { return -1 }
+    return settingsWrite(data, output, capacity, needed)
+}
+
 /// Store one value: the new document, or the core's refusal with its kind
-/// and, for an out-of-range value, the entry's bounds.
+/// and, for an out-of-range value, the entry's bounds. A request that cannot
+/// cross — an id over 256 bytes or a value over 8 KiB — is reported as
+/// request-too-large through the same wire, so a caller can tell it from a
+/// document that does not load (-1).
 @c(xrg_settings_set) public func settingsSet(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
     _ id: UnsafePointer<UInt8>?, _ idLen: UInt32,
     _ value: UnsafePointer<UInt8>?, _ valueLen: UInt32,
     _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
     _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
-    guard len <= 1_048_576, idLen <= 256, valueLen <= 8192, let doc, let id, let value,
+    guard len <= 1_048_576, let doc, let id, let value,
           let catalog = try? XRGSettingsCatalog.load(),
-          let idText = String(bytes: UnsafeBufferPointer(start: id, count: Int(idLen)), encoding: .utf8),
-          let valueText = String(bytes: UnsafeBufferPointer(start: value, count: Int(valueLen)), encoding: .utf8),
-          let json = JSONValue.parse(valueText),
           case .ok(var document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+    else { return -1 }
+    // Request-level problems ride the wire: the document itself may be fine,
+    // so the size of a request must not masquerade as an unreadable document.
+    guard idLen <= 256, valueLen <= 8192 else {
+        return settingsRefusal(SettingsErrorJSON(kind: "request-too-large", min: nil, max: nil),
+                               output, capacity, needed)
+    }
+    guard let idText = String(bytes: UnsafeBufferPointer(start: id, count: Int(idLen)), encoding: .utf8),
+          let valueText = String(bytes: UnsafeBufferPointer(start: value, count: Int(valueLen)), encoding: .utf8),
+          let json = JSONValue.parse(valueText)
     else { return -1 }
     guard let settingsValue = XRGSettingsValue(json: json) else {
         // A shape no control can hold, reported as the type refusal `set`
         // itself would give.
-        guard let data = settingsJSON(SettingsMutationJSON(document: nil,
-            error: SettingsErrorJSON(kind: "wrong-type", min: nil, max: nil))) else { return -1 }
-        return settingsWrite(data, output, capacity, needed)
+        return settingsRefusal(SettingsErrorJSON(kind: "wrong-type", min: nil, max: nil),
+                               output, capacity, needed)
     }
     do {
         try document.set(idText, settingsValue, catalog: catalog)
         guard let bytes = String(data: document.serialized(), encoding: .utf8),
               let data = settingsJSON(SettingsMutationJSON(document: bytes, error: nil)) else { return -1 }
         return settingsWrite(data, output, capacity, needed)
-    } catch let error as XRGSettingsError {
-        guard let data = settingsJSON(SettingsMutationJSON(document: nil, error: SettingsErrorJSON(error)))
-        else { return -1 }
-        return settingsWrite(data, output, capacity, needed)
-    } catch { return -1 }
+    } catch {
+        // `set` is `throws(XRGSettingsError)`, so this catches exactly its
+        // typed refusals.
+        return settingsRefusal(SettingsErrorJSON(error), output, capacity, needed)
+    }
 }
 
 /// Restore one section to its defaults; unknown keys at either level, and
