@@ -46,12 +46,12 @@ public final class XRGCPUView: NSView, XRGModuleView {
     @nonobjc static let sourceKey = "XRGCPUView.Source.v1"
     @nonobjc static let historyKey = "XRGCPUView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int {
-        let value = defaults.integer(forKey: Self.historyKey)
+        let value = settingsStore.intSetting(legacyKey: Self.historyKey)
         return XRGSamplingSettings.validCPUHistorySamples(value) ? value : 0
     }
     @nonobjc static let windowKey = "XRGCPUView.HistoryMinutes.v1"
     @nonobjc var historyMinutes: Int {
-        let value = defaults.integer(forKey: Self.windowKey)
+        let value = settingsStore.intSetting(legacyKey: Self.windowKey)
         return (0...XRGTimedHistory.systemMaximumMinutes).contains(value) ? value : 0
     }
     @nonobjc private let timedHistory = XRGTimedHistory(channels: 3, retentionMinutes: XRGTimedHistory.systemMaximumMinutes)!
@@ -71,6 +71,9 @@ public final class XRGCPUView: NSView, XRGModuleView {
     @nonobjc let graphLabels = XRGGraphLabels()
     @nonobjc static let activityMonitorURL = URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         miner = XRGCPUMiner(); processMiner = XRGProcessMiner()
@@ -95,10 +98,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
     }
     isolated deinit { if let historyObservation { miner.removeHistoryObserver(historyObservation) } }
     private func prepare() {
-        do {
-            let saved = try XRGMonitorSource.load(defaults, key: Self.sourceKey)
-            try saved.validateCPU(); selectedCPU = saved.source.flatMap(Int.init)
-        } catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
+        loadSavedSource()
         historyObservation = miner.observeHistory { [weak self] event in self?.observeHistory(event) }
         for label in [graphLabels.leftLabel, graphLabels.centerLabel, graphLabels.rightLabel] { addSubview(label) }
         setGraphSize(bounds.size)
@@ -111,6 +111,16 @@ public final class XRGCPUView: NSView, XRGModuleView {
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow(); bindToWindow()
     }
+
+    /// Load the saved CPU selection through the settings store. The nib path
+    /// constructs this view before its host's settings exist, so the load is
+    /// repeated once the window binding provides them.
+    @nonobjc func loadSavedSource() {
+        do {
+            let saved = try XRGMonitorSource.load(settingsStore, key: Self.sourceKey)
+            try saved.validateCPU(); selectedCPU = saved.source.flatMap(Int.init)
+        } catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
+    }
     private func bindToWindow() {
         if window == nil { processInspector?.close() }
         let next = window as? any XRGCPUViewHost
@@ -121,13 +131,14 @@ public final class XRGCPUView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "CPU", reference: self, defaults: defaults)
+        loadSavedSource()
+        let module = XRGModule(name: "CPU", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 0
         // Core history and accounting continue when only presentation is hidden.
         module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true; module.doesFastUpdate = true
         module.doesMin5Update = false; module.doesMin30Update = false
-        module.isDisplayed = defaults.bool(forKey: "showCPUGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.cpu)
         self.module = module; registeredManager = manager
         host.cpuView = self; host.initTimers()
         updateMinSize()
@@ -363,15 +374,15 @@ public final class XRGCPUView: NSView, XRGModuleView {
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @objc func selectHistory(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, XRGSamplingSettings.validCPUHistorySamples(item.tag) else { return }
-        defaults.set(item.tag, forKey: Self.historyKey); defaults.set(0, forKey: Self.windowKey)
+        settingsStore.storeSetting(item.tag, legacyKey: Self.historyKey); settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     @objc func selectHistoryWindow(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, (0...XRGTimedHistory.systemMaximumMinutes).contains(item.tag) else { return }
-        defaults.set(item.tag, forKey: Self.windowKey); updateLabels(); needsDisplay = true
+        settingsStore.storeSetting(item.tag, legacyKey: Self.windowKey); updateLabels(); needsDisplay = true
     }
     public func openProcesses(_ sender: Any?) {
-        if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .cpu) }
+        if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .cpu, settings: settings) }
         processInspector?.present()
     }
     @nonobjc var detailText: String {
@@ -389,7 +400,7 @@ public final class XRGCPUView: NSView, XRGModuleView {
     }
     @nonobjc func applyCPUSource(_ index: Int?) throws {
         let next = XRGMonitorSource(source: index.map(String.init)); try next.validateCPU()
-        defaults.set(try next.encoded(), forKey: Self.sourceKey)
+        settingsStore.setLegacyValues([Self.sourceKey: try next.encoded()])
         if selectedCPU != index { timedHistory.clear() }
         selectedCPU = index; sourceWarning = nil
         updateLabels(); needsDisplay = true

@@ -3,13 +3,14 @@
 import AppKit
 
 @MainActor enum XRGSystemTimeWindow {
-    static func saved(_ defaults: UserDefaults, key: String) -> Int {
-        let value = defaults.integer(forKey: key)
+    static func saved(_ store: XRGSettingsStore, key: String) -> Int {
+        let value = store.intSetting(legacyKey: key)
         return (0...XRGTimedHistory.systemMaximumMinutes).contains(value) ? value : 0
     }
-    static func store(_ sender: Any?, defaults: UserDefaults, key: String) -> Bool {
+    static func store(_ sender: Any?, store: XRGSettingsStore, key: String) -> Bool {
         guard let item = sender as? NSMenuItem, (0...XRGTimedHistory.systemMaximumMinutes).contains(item.tag) else { return false }
-        defaults.set(item.tag, forKey: key); return true
+        store.storeSetting(item.tag, legacyKey: key)
+        return true
     }
     static func menu(_ title: String, minutes: Int, target: AnyObject, action: Selector, rootAction: Selector) -> NSMenuItem {
         let root = NSMenuItem(title: title, action: rootAction, keyEquivalent: ""); root.target = target

@@ -37,6 +37,10 @@ import AppKit
 @objc(XRGModule) @objcMembers
 public final class XRGModule: NSObject {
     private let defaults: UserDefaults
+    /// The settings this module's saved size belongs to; nil keeps the
+    /// legacy defaults domain (the store's legacy backend reads and writes
+    /// it exactly as before).
+    private weak var settings: XRGSettings?
 
     public var name: String? { didSet { if name != nil { isEmptyModule = false } } }
     // The module owns its view, as before. The manager's window reference is weak.
@@ -78,27 +82,37 @@ public final class XRGModule: NSObject {
         self.init(name: name, reference: reference, defaults: .standard)
     }
 
-    @nonobjc convenience init(name: String?, reference: NSView?, defaults: UserDefaults) {
+    @nonobjc convenience init(name: String?, reference: NSView?, defaults: UserDefaults, settings: XRGSettings? = nil) {
         self.init(defaults: defaults)
         self.name = name
         self.reference = reference
+        self.settings = settings
         self.currentSize = Self.savedSize(forModule: self)
         isEmptyModule = false
+    }
+
+    /// The store this module's size is saved through: the settings' store,
+    /// or the legacy backend over the injected defaults.
+    private var store: XRGSettingsStore {
+        settings?.store ?? XRGSettingsStore.legacy(defaults: defaults)
     }
 
     @objc(saveSizeForModule:)
     public static func saveSize(forModule module: XRGModule?) {
         guard let module, let name = module.name else { return }
-        module.defaults.set(module.currentSize.width, forKey: "XRGModule_\(name)_width")
-        module.defaults.set(module.currentSize.height, forKey: "XRGModule_\(name)_height")
+        module.store.storeSetting(Double(module.currentSize.width), legacyKey: "XRGModule_\(name)_width")
+        module.store.storeSetting(Double(module.currentSize.height), legacyKey: "XRGModule_\(name)_height")
     }
 
     @objc(savedSizeForModule:)
     public static func savedSize(forModule module: XRGModule?) -> NSSize {
         guard let module, let name = module.name else { return NSSize(width: 55, height: 65) }
         func value(_ suffix: String, fallback: CGFloat) -> CGFloat {
-            let number = module.defaults.double(forKey: "XRGModule_\(name)_\(suffix)")
-            return number.isFinite && number > 0 ? CGFloat(number) : fallback
+            // Zero and unset mean automatic sizing: the store reads null for
+            // an entry that was never saved.
+            guard let number = module.store.doubleSetting(legacyKey: "XRGModule_\(name)_\(suffix)"),
+                  number.isFinite, number > 0 else { return fallback }
+            return CGFloat(number)
         }
         return NSSize(width: value("width", fallback: 55), height: value("height", fallback: 65))
     }

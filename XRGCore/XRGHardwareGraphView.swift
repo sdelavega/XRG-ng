@@ -52,6 +52,9 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     private(set) weak var module: XRGModule?
     let labels = XRGGraphLabels()
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     init(kind: Kind, frame: NSRect, settings: XRGSettings?, defaults: UserDefaults,
          historyClock: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 },
@@ -60,13 +63,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         self.kind = kind; self.source = source; self.defaults = defaults; standaloneSettings = settings
         status = kind == .fans ? "No readable fan RPM" : "GPU memory unavailable"
         super.init(frame: frame)
-        if defaults.object(forKey: kind.sourcesKey) != nil {
-            if let data = defaults.data(forKey: kind.sourcesKey), let decoded = try? XRGHardwareSources(data: data) {
-                sourceSelection = decoded
-            } else {
-                sourceSelectionError = "Saved source choices are invalid. Using automatic sources for this session; Apply valid choices to replace them."
-            }
-        }
+        loadSavedSource()
         for label in [labels.leftLabel, labels.centerLabel, labels.rightLabel] { addSubview(label) }
         setGraphSize(frame.size); updateLabels()
     }
@@ -79,6 +76,17 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         if sourcesHost != nil && sourcesHost !== window { cancelSources() }
         bindToWindow()
     }
+
+    /// Load the saved source choices through the settings store. The nib
+    /// path constructs this view before its host's settings exist, so the
+    /// load is repeated once the window binding provides them.
+    func loadSavedSource() {
+        switch settingsStore.hardwareSourcesResult(legacyKey: kind.sourcesKey) {
+        case .success(let sources): sourceSelection = sources
+        case .failure:
+            sourceSelectionError = "Saved source choices are invalid. Using automatic sources for this session; Apply valid choices to replace them."
+        }
+    }
     private func bindToWindow() {
         let next = window as? any XRGHardwareViewHost
         if host !== next || registeredManager !== next?.moduleManager {
@@ -86,13 +94,14 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
             module = nil; registeredManager = nil; host = next
         }
         guard awake, let host, let manager = host.moduleManager, settings != nil, registeredManager !== manager else { return }
-        let module = XRGModule(name: kind.name, reference: self, defaults: defaults)
+        loadSavedSource()
+        let module = XRGModule(name: kind.name, reference: self, defaults: defaults, settings: settings)
         // Stable ties place these after NPU/Temperature without renumbering the
         // original modules or changing older saved layout priorities.
         module.displayOrder = kind == .vram ? 2 : 5
         module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
-        module.isDisplayed = defaults.bool(forKey: kind.id.visibilityKey)
+        module.isDisplayed = settingsStore.moduleVisible(kind.id)
         self.module = module; registeredManager = manager
         updateMinSize(); manager.addModule(module); host.initTimers()
     }
@@ -158,8 +167,7 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         updateLabels(); needsDisplay = true
     }
     func applySources(_ value: XRGHardwareSources) throws {
-        let data = try value.encoded()
-        defaults.set(data, forKey: kind.sourcesKey)
+        settingsStore.setLegacyValues([kind.sourcesKey: try value.encoded()])
         sourceSelection = value; sourceSelectionError = nil
         project(appendSample: false)
     }
@@ -244,18 +252,18 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     static let windowKey = "XRGHardwareGraphView.VRAM.HistoryMinutes.v1"
     static let fanWindowKey = "XRGHardwareGraphView.Fans.HistoryMinutes.v1"
     private var timeKey: String { kind == .vram ? Self.windowKey : Self.fanWindowKey }
-    var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: timeKey) }
+    var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: timeKey) }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: timeKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: timeKey) else { return }
         updateLabels(); needsDisplay = true
     }
     static let historyKey = "XRGHardwareGraphView.VRAM.HistorySamples.v1"
     static let fanHistoryKey = "XRGHardwareGraphView.Fans.HistorySamples.v1"
     private var retentionKey: String { kind == .vram ? Self.historyKey : Self.fanHistoryKey }
-    var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: retentionKey) }
+    var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: retentionKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: retentionKey) else { return }
-        defaults.set(0, forKey: timeKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: retentionKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: timeKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     @objc func emptyEvent(_ sender: Any?) {}

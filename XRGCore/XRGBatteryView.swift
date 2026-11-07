@@ -55,6 +55,9 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     @nonobjc private(set) var chargingPhase = 0
     @nonobjc static let batterySettingsURL = URL(fileURLWithPath: "/System/Library/PreferencePanes/Battery.prefPane")
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         batteryMiner = XRGBatteryMiner()
@@ -106,12 +109,12 @@ public final class XRGBatteryView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "Battery", reference: self, defaults: defaults)
+        let module = XRGModule(name: "Battery", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 4
         module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
-        module.isDisplayed = defaults.bool(forKey: "showBatteryGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.battery)
         self.module = module; registeredManager = manager
         host.batteryView = self
         host.initTimers()
@@ -302,16 +305,16 @@ public final class XRGBatteryView: NSView, XRGModuleView {
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @nonobjc static let windowKey = "XRGBatteryView.HistoryMinutes.v1"
-    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: Self.windowKey) }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: Self.windowKey) else { return }
         updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGBatteryView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}

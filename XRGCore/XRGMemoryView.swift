@@ -45,6 +45,9 @@ public final class XRGMemoryView: NSView, XRGModuleView {
     public private(set) weak var module: XRGModule?
     @nonobjc let graphLabels = XRGGraphLabels()
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         memoryMiner = XRGMemoryMiner()
@@ -99,7 +102,7 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "Memory", reference: self, defaults: defaults)
+        let module = XRGModule(name: "Memory", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 3
         // Core history and accounting continue when only presentation is hidden.
         module.alwaysDoesGraphUpdate = true
@@ -107,7 +110,7 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         module.doesFastUpdate = false
         module.doesMin5Update = false
         module.doesMin30Update = false
-        module.isDisplayed = defaults.bool(forKey: "showMemoryGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.memory)
         self.module = module
         registeredManager = manager
         host.memoryView = self
@@ -295,17 +298,17 @@ public final class XRGMemoryView: NSView, XRGModuleView {
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @nonobjc static let windowKey = "XRGMemoryView.HistoryMinutes.v1"
-    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: Self.windowKey) }
     @nonobjc private let timeProjection = XRGTimeWindowProjection(channels: 3)
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: Self.windowKey) else { return }
         updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGMemoryView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     public func clearData(_ sender: Any?) {
@@ -314,7 +317,7 @@ public final class XRGMemoryView: NSView, XRGModuleView {
         needsDisplay = true
     }
     public func openProcesses(_ sender: Any?) {
-        if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .memory) }
+        if processInspector == nil { processInspector = XRGProcessInspector(miner: processMiner, defaults: defaults, sort: .memory, settings: settings) }
         processInspector?.present()
     }
     public func emptyEvent(_ sender: Any?) {}

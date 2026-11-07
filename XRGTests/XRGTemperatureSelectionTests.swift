@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import XRGCore
 
+@MainActor
 struct XRGTemperatureSelectionTests {
     @Test func persistenceAndLegacyRepair() throws {
         let suite = "XRG.selection.\(UUID().uuidString)"

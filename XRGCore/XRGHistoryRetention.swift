@@ -5,13 +5,13 @@ import AppKit
 /// Shared presentation for graph-local capacity choices. Zero preserves each
 /// view's original automatic sizing; persistence never polls a collector.
 @MainActor enum XRGHistoryRetention {
-    static func saved(_ defaults: UserDefaults, key: String) -> Int {
-        let count = defaults.integer(forKey: key)
+    static func saved(_ store: XRGSettingsStore, key: String) -> Int {
+        let count = store.intSetting(legacyKey: key)
         return XRGSamplingSettings.validHistorySamples(count) ? count : 0
     }
-    static func store(_ sender: Any?, defaults: UserDefaults, key: String) -> Bool {
+    static func store(_ sender: Any?, store: XRGSettingsStore, key: String) -> Bool {
         guard let item = sender as? NSMenuItem, XRGSamplingSettings.validHistorySamples(item.tag) else { return false }
-        defaults.set(item.tag, forKey: key)
+        store.storeSetting(item.tag, legacyKey: key)
         return true
     }
     static func menu(_ title: String, count: Int, target: AnyObject, action: Selector, rootAction: Selector) -> NSMenuItem {

@@ -46,7 +46,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
                   activateApplication: {
                       NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.activate(options: [])
                       DispatchQueue.main.async { NSApp.activate() }
-                  }, includeUnknownSensors: { XRGTemperatureView.showUnknownSensors() }, sensorProvider: { includingUnknown in
+                  }, includeUnknownSensors: { XRGTemperatureView.showUnknownSensors(XRGSettingsStore.legacy(defaults: .standard)) }, sensorProvider: { includingUnknown in
                       let miner = XRGTemperatureMiner.shared
                       return miner.locationKeys(includingUnknown: includingUnknown).compactMap { miner.sensor(forLocation: $0) }
                   }, invalidThemeNotice: { error in
@@ -67,7 +67,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         self.budgetNotifications = budgetNotifications
         self.defaults = defaults; self.loadNib = loadNib; self.presentWindow = presentWindow
         self.activateApplication = activateApplication; self.sensorProvider = sensorProvider
-        self.includeUnknownSensors = includeUnknownSensors ?? { defaults.bool(forKey: "tempShowUnknownSensors") }
+        self.includeUnknownSensors = includeUnknownSensors ?? { XRGTemperatureView.showUnknownSensors(XRGSettingsStore.legacy(defaults: defaults)) }
         self.invalidThemeNotice = invalidThemeNotice
         super.init()
     }
@@ -111,12 +111,12 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         if sensorViewController?.dataSource == nil { sensorViewController?.dataSource = self }
         sensorWindow?.level = .normal
         if let window = sensorWindow { presentWindow(window, self) }
-        defaults.set(true, forKey: "showSensorWindow")
+        appSettings?.sensorsWindowOpen = true
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if sender === sensorWindow {
-            defaults.set(false, forKey: "showSensorWindow")
+            appSettings?.sensorsWindowOpen = false
         }
         return true
     }
@@ -139,6 +139,12 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let window = xrgGraphWindow else { return }
+        // The AI token observer is not main-actor confined; hand it the
+        // shared document store before any accounting can start. A test
+        // scene's injected suite keeps the observer on that suite.
+        if defaults === UserDefaults.standard, Bundle.main.bundleIdentifier == "com.sdelavega.xrg" {
+            XRGAITokensObserver.adoptStore(XRGSettingsStore.shared)
+        }
         budgetNotifications?.installNativeDelegate()
         budgetNotifications?.start()
         window.startRuntimeIfNeeded()
@@ -147,7 +153,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         window.initializeAITokenView()
         window.initializeHardwareViews()
 
-        if defaults.bool(forKey: "windowIsMinimized") {
+        if window.appSettings?.windowCollapsed == true {
             // Restore the expanded dimensions before collapsing, preserving the
             // fork's fix for relaunches that otherwise get stuck as a thin strip.
             let collapsedLimit = (2 * CGFloat(window.borderWidth)) + (window.appSettings?.textRectHeight ?? 0) + 1
@@ -164,7 +170,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
                 background.clickedMinimized = true
             }
         }
-        if defaults.bool(forKey: "showSensorWindow") {
+        if window.appSettings?.sensorsWindowOpen == true {
             openSensorWindow(self)
         }
 

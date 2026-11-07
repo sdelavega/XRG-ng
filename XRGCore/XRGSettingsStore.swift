@@ -1,0 +1,833 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stephen de la Vega.
+
+import AppKit
+import Darwin
+import Foundation
+
+/// The macOS settings store: the single place every catalog setting is read
+/// from and written to (spec §2 and §4, decision D5).
+///
+/// It has two backends. The **document** backend is the application's: the
+/// shared settings document at `~/Library/Application Support/XRG-ng/
+/// settings.json` is the source of truth, written atomically, migrated once
+/// from the 0.2.2 `NSUserDefaults` domain on the first launch and never
+/// touching that domain again. An unreadable or malformed file is never
+/// overwritten: the store runs on catalog defaults, exposes the problem as
+/// `loadProblem`, and keeps changes in memory until the user confirms
+/// `replaceUnreadableFile()`. The **legacy** backend backs the objects that
+/// are constructed with an injected `UserDefaults` suite (tests and fixture
+/// scenes): it reads and writes that suite live, exactly as 0.2.2 did, so
+/// every existing suite-based behaviour is preserved unchanged.
+///
+/// Keys the catalog does not map — Sparkle's `SU*` state, AppKit window frames,
+/// the `unminimizedFrame` restore rectangle, internal latches and recorded
+/// usage data — are not settings; they keep their home in `NSUserDefaults`
+/// on both backends.
+@MainActor public final class XRGSettingsStore {
+    /// Posted on the main thread after every stored change, with the changed
+    /// id in `userInfo["id"]` and the store as the notification's object.
+    public static let didChange: Notification.Name = Notification.Name("XRGSettingsStore.didChange")
+
+    /// The problem that stopped the settings file being loaded, nil when the
+    /// document is the source of truth. Non-nil while the file is malformed,
+    /// of an unknown format, of a newer version, or unreadable.
+    public private(set) var loadProblem: XRGSettingsDiagnostic?
+
+    // All three are immutable and (except `defaults`, which is documented
+    // thread-safe) Sendable, so the nonisolated legacy read below can use
+    // them from any thread.
+    /// The 0.2.2 defaults domain: read once by the document backend's
+    /// migration, read live by the legacy backend, and written only by the
+    /// legacy backend and for keys the catalog does not map.
+    nonisolated(unsafe) public let defaults: UserDefaults
+    public let catalog: XRGSettingsCatalog
+
+    private enum Backend: Sendable {
+        /// The shared document at this URL.
+        case document(URL)
+        /// Live `UserDefaults`, exactly as 0.2.2 behaved.
+        case legacy
+    }
+    private let backend: Backend
+
+    /// The document under its lock. Every read and write — including the
+    /// main-actor ones — goes through the lock, so the nonisolated read the
+    /// AI token observer makes from its worker threads cannot race a write.
+    private final class LockedDocument: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: XRGSettingsDocument
+        init(_ document: XRGSettingsDocument) { storage = document }
+        var document: XRGSettingsDocument { lock.withLock { storage } }
+        func mutate(_ body: (inout XRGSettingsDocument) -> Void) { lock.withLock { body(&storage) } }
+        func set(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) -> XRGSettingsError? {
+            lock.lock()
+            defer { lock.unlock() }
+            do { try storage.set(id, value, catalog: catalog) }
+            catch let error as XRGSettingsError { return error }
+            return nil
+        }
+    }
+    private let locked: LockedDocument
+
+    // MARK: Creation
+
+    /// The application's store: the shared document at the spec's macOS path.
+    public static let shared: XRGSettingsStore = {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let url = support.appendingPathComponent("XRG-ng", isDirectory: true)
+            .appendingPathComponent("settings.json")
+        return XRGSettingsStore(fileURL: url, defaults: .standard, catalog: loadCatalog())
+    }()
+
+    private nonisolated(unsafe) static var legacyCache: [ObjectIdentifier: XRGSettingsStore] = [:]
+    private nonisolated static let legacyCacheLock = NSLock()
+
+    /// The store that keeps reading and writing the given defaults domain,
+    /// exactly as 0.2.2 did. Instances are cached per domain so hot paths
+    /// (graph tick history settings) do not reload the catalog each read.
+    /// Any thread may construct one: the legacy backend only reads immutable
+    /// state and the thread-safe `UserDefaults`.
+    public nonisolated static func legacy(defaults: UserDefaults) -> XRGSettingsStore {
+        legacyCacheLock.lock()
+        defer { legacyCacheLock.unlock() }
+        if let cached = legacyCache[ObjectIdentifier(defaults)] { return cached }
+        let store = XRGSettingsStore(backend: .legacy, defaults: defaults, catalog: loadCatalog())
+        legacyCache[ObjectIdentifier(defaults)] = store
+        return store
+    }
+
+    /// The embedded catalog. Startup cannot proceed without it (decision D4).
+    nonisolated static func loadCatalog() -> XRGSettingsCatalog {
+        guard let catalog = try? XRGSettingsCatalog.load() else {
+            fatalError("XRG-ng settings catalog is missing or invalid")
+        }
+        return catalog
+    }
+
+    /// Load the document backend: an existing settings file is read (its
+    /// values are validated by the core, invalid ones fall back to their
+    /// defaults with diagnostics); a file that cannot be read at all puts the
+    /// store on catalog defaults with a `loadProblem`; a missing file is the
+    /// first launch of 0.2.3, which migrates the 0.2.2 domain into a new
+    /// document — once, without touching the domain — and writes it.
+    public init(fileURL: URL, defaults: UserDefaults, catalog: XRGSettingsCatalog) {
+        backend = .document(fileURL)
+        self.defaults = defaults
+        self.catalog = catalog
+        locked = LockedDocument(XRGSettingsDocument())
+        var problem: XRGSettingsDiagnostic?
+        let exists = FileManager.default.fileExists(atPath: fileURL.path)
+        if exists, let data = try? Data(contentsOf: fileURL) {
+            switch XRGSettingsDocument.load(data, catalog: catalog) {
+            case .ok(let document, let diagnostics):
+                locked.mutate { $0 = document }
+                Self.note(diagnostics)
+            case .unreadable(let diagnostic):
+                // A malformed or future file is never overwritten: the app
+                // runs on defaults and reports the problem (spec §2).
+                problem = diagnostic
+            }
+        } else if exists {
+            // Present but unreadable (permissions): same rule as malformed.
+            problem = XRGSettingsDiagnostic(id: nil, problem: "unreadable")
+        } else {
+            // First launch of 0.2.3: migrate the 0.2.2 domain once. A key
+            // that fails conversion takes its default and is logged; launch
+            // never blocks (spec §4).
+            let (migrated, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                defaults.dictionaryRepresentation(), catalog: catalog)
+            locked.mutate { $0 = migrated }
+            Self.note(diagnostics)
+            if let error = persistError() {
+                problem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+            }
+        }
+        loadProblem = problem
+    }
+
+    /// Any isolation may construct the legacy backend: it only reads the
+    /// thread-safe `UserDefaults` through immutable state.
+    private nonisolated init(backend: Backend, defaults: UserDefaults, catalog: XRGSettingsCatalog) {
+        self.backend = backend
+        self.defaults = defaults
+        self.catalog = catalog
+        locked = LockedDocument(XRGSettingsDocument())
+    }
+
+    private static func note(_ diagnostics: [XRGSettingsDiagnostic]) {
+        for diagnostic in diagnostics {
+            NSLog("XRG-ng settings: \(diagnostic.problem) for \(diagnostic.id ?? "document")")
+        }
+    }
+
+    // MARK: Reading
+
+    /// The effective value of a setting: the stored value, or the entry's
+    /// catalog default. `null` (or the default) for an id the catalog does
+    /// not know.
+    public func value(_ id: String) -> XRGSettingsValue { settingsValue(id) }
+
+    /// A read any thread can make (the AI token accounting observer is not
+    /// main-actor confined). Safe because the document lives under its lock
+    /// and the legacy path reads only immutable state.
+    public nonisolated func settingsValue(_ id: String) -> XRGSettingsValue {
+        guard case .legacy = backend else { return locked.document.value(id, catalog: catalog) }
+        return legacyDocumentValue(id)
+    }
+
+    /// The value of a setting named by its legacy defaults key (the form the
+    /// graph views and window still keep their per-view constants in). `null`
+    /// when the catalog does not map the key at all.
+    public nonisolated func value(legacyKey key: String) -> XRGSettingsValue {
+        guard let entry = entry(legacyKey: key) else { return .null }
+        return settingsValue(entry.id)
+    }
+
+    private nonisolated func legacyDocumentValue(_ id: String) -> XRGSettingsValue {
+        guard let entry = catalog.entry(id), let key = Self.legacyKey(of: entry),
+              let raw = defaults.object(forKey: key) else {
+            return catalog.entry(id)?.defaultValue ?? .null
+        }
+        guard let value = XRGSettingsMigration.legacyValue(raw, for: entry),
+              XRGSettingsDocument.validate(value, for: entry) == nil else {
+            return entry.defaultValue
+        }
+        return value
+    }
+
+    // MARK: Writing
+
+    /// Store a value for a setting, enforcing the entry's rules. The value
+    /// is written atomically, and `didChange` is posted with the id. While
+    /// the settings file is unreadable, the change is held in memory and the
+    /// file is left untouched until the user confirms `replaceUnreadableFile()`.
+    public func set(_ id: String, _ value: XRGSettingsValue) throws(XRGSettingsError) {
+        guard let entry = catalog.entry(id) else { throw .unknownId }
+        switch backend {
+        case .legacy:
+            guard let key = Self.legacyKey(of: entry) else { throw .unknownId }
+            guard let raw = reverseLegacy(value, for: entry) else { throw .wrongType }
+            defaults.set(raw, forKey: key)
+        case .document:
+            if let error = locked.set(id, value, catalog: catalog) { throw error }
+            if loadProblem == nil {
+                if let error = persistError() {
+                    loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                }
+            }
+        }
+        post(id)
+    }
+
+    /// Store raw 0.2.2-style defaults values (a preferences snapshot, a theme,
+    /// a graph presentation or process options blob). The legacy backend
+    /// writes them to its domain verbatim, as 0.2.2 did; the document backend
+    /// converts them through the migration into the document. Keys the
+    /// catalog does not map keep their home in `NSUserDefaults` on both
+    /// backends.
+    public func setLegacyValues(_ raw: [String: Any]) {
+        switch backend {
+        case .legacy:
+            for (key, value) in raw { defaults.set(value, forKey: key) }
+        case .document:
+            for (key, value) in raw where entry(legacyKey: key) == nil {
+                defaults.set(value, forKey: key)
+            }
+            let (migrated, _) = XRGSettingsMigration.fromMacDefaults(raw, catalog: catalog)
+            guard !migrated.values.isEmpty else { return }
+            locked.mutate { document in
+                for (id, value) in migrated.values {
+                    try? document.storeMigrated(id, value, catalog: catalog)
+                }
+            }
+            if loadProblem == nil {
+                if let error = persistError() {
+                    loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                }
+            }
+            for id in migrated.values.keys.sorted(by: XRGSettingsDocument.precedes) { post(id) }
+        }
+    }
+
+    /// Restore every entry of one section to its default. Other sections and
+    /// unknown keys at either level are not touched.
+    public func resetSection(_ section: String) {
+        switch backend {
+        case .legacy:
+            for entry in catalog.entries(section: section, platform: .macos) {
+                if let key = Self.legacyKey(of: entry) { defaults.removeObject(forKey: key) }
+            }
+        case .document:
+            locked.mutate { $0.resetSection(section, catalog: catalog, platform: .macos) }
+            if loadProblem == nil {
+                if let error = persistError() {
+                    loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                }
+            }
+            for entry in catalog.entries(section: section, platform: .macos) { post(entry.id) }
+        }
+    }
+
+    /// The user confirmed replacing an unreadable settings file: write the
+    /// current in-memory document over it and clear the problem.
+    public func replaceUnreadableFile() {
+        guard case .document = backend else { return }
+        if let error = persistError() {
+            loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+        } else {
+            loadProblem = nil
+        }
+    }
+
+    private func post(_ id: String) {
+        NotificationCenter.default.post(name: Self.didChange, object: self, userInfo: ["id": id])
+    }
+
+    /// Write the document atomically: a temporary file in the same directory,
+    /// fsync, then rename over the settings file (spec §2). Mode 0600. Returns
+    /// the error that stopped the write, nil on success.
+    private func persistError() -> NSError? {
+        guard case .document(let fileURL) = backend else { return nil }
+        let bytes = locked.document.serialized()
+        let directory = fileURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let temporary = directory.appendingPathComponent(".settings-\(UUID().uuidString).tmp")
+            do {
+                try bytes.write(to: temporary)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+                let descriptor = open(temporary.path, O_RDONLY)
+                if descriptor >= 0 {
+                    fsync(descriptor)
+                    close(descriptor)
+                }
+                // A rename within the directory cannot leave a half-written
+                // file, and replaces the settings file if it already exists.
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+            } catch {
+                try? FileManager.default.removeItem(at: temporary)
+                return error as NSError
+            }
+            return nil
+        } catch {
+            return error as NSError
+        }
+    }
+
+    // MARK: Legacy keys
+
+    /// The defaults key an entry's `legacy.macos` pointer reads — the same
+    /// reduction the migration applies: the two JSON blobs are inventoried
+    /// as paths into the blob, so the key is the pointer's first component.
+    nonisolated static func legacyKey(of entry: XRGSettingsEntry) -> String? {
+        guard let pointer = entry.legacy?.macos else { return nil }
+        for blob in ["graphPresentationV1", "processInspectorV1"] where pointer.hasPrefix(blob + ".") {
+            return blob
+        }
+        return pointer
+    }
+
+    /// Whether this store is the application's shared document (against the
+    /// store built over an injected `UserDefaults` suite).
+    public nonisolated var isDocumentBacked: Bool {
+        if case .document = backend { return true }
+        return false
+    }
+
+    /// The legacy key an entry id reads, when the catalog maps one.
+    public func legacyKey(forId id: String) -> String? {
+        catalog.entry(id).flatMap { Self.legacyKey(of: $0) }
+    }
+
+    /// The one entry that reads `key`, nil when none does (an excluded key)
+    /// or several do (the blobs, which the migration decodes as a unit).
+    /// Only immutable catalog state, so any thread may call it.
+    public nonisolated func entry(legacyKey key: String) -> XRGSettingsEntry? {
+        var matches: [XRGSettingsEntry] = []
+        for entry in catalog.entries where Self.legacyKey(of: entry) == key {
+            matches.append(entry)
+            if matches.count > 1 { return nil }
+        }
+        return matches.first
+    }
+
+    /// The ids whose entries read `key` (several for the blobs).
+    public nonisolated func ids(legacyKey key: String) -> [String] {
+        catalog.entries.filter { Self.legacyKey(of: $0) == key }.map(\.id)
+    }
+
+    // MARK: Typed legacy-key helpers (the graph views keep their per-view keys)
+
+    /// The id of a graph's visibility setting (`graphs.<g>.visible`); the
+    /// blob's `tpu` is the catalog's `npu`.
+    nonisolated static func visibilityID(_ graph: XRGGraphID) -> String {
+        "graphs.\(graph == .tpu ? "npu" : graph.rawValue).visible"
+    }
+
+    /// A graph's visibility (`show<Name>Graph` before 0.2.3).
+    func moduleVisible(_ graph: XRGGraphID) -> Bool {
+        if case .bool(let visible) = settingsValue(Self.visibilityID(graph)) { return visible }
+        return false
+    }
+
+    func setModuleVisible(_ graph: XRGGraphID, _ visible: Bool) {
+        try? set(Self.visibilityID(graph), .bool(visible))
+    }
+
+    /// A boolean setting named by its legacy key, false when unset.
+    public nonisolated func boolSetting(legacyKey key: String) -> Bool {
+        if case .bool(let value) = value(legacyKey: key) { return value }
+        return false
+    }
+
+    /// A whole-number setting named by its legacy key (graph history sizes
+    /// and time windows), 0 when unset or invalid.
+    public nonisolated func intSetting(legacyKey key: String) -> Int {
+        switch value(legacyKey: key) {
+        case .int(let number): return Int(number)
+        case .double(let number): return Int(number)
+        default: return 0
+        }
+    }
+
+    /// A decimal setting named by its legacy key (saved module sizes), nil
+    /// when unset (the caller supplies its fallback).
+    public nonisolated func doubleSetting(legacyKey key: String) -> Double? {
+        switch value(legacyKey: key) {
+        case .int(let number): return Double(number)
+        case .double(let number): return number
+        default: return nil
+        }
+    }
+
+    /// Store a whole-number or decimal value through its legacy key. Both
+    /// backends validate it against the catalog entry first.
+    public func storeSetting(_ value: Int, legacyKey key: String) {
+        guard let entry = entry(legacyKey: key) else { return }
+        try? set(entry.id, .int(Int64(value)))
+    }
+
+    public func storeSetting(_ value: Double, legacyKey key: String) {
+        guard let entry = entry(legacyKey: key) else { return }
+        try? set(entry.id, .double(value))
+    }
+
+    /// The saved CPU or GPU monitor selection for a source key
+    /// (`XRGCPUView.Source.v1`, `XRGGPUView.Source.v1`).
+    func monitorSource(legacyKey key: String) -> XRGMonitorSource {
+        switch value(legacyKey: key) {
+        case .string(let source): return XRGMonitorSource(source: source)
+        case .int(let index): return XRGMonitorSource(source: String(index))
+        default: return XRGMonitorSource()
+        }
+    }
+
+    /// Store a monitor selection through its source key.
+    func storeMonitorSource(_ source: XRGMonitorSource, legacyKey key: String) {
+        guard let data = try? source.encoded() else { return }
+        setLegacyValues([key: data])
+    }
+
+    /// The saved curve slots for a hardware sources key
+    /// (`vramGraphSourcesV1`, `fanGraphSourcesV1`).
+    func hardwareSources(legacyKey key: String) -> XRGHardwareSources {
+        let ids = ids(legacyKey: key).sorted()
+        guard !ids.isEmpty else { return XRGHardwareSources() }
+        var slots: [String?] = []
+        for id in ids {
+            switch settingsValue(id) {
+            case .string(let source): slots.append(source)
+            default: slots.append(nil)
+            }
+        }
+        while slots.count < 3 { slots.append(nil) }
+        return XRGHardwareSources(sources: slots.count == 3 && slots.contains(where: { $0 != nil }) ? slots : nil)
+    }
+
+    /// Store curve slots through their sources key.
+    func storeHardwareSources(_ sources: XRGHardwareSources, legacyKey key: String) {
+        guard let data = try? sources.encoded() else { return }
+        setLegacyValues([key: data])
+    }
+
+    /// The saved process inspector options (`processInspectorV1`), nil when
+    /// the saved blob is invalid (the legacy backend's historical error state).
+    func processOptions() -> XRGProcessOptions? {
+        switch backend {
+        case .legacy:
+            guard let data = defaults.data(forKey: XRGProcessInspector.optionsKey) else { return XRGProcessOptions() }
+            guard let saved = try? JSONDecoder().decode(XRGProcessOptions.self, from: data), saved.valid else { return nil }
+            return saved
+        case .document:
+            var options = XRGProcessOptions()
+            for field in ["sort", "search", "user", "limit"] {
+                guard let entry = entry(legacyKey: XRGProcessInspector.optionsKey + "." + field) else { continue }
+                switch settingsValue(entry.id) {
+                case .string(let value):
+                    switch field {
+                    case "sort": options.sort = XRGProcessOptions.Sort(rawValue: value) ?? options.sort
+                    case "search": options.search = value
+                    case "user": options.user = value
+                    default: break
+                    }
+                case .int(let limit): options.limit = min(200, max(25, Int(limit)))
+                default: break
+                }
+            }
+            return options
+        }
+    }
+
+    /// Store process options through their blob key.
+    func storeProcessOptions(_ options: XRGProcessOptions) {
+        guard let data = try? JSONEncoder().encode(options) else { return }
+        setLegacyValues([XRGProcessInspector.optionsKey: data])
+    }
+
+    /// The saved curve slots for a sources key, or the decoding error the
+    /// legacy blob produced (invalid saved choices keep their historical
+    /// error state; the document cannot hold invalid slots).
+    func hardwareSourcesResult(legacyKey key: String) -> Result<XRGHardwareSources, Error> {
+        if case .document = backend { return .success(hardwareSources(legacyKey: key)) }
+        guard let raw = defaults.object(forKey: key) else { return .success(XRGHardwareSources()) }
+        guard let data = raw as? Data, let decoded = try? XRGHardwareSources(data: data) else {
+            return .failure(XRGHardwareSources.invalid)
+        }
+        return .success(decoded)
+    }
+
+    /// The state of the saved GPU plot mode: valid, invalid (the legacy
+    /// backend's historical warning state), or unset.
+    enum PlotModeState {
+        case valid(XRGGPUPlotMode)
+        case invalid
+        case unset
+    }
+
+    func plotMode(legacyKey key: String) -> PlotModeState {
+        if case .document = backend {
+            switch settingsValue(entry(legacyKey: key)?.id ?? "") {
+            case .string("memory_and_activity"): return .valid(.memoryAndActivity)
+            case .string("utilization"): return .valid(.utilization)
+            case .null: return .unset
+            default: return .invalid
+            }
+        }
+        guard let raw = defaults.object(forKey: key) else { return .unset }
+        guard let name = raw as? String, let mode = XRGGPUPlotMode(rawValue: name) else { return .invalid }
+        return .valid(mode)
+    }
+
+    /// Store the GPU plot mode through its legacy key.
+    func storePlotMode(_ mode: XRGGPUPlotMode, legacyKey key: String) {
+        guard let entry = entry(legacyKey: key) else { return }
+        try? set(entry.id, .string(mode == .memoryAndActivity ? "memory_and_activity" : "utilization"))
+    }
+
+    /// A boolean setting by its catalog id.
+    public nonisolated func boolSetting(_ id: String) -> Bool {
+        if case .bool(let value) = settingsValue(id) { return value }
+        return false
+    }
+
+    /// A string setting by its catalog id, empty when unset.
+    public nonisolated func stringSetting(_ id: String) -> String {
+        if case .string(let value) = settingsValue(id) { return value }
+        return ""
+    }
+
+    /// The legacy index a choice setting's option list gives a value
+    /// (`names` in the order 0.2.2 indexed them).
+    func choiceIndex(_ id: String, _ names: [String]) -> Int {
+        guard case .string(let name) = settingsValue(id) else { return 0 }
+        return names.firstIndex(of: name) ?? 0
+    }
+
+    /// The whole number at a whole-number setting by its catalog id.
+    public nonisolated func intSetting(_ id: String) -> Int {
+        switch settingsValue(id) {
+        case .int(let value): return Int(value)
+        case .double(let value): return Int(value)
+        default: return 0
+        }
+    }
+
+    /// Store a whole number at a setting by its catalog id.
+    public func storeSetting(_ value: Int, id: String) {
+        try? set(id, .int(Int64(value)))
+    }
+
+    /// The saved graph presentation as a whole (`graphPresentationV1`),
+    /// rebuilt from the per-field entries on the document backend and from
+    /// the blob on the legacy backend.
+    func graphPreferences() -> XRGGraphPreferences {
+        switch backend {
+        case .legacy:
+            if let data = defaults.data(forKey: XRGGraphPreferences.key),
+               let saved = try? XRGGraphPreferences(data: data) {
+                return saved
+            }
+            return XRGGraphPreferences()
+        case .document:
+            var preferences = XRGGraphPreferences()
+            if case .string(let list) = settingsValue("graphs.order") {
+                let ids = list.split(separator: ",").map(String.init).compactMap { name -> XRGGraphID? in
+                    XRGGraphID(rawValue: name == "npu" ? "tpu" : name)
+                }
+                if !ids.isEmpty { preferences.order = ids }
+            }
+            for graph in XRGGraphID.allCases {
+                var override = XRGGraphOverride()
+                let prefix = "graphs.\(graph == .tpu ? "npu" : graph.rawValue)"
+                if case .int(let height) = settingsValue(prefix + ".height") { override.height = Int(height) }
+                if case .string(let curve) = settingsValue(prefix + ".style"),
+                   let style = XRGCurveStyle(rawValue: curve) { override.curve = style }
+                if case .string(let name) = settingsValue(prefix + ".effect"),
+                   let index = Self.effectNames.firstIndex(of: name) { override.effect = index }
+                for component in 0..<4 {
+                    let suffix = component == 0 ? "background" : "series\(component)"
+                    if case .color(let rgba) = settingsValue(prefix + ".color." + suffix) {
+                        override.colors[component] = rgba
+                    }
+                }
+                preferences[graph] = override
+            }
+            return preferences
+        }
+    }
+
+    /// Store the whole graph presentation through its blob key.
+    func storeGraphPreferences(_ preferences: XRGGraphPreferences) throws {
+        guard let data = try? preferences.encoded() else { throw XRGGraphPreferences.invalid }
+        setLegacyValues([XRGGraphPreferences.key: data])
+    }
+
+    /// The raw 0.2.2 defaults value that means the same as `value` for one
+    /// entry: the reverse of the migration's transform. Only the legacy
+    /// backend needs it (the document backend stores the converted value);
+    /// nil when the value cannot be represented for the entry.
+    private func reverseLegacy(_ value: XRGSettingsValue, for entry: XRGSettingsEntry) -> Any? {
+        switch entry.legacy?.macosTransform {
+        case nil:
+            switch value {
+            case .bool(let flag): return flag
+            case .int(let number): return Int(number)
+            case .double(let number): return number
+            case .string(let text): return text
+            case .null: return nil
+            case .color(let rgba): return Self.colorArchive(rgba)
+            }
+        case "orientationFlag":
+            return (value == .string("vertical")) ? true : false
+        case "windowLevelIndex":
+            switch value {
+            case .string("normal"): return 0
+            case .string("floating"): return 1
+            case .string("background"): return 2
+            default: return nil
+            }
+        case "collapseAnchorIndex":
+            switch value {
+            case .string("start"): return 0
+            case .string("end"): return 1
+            default: return nil
+            }
+        case "fahrenheitCelsiusIndex":
+            switch value {
+            case .string("fahrenheit"): return 0
+            case .string("celsius"): return 1
+            default: return nil
+            }
+        case "milesKilometersIndex":
+            switch value {
+            case .string("miles"): return 0
+            case .string("kilometers"): return 1
+            default: return nil
+            }
+        case "inchesHectopascalsIndex":
+            switch value {
+            case .string("inches"): return 0
+            case .string("hectopascals"): return 1
+            default: return nil
+            }
+        case "secondaryIndex":
+            switch value {
+            case .string("none"): return 0
+            case .string("wind"): return 1
+            case .string("humidity"): return 2
+            case .string("visibility"): return 3
+            case .string("dewpoint"): return 4
+            case .string("pressure"): return 5
+            default: return nil
+            }
+        case "stockTimeframeIndex":
+            switch value {
+            case .int(1): return 0
+            case .int(3): return 1
+            case .int(6): return 2
+            case .int(12): return 3
+            default: return nil
+            }
+        case "graphStyleIndex":
+            switch value {
+            case .string("normal"): return 0
+            case .string("scanlines"): return 1
+            case .string("pixel_grid"): return 2
+            case .string("retro_dots"): return 3
+            default: return nil
+            }
+        case "gpuPlotMode":
+            switch value {
+            case .string("memory_and_activity"): return "memoryAndActivity"
+            case .string("utilization"): return "utilization"
+            default: return nil
+            }
+        case "zeroToNull":
+            switch value {
+            case .null: return 0
+            case .int(let number): return Int(number)
+            default: return nil
+            }
+        case "networkInterfaceAll":
+            switch value {
+            case .null: return "All"
+            case .string(let name): return name
+            default: return nil
+            }
+        case "temperatureSensorSlot":
+            switch value {
+            case .null: return ""
+            case .string(let key): return key
+            default: return nil
+            }
+        case "themePreset":
+            guard case .string(let name) = value else { return nil }
+            return name
+        case "nsColorArchive":
+            guard case .color(let rgba) = value, rgba.count == 4 else { return nil }
+            return Self.colorArchive(rgba)
+        case "fontArchive":
+            guard case .string(let descriptor) = value else { return nil }
+            return Self.fontArchive(descriptor)
+        case "cpuMonitorSource":
+            switch value {
+            case .null: return try? XRGMonitorSource().encoded()
+            case .int(let index): return try? XRGMonitorSource(source: String(index)).encoded()
+            default: return nil
+            }
+        case "gpuMonitorSource":
+            switch value {
+            case .null: return try? XRGMonitorSource().encoded()
+            case .string(let source): return try? XRGMonitorSource(source: source).encoded()
+            default: return nil
+            }
+        case "hardwareSourceSlot":
+            let ids = ids(legacyKey: Self.legacyKey(of: entry) ?? "")
+            guard ids.count == 3, let slot = entry.id.last(where: { $0.isNumber }).flatMap({ Int(String($0)) }),
+                  (1...3).contains(slot) else { return nil }
+            var sources: [String?] = []
+            for id in ids.sorted() {
+                switch settingsValue(id) {
+                case .null: sources.append(nil)
+                case .string(let source): sources.append(source)
+                default: return nil
+                }
+            }
+            return try? XRGHardwareSources(sources: sources).encoded()
+        case "graphPreferenceHeight":
+            guard case .int(let height) = value else { return nil }
+            return reverseGraphPreferences { $0[graphID(of: entry)].height = Int(height) }
+        case "graphPreferenceCurve":
+            guard case .string(let curve) = value, let style = XRGCurveStyle(rawValue: curve) else { return nil }
+            return reverseGraphPreferences { $0[graphID(of: entry)].curve = style }
+        case "graphPreferenceEffect":
+            guard case .string(let name) = value,
+                  let index = Self.effectNames.firstIndex(of: name) else { return nil }
+            return reverseGraphPreferences { $0[graphID(of: entry)].effect = index }
+        case "graphPreferenceColor":
+            let component = colorComponent(of: entry)
+            switch value {
+            case .null: return reverseGraphPreferences { $0[graphID(of: entry)].colors[component] = nil }
+            case .color(let rgba): return reverseGraphPreferences { $0[graphID(of: entry)].colors[component] = rgba }
+            default: return nil
+            }
+        case "graphOrder":
+            guard case .string(let list) = value else { return nil }
+            let ids = list.split(separator: ",").map(String.init).compactMap { name -> XRGGraphID? in
+                (name == "npu" ? XRGGraphID.tpu : XRGGraphID(rawValue: name))
+            }
+            return reverseGraphPreferences { $0.order = ids }
+        case "processInspectorField":
+            guard let pointer = entry.legacy?.macos,
+                  let field = pointer.split(separator: ".").last.map(String.init),
+                  var current = savedProcessOptions() else { return nil }
+            switch (field, value) {
+            case ("sort", .string(let sort)): current.sort = XRGProcessOptions.Sort(rawValue: sort) ?? current.sort
+            case ("search", .string(let search)): current.search = search
+            case ("user", .string(let user)): current.user = user
+            case ("limit", .int(let limit)): current.limit = Int(limit)
+            default: return nil
+            }
+            return try? JSONEncoder().encode(current)
+        default:
+            return nil
+        }
+    }
+
+    /// Rebuild the saved graph presentation blob with one field changed.
+    /// Only the legacy backend calls this, so the current blob is read from
+    /// the defaults domain it still lives in.
+    private func reverseGraphPreferences(_ update: (inout XRGGraphPreferences) -> Void) -> Any? {
+        var preferences = XRGGraphPreferences()
+        if let data = defaults.data(forKey: XRGGraphPreferences.key),
+           let saved = try? XRGGraphPreferences(data: data) {
+            preferences = saved
+        }
+        update(&preferences)
+        return try? preferences.encoded()
+    }
+
+    private func savedProcessOptions() -> XRGProcessOptions? {
+        guard let data = defaults.data(forKey: XRGProcessInspector.optionsKey) else { return XRGProcessOptions() }
+        guard let saved = try? JSONDecoder().decode(XRGProcessOptions.self, from: data), saved.valid else { return nil }
+        return saved
+    }
+
+    /// The graph an entry's `legacy.macos` override path names:
+    /// `graphPresentationV1.overrides.<graph>.<field>` — the blob's `tpu` is
+    /// the catalog's `npu` (docs/settings-inventory.md).
+    private func graphID(of entry: XRGSettingsEntry) -> XRGGraphID {
+        guard let pointer = entry.legacy?.macos else { return .cpu }
+        let components = pointer.split(separator: ".").map(String.init)
+        guard components.count >= 3 else { return .cpu }
+        return XRGGraphID(rawValue: components[2]) ?? .cpu
+    }
+
+    private func colorComponent(of entry: XRGSettingsEntry) -> Int {
+        guard let pointer = entry.legacy?.macos else { return 0 }
+        let components = pointer.split(separator: ".").map(String.init)
+        guard let component = components.last.flatMap({ Int($0) }) else { return 0 }
+        return min(3, max(0, component))
+    }
+
+    /// The effect names the graph options editor indexes, in blob order —
+    /// the same four the migration's `graphStyleIndex` converts.
+    private static let effectNames = ["normal", "scanlines", "pixel_grid", "retro_dots"]
+
+    private static func colorArchive(_ rgba: [Double]) -> Data? {
+        guard rgba.count == 4, rgba.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return nil }
+        let color = NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+        return try? NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: true)
+    }
+
+    private static func fontArchive(_ descriptor: String) -> Data? {
+        let parts = descriptor.split(separator: " ")
+        guard let size = Double(parts.last ?? "") else { return nil }
+        let name = parts.dropLast().joined(separator: " ")
+        let font = name == "System" ? NSFont.systemFont(ofSize: CGFloat(size)) : NSFont(name: name, size: CGFloat(size))
+        guard let font else { return nil }
+        return try? NSKeyedArchiver.archivedData(withRootObject: font, requiringSecureCoding: true)
+    }
+}

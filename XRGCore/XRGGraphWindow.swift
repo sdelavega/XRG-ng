@@ -139,12 +139,37 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         super.init(contentRect: contentRect, styleMask: .borderless, backing: .buffered, defer: false)
         isReleasedWhenClosed = false; prepare()
     }
+    /// Whether this process is the real XRG-ng application bundle: only it
+    /// keeps its settings in the shared document. The smoke app runs the same
+    /// code over a private standard domain, and fixtures inject suites.
+    private class var applicationBundle: Bool {
+        Bundle.main.bundleIdentifier == "com.sdelavega.xrg"
+    }
+
     private func prepare() {
-        defaults.register(defaults: Self.getDefaultPrefs() as? [String: Any] ?? [:])
-        appSettings = XRGSettings(defaults: defaults)
+        if defaults === UserDefaults.standard, Self.applicationBundle {
+            // The application's settings live in the shared document; the
+            // 0.2.2 NSUserDefaults domain is read once, by the migration.
+            appSettings = XRGSettings(store: XRGSettingsStore.shared)
+        } else {
+            // An injected suite keeps 0.2.2's NSUserDefaults behaviour.
+            defaults.register(defaults: Self.getDefaultPrefs() as? [String: Any] ?? [:])
+            appSettings = XRGSettings(defaults: defaults)
+        }
         moduleManager = XRGModuleManager(window: self); fontManager = .shared
         isMovable = false; isMovableByWindowBackground = true
-        setupSettingsFromDictionary(defaults.dictionaryRepresentation() as NSDictionary)
+        if let settings = appSettings, settings.store.isDocumentBacked {
+            // The document already carries every setting: apply the
+            // window-level state without reading or writing the legacy domain.
+            borderWidth = Int32(settings.borderWidth)
+            backgroundColor = .clear; alphaValue = 0.99; isOpaque = false
+            hasShadow = settings.dropShadow
+            moduleManager?.graphOrientationVertical = settings.graphOrientationVertical
+            if let manager = moduleManager { minSize = manager.getMinSize(); manager.windowChanged(to: frame.size) }
+            setWindowLevelHelper(settings.windowLevel)
+        } else {
+            setupSettingsFromDictionary(defaults.dictionaryRepresentation() as NSDictionary)
+        }
     }
     public nonisolated override func awakeFromNib() {
         super.awakeFromNib()
@@ -214,7 +239,9 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         guard isVersion(latest, laterThanVersion: currentVersion) else { return }
         switch updateNotice(latest, currentVersion) {
         case .moreInfo: _ = openURL(URL(string: "https://github.com/sdelavega/XRG-ng/releases")!)
-        case .disable: appSettings?.checkForUpdates = false; defaults.set(false, forKey: "checkForUpdates")
+        case .disable:
+            appSettings?.checkForUpdates = false
+            try? appSettings?.store.set("general.updates.check_on_launch", .bool(false))
         case .notYet: break
         }
     }
@@ -358,7 +385,10 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
             manager.windowChanged(to: frame.size); backgroundView?.updateModuleLayout()
         }
         if wasMinimized { backgroundView?.minimizeWindow() }
-        defaults.set(vertical, forKey: "graphOrientationVertical")
+        appSettings?.graphOrientationVertical = vertical
+        // The orientation action has always persisted immediately, in both
+        // the legacy domain and the document.
+        try? appSettings?.store.set("general.window.orientation", .string(vertical ? "vertical" : "horizontal"))
     }
     @IBAction public func setGraphRefreshActionPart2(_ sender: Any?) {
         guard let control = sender as? NSControl, control.doubleValue.isFinite, control.doubleValue > 0 else { return }
@@ -455,8 +485,8 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
     public func cleanupBeforeExiting() {
         npuView?.samplingWillSleep()
         gpuView?.setCollectionActive(false)
-        let wasMinimized = defaults.bool(forKey: "windowIsMinimized")
-        backgroundView?.expandWindow(); defaults.set(wasMinimized, forKey: "windowIsMinimized")
+        let wasMinimized = appSettings?.windowCollapsed ?? false
+        backgroundView?.expandWindow(); appSettings?.windowCollapsed = wasMinimized
         for timer in [min30Timer, min5Timer, graphTimer, fastTimer, aiTimer] { timer?.invalidate() }
         min30Timer = nil; min5Timer = nil; graphTimer = nil; fastTimer = nil; aiTimer = nil
         xrgCheckURL?.cancelLoading(); xrgCheckURL = nil

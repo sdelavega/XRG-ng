@@ -31,6 +31,10 @@ struct XRGProcessOptions: Codable, Equatable {
     static let optionsKey = "processInspectorV1"
     private let miner: XRGProcessMiner
     private let defaults: UserDefaults
+    /// The settings store the saved process options belong to; nil keeps the
+    /// legacy defaults domain.
+    private let settings: XRGSettings?
+    private let initialSort: XRGProcessOptions.Sort
     private(set) var options = XRGProcessOptions()
     private(set) var rows: [XRGProcessRecord] = []
     private(set) var refreshTimer: Timer?
@@ -44,19 +48,29 @@ struct XRGProcessOptions: Codable, Equatable {
     private(set) var details: [XRGProcessIdentity: XRGProcessDetailController] = [:]
     private let detail = NSButton(title: "Inspect Selected…", target: nil, action: nil)
 
-    init(miner: XRGProcessMiner, defaults: UserDefaults, sort initialSort: XRGProcessOptions.Sort) {
-        self.miner = miner; self.defaults = defaults
-        if let data = defaults.data(forKey: Self.optionsKey), data.count <= 4096,
-           let saved = try? JSONDecoder().decode(XRGProcessOptions.self, from: data), saved.valid { options = saved }
-        options.sort = initialSort
+    init(miner: XRGProcessMiner, defaults: UserDefaults, sort initialSort: XRGProcessOptions.Sort,
+         settings: XRGSettings? = nil) {
+        self.miner = miner; self.defaults = defaults; self.settings = settings
+        self.initialSort = initialSort
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 540),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "XRG-ng · Processes"; window.minSize = NSSize(width: 720, height: 420)
         window.isReleasedWhenClosed = false; window.delegate = self; window.center()
+        loadSavedOptions()
+        options.sort = initialSort
         build(); reload()
     }
     required init?(coder: NSCoder) { fatalError("Programmatic window") }
+    /// Load the saved options through the settings store: the document's
+    /// per-field entries, or the legacy blob (invalid saved options keep
+    /// their historical fallback to fresh defaults).
+    private func loadSavedOptions() {
+        switch (settings?.store ?? XRGSettingsStore.legacy(defaults: defaults)).processOptions() {
+        case .some(let saved): options = saved
+        case nil: options = XRGProcessOptions()
+        }
+    }
     private func build() {
         guard let content = window?.contentView else { return }
         func label(_ text: String, _ x: CGFloat, _ width: CGFloat) {
@@ -130,7 +144,7 @@ struct XRGProcessOptions: Codable, Equatable {
         search.stringValue = options.search; user.stringValue = options.user
         options.sort = XRGProcessOptions.Sort.allCases[max(0, sort.indexOfSelectedItem)]
         options.limit = [25, 50, 100, 200][max(0, limit.indexOfSelectedItem)]
-        if let data = try? JSONEncoder().encode(options) { defaults.set(data, forKey: Self.optionsKey) }
+        (settings?.store ?? XRGSettingsStore.legacy(defaults: defaults)).storeProcessOptions(options)
         reload()
     }
     func controlTextDidChange(_ notification: Notification) { optionsChanged(nil) }

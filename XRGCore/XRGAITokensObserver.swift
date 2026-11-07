@@ -27,8 +27,15 @@ import Foundation
 @objc(XRGAITokensObserver)
 public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
     @objc public static let shared = XRGAITokensObserver()
+    /// The store the AI settings are read through. The application adopts its
+    /// shared document store at launch (main-actor, before any accounting
+    /// starts); until then this observer reads its defaults domain live,
+    /// exactly as 0.2.2 did.
+    nonisolated(unsafe) private static var adoptedStore: XRGSettingsStore?
+    @MainActor public static func adoptStore(_ store: XRGSettingsStore) { adoptedStore = store }
     private let lock = NSLock()
     private let defaults: UserDefaults
+    private let settingsStore: XRGSettingsStore
     private let center: NotificationCenter
     private let now: () -> Date
     private let calendar: Calendar
@@ -53,11 +60,15 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
         self.init(defaults: .standard, center: .default, calendar: .autoupdatingCurrent, now: Date.init)
     }
 
-    init(defaults: UserDefaults, center: NotificationCenter, calendar: Calendar, now: @escaping () -> Date) {
+    init(defaults: UserDefaults, center: NotificationCenter, calendar: Calendar,
+         now: @escaping () -> Date, store: XRGSettingsStore? = nil) {
         self.defaults = defaults
         self.center = center
         self.calendar = calendar
         self.now = now
+        // Recorded usage counters are not settings: they keep their home in
+        // this defaults domain (docs/settings-inventory.md).
+        self.settingsStore = store ?? Self.adoptedStore ?? XRGSettingsStore.legacy(defaults: defaults)
         dailyUnclassified = Self.count(defaults.object(forKey: "aiTokensDailyUnclassifiedTokens"))
         modelUnclassified = Self.counts(defaults.dictionary(forKey: "aiTokensDailyModelUnclassifiedTokens"))
         providerUnclassified = Self.counts(defaults.dictionary(forKey: "aiTokensDailyProviderUnclassifiedTokens"))
@@ -118,7 +129,7 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
     private func record(usage: XRGTokenUsage, models: [String: UInt64], legacyModel model: String?, provider: String?) {
         let promptTokens = usage.input, completionTokens = usage.output
         let progress: (Double, UUID)? = lock.withLock {
-            guard defaults.bool(forKey: "aiTokensTrackingEnabled") else { return nil }
+            guard settingsStore.boolSetting("ai.tracking.enabled") else { return nil }
             rollover()
             let unclassified = usage.isValid ? usage.unclassified : 0
             sessionUnclassified = add(sessionUnclassified, unclassified)
@@ -127,20 +138,20 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
             sessionCompletion = add(sessionCompletion, completionTokens)
             dailyPrompt = add(dailyPrompt, promptTokens)
             dailyCompletion = add(dailyCompletion, completionTokens)
-            if defaults.bool(forKey: "aiTokensAggregateByModel"), let model, !model.isEmpty {
+            if settingsStore.boolSetting("ai.tracking.by_model"), let model, !model.isEmpty {
                 modelPrompt[model] = add(modelPrompt[model] ?? 0, promptTokens)
                 modelCompletion[model] = add(modelCompletion[model] ?? 0, completionTokens)
             }
-            if defaults.bool(forKey: "aiTokensAggregateByModel") {
+            if settingsStore.boolSetting("ai.tracking.by_model") {
                 for (name, count) in models { modelUnclassified[name] = add(modelUnclassified[name] ?? 0, count) }
             }
-            if defaults.bool(forKey: "aiTokensAggregateByProvider"), let provider, !provider.isEmpty {
+            if settingsStore.boolSetting("ai.tracking.by_provider"), let provider, !provider.isEmpty {
                 providerUnclassified[provider] = add(providerUnclassified[provider] ?? 0, unclassified)
                 providerPrompt[provider] = add(providerPrompt[provider] ?? 0, promptTokens)
                 providerCompletion[provider] = add(providerCompletion[provider] ?? 0, completionTokens)
             }
-            let budget = defaults.integer(forKey: "aiTokensDailyBudget")
-            let configuredPercent = defaults.integer(forKey: "aiTokensBudgetNotifyPercent")
+            let budget = settingsStore.intSetting("ai.tracking.daily_budget")
+            let configuredPercent = settingsStore.intSetting("ai.tracking.notify_percent")
             let threshold = configuredPercent > 0 ? configuredPercent : 80
             let today = now()
             var result: Double?
@@ -166,7 +177,7 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
     }
 
     func isCurrentNotification(_ id: UUID) -> Bool {
-        lock.withLock { rollover(); return notificationGeneration == id && defaults.bool(forKey: "aiTokensTrackingEnabled") }
+        lock.withLock { rollover(); return notificationGeneration == id && settingsStore.boolSetting("ai.tracking.enabled") }
     }
     @objc public func resetSession() {
         lock.withLock { sessionPrompt = 0; sessionCompletion = 0; sessionUnclassified = 0; generation = UUID() }
@@ -176,7 +187,7 @@ public final class XRGAITokensObserver: NSObject, @unchecked Sendable {
     }
 
     private func rollover() {
-        guard defaults.bool(forKey: "aiTokensDailyAutoReset") else { return }
+        guard settingsStore.boolSetting("ai.tracking.auto_reset") else { return }
         if !(dailyDate.map { calendar.isDate($0, inSameDayAs: now()) } ?? false) {
             clearDaily()
             persist()

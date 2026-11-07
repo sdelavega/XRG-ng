@@ -49,6 +49,7 @@ PYRESULTS
 python3 Tools/check-macos-sensor-license.py
 python3 Tools/settings-catalog-embed.py --check
 python3 Tools/aether7b-tokens.py --check
+python3 Tools/tests/check-settings-defaults-lint.py --quiet
 phase "Universal $configuration app build"
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     bash Tools/ci-macos-diagnostics.sh "$output" &

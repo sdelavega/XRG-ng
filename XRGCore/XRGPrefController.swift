@@ -145,7 +145,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         notificationPermission = { await XRGAIBudgetNotifications.requestPermission() }
         sensorSource = {
             let miner = XRGTemperatureMiner.shared
-            return miner.locationKeys(includingUnknown: XRGTemperatureView.showUnknownSensors()).compactMap { miner.sensor(forLocation: $0) }
+            return miner.locationKeys(includingUnknown: XRGTemperatureView.showUnknownSensors(nil)).compactMap { miner.sensor(forLocation: $0) }
         }
         sensorGroupSource = { XRGTemperatureMiner.shared.sensorGroup(forKey: $0) }
         interfaceSource = { $0.netView?.miner.networkInterfaces() ?? [] }
@@ -199,11 +199,15 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         prepareGraphsPanel()
     }
     private var settings: XRGSettings? { xrgGraphWindow?.appSettings }
+    /// Settings over the injected defaults, for the fixtures that run without
+    /// a graph window.
+    private lazy var injectedSettings = XRGSettings(defaults: defaults)
+    private func effectiveSettings() -> XRGSettings { settings ?? injectedSettings }
     @nonobjc private(set) var graphsEditor: XRGGraphPreferencesEditor?
 
     private func graphVisibility() -> [XRGGraphID: Bool] {
         Dictionary(uniqueKeysWithValues: XRGGraphID.allCases.map { id in
-            (id, xrgGraphWindow?.moduleManager?.getModule(byName: id.name)?.isDisplayed ?? defaults.bool(forKey: id.visibilityKey))
+            (id, xrgGraphWindow?.moduleManager?.getModule(byName: id.name)?.isDisplayed ?? effectiveSettings().moduleVisible(id))
         })
     }
     private func prepareGraphsPanel() {
@@ -215,7 +219,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
                     try settings.applyGraphPreferences(value)
                     for id in XRGGraphID.allCases {
                         let visible = visibility[id] == true
-                        self.defaults.set(visible, forKey: id.visibilityKey)
+                        self.effectiveSettings().setModuleVisible(id, visible)
                         if graph.moduleManager?.getModule(byName: id.name)?.isDisplayed != visible {
                             graph.moduleManager?.setModule(id.name, isDisplayed: visible)
                         }
@@ -361,7 +365,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
               let preset = XRGTheme.Builtin(rawValue: raw), let settings else { return }
         do {
             try settings.applyThemeDictionary(preset.dictionary(), defaults: defaults)
-            defaults.set(preset.name, forKey: XRGTheme.nameKey)
+            settings.themeName = preset.name
             setUpColorPanel(); redrawGraphs()
         } catch { errorNotice("Could not apply the built-in theme.", window) }
     }
@@ -502,9 +506,9 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
                 button.bezelStyle = .rounded; button.frame = NSRect(x: 20 + index * 160, y: 160, width: 150, height: 28); panel.addSubview(button)
             }
         }
-        for field in Self.aiCheckboxes { (panel.viewWithTag(field.0) as? NSButton)?.state = defaults.bool(forKey: field.2) ? .on : .off }
-        (panel.viewWithTag(1002) as? NSTextField)?.integerValue = defaults.integer(forKey: "aiTokensDailyBudget")
-        (panel.viewWithTag(1003) as? NSTextField)?.integerValue = defaults.integer(forKey: "aiTokensBudgetNotifyPercent")
+        for field in Self.aiCheckboxes { (panel.viewWithTag(field.0) as? NSButton)?.state = effectiveSettings().store.boolSetting(legacyKey: field.2) ? .on : .off }
+        (panel.viewWithTag(1002) as? NSTextField)?.integerValue = effectiveSettings().store.intSetting("ai.tracking.daily_budget")
+        (panel.viewWithTag(1003) as? NSTextField)?.integerValue = effectiveSettings().store.intSetting("ai.tracking.notify_percent")
     }
     private func updateRefreshText() {
         let refresh = XRGGraphWindow.validRefresh(settings?.graphRefresh)
@@ -631,7 +635,7 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         do {
             let values = try preferencesSnapshot()
             // Validate and archive the complete snapshot before the first persistent write.
-            for (key, value) in values { defaults.set(value, forKey: key) }
+            effectiveSettings().store.setLegacyValues(values)
             if let hours = values["weatherHistoryHours"] as? Int {
                 settings.weatherHistoryHours = hours
                 graph.weatherView?.needsDisplay = true
@@ -664,8 +668,9 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     }
     @nonobjc func portableThemeData() throws -> Data {
         let original = defaults.data(forKey: XRGTheme.documentKey).flatMap { try? XRGThemeDocument(data: $0) }
+        let name = settings?.themeName ?? "My Theme"
         return try XRGTheme(dictionary: themeDictionary()).portableDocument(
-            name: defaults.string(forKey: XRGTheme.nameKey) ?? "My Theme", original: original).encoded()
+            name: name, original: original).encoded()
     }
     @nonobjc func loadTheme(from url: URL) -> Bool {
         guard let settings else { return false }

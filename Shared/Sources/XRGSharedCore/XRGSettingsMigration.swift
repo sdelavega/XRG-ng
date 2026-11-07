@@ -33,6 +33,19 @@ public enum XRGSettingsMigration {
     /// to — into the shared document. Keys the catalog does not map (Sparkle
     /// `SU*` state, AppKit window frames, latches, recorded data) are ignored:
     /// they are not settings and ignoring them is not a problem.
+    /// The raw 0.2.2 defaults value of one entry, converted into its document
+    /// value; nil when the conversion fails. The macOS settings store reads
+    /// live `NSUserDefaults` domains with it (its legacy backend, which keeps
+    /// injected defaults suites behaving exactly as 0.2.2 did); the document
+    /// backend never needs it, because migration already converted those
+    /// values once, at the first launch of 0.2.3.
+    public static func legacyValue(_ raw: Any, for entry: XRGSettingsEntry) -> XRGSettingsValue? {
+        if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
+            return transform(raw, entry).value
+        }
+        return macIdentity(raw)
+    }
+
     public static func fromMacDefaults(_ defaults: [String: Any], catalog: XRGSettingsCatalog)
         -> (XRGSettingsDocument, [XRGSettingsDiagnostic]) {
         var document = XRGSettingsDocument()

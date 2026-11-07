@@ -95,7 +95,7 @@ private final class SmokePreferencesOwner: NSObject {
             source.nibs.append(name); source.load?(name, owner)
         }, presentWindow: { window, _ in source.presentations.append(window) },
            activateApplication: { source.activations += 1 },
-           includeUnknownSensors: { XRGTemperatureView.includesUnknownSensors(defaults: defaults, knownCount: temperature.knownTemperatureKeyCount) },
+           includeUnknownSensors: { XRGTemperatureView.includesUnknownSensors(store: XRGSettingsStore.legacy(defaults: defaults), knownCount: temperature.knownTemperatureKeyCount) },
            sensorProvider: { unknown in temperature.locationKeys(includingUnknown: unknown).compactMap { temperature.sensor(forLocation: $0) } },
            invalidThemeNotice: { source.errors.append(String(describing: $0)) })
         background = XRGBackgroundView(frame: NSRect(origin: .zero, size: window.frame.size), defaults: defaults)

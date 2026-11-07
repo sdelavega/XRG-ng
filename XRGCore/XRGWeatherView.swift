@@ -64,6 +64,9 @@ public final class XRGWeatherView: NSView, XRGModuleView {
     public private(set) var stationName = ""
     public private(set) var gettingData = false
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
     private var active: Bool {
         if let module { return module.isDisplayed && window != nil }
         return host == nil && !didAwake && standaloneSettings != nil
@@ -120,10 +123,10 @@ public final class XRGWeatherView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "Weather", reference: self, defaults: defaults)
+        let module = XRGModule(name: "Weather", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 8; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = true
-        module.isDisplayed = defaults.bool(forKey: "showWeatherGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.weather)
         self.module = module; registeredManager = manager; host.weatherView = self
         host.initTimers(); updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)
         setURL(settings?.ICAO ?? "")

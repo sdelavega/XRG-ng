@@ -51,6 +51,9 @@ public final class XRGDiskView: NSView, XRGModuleView {
     @nonobjc private(set) var fastScale: CGFloat = 1_048_576
     @nonobjc static let diskUtilityURL = URL(fileURLWithPath: "/System/Applications/Utilities/Disk Utility.app")
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         miner = XRGDiskMiner()
@@ -95,13 +98,13 @@ public final class XRGDiskView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "Disk", reference: self, defaults: defaults)
+        let module = XRGModule(name: "Disk", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 7
         // Core history and accounting continue when only presentation is hidden.
         module.alwaysDoesGraphUpdate = true
         module.doesGraphUpdate = true; module.doesFastUpdate = true
         module.doesMin5Update = true; module.doesMin30Update = false
-        module.isDisplayed = defaults.bool(forKey: "showDiskGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.disk)
         self.module = module; registeredManager = manager
         host.diskView = self
         host.initTimers()
@@ -276,20 +279,20 @@ public final class XRGDiskView: NSView, XRGModuleView {
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     public func emptyEvent(_ sender: Any?) {}
     @nonobjc static let windowKey = "XRGDiskView.HistoryMinutes.v1"
-    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: Self.windowKey) }
     @nonobjc private let timeProjection = XRGTimeWindowProjection(channels: 3)
     @nonobjc private func windowData() -> [XRGDataSet]? {
         timeProjection.values(from: miner.timedHistory, minutes: historyMinutes, interval: Double(settings?.graphRefresh ?? 1))
     }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: Self.windowKey) else { return }
         updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGDiskView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     public func openDiskUtility(_ sender: Any?) { _ = openURL(Self.diskUtilityURL) }

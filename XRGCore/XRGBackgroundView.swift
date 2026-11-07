@@ -94,7 +94,9 @@ public final class XRGBackgroundView: NSView {
     private var lastLayoutSize: NSSize?
     private var lastLayoutVertical: Bool?
     @nonobjc private(set) var unminimizedRect = NSRect.zero
-    @nonobjc private(set) var uiIsHidden = false
+    /// Whether the dock icon is hidden; read through the settings store,
+    /// live on both backends (the legacy domain and the document).
+    @nonobjc var uiIsHidden: Bool { settings.map { $0.store.boolSetting("general.window.hide_dock_icon") } ?? false }
     public var hostname = "XRG-ng" { didSet { needsDisplay = true; updateAccessibility() } }
     public var clickedMinimized = false
     public private(set) var trackingArea: NSTrackingArea?
@@ -124,7 +126,6 @@ public final class XRGBackgroundView: NSView {
         super.init(frame: frame); prepare()
     }
     private func prepare() {
-        uiIsHidden = defaults.bool(forKey: "isDockIconHidden")
         registerForDraggedTypes([.fileURL]); updateAccessibility()
     }
     public nonisolated override func awakeFromNib() {
@@ -264,7 +265,10 @@ public final class XRGBackgroundView: NSView {
         if settings.foregroundWhenExpanding {
             host.level = settings.windowLevel == 0 ? .normal : settings.windowLevel == 1 ? .floating : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
         }
-        defaults.set(true, forKey: "windowIsMinimized"); defaults.set(NSStringFromRect(unminimizedRect), forKey: "unminimizedFrame")
+        // `unminimizedFrame` is deliberately not a catalog setting (the
+        // AppKit window restore rectangle, docs/settings-inventory.md): it
+        // keeps its home in NSUserDefaults; the collapse latch does not.
+        settings.windowCollapsed = true; defaults.set(NSStringFromRect(unminimizedRect), forKey: "unminimizedFrame")
         needsDisplay = true; updateAccessibility()
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
@@ -278,7 +282,7 @@ public final class XRGBackgroundView: NSView {
         if settings.foregroundWhenExpanding && settings.autoExpandGraph { host.level = .floating }
         host.setFrame(expanded, display: true, animate: animateResizing)
         for module in manager.displayList() { module.reference?.isHidden = false; module.reference?.needsDisplay = true }
-        defaults.set(false, forKey: "windowIsMinimized"); needsDisplay = true; updateAccessibility()
+        settings.windowCollapsed = false; needsDisplay = true; updateAccessibility()
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
     @nonobjc func makeMenu() -> NSMenu {
@@ -295,8 +299,16 @@ public final class XRGBackgroundView: NSView {
     public func openAboutBox(_ sender: Any?) { action(.about) }
     public func openHelp(_ sender: Any?) { action(.help) }
     public func openPreferences(_ sender: Any?) { host?.showGeneralPreferences() }
-    public func hideUI(_ sender: Any?) { uiIsHidden = true; defaults.set(true, forKey: "isDockIconHidden"); action(.hideDockNotice) }
-    public func showUI(_ sender: Any?) { uiIsHidden = false; defaults.set(false, forKey: "isDockIconHidden"); action(.showDock) }
+    public func hideUI(_ sender: Any?) {
+        settings?.isDockIconHidden = true
+        try? settings?.store.set("general.window.hide_dock_icon", .bool(true))
+        action(.hideDockNotice)
+    }
+    public func showUI(_ sender: Any?) {
+        settings?.isDockIconHidden = false
+        try? settings?.store.set("general.window.hide_dock_icon", .bool(false))
+        action(.showDock)
+    }
     public func quit(_ sender: Any?) { action(.quit) }
     @nonobjc private static func systemAction(_ action: XRGBackgroundAction) {
         switch action {

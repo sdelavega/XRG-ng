@@ -122,6 +122,9 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     @nonobjc private(set) var legendLabels: [XRGNonInteractableTextField] = []
     public private(set) weak var module: XRGModule?
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         now = { ProcessInfo.processInfo.systemUptime }
@@ -167,11 +170,11 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "AI Tokens", reference: self, defaults: defaults)
+        let module = XRGModule(name: "AI Tokens", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 10; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false
         module.alwaysDoesGraphUpdate = true
-        module.isDisplayed = defaults.bool(forKey: "showAITokenGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.ai)
         self.module = module; registeredManager = manager
         host.aiTokenView = self; host.initTimers()
         updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)
@@ -195,7 +198,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         updateLabels()
     }
     public func graphUpdate(_ timer: Timer?) {
-        let tracking = defaults.bool(forKey: "aiTokensTrackingEnabled")
+        let tracking = settingsStore.boolSetting("ai.tracking.enabled")
         if lastTracking != tracking {
             collectionID = nil; cadence.reset(); lastTracking = tracking
         }
@@ -470,10 +473,10 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         return menu
     }
     @nonobjc static let historyKey = "XRGAITokenView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @nonobjc static let windowKey = "XRGAITokenView.HistoryMinutes.v1"
     @nonobjc var historyMinutes: Int {
-        let value = defaults.integer(forKey: Self.windowKey)
+        let value = settingsStore.intSetting(legacyKey: Self.windowKey)
         return XRGTimedHistory.validMinutes(value) ? value : 0
     }
     private func historyWindowMenu() -> NSMenuItem {
@@ -489,7 +492,7 @@ public final class XRGAITokenView: NSView, XRGModuleView {
     }
     @objc func selectHistoryWindow(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, XRGTimedHistory.validMinutes(item.tag) else { return }
-        defaults.set(item.tag, forKey: Self.windowKey)
+        settingsStore.storeSetting(item.tag, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     @nonobjc var historyDescription: String {
@@ -499,8 +502,8 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         return String(format: "AI history: %d samples; nominal %.0f seconds at 5 s cadence", count, span)
     }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }

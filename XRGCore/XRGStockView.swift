@@ -73,6 +73,9 @@ public final class XRGStockView: NSView, XRGModuleView {
     @nonobjc private(set) var quoteLabels: [XRGGraphLabels] = []
     public private(set) weak var module: XRGModule?
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
     private var active: Bool {
         if let module { return module.isDisplayed && window != nil }
         return host == nil && !didAwake && standaloneSettings != nil
@@ -125,10 +128,10 @@ public final class XRGStockView: NSView, XRGModuleView {
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { synchronizeTicker(); updateLabels(); return }
         stockSymbols = Self.parseSymbols(settings?.stockSymbols ?? "")
-        let module = XRGModule(name: "Stock", reference: self, defaults: defaults)
+        let module = XRGModule(name: "Stock", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 9; module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = true
-        module.isDisplayed = defaults.bool(forKey: "showStockGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.stock)
         self.module = module; registeredManager = manager
         host.stockView = self; host.initTimers()
         updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)

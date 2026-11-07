@@ -46,15 +46,19 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
     public private(set) weak var module: XRGModule?
     @nonobjc let graphLabels = XRGGraphLabels()
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
-    @nonobjc static func includesUnknownSensors(defaults: UserDefaults, knownCount: Int) -> Bool {
-        defaults.bool(forKey: "tempShowUnknownSensors") || knownCount < 10
+    @nonobjc static func includesUnknownSensors(store: XRGSettingsStore, knownCount: Int) -> Bool {
+        store.boolSetting("sources.temperature.show_unknown") || knownCount < 10
     }
-    public static func showUnknownSensors() -> Bool {
-        includesUnknownSensors(defaults: .standard, knownCount: XRGTemperatureMiner.shared.knownTemperatureKeyCount)
+    public static func showUnknownSensors(_ store: XRGSettingsStore?) -> Bool {
+        includesUnknownSensors(store: store ?? XRGSettingsStore.legacy(defaults: .standard),
+                               knownCount: XRGTemperatureMiner.shared.knownTemperatureKeyCount)
     }
     @nonobjc var includesUnknown: Bool {
-        Self.includesUnknownSensors(defaults: defaults, knownCount: miner.knownTemperatureKeyCount)
+        Self.includesUnknownSensors(store: settingsStore, knownCount: miner.knownTemperatureKeyCount)
     }
     public override init(frame frameRect: NSRect) {
         miner = .shared; statsManager = .shared; defaults = .standard; standaloneSettings = nil
@@ -92,11 +96,11 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "Temperature", reference: self, defaults: defaults)
+        let module = XRGModule(name: "Temperature", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 5
         module.doesGraphUpdate = true; module.doesFastUpdate = false
         module.doesMin5Update = false; module.doesMin30Update = false; module.alwaysDoesGraphUpdate = false
-        module.isDisplayed = defaults.bool(forKey: "showTemperatureGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.temperature)
         self.module = module; registeredManager = manager
         host.temperatureView = self; host.initTimers()
         updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)
@@ -300,16 +304,16 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @nonobjc static let windowKey = "XRGTemperatureView.HistoryMinutes.v1"
-    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: Self.windowKey) }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: Self.windowKey) else { return }
         updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGTemperatureView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     private func observedValues(_ sensor: XRGSensorData) -> [CGFloat] {

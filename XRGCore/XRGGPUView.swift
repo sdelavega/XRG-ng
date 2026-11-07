@@ -51,6 +51,9 @@ public final class XRGGPUView: NSView, XRGModuleView {
     @nonobjc private(set) var cardLabels: [XRGGraphLabels] = []
 
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         miner = XRGGPUMiner()
@@ -81,12 +84,8 @@ public final class XRGGPUView: NSView, XRGModuleView {
                 (self.host as? any XRGGraphicsSnapshotHost)?.graphicsSnapshotDidComplete()
             }
         }
-        do { selectedSource = try XRGMonitorSource.load(defaults, key: Self.sourceKey).source }
-        catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
-        if let raw = defaults.object(forKey: Self.modeKey) {
-            if let name = raw as? String, let mode = XRGGPUPlotMode(rawValue: name) { plotMode = mode }
-            else { modeWarning = "Saved GPU plot mode is invalid. Using Memory + Activity without changing the saved value." }
-        }
+        loadSavedSource()
+
         ensureLabelCount(1)
         setGraphSize(bounds.size)
         updateLabels()
@@ -104,6 +103,20 @@ public final class XRGGPUView: NSView, XRGModuleView {
         super.viewDidMoveToWindow()
         bindToWindow()
     }
+
+    /// Load the saved GPU source and plot mode through the settings store.
+    /// The nib path constructs this view before its host's settings exist,
+    /// so the load is repeated once the window binding provides them.
+    @nonobjc func loadSavedSource() {
+        do { selectedSource = try XRGMonitorSource.load(settingsStore, key: Self.sourceKey).source }
+        catch { sourceWarning = XRGMonitorSource.invalid.localizedDescription }
+        switch settingsStore.plotMode(legacyKey: Self.modeKey) {
+        case .valid(let mode): plotMode = mode
+        case .invalid:
+            modeWarning = "Saved GPU plot mode is invalid. Using Memory + Activity without changing the saved value."
+        case .unset: break
+        }
+    }
     private func bindToWindow() {
         let next = window as? any XRGGPUViewHost
         if host !== next {
@@ -116,13 +129,14 @@ public final class XRGGPUView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "GPU", reference: self, defaults: defaults)
+        loadSavedSource()
+        let module = XRGModule(name: "GPU", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 1
         module.doesGraphUpdate = true
         module.doesFastUpdate = false
         module.doesMin5Update = false
         module.doesMin30Update = false
-        module.isDisplayed = defaults.bool(forKey: "showGPUGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.gpu)
         self.module = module
         registeredManager = manager
         host.gpuView = self
@@ -349,11 +363,11 @@ public final class XRGGPUView: NSView, XRGModuleView {
     }
     @nonobjc func applyGPUSource(_ id: String?) throws {
         let next = XRGMonitorSource(source: id)
-        defaults.set(try next.encoded(), forKey: Self.sourceKey)
+        settingsStore.setLegacyValues([Self.sourceKey: try next.encoded()])
         selectedSource = id; sourceWarning = nil; updateLabels(); needsDisplay = true
     }
     @nonobjc func applyPlotMode(_ mode: XRGGPUPlotMode) {
-        defaults.set(mode.rawValue, forKey: Self.modeKey)
+        settingsStore.storePlotMode(mode, legacyKey: Self.modeKey)
         plotMode = mode; modeWarning = nil; updateLabels(); needsDisplay = true
     }
     @nonobjc func makeMenu() -> NSMenu {
@@ -389,16 +403,16 @@ public final class XRGGPUView: NSView, XRGModuleView {
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @nonobjc static let windowKey = "XRGGPUView.HistoryMinutes.v1"
-    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: Self.windowKey) }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: Self.windowKey) else { return }
         updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGGPUView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}

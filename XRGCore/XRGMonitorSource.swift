@@ -33,6 +33,22 @@ struct XRGMonitorSource: Codable, Equatable {
         guard let data = object as? Data else { throw Self.invalid }
         return try Self(data: data)
     }
+    /// Load through the settings store: the document backend reads the
+    /// converted selection; the legacy backend decodes the saved blob exactly
+    /// as before, so an invalid blob still throws its historical error.
+    static func load(_ store: XRGSettingsStore, key: String) throws -> Self {
+        if store.isDocumentBacked {
+            switch store.value(legacyKey: key) {
+            case .null: return Self()
+            case .string(let source): return Self(source: source)
+            case .int(let index): return Self(source: String(index))
+            default: throw Self.invalid
+            }
+        }
+        guard let object = store.defaults.object(forKey: key) else { return Self() }
+        guard let data = object as? Data else { throw Self.invalid }
+        return try Self(data: data)
+    }
     func encoded() throws -> Data { try validate(); return try JSONEncoder().encode(self) }
     static var invalid: NSError { NSError(domain: "XRGMonitorSource", code: 1, userInfo: [NSLocalizedDescriptionKey:
         "Saved source options are invalid. Using the default without changing the saved value; choose a source explicitly to replace it."]) }

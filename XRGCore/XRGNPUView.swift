@@ -21,6 +21,9 @@ public final class XRGNPUView: NSView, XRGModuleView {
     public private(set) weak var module: XRGModule?
     @nonobjc let labels = XRGGraphLabels()
     private var settings: XRGSettings? { host?.appSettings ?? standaloneSettings }
+    /// The store this view's settings live in: the settings' store, or the
+    /// legacy backend over the injected defaults.
+    private var settingsStore: XRGSettingsStore { settings?.store ?? XRGSettingsStore.legacy(defaults: defaults) }
 
     public override init(frame frameRect: NSRect) {
         miner = XRGNPUMiner(); defaults = .standard; standaloneSettings = nil
@@ -53,9 +56,9 @@ public final class XRGNPUView: NSView, XRGModuleView {
         }
         guard didAwake, let host, let manager = host.moduleManager, settings != nil,
               registeredManager !== manager else { updateLabels(); return }
-        let module = XRGModule(name: "NPU", reference: self, defaults: defaults)
+        let module = XRGModule(name: "NPU", reference: self, defaults: defaults, settings: settings)
         module.displayOrder = 2; module.doesGraphUpdate = true
-        module.isDisplayed = defaults.bool(forKey: "showNPUGraph")
+        module.isDisplayed = settingsStore.moduleVisible(.tpu)
         self.module = module; registeredManager = manager; host.npuView = self
         host.initTimers(); updateMinSize(); manager.addModule(module); setGraphSize(module.currentSize)
     }
@@ -146,16 +149,16 @@ public final class XRGNPUView: NSView, XRGModuleView {
         preferences.target = self; menu.addItem(preferences); return menu
     }
     @nonobjc static let windowKey = "XRGNPUView.HistoryMinutes.v1"
-    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(defaults, key: Self.windowKey) }
+    @nonobjc var historyMinutes: Int { XRGSystemTimeWindow.saved(settingsStore, key: Self.windowKey) }
     @objc func selectHistoryWindow(_ sender: Any?) {
-        guard XRGSystemTimeWindow.store(sender, defaults: defaults, key: Self.windowKey) else { return }
+        guard XRGSystemTimeWindow.store(sender, store: settingsStore, key: Self.windowKey) else { return }
         updateLabels(); needsDisplay = true
     }
     @nonobjc static let historyKey = "XRGNPUView.HistorySamples.v1"
-    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(defaults, key: Self.historyKey) }
+    @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, defaults: defaults, key: Self.historyKey) else { return }
-        defaults.set(0, forKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public func emptyEvent(_ sender: Any?) {}
