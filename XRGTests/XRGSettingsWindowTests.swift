@@ -1476,6 +1476,19 @@ struct XRGSettingsWindowTests {
         well.color = NSColor(srgbRed: 0.8, green: 0.3, blue: 0.2, alpha: 1)
         #expect(well.accessibilityValue() as? String == "#CC4D33, 100% opacity",
                 "the well's value is not a usable colour: \(well.accessibilityValue() ?? "nil")")
+        // An EXPLICIT transparent colour is an override, announced as hex
+        // plus opacity — never "Inherited" (review round 3: the pre-fix
+        // well derived inheritance from alpha ≤ 0.005, so a stored
+        // `.color([1, 0, 0, 0])` was misreported as inherited).
+        colour.present(.color([1, 0, 0, 0]))
+        #expect(well.accessibilityValue() as? String == "#FF0000, 0% opacity",
+                "a zero-alpha override is announced as inherited: \(well.accessibilityValue() ?? "nil")")
+        #expect(colour.hasColor, "a zero-alpha override flipped the control to unset")
+        // Low (but nonzero) alpha is announced the same way: an override
+        // with its own opacity, still never "Inherited".
+        colour.present(.color([0.2, 0.4, 0.6, 0.004]))
+        #expect(well.accessibilityValue() as? String == "#336699, 0% opacity",
+                "a low-alpha override is announced as inherited: \(well.accessibilityValue() ?? "nil")")
         // An unset (inherited) well says so.
         #expect(colour.inheritButton.accessibilityPerformPress())
         #expect(well.accessibilityValue() as? String == "Inherited",

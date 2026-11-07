@@ -1360,6 +1360,11 @@ import AppKit
         didSet { applySwatch() }
     }
     weak var focusOwner: XRGSettingsEntryControl?
+    /// True while the entry is unset (`.null` — the palette inherits).
+    /// Inheritance is decided HERE, never from alpha: an explicit
+    /// transparent colour is a stored override and is announced as hex
+    /// plus opacity (review round 3: alpha ≤ 0.005 said "Inherited").
+    public var isUnset = true { didSet { applySwatch() } }
     private var isDarkAppearance = false
 
     public init(dark: Bool) {
@@ -1390,9 +1395,11 @@ import AppKit
     /// A colour VoiceOver can use: the swatch as hex with its opacity, or
     /// "Inherited" while the entry is unset — never `NSColor.description`'s
     /// device dump, which announced nothing useful (review: the well's
-    /// value was meaningless).
+    /// value was meaningless). Unset-ness comes from `isUnset` (the entry's
+    /// `.null` state) — a stored transparent colour is an override with
+    /// its own hex and opacity, not inheritance.
     public var accessibilityColorDescription: String {
-        guard let rgba = color.usingColorSpace(.sRGB), rgba.alphaComponent > 0.005 else { return "Inherited" }
+        guard !isUnset, let rgba = color.usingColorSpace(.sRGB) else { return "Inherited" }
         let hex = String(format: "#%02X%02X%02X",
                          Int((rgba.redComponent * 255).rounded()),
                          Int((rgba.greenComponent * 255).rounded()),
@@ -1475,8 +1482,14 @@ import AppKit
         return .color([Double(rgba.redComponent), Double(rgba.greenComponent), Double(rgba.blueComponent), Double(rgba.alphaComponent)])
     }
     public override func present(_ value: XRGSettingsValue) {
-        guard case .color(let rgba) = value, rgba.count == 4 else { hasColor = false; well.color = .clear; return }
+        guard case .color(let rgba) = value, rgba.count == 4 else {
+            hasColor = false
+            well.isUnset = true
+            well.color = .clear
+            return
+        }
         hasColor = true
+        well.isUnset = false
         well.color = NSColor(srgbRed: CGFloat(rgba[0]), green: CGFloat(rgba[1]), blue: CGFloat(rgba[2]), alpha: CGFloat(rgba[3]))
     }
     public override func themeDidChange(dark: Bool) {
@@ -1526,7 +1539,7 @@ import AppKit
         // the swatch with no name).
         well.setAccessibilityLabel(entry.label)
     }
-    @objc func changedColor() { hasColor = true; submit(value()) }
+    @objc func changedColor() { hasColor = true; well.isUnset = false; submit(value()) }
     public override func focusableViews() -> [NSView] { [well, inheritButton] }
 }
 
