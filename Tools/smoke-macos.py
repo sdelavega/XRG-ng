@@ -123,6 +123,15 @@ def main():
             if passed:
                 raise RuntimeError(f"Failed to remove private preferences for {domain}")
             print(f"Private preference cleanup returned {cleanup.returncode} for {domain}", file=sys.stderr)
+        # The private bundle also gets a bundle-scoped document store
+        # (XRGSettingsStore.shared's non-production path): remove it too.
+        private_support = Path.home() / "Library/Application Support/XRG-ng-Private" / domain
+        if private_support.is_symlink() or private_support.is_file():
+            private_support.unlink()
+        elif private_support.is_dir():
+            shutil.rmtree(private_support)
+        if passed and (private_support.exists() or private_support.is_symlink()):
+            raise RuntimeError(f"Failed to remove private settings for {domain}")
     print("PASS: two AppKit processes, thirteen registered fixture-backed panels (two optional), private preferences restored and removed, timers stopped", flush=True)
 
 

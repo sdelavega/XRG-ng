@@ -42,7 +42,10 @@ def private_home_paths(home, domain):
         paths.extend([home / "Library/Preferences" / (identifier + ".plist"),
                       home / "Library/Caches" / identifier,
                       home / "Library/Saved Application State" / (identifier + ".savedState"),
-                      home / "Library/HTTPStorages" / identifier])
+                      home / "Library/HTTPStorages" / identifier,
+                      # The bundle-scoped document store a non-production
+                      # bundle identifier gets (XRGSettingsStore.shared).
+                      home / "Library/Application Support/XRG-ng-Private" / identifier])
     return paths
 
 

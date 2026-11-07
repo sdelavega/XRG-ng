@@ -35,7 +35,12 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
     private let presentWindow: (NSWindow, Any?) -> Void
     private let activateApplication: () -> Void
     private let sensorProvider: (Bool) -> [XRGSensorData]
-    private let includeUnknownSensors: () -> Bool
+    /// The sensor window's unknown-sensor policy. The default resolves the
+    /// active graph window's settings store — the shared document in the
+    /// shipping app, an injected suite in a fixture scene — so document
+    /// changes control the shipping sensor UI (review issue 6); fixtures
+    /// keep their injected closures.
+    private var includeUnknownSensors: () -> Bool = { false }
     private let invalidThemeNotice: (Error) -> Void
     private var updater: XRGUpdater?
 
@@ -46,7 +51,7 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
                   activateApplication: {
                       NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.activate(options: [])
                       DispatchQueue.main.async { NSApp.activate() }
-                  }, includeUnknownSensors: { XRGTemperatureView.showUnknownSensors(XRGSettingsStore.legacy(defaults: .standard)) }, sensorProvider: { includingUnknown in
+                  }, sensorProvider: { includingUnknown in
                       let miner = XRGTemperatureMiner.shared
                       return miner.locationKeys(includingUnknown: includingUnknown).compactMap { miner.sensor(forLocation: $0) }
                   }, invalidThemeNotice: { error in
@@ -67,9 +72,11 @@ final class XRGAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, X
         self.budgetNotifications = budgetNotifications
         self.defaults = defaults; self.loadNib = loadNib; self.presentWindow = presentWindow
         self.activateApplication = activateApplication; self.sensorProvider = sensorProvider
-        self.includeUnknownSensors = includeUnknownSensors ?? { XRGTemperatureView.showUnknownSensors(XRGSettingsStore.legacy(defaults: defaults)) }
         self.invalidThemeNotice = invalidThemeNotice
         super.init()
+        self.includeUnknownSensors = includeUnknownSensors ?? { [weak self] in
+            XRGTemperatureView.showUnknownSensors(XRGTemperatureView.policyStore(of: self?.xrgGraphWindow))
+        }
     }
 
     @IBOutlet var prefController: XRGPrefController?

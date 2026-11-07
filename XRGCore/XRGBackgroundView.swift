@@ -272,7 +272,14 @@ public final class XRGBackgroundView: NSView {
         needsDisplay = true; updateAccessibility()
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
-    public func expandWindow() {
+    public func expandWindow() { expandWindow(persistingLatch: true) }
+
+    /// Expand the window. `persistingLatch: false` is the shutdown path: the
+    /// caller preserves the collapse latch itself (`cleanupBeforeExiting`
+    /// re-asserts it afterwards), so the expansion must not write the latch
+    /// back — a document-backed exit leaves settings.json untouched when
+    /// nothing actually changed.
+    public func expandWindow(persistingLatch: Bool) {
         guard let host, let manager, let settings, host.minimized else { return }
         if !XRGGraphRenderer.validRect(unminimizedRect) {
             unminimizedRect = XRGBackgroundGeometry.repairedRestore(current: host.frame, saved: savedFrame, minimum: manager.getMinSize(), strip: strip)
@@ -282,7 +289,8 @@ public final class XRGBackgroundView: NSView {
         if settings.foregroundWhenExpanding && settings.autoExpandGraph { host.level = .floating }
         host.setFrame(expanded, display: true, animate: animateResizing)
         for module in manager.displayList() { module.reference?.isHidden = false; module.reference?.needsDisplay = true }
-        settings.windowCollapsed = false; needsDisplay = true; updateAccessibility()
+        if persistingLatch { settings.windowCollapsed = false }
+        needsDisplay = true; updateAccessibility()
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
     @nonobjc func makeMenu() -> NSMenu {

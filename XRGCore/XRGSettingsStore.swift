@@ -72,13 +72,34 @@ import Foundation
 
     // MARK: Creation
 
-    /// The application's store: the shared document at the spec's macOS path.
-    public static let shared: XRGSettingsStore = {
+    /// The real XRG-ng application bundle's identifier: the only process
+    /// whose shared store may use the production settings path.
+    private static let productionBundleIdentifier = "com.sdelavega.xrg"
+
+    /// Where `shared` keeps the settings document. The real application
+    /// bundle uses the spec's production path
+    /// (`~/Library/Application Support/XRG-ng/settings.json`); any other
+    /// bundle identifier — a private smoke bundle, a disposable app copy,
+    /// an unbundled process — gets a private, bundle-scoped directory under
+    /// `XRG-ng-Private`, so `shared` itself can never read or write the
+    /// user's real settings file no matter who touches it (review summary:
+    /// the store, not its callers, enforces the gate).
+    static func sharedDocumentURL(bundleIdentifier: String?) -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let url = support.appendingPathComponent("XRG-ng", isDirectory: true)
+        if bundleIdentifier == productionBundleIdentifier {
+            return support.appendingPathComponent("XRG-ng", isDirectory: true)
+                .appendingPathComponent("settings.json")
+        }
+        return support.appendingPathComponent("XRG-ng-Private", isDirectory: true)
+            .appendingPathComponent(bundleIdentifier ?? "unbundled", isDirectory: true)
             .appendingPathComponent("settings.json")
-        return XRGSettingsStore(fileURL: url, defaults: .standard, catalog: loadCatalog())
+    }
+
+    /// The application's store: the shared document at the spec's macOS path.
+    public static let shared: XRGSettingsStore = {
+        XRGSettingsStore(fileURL: sharedDocumentURL(bundleIdentifier: Bundle.main.bundleIdentifier),
+                         defaults: .standard, catalog: loadCatalog())
     }()
 
     private nonisolated(unsafe) static var legacyCache: [ObjectIdentifier: XRGSettingsStore] = [:]
@@ -135,9 +156,15 @@ import Foundation
         } else {
             // First launch of 0.2.3: migrate the 0.2.2 domain once. A key
             // that fails conversion takes its default and is logged; launch
-            // never blocks (spec §4).
+            // never blocks (spec §4). Keys the user never persisted keep
+            // their EFFECTIVE 0.2.2 values: the registered defaults 0.2.2
+            // served are written into the document wherever they differ from
+            // the catalog default, so an upgrade changes nothing the user
+            // sees (netMinGraphScale stays 1024, review issue 4).
+            let registered = XRGWindowPreferences.defaultValues(
+                metric: Locale.current.measurementSystem != .us, screen: NSScreen.main?.frame ?? .zero)
             let (migrated, diagnostics) = XRGSettingsMigration.fromMacDefaults(
-                defaults.dictionaryRepresentation(), catalog: catalog)
+                defaults.dictionaryRepresentation(), registered: registered, catalog: catalog)
             locked.mutate { $0 = migrated }
             Self.note(diagnostics)
             if let error = persistError() {
@@ -203,6 +230,10 @@ import Foundation
     /// is written atomically, and `didChange` is posted with the id. While
     /// the settings file is unreadable, the change is held in memory and the
     /// file is left untouched until the user confirms `replaceUnreadableFile()`.
+    /// A value that equals the current one is a no-op — no write, no
+    /// notification — so the launch paths that re-assert restored state
+    /// (the sensors window, the collapse latch) leave settings.json
+    /// untouched (spec §2: opening or restoring never rewrites the file).
     public func set(_ id: String, _ value: XRGSettingsValue) throws(XRGSettingsError) {
         guard let entry = catalog.entry(id) else { throw .unknownId }
         switch backend {
@@ -211,6 +242,7 @@ import Foundation
             guard let raw = reverseLegacy(value, for: entry) else { throw .wrongType }
             defaults.set(raw, forKey: key)
         case .document:
+            if XRGSettingsValue.sameValue(value, settingsValue(id)) { return }
             if let error = locked.set(id, value, catalog: catalog) { throw error }
             if loadProblem == nil {
                 if let error = persistError() {
@@ -224,22 +256,35 @@ import Foundation
     /// Store raw 0.2.2-style defaults values (a preferences snapshot, a theme,
     /// a graph presentation or process options blob). The legacy backend
     /// writes them to its domain verbatim, as 0.2.2 did; the document backend
-    /// converts them through the migration into the document. Keys the
-    /// catalog does not map keep their home in `NSUserDefaults` on both
-    /// backends.
+    /// converts them through the migration into the document, and the
+    /// conversion REPLACES what the keys' entries held: a snapshot whose
+    /// value converts to the entry's default — or whose blob omits a field —
+    /// clears the stored value, so restoring defaults cannot silently revert
+    /// (review issue 3). Keys the catalog does not map at all are excluded
+    /// state and keep their home in `NSUserDefaults` on both backends; keys
+    /// it maps with one entry or a whole blob never touch the domain on the
+    /// document backend (decision D5, review issue 2).
     public func setLegacyValues(_ raw: [String: Any]) {
         switch backend {
         case .legacy:
             for (key, value) in raw { defaults.set(value, forKey: key) }
         case .document:
-            for (key, value) in raw where entry(legacyKey: key) == nil {
+            for (key, value) in raw where ids(legacyKey: key).isEmpty {
                 defaults.set(value, forKey: key)
             }
+            let named = raw.keys.flatMap { ids(legacyKey: $0) }
+                .sorted(by: XRGSettingsDocument.precedes)
+            guard !named.isEmpty else { return }
             let (migrated, _) = XRGSettingsMigration.fromMacDefaults(raw, catalog: catalog)
-            guard !migrated.values.isEmpty else { return }
             locked.mutate { document in
-                for (id, value) in migrated.values {
-                    try? document.storeMigrated(id, value, catalog: catalog)
+                for id in named {
+                    if let value = migrated.values[id] {
+                        try? document.storeMigrated(id, value, catalog: catalog)
+                    } else if let entry = catalog.entry(id) {
+                        // The value converted to the entry's default (or the
+                        // blob carries no such field): clear what was stored.
+                        try? document.storeMigrated(id, entry.defaultValue, catalog: catalog)
+                    }
                 }
             }
             if loadProblem == nil {
@@ -247,12 +292,13 @@ import Foundation
                     loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
                 }
             }
-            for id in migrated.values.keys.sorted(by: XRGSettingsDocument.precedes) { post(id) }
+            for id in named { post(id) }
         }
     }
 
     /// Restore every entry of one section to its default. Other sections and
-    /// unknown keys at either level are not touched.
+    /// unknown keys at either level are not touched. A section already at
+    /// its defaults has nothing to remove: the file keeps its bytes and mtime.
     public func resetSection(_ section: String) {
         switch backend {
         case .legacy:
@@ -260,13 +306,15 @@ import Foundation
                 if let key = Self.legacyKey(of: entry) { defaults.removeObject(forKey: key) }
             }
         case .document:
+            let entries = catalog.entries(section: section, platform: .macos)
+            let storedSomething = entries.contains { locked.document.values[$0.id] != nil }
             locked.mutate { $0.resetSection(section, catalog: catalog, platform: .macos) }
-            if loadProblem == nil {
+            if storedSomething, loadProblem == nil {
                 if let error = persistError() {
                     loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
                 }
             }
-            for entry in catalog.entries(section: section, platform: .macos) { post(entry.id) }
+            for entry in entries { post(entry.id) }
         }
     }
 
@@ -288,20 +336,44 @@ import Foundation
     /// Write the document atomically: a temporary file in the same directory,
     /// fsync, then rename over the settings file (spec §2). Mode 0600. Returns
     /// the error that stopped the write, nil on success.
+    ///
+    /// A destination that cannot be written — a settings file whose mode
+    /// lacks owner write, or a directory that is not writable — is never
+    /// replaced: the write is refused before any temporary file exists, the
+    /// change stays in memory and `loadProblem` reports it, exactly like an
+    /// unreadable file (review issue 1). Durability is checked too: a
+    /// temporary file that cannot be opened or synced stops the write
+    /// instead of proceeding to the replacement (review issue 10).
     private func persistError() -> NSError? {
         guard case .document(let fileURL) = backend else { return nil }
         let bytes = locked.document.serialized()
         let directory = fileURL.deletingLastPathComponent()
+        func denied(_ path: String) -> NSError {
+            NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES),
+                    userInfo: [NSLocalizedDescriptionKey: "Permission denied: \(path)"])
+        }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: fileURL.path), access(fileURL.path, W_OK) != 0 {
+                throw denied(fileURL.path)
+            }
+            if access(directory.path, W_OK) != 0 {
+                throw denied(directory.path)
+            }
             let temporary = directory.appendingPathComponent(".settings-\(UUID().uuidString).tmp")
             do {
                 try bytes.write(to: temporary)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
                 let descriptor = open(temporary.path, O_RDONLY)
-                if descriptor >= 0 {
-                    fsync(descriptor)
-                    close(descriptor)
+                guard descriptor >= 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                                  userInfo: [NSLocalizedDescriptionKey: "Could not open \(temporary.path) for fsync"])
+                }
+                let synced = fsync(descriptor) == 0
+                close(descriptor)
+                guard synced else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                                  userInfo: [NSLocalizedDescriptionKey: "Could not sync \(temporary.path)"])
                 }
                 // A rename within the directory cannot leave a half-written
                 // file, and replaces the settings file if it already exists.
@@ -461,18 +533,17 @@ import Foundation
             guard let saved = try? JSONDecoder().decode(XRGProcessOptions.self, from: data), saved.valid else { return nil }
             return saved
         case .document:
+            // The options live in the document under their canonical ids
+            // (`graphs.processes.*`); the legacy pointer only names the blob
+            // they migrated from (review issue 5).
             var options = XRGProcessOptions()
-            for field in ["sort", "search", "user", "limit"] {
-                guard let entry = entry(legacyKey: XRGProcessInspector.optionsKey + "." + field) else { continue }
-                switch settingsValue(entry.id) {
-                case .string(let value):
-                    switch field {
-                    case "sort": options.sort = XRGProcessOptions.Sort(rawValue: value) ?? options.sort
-                    case "search": options.search = value
-                    case "user": options.user = value
-                    default: break
-                    }
-                case .int(let limit): options.limit = min(200, max(25, Int(limit)))
+            for (id, field) in [("graphs.processes.sort", "sort"), ("graphs.processes.filter", "search"),
+                                ("graphs.processes.user", "user"), ("graphs.processes.limit", "limit")] {
+                switch (field, settingsValue(id)) {
+                case ("sort", .string(let sort)): options.sort = XRGProcessOptions.Sort(rawValue: sort) ?? options.sort
+                case ("search", .string(let search)): options.search = search
+                case ("user", .string(let user)): options.user = user
+                case ("limit", .int(let limit)): options.limit = min(200, max(25, Int(limit)))
                 default: break
                 }
             }

@@ -28,11 +28,6 @@ public enum XRGSettingsMigration {
 
     // MARK: Entry points
 
-    /// Migrate a 0.2.2 `NSUserDefaults` persistent domain — the dictionary
-    /// `UserDefaults.dictionaryRepresentation()` or a defaults export decodes
-    /// to — into the shared document. Keys the catalog does not map (Sparkle
-    /// `SU*` state, AppKit window frames, latches, recorded data) are ignored:
-    /// they are not settings and ignoring them is not a problem.
     /// The raw 0.2.2 defaults value of one entry, converted into its document
     /// value; nil when the conversion fails. The macOS settings store reads
     /// live `NSUserDefaults` domains with it (its legacy backend, which keeps
@@ -46,7 +41,22 @@ public enum XRGSettingsMigration {
         return macIdentity(raw)
     }
 
-    public static func fromMacDefaults(_ defaults: [String: Any], catalog: XRGSettingsCatalog)
+    /// Migrate a 0.2.2 `NSUserDefaults` persistent domain — the dictionary
+    /// `UserDefaults.dictionaryRepresentation()` or a defaults export decodes
+    /// to — into the shared document. Keys the catalog does not map (Sparkle
+    /// `SU*` state, AppKit window frames, latches, recorded data) are ignored:
+    /// they are not settings and ignoring them is not a problem.
+    ///
+    /// `registered` carries the defaults 0.2.2 *registered* (its
+    /// `XRGWindowPreferences.defaultValues`), so a mapped key the user never
+    /// persisted keeps its effective 0.2.2 value: whenever that registered
+    /// value differs from the entry's catalog default, it is written into the
+    /// document (`storeMigrated` drops it when it is the same). An upgrade
+    /// therefore changes nothing the user sees — `netMinGraphScale` stays at
+    /// its registered 1024 instead of the catalog's 0, US-locale unit choices
+    /// stay Fahrenheit, and so on. The old domain is only ever read.
+    public static func fromMacDefaults(_ defaults: [String: Any], registered: [String: Any] = [:],
+                                       catalog: XRGSettingsCatalog)
         -> (XRGSettingsDocument, [XRGSettingsDiagnostic]) {
         var document = XRGSettingsDocument()
         var diagnostics: [XRGSettingsDiagnostic] = []
@@ -56,17 +66,60 @@ public enum XRGSettingsMigration {
         // own rules but not its `depends` gating, which belongs to the
         // interactive settings window.
         for entry in catalog.entries.sorted(by: { XRGSettingsDocument.precedes($0.id, $1.id) }) {
-            guard let key = macKey(of: entry), let raw = defaults[key] else { continue }
-            let outcome: TransformOutcome
-            if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
-                outcome = transform(raw, entry)
-            } else {
-                outcome = TransformOutcome(macIdentity(raw))
+            guard let key = macKey(of: entry) else { continue }
+            if let raw = defaults[key] {
+                let outcome: TransformOutcome
+                if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
+                    outcome = transform(raw, entry)
+                } else {
+                    outcome = TransformOutcome(macIdentity(raw))
+                }
+                store(outcome.value, unconvertibleColorSpace: outcome.unconvertibleColorSpace,
+                      for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
+            } else if let raw = registered[key] {
+                // The user never persisted this key: 0.2.2 served the
+                // registered default for it, so the upgrade must keep that
+                // effective value rather than the catalog's fresh-install one.
+                if let value = registeredValue(raw, for: entry) {
+                    store(value, unconvertibleColorSpace: nil,
+                          for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
+                }
             }
-            store(outcome.value, unconvertibleColorSpace: outcome.unconvertibleColorSpace,
-                  for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
         }
         return (document, diagnostics)
+    }
+
+    /// The document value of one 0.2.2 registered default. Registration
+    /// stored most values as the string forms 0.2.2's preferences reader
+    /// parsed (`"YES"`, `"1024"`, `"1.0"`); the effective value is what that
+    /// reader made of them — a boolean for the boolean spellings, then a
+    /// whole number, then a decimal, then the text itself
+    /// (`XRGWindowPreferences.apply`). Numbers and archives are already
+    /// typed and convert directly. The first candidate that converts through
+    /// the entry's own transform and validates wins; nil when none does
+    /// (the entry then simply keeps its catalog default).
+    private static func registeredValue(_ raw: Any, for entry: XRGSettingsEntry) -> XRGSettingsValue? {
+        var candidates: [Any] = []
+        if let text = raw as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch trimmed.uppercased() {
+            case "YES", "TRUE": candidates.append(true)
+            case "NO", "FALSE": candidates.append(false)
+            case "": candidates.append(false)
+            default: break
+            }
+            if let whole = Int(trimmed) { candidates.append(whole) }
+            if let decimal = Double(trimmed) { candidates.append(decimal) }
+            candidates.append(trimmed)
+        } else {
+            candidates.append(raw)
+        }
+        for candidate in candidates {
+            guard let value = legacyValue(candidate, for: entry),
+                  XRGSettingsDocument.validate(value, for: entry) == nil else { continue }
+            return value
+        }
+        return nil
     }
 
     /// Migrate a version-40 Linux settings file, already upgraded by Rust's

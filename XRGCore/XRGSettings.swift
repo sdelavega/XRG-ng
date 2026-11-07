@@ -51,6 +51,10 @@ public final class XRGSettings: NSObject {
     /// True while the document's values are being loaded into the stored
     /// properties, so hydration itself does not write back.
     private var hydrating = false
+    /// Observes the document store's changes so the typed properties follow
+    /// the document without writing anything back (Task 9's instant-apply
+    /// window depends on this).
+    private var storeObserver: NSObjectProtocol?
     @nonobjc private(set) var graphPreferencesStorage = XRGGraphPreferences()
     @nonobjc private(set) var graphPreferencesError: String?
 
@@ -344,6 +348,16 @@ public final class XRGSettings: NSObject {
         super.init()
         finishSetup()
         hydrateFromStore()
+        if store.isDocumentBacked {
+            storeObserver = NotificationCenter.default.addObserver(
+                forName: XRGSettingsStore.didChange, object: store, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshFromStore() }
+            }
+        }
+    }
+
+    isolated deinit {
+        if let storeObserver { NotificationCenter.default.removeObserver(storeObserver) }
     }
 
     private func finishSetup() {
@@ -471,6 +485,17 @@ public final class XRGSettings: NSObject {
 
     // MARK: Persistence
 
+    /// Follow the store: a change the document store posted (another
+    /// consumer's `set`, a `setLegacyValues` snapshot, a `resetSection`)
+    /// refreshes the typed properties and the cached graph preferences
+    /// from the document WITHOUT writing anything back (review issue 8;
+    /// Task 9's instant-apply window depends on this).
+    private func refreshFromStore() {
+        guard store.isDocumentBacked else { return }
+        hydrateFromStore()
+        graphPreferencesStorage = store.graphPreferences()
+    }
+
     /// A write-through is a document write only: the legacy backend keeps
     /// 0.2.2's in-memory behaviour (`XRGWindowPreferences.apply` restores
     /// stored values without touching the suite).
@@ -552,8 +577,11 @@ public final class XRGSettings: NSObject {
         let portable = try theme.document?.encoded()
         if store.isDocumentBacked {
             // The document backend owns the theme fields: the migration
-            // converts each archive into the document's colors, and the
-            // stored color state follows the document immediately.
+            // converts each archive into the document's colors and the
+            // theme's name into the document's theme name, and the stored
+            // color state follows the document immediately. Nothing is
+            // written to the legacy domain — not the mapped theme keys, not
+            // the portable document (decision D5, review issue 2).
             var values: [String: Any] = [:]
             for field in theme.fields {
                 values[field.alphaKey] = field.alpha
@@ -569,7 +597,8 @@ public final class XRGSettings: NSObject {
             hydrating = false
         } else {
             // 0.2.2's behaviour, verbatim: the theme's keys are written to
-            // the injected domain, and the stored state follows them.
+            // the injected domain, and the stored state follows them. The
+            // theme defaults writes live entirely inside this legacy branch.
             for field in theme.fields {
                 // XRGTheme supplies a fixed allowlist of keys.
                 setValue(field.alpha, forKey: field.alphaKey)
@@ -577,13 +606,13 @@ public final class XRGSettings: NSObject {
                 defaults.set(field.alpha, forKey: field.alphaKey)
                 defaults.set(field.archive, forKey: field.colorKey)
             }
-        }
-        if let portable {
-            defaults.set(portable, forKey: XRGTheme.documentKey)
-            defaults.set(theme.document?.name, forKey: XRGTheme.nameKey)
-        } else {
-            defaults.removeObject(forKey: XRGTheme.documentKey)
-            defaults.removeObject(forKey: XRGTheme.nameKey)
+            if let portable {
+                defaults.set(portable, forKey: XRGTheme.documentKey)
+                defaults.set(theme.document?.name, forKey: XRGTheme.nameKey)
+            } else {
+                defaults.removeObject(forKey: XRGTheme.documentKey)
+                defaults.removeObject(forKey: XRGTheme.nameKey)
+            }
         }
     }
 

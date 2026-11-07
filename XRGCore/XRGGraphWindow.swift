@@ -486,7 +486,10 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
         npuView?.samplingWillSleep()
         gpuView?.setCollectionActive(false)
         let wasMinimized = appSettings?.windowCollapsed ?? false
-        backgroundView?.expandWindow(); appSettings?.windowCollapsed = wasMinimized
+        // The latch is re-asserted after the expansion (and an unchanged
+        // value writes nothing), so an exit never rewrites settings.json
+        // just to expand before quitting.
+        backgroundView?.expandWindow(persistingLatch: false); appSettings?.windowCollapsed = wasMinimized
         for timer in [min30Timer, min5Timer, graphTimer, fastTimer, aiTimer] { timer?.invalidate() }
         min30Timer = nil; min5Timer = nil; graphTimer = nil; fastTimer = nil; aiTimer = nil
         xrgCheckURL?.cancelLoading(); xrgCheckURL = nil

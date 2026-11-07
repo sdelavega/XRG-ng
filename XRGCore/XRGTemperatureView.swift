@@ -53,6 +53,14 @@ public final class XRGTemperatureView: NSView, XRGModuleView {
     @nonobjc static func includesUnknownSensors(store: XRGSettingsStore, knownCount: Int) -> Bool {
         store.boolSetting("sources.temperature.show_unknown") || knownCount < 10
     }
+    /// The store the shipping sensor policy reads: the active graph window's
+    /// settings — the shared document store in the real app, the injected
+    /// suite in a fixture scene. Nil while no window is loaded (the caller
+    /// then falls back to the legacy domain, as before). Document changes
+    /// therefore control the shipping sensor UI (review issue 6).
+    @nonobjc public static func policyStore(of window: XRGGraphWindow?) -> XRGSettingsStore? {
+        window?.appSettings?.store
+    }
     public static func showUnknownSensors(_ store: XRGSettingsStore?) -> Bool {
         includesUnknownSensors(store: store ?? XRGSettingsStore.legacy(defaults: .standard),
                                knownCount: XRGTemperatureMiner.shared.knownTemperatureKeyCount)

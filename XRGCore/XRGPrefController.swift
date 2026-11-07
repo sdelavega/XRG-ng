@@ -32,7 +32,12 @@ import UniformTypeIdentifiers
 public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDelegate {
     private let defaults: UserDefaults
     private let center: NotificationCenter
-    private let sensorSource: () -> [XRGSensorData]
+    /// The temperature panel's sensor list. The production closure resolves
+    /// the active graph window's settings store — the shared document in the
+    /// shipping app, an injected suite in a fixture scene — so the panel
+    /// follows the document's unknown-sensor policy (review issue 6);
+    /// fixtures keep their injected closures.
+    private var sensorSource: () -> [XRGSensorData] = { [] }
     private let sensorGroupSource: (String) -> XRGSensorGroup
     private let interfaceSource: (XRGGraphWindow) -> [String]
     private let openURL: (URL) -> Bool
@@ -143,10 +148,6 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
     public override init() {
         defaults = .standard; center = .default; animate = true
         notificationPermission = { await XRGAIBudgetNotifications.requestPermission() }
-        sensorSource = {
-            let miner = XRGTemperatureMiner.shared
-            return miner.locationKeys(includingUnknown: XRGTemperatureView.showUnknownSensors(nil)).compactMap { miner.sensor(forLocation: $0) }
-        }
         sensorGroupSource = { XRGTemperatureMiner.shared.sensorGroup(forKey: $0) }
         interfaceSource = { $0.netView?.miner.networkInterfaces() ?? [] }
         openURL = { NSWorkspace.shared.open($0) }; errorNotice = Self.presentError
@@ -157,6 +158,11 @@ public final class XRGPrefController: NSObject, NSToolbarDelegate, NSWindowDeleg
         chooseOpen = Self.openThemePanel; chooseSave = Self.saveThemePanel
         readFile = XRGTheme.readFile; writeFile = { try $0.write(to: $1, options: .atomic) }
         super.init()
+        sensorSource = { [weak self] in
+            let miner = XRGTemperatureMiner.shared
+            return miner.locationKeys(includingUnknown: XRGTemperatureView.showUnknownSensors(
+                XRGTemperatureView.policyStore(of: self?.xrgGraphWindow))).compactMap { miner.sensor(forLocation: $0) }
+        }
     }
     @nonobjc init(defaults: UserDefaults, center: NotificationCenter = NotificationCenter(),
                   sensors: @escaping () -> [XRGSensorData] = { [] },
