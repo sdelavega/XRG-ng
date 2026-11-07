@@ -10,6 +10,27 @@ use xrg_ng_linux::{
     settings::{GraphStyle, Module, Settings, Store},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+/// Open the store under one fixture root: the store, the Linux view, and
+/// the load problem the app's entry points receive.
+fn open(root: &std::path::Path) -> (Store, Settings, Option<String>) {
+    let store = Store::open(root);
+    let settings = store.settings().clone();
+    let problem = store.load_problem().map(str::to_owned);
+    (store, settings, problem)
+}
+
+/// The Linux view of the document with every setting at its catalog default,
+/// as only the core renders it: the settings a fresh configuration starts
+/// from (the shared catalog's, not the legacy Rust model's).
+fn default_view() -> Settings {
+    let document = match xrg_ng_linux::settings::document::load(
+        br#"{"format": "xrg-ng-settings", "version": 1, "settings": {}}"#,
+    ) {
+        xrg_ng_linux::settings::document::Loaded::Ok { document, .. } => document,
+        _ => unreachable!("the core loads its own defaults"),
+    };
+    xrg_ng_linux::settings::document::linux_view(&document).unwrap()
+}
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -19,10 +40,14 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&p).unwrap();
+        fs::create_dir(p.join("xrg-ng")).unwrap();
         Self(p)
     }
     fn path(&self) -> PathBuf {
-        self.0.join("settings.conf")
+        self.0.join("xrg-ng/settings.conf")
+    }
+    fn json(&self) -> PathBuf {
+        self.0.join("xrg-ng/settings.json")
     }
 }
 impl Drop for Fixture {
@@ -56,7 +81,7 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         }
         let original = serde_json::to_vec(&wire).unwrap();
         fs::write(f.path(), &original).unwrap();
-        let (mut store, loaded, error) = Store::open(Some(f.path()));
+        let (mut store, loaded, error) = open(&f.0);
         assert!(error.is_none(), "version {version}: {error:?}");
         assert_eq!(loaded.version, 40);
         assert!(loaded.modules.iter().all(|m| m.height.is_none()
@@ -81,10 +106,7 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         assert_eq!(loaded_order, original_order);
         assert_eq!(fs::read(f.path()).unwrap(), original);
         store.save(&loaded).unwrap();
-        assert_eq!(
-            Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
-            loaded
-        );
+        assert_eq!(open(&f.0).1, loaded);
     }
     let loaded = Settings::parse(b"theme=Ocean\n").unwrap();
     assert!(loaded.modules.iter().all(|m| m.style == GraphStyle::Hollow));
@@ -104,21 +126,26 @@ fn new_installs_fill_and_each_graph_style_survives_reorder_hide_and_round_trip()
         module.visible = index % 2 == 0;
     }
     settings.move_module(Module::Cpu, 8);
-    let (mut store, _, error) = Store::open(Some(f.path()));
+    let (mut store, _, error) = open(&f.0);
     assert!(error.is_none());
     store.save(&settings).unwrap();
-    assert_eq!(
-        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
-        settings
-    );
+    assert_eq!(open(&f.0).1, settings);
+    // A fresh installation whose legacy file carries an invalid style keeps
+    // that file byte-identical: no document is written over it, and the app
+    // runs on the catalog defaults the core renders.
+    let f = Fixture::new();
     let mut bad = serde_json::to_value(&settings).unwrap();
     bad["modules"][0]["style"] = "unknown".into();
     let original = serde_json::to_vec(&bad).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, fallback, error) = Store::open(Some(f.path()));
+    let (mut store, fallback, error) = open(&f.0);
     assert!(error.is_some());
-    assert!(store.save(&fallback).is_err());
     assert_eq!(fs::read(f.path()).unwrap(), original);
+    assert_eq!(fallback, default_view());
+    assert!(!f.json().exists());
+    store.save(&fallback).unwrap();
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+    assert_eq!(open(&f.0).1, default_view());
 }
 #[test]
 fn all_c_module_styles_import_and_invalid_supported_values_reject_the_entire_import() {

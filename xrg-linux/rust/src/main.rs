@@ -11,9 +11,13 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if args == ["--check-settings"] {
-        let (_, settings, error) =
-            xrg_ng_linux::settings::Store::open(xrg_ng_linux::settings::preferences_path());
-        if let Some(error) = error {
+        let Some(root) = xrg_ng_linux::settings::config_root() else {
+            eprintln!("Preferences invalid: No configuration directory available");
+            return ExitCode::FAILURE;
+        };
+        let store = xrg_ng_linux::settings::Store::open(&root);
+        let settings = store.settings().clone();
+        if let Some(error) = store.load_problem() {
             eprintln!("Preferences invalid: {error}");
             return ExitCode::FAILURE;
         }
@@ -32,9 +36,21 @@ fn main() -> ExitCode {
             },
             _ => return usage(),
         };
-        let (_, settings, error) =
-            xrg_ng_linux::settings::Store::open(xrg_ng_linux::settings::preferences_path());
-        if let Some(error) = error {
+        let (settings, problem) = xrg_ng_linux::settings::config_root()
+            .map(|root| {
+                let store = xrg_ng_linux::settings::Store::open(&root);
+                (
+                    store.settings().clone(),
+                    store.load_problem().map(str::to_owned),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    xrg_ng_linux::settings::Settings::default(),
+                    Some("No configuration directory available".to_owned()),
+                )
+            });
+        if let Some(error) = &problem {
             eprintln!("Preferences unavailable; using default AI sources: {error}");
         }
         let mut sampler = Sampler::live_with_sources(true, settings.ai, settings.weather);

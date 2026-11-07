@@ -10,6 +10,28 @@ use xrg_ng_linux::{
     settings::{Layout, Module, Settings, Store},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// Open the store under one fixture root: the store, the Linux view, and
+/// the load problem the app's entry points receive.
+fn open(root: &std::path::Path) -> (Store, Settings, Option<String>) {
+    let store = Store::open(root);
+    let settings = store.settings().clone();
+    let problem = store.load_problem().map(str::to_owned);
+    (store, settings, problem)
+}
+
+/// The Linux view of the document with every setting at its catalog default,
+/// as only the core renders it: the settings a fresh configuration starts
+/// from (the shared catalog's, not the legacy Rust model's).
+fn default_view() -> Settings {
+    let document = match xrg_ng_linux::settings::document::load(
+        br#"{"format": "xrg-ng-settings", "version": 1, "settings": {}}"#,
+    ) {
+        xrg_ng_linux::settings::document::Loaded::Ok { document, .. } => document,
+        _ => unreachable!("the core loads its own defaults"),
+    };
+    xrg_ng_linux::settings::document::linux_view(&document).unwrap()
+}
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -19,10 +41,14 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&p).unwrap();
+        fs::create_dir(p.join("xrg-ng")).unwrap();
         Self(p)
     }
     fn path(&self) -> PathBuf {
-        self.0.join("settings.conf")
+        self.0.join("xrg-ng/settings.conf")
+    }
+    fn json(&self) -> PathBuf {
+        self.0.join("xrg-ng/settings.json")
     }
 }
 impl Drop for Fixture {
@@ -52,16 +78,13 @@ fn previous_settings_keep_the_original_minimum_without_an_early_write() {
     wire.as_object_mut().unwrap().remove("graph_width");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    let (mut store, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(loaded.graph_width, 140);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     store.save(&loaded).unwrap();
-    assert_eq!(
-        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
-        expected
-    );
+    assert_eq!(open(&f.0).1, expected);
     assert_eq!(Settings::parse(b"theme=Ocean").unwrap().graph_width, 140);
 }
 #[test]
@@ -110,9 +133,13 @@ fn malformed_widths_refuse_the_whole_file_and_preserve_recovery_protection() {
         wire["graph_width"] = invalid;
         let original = serde_json::to_vec(&wire).unwrap();
         fs::write(f.path(), &original).unwrap();
-        let (mut store, fallback, error) = Store::open(Some(f.path()));
+        let (mut store, fallback, error) = open(&f.0);
         assert!(error.is_some());
-        assert!(store.save(&fallback).is_err());
+        assert_eq!(fallback, default_view());
+        // The invalid legacy file is protected; a save starts a fresh document.
+        assert!(!f.json().exists());
+        store.save(&fallback).unwrap();
         assert_eq!(fs::read(f.path()).unwrap(), original);
+        assert_eq!(open(&f.0).1, default_view());
     }
 }

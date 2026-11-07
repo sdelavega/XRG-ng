@@ -137,9 +137,14 @@ def exercise(d, binary, fixture, layout, anchor):
     d.key("ctrl+m")
     state(log, True, True, *thin)
     report = d.close(process, log, identifier)
-    saved = json.loads(prefs.read_text())
+    # 0.2.3 migrates the seeded legacy file once and persists in the unified
+    # settings document; the effective state comes from the app itself, and
+    # the legacy file must remain byte-identical for downgrades.
+    seeded = prefs.read_bytes()
+    saved = json.loads(run([binary, "--check-settings"], env))
     require(saved["window_size"] == {"width": 220, "height": 600}, f"Transient dimensions were saved: {saved['window_size']}")
     require(saved["window_collapse"] == {"collapsed": True, "expand_on_hover": True, "anchor": anchor}, "Manual latch did not persist")
+    require(prefs.read_bytes() == seeded, "The legacy settings.conf was rewritten")
     outside(d)
     restored_log = d.output / f"{name}-restored-app.log"
     process = d.start(f"{name}-restored-app", [binary], d.app_env_reuse(case))
@@ -158,7 +163,7 @@ def exercise(d, binary, fixture, layout, anchor):
     d.key("ctrl+m")
     state(restored_log, False, False, 220, 600)
     restored = d.close(process, restored_log, identifier)
-    require(json.loads(prefs.read_text())["window_size"] == {"width": 220, "height": 600}, "Expanded restore dimensions changed after relaunch")
+    require(json.loads(run([binary, "--check-settings"], d.app_env_reuse(case)))["window_size"] == {"width": 220, "height": 600}, "Expanded restore dimensions changed after relaunch")
     require(report["valid_snapshots"] > 0 and restored["dropped_events"] == 0, "Missing samples or diagnostic overflow")
     require(report["ui_passes"] < 450, f"Unexpected repaint loop: {report['ui_passes']}")
     (d.output / f"{name}.json").write_text(json.dumps({"initial": before, "collapsed": collapsed, "native_report": report, "restored_report": restored}, indent=2) + "\n")

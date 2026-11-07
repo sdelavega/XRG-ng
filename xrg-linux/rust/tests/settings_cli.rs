@@ -44,11 +44,27 @@ fn settings_diagnostic_reports_effective_values_without_rewriting_files() {
         settings
     );
     assert_eq!(fs::read(&file).unwrap(), original);
+    // The migration from the valid run left the document in place; it, not
+    // the legacy file, is the store's file now, so breaking the legacy file
+    // changes nothing and the run stays clean.
     fs::write(&file, b"{broken").unwrap();
+    let invalid = run();
+    assert!(
+        invalid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invalid.stderr)
+    );
+    assert_eq!(fs::read(&file).unwrap(), b"{broken");
+    // A malformed settings.json, unlike the legacy file, is reported and
+    // never overwritten by a diagnostic run.
+    fs::write(root.join("xrg-ng/settings.json"), b"{broken").unwrap();
     let invalid = run();
     assert!(!invalid.status.success());
     assert!(invalid.stdout.is_empty());
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("Preferences invalid"));
-    assert_eq!(fs::read(&file).unwrap(), b"{broken");
+    assert_eq!(
+        fs::read(root.join("xrg-ng/settings.json")).unwrap(),
+        b"{broken"
+    );
     fs::remove_dir_all(root).unwrap();
 }

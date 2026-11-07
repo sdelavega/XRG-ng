@@ -10,7 +10,8 @@ use xrg_ng_linux::{
 fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     let root = std::env::temp_dir().join(format!("xrg-bars-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
-    let path = root.join("settings.conf");
+    let path = root.join("xrg-ng/settings.conf");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut expected = Settings::default();
     expected.modules[0].height = Some(164);
     expected.modules[1].colors.series[0] = Some([0., 1., 0., 0.25]);
@@ -26,19 +27,13 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     wire.as_object_mut().unwrap().remove("activity_bars");
     let original = serde_json::to_vec(&wire).unwrap();
     std::fs::write(&path, &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(path.clone()));
-    assert!(error.is_none());
+    let mut store = Store::open(&root);
+    assert!(store.load_problem().is_none());
+    let loaded = store.settings().clone();
     assert_eq!(loaded, expected);
     assert_eq!(std::fs::read(&path).unwrap(), original);
     store.save(&loaded).unwrap();
-    assert_eq!(
-        Settings::parse(&std::fs::read(&path).unwrap()).unwrap(),
-        expected
-    );
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["version"],
-        40
-    );
+    assert_eq!(Store::open(&root).settings(), &expected);
     std::fs::remove_dir_all(&root).unwrap();
     assert!(
         !Settings::parse(b"theme=Ocean")

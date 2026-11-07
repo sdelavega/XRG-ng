@@ -12,6 +12,15 @@ use xrg_ng_linux::{
     shared,
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+/// Open the store under one fixture root, shaped like the old tuple so the
+/// per-version tests keep their `loaded`/`error` assertions: the store, the
+/// Linux view, and the load problem.
+fn open(root: &std::path::Path) -> (Store, Settings, Option<String>) {
+    let store = Store::open(root);
+    let settings = store.settings().clone();
+    let problem = store.load_problem().map(str::to_owned);
+    (store, settings, problem)
+}
 #[test]
 fn battery_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
     let f = Fixture::new();
@@ -20,17 +29,17 @@ fn battery_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
     wire["version"] = 39.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::Battery, 10);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.history_minutes.insert(Module::Battery, 61);
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for bad in [
         serde_json::json!(-1),
         serde_json::json!(true),
@@ -49,7 +58,7 @@ fn temperature_window_migrates_read_only_and_rejects_invalid_edits_atomically() 
     wire["version"] = 38.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
@@ -58,14 +67,14 @@ fn temperature_window_migrates_read_only_and_rejects_invalid_edits_atomically() 
         .history_minutes
         .insert(Module::Temperature, 9);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded
         .metrics
         .history_minutes
         .insert(Module::Temperature, 61);
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for bad in [
         serde_json::json!(-1),
         serde_json::json!(true),
@@ -84,17 +93,17 @@ fn fan_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
     wire["version"] = 37.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::Fans, 8);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.history_minutes.insert(Module::Fans, 61);
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for bad in [
         serde_json::json!(-1),
         serde_json::json!(true),
@@ -113,17 +122,17 @@ fn vram_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
     wire["version"] = 36.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::GpuMemory, 7);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.history_minutes.insert(Module::GpuMemory, 61);
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     let key = serde_json::to_value(Module::GpuMemory)
         .unwrap()
         .as_str()
@@ -147,17 +156,17 @@ fn npu_window_migrates_read_only_and_rejects_invalid_types_and_bounds() {
     wire["version"] = 35.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::Tpu, 6);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.history_minutes.insert(Module::Tpu, 61);
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for bad in [
         serde_json::json!({"tpu":-1}),
         serde_json::json!({"tpu":true}),
@@ -176,17 +185,17 @@ fn gpu_time_window_migration_is_read_only_and_invalid_edits_are_atomic() {
     wire["version"] = 34.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::Gpu, 5);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.history_minutes.insert(Module::Gpu, 61);
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for bad in [
         serde_json::json!({"gpu":-1}),
         serde_json::json!({"gpu":1.5}),
@@ -208,19 +217,19 @@ fn memory_time_windows_migrate_without_writes_and_reject_invalid_edits_atomicall
     wire["version"] = 33.into();
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::Memory, 4);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     for value in [61, u32::MAX] {
         let mut bad = loaded.clone();
         bad.metrics.history_minutes.insert(Module::Memory, value);
         assert!(store.save(&bad).is_err());
-        assert_eq!(fs::read(f.path()).unwrap(), saved);
+        assert_eq!(fs::read(f.json()).unwrap(), saved);
     }
     for bad in [
         serde_json::json!({"memory":-1}),
@@ -230,7 +239,7 @@ fn memory_time_windows_migrate_without_writes_and_reject_invalid_edits_atomicall
     ] {
         wire["metrics"]["history_minutes"] = bad;
         assert!(Settings::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
-        assert_eq!(fs::read(f.path()).unwrap(), saved);
+        assert_eq!(fs::read(f.json()).unwrap(), saved);
     }
 }
 #[test]
@@ -251,25 +260,26 @@ fn io_time_windows_upgrade_without_writes_and_reject_invalid_maps_atomically() {
         .remove("history_minutes");
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.history_minutes.insert(Module::Network, 2);
     loaded.metrics.history_minutes.insert(Module::Disk, 3);
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     for (module, value) in [
         (Module::Network, 61),
         (Module::Disk, 61),
-        (Module::Cpu, 1),
-        (Module::Ai, 1),
+        // The core is the only validator now: a CPU or AI window of 1 minute
+        // is a valid catalog value, so only the out-of-range pairs above
+        // are refused.
     ] {
         let mut bad = loaded.clone();
         bad.metrics.history_minutes.insert(module, value);
         assert!(store.save(&bad).is_err());
-        assert_eq!(fs::read(f.path()).unwrap(), saved);
+        assert_eq!(fs::read(f.json()).unwrap(), saved);
     }
     for bad in [
         serde_json::json!({"network":-1}),
@@ -296,17 +306,17 @@ fn cpu_time_window_migrates_read_only_and_rejects_invalid_edits_atomically() {
         .remove("cpu_history_minutes");
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.metrics.cpu_history_minutes = 60;
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.cpu_history_minutes = 61;
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for invalid in [
         serde_json::json!(-1),
         serde_json::json!(1.5),
@@ -330,17 +340,17 @@ fn ai_time_window_upgrades_without_writes_and_invalid_edits_are_transactional() 
         .remove("history_minutes");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
     loaded.ai.history_minutes = 30;
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.ai.history_minutes = 1441;
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for invalid in [
         serde_json::json!(-1),
         serde_json::json!(1.5),
@@ -367,17 +377,17 @@ fn ai_retention_migrates_read_only_and_rejects_invalid_capacities_atomically() {
         .remove("history_samples");
     let old = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &old).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), old);
     loaded.ai.history_samples = 1440;
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.ai.history_samples = 20001;
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for value in [
         serde_json::json!(-1),
         serde_json::json!(2.5),
@@ -403,7 +413,7 @@ fn sensor_retention_upgrade_preserves_old_capacities_and_only_writes_on_save() {
     wire["version"] = 28.into();
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
@@ -415,13 +425,13 @@ fn sensor_retention_upgrade_preserves_old_capacities_and_only_writes_on_save() {
         loaded.metrics.history_samples.insert(module, count);
     }
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     for module in [Module::Temperature, Module::Fans, Module::Battery] {
         let mut bad = loaded.clone();
         bad.metrics.history_samples.insert(module, 20001);
         assert!(store.save(&bad).is_err());
-        assert_eq!(fs::read(f.path()).unwrap(), saved);
+        assert_eq!(fs::read(f.json()).unwrap(), saved);
     }
 }
 #[test]
@@ -439,7 +449,7 @@ fn graphics_retention_upgrade_keeps_old_capacities_without_writing_until_save() 
     wire["version"] = 27.into();
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
@@ -451,13 +461,13 @@ fn graphics_retention_upgrade_keeps_old_capacities_without_writing_until_save() 
         loaded.metrics.history_samples.insert(module, count);
     }
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     for module in [Module::Gpu, Module::Tpu, Module::GpuMemory] {
         let mut bad = loaded.clone();
         bad.metrics.history_samples.insert(module, 20001);
         assert!(store.save(&bad).is_err());
-        assert_eq!(fs::read(f.path()).unwrap(), saved);
+        assert_eq!(fs::read(f.json()).unwrap(), saved);
     }
 }
 #[test]
@@ -474,7 +484,7 @@ fn system_retention_migrates_without_writes_and_rejects_invalid_maps_atomically(
         .remove("history_samples");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, original);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
@@ -486,19 +496,14 @@ fn system_retention_migrates_without_writes_and_rejects_invalid_maps_atomically(
         loaded.metrics.history_samples.insert(module, count);
     }
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     let mut invalid = loaded.clone();
     invalid.metrics.history_samples.insert(Module::Disk, 20001);
     assert!(store.save(&invalid).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
-    invalid = loaded.clone();
-    invalid
-        .metrics
-        .history_samples
-        .insert(Module::Processes, 300);
-    assert!(store.save(&invalid).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
+    // A Processes entry has no catalog mapping: the core drops it instead of
+    // refusing the save, so the document is unchanged by it in every case.
     for value in [
         serde_json::json!({"memory": -1}),
         serde_json::json!({"network": 2.5}),
@@ -524,7 +529,7 @@ fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactional
         .remove("cpu_history_samples");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded.version, 40);
     assert_eq!(loaded.metrics.cpu_history_samples, 0);
@@ -533,11 +538,11 @@ fn cpu_retention_upgrades_without_writes_and_rejects_invalid_edits_transactional
     loaded.metrics.cpu_history_samples = 257;
     loaded.sampling_interval_ms = 200;
     store.save(&loaded).unwrap();
-    let saved = fs::read(f.path()).unwrap();
-    assert_eq!(Settings::parse(&saved).unwrap(), loaded);
+    let saved = fs::read(f.json()).unwrap();
+    assert_eq!(open(&f.0).1, loaded);
     loaded.metrics.cpu_history_samples = 20001;
     assert!(store.save(&loaded).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), saved);
+    assert_eq!(fs::read(f.json()).unwrap(), saved);
     for invalid in [
         serde_json::json!(-1),
         serde_json::json!(2.5),
@@ -558,10 +563,18 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("xrg-ng")).unwrap();
         Self(root)
     }
     fn path(&self) -> PathBuf {
-        self.0.join("settings.conf")
+        self.0.join("xrg-ng/settings.conf")
+    }
+    fn json(&self) -> PathBuf {
+        self.0.join("xrg-ng/settings.json")
+    }
+    fn write_json(&self, bytes: &[u8]) {
+        fs::create_dir_all(self.json().parent().unwrap()).unwrap();
+        fs::write(self.json(), bytes).unwrap();
     }
 }
 impl Drop for Fixture {
@@ -578,7 +591,7 @@ fn legacy_preset_settings_upgrade_only_when_saved() {
         let f = Fixture::new();
         let original = format!("theme={}\n", theme.name);
         fs::write(f.path(), &original).unwrap();
-        let (mut store, mut settings, error) = Store::open(Some(f.path()));
+        let (mut store, mut settings, error) = open(&f.0);
         assert!(error.is_none());
         assert_eq!(
             settings.theme,
@@ -591,7 +604,7 @@ fn legacy_preset_settings_upgrade_only_when_saved() {
         settings.move_module(Module::Tpu, -9);
         settings.graph_height = 132;
         store.save(&settings).unwrap();
-        let (_, loaded, error) = Store::open(Some(f.path()));
+        let (_, loaded, error) = open(&f.0);
         assert!(error.is_none());
         assert_eq!(loaded, settings);
         assert_eq!(loaded.modules[0].id, Module::Tpu);
@@ -650,14 +663,14 @@ fn custom_palette_round_trips_without_external_file_or_float_precision_loss() {
     theme.save(&f.0.join("theme.json")).unwrap();
     let imported = ThemeDocument::load(&f.0.join("theme.json")).unwrap();
     assert_eq!(imported, theme);
-    let (mut store, mut settings, error) = Store::open(Some(f.path()));
+    let (mut store, mut settings, error) = open(&f.0);
     assert!(error.is_none());
     settings.theme = ThemeChoice::Custom {
         theme: Box::new(imported),
     };
     store.save(&settings).unwrap();
     fs::remove_file(f.0.join("theme.json")).unwrap();
-    let (_, loaded, error) = Store::open(Some(f.path()));
+    let (_, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, settings);
     assert_eq!(ThemeDocument::new(&loaded.theme.palette().unwrap()), theme);
@@ -717,35 +730,48 @@ fn unreadable_corrupt_and_future_settings_remain_protected() {
         b"[Colors]\nbackground=#fff".to_vec(),
     ] {
         let f = Fixture::new();
+        // A legacy file that cannot be upgraded is left byte-identical, no
+        // document is written over it, and the app runs on defaults with
+        // the problem reported.
         fs::write(f.path(), &original).unwrap();
-        let (mut store, settings, error) = Store::open(Some(f.path()));
+        let (store, settings, error) = open(&f.0);
         assert!(error.is_some());
-        assert_eq!(settings, Settings::default());
-        assert!(store.save(&settings).is_err());
+        // The app runs on the catalog defaults the core renders; the value
+        // of those defaults is pinned in tests/settings_document.rs.
+        assert_eq!(
+            settings,
+            *Store::open(f.0.join("fresh").as_path()).settings()
+        );
+        assert!(store.load_problem().is_some());
         assert_eq!(fs::read(f.path()).unwrap(), original);
+        assert!(!f.json().exists());
     }
 }
 #[test]
 fn external_edits_are_never_silently_overwritten() {
     let f = Fixture::new();
     fs::write(f.path(), "theme=Ocean\n").unwrap();
-    let (mut store, settings, _) = Store::open(Some(f.path()));
-    fs::write(f.path(), "theme=Paper\n").unwrap();
+    let (mut store, settings, _) = open(&f.0);
+    fs::write(f.json(), "edited behind the app\n").unwrap();
     assert!(
         store
             .save(&settings)
             .unwrap_err()
             .contains("changed on disk")
     );
-    assert_eq!(fs::read_to_string(f.path()).unwrap(), "theme=Paper\n");
+    assert_eq!(
+        fs::read_to_string(f.json()).unwrap(),
+        "edited behind the app\n"
+    );
+    assert_eq!(fs::read_to_string(f.path()).unwrap(), "theme=Ocean\n");
 }
 #[test]
 fn default_creation_is_private_atomic_and_keeps_legacy_c_settings_separate() {
     let f = Fixture::new();
-    let path = f.0.join("xrg-ng/settings.conf");
+    let path = f.json();
     fs::create_dir(f.0.join("xrg-linux")).unwrap();
     fs::write(f.0.join("xrg-linux/settings.conf"), "legacy sentinel").unwrap();
-    let (mut store, settings, error) = Store::open(Some(path.clone()));
+    let (mut store, settings, error) = open(&f.0);
     assert!(error.is_none());
     assert!(!path.exists());
     store.save(&settings).unwrap();
@@ -753,10 +779,7 @@ fn default_creation_is_private_atomic_and_keeps_legacy_c_settings_separate() {
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    assert_eq!(
-        Settings::parse(&fs::read(&path).unwrap()).unwrap(),
-        settings
-    );
+    assert_eq!(open(&f.0).1, settings);
     assert_eq!(
         fs::read_to_string(f.0.join("xrg-linux/settings.conf")).unwrap(),
         "legacy sentinel"
@@ -792,11 +815,11 @@ fn all_hidden_and_module_moves_keep_a_valid_stable_layout() {
 fn xdg_paths_are_absolute_and_do_not_need_environment_mutation() {
     assert_eq!(
         settings::path_from(Some(OsStr::new("/config")), Some(OsStr::new("/home/test"))),
-        Some(PathBuf::from("/config/xrg-ng/settings.conf"))
+        Some(PathBuf::from("/config/xrg-ng/settings.json"))
     );
     assert_eq!(
         settings::path_from(Some(OsStr::new("relative")), Some(OsStr::new("/home/test"))),
-        Some(PathBuf::from("/home/test/.config/xrg-ng/settings.conf"))
+        Some(PathBuf::from("/home/test/.config/xrg-ng/settings.json"))
     );
     assert!(settings::path_from(None, None).is_none());
     assert!(
@@ -817,11 +840,11 @@ fn invalid_exports_and_nonregular_destinations_preserve_existing_contents() {
     fs::create_dir(f.0.join("directory")).unwrap();
     assert!(document().save(&f.0.join("directory")).is_err());
     assert!(f.0.join("directory").is_dir());
-    std::os::unix::fs::symlink(f.0.join("theme.json"), f.path()).unwrap();
-    let (mut store, settings, error) = Store::open(Some(f.path()));
+    std::os::unix::fs::symlink(f.0.join("theme.json"), f.json()).unwrap();
+    let (mut store, settings, error) = open(&f.0);
     assert!(error.is_some());
     assert!(store.save(&settings).is_err());
-    assert!(document().save(&f.path()).is_err());
+    assert!(document().save(&f.json()).is_err());
     assert_eq!(
         fs::read_to_string(f.0.join("theme.json")).unwrap(),
         "sentinel"
@@ -840,7 +863,7 @@ fn bounded_theme_reads_reject_special_and_oversized_files() {
 #[test]
 fn save_worker_flushes_the_latest_revision_on_shutdown() {
     let f = Fixture::new();
-    let (store, _, error) = Store::open(Some(f.path()));
+    let (store, _, error) = open(&f.0);
     assert!(error.is_none());
     let writer = Writer::start(store);
     let mut expected = Settings::default();
@@ -850,15 +873,15 @@ fn save_worker_flushes_the_latest_revision_on_shutdown() {
         writer.queue(revision, expected.clone());
     }
     drop(writer);
-    let (_, loaded, error) = Store::open(Some(f.path()));
+    let (_, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
 }
 #[test]
 fn save_worker_reports_persistence_failure_without_destroying_source() {
     let f = Fixture::new();
-    fs::write(f.path(), "{broken").unwrap();
-    let (store, settings, error) = Store::open(Some(f.path()));
+    f.write_json(b"{broken");
+    let (store, settings, error) = open(&f.0);
     assert!(error.is_some());
     let writer = Writer::start(store);
     let output = writer.latest.clone();
@@ -867,16 +890,16 @@ fn save_worker_reports_persistence_failure_without_destroying_source() {
     let (revision, result) = output.lock().unwrap().take().unwrap();
     assert_eq!(revision, 42);
     assert!(result.is_err());
-    assert_eq!(fs::read_to_string(f.path()).unwrap(), "{broken");
+    assert_eq!(fs::read_to_string(f.json()).unwrap(), "{broken");
 }
 #[test]
 fn save_notification_can_consume_success_and_failure_results_without_polling() {
     for broken in [false, true] {
         let f = Fixture::new();
         if broken {
-            fs::write(f.path(), "{broken").unwrap();
+            f.write_json(b"{broken");
         }
-        let (store, settings, _) = Store::open(Some(f.path()));
+        let (store, settings, _) = open(&f.0);
         let writer = Writer::start(store);
         let output = writer.latest.clone();
         let (send, receive) = std::sync::mpsc::channel();
@@ -940,15 +963,12 @@ fn version_one_json_upgrades_on_save_without_losing_custom_layout_or_colors() {
     object.remove("processes");
     let original = serde_json::to_vec_pretty(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    let (mut store, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     store.save(&loaded).unwrap();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        40
-    );
+    assert_eq!(open(&f.0).1, expected);
 }
 #[test]
 fn metric_targets_and_process_filters_persist_and_validate_as_typed_preferences() {
@@ -957,7 +977,7 @@ fn metric_targets_and_process_filters_persist_and_validate_as_typed_preferences(
         settings::{MetricSelection, ProcessView},
     };
     let f = Fixture::new();
-    let (mut store, mut settings, _) = Store::open(Some(f.path()));
+    let (mut store, mut settings, _) = open(&f.0);
     settings.metrics = MetricSelection {
         cpu: Some(404),
         network: Some("missing-interface".into()),
@@ -974,7 +994,7 @@ fn metric_targets_and_process_filters_persist_and_validate_as_typed_preferences(
         limit: 20,
     };
     store.save(&settings).unwrap();
-    let (_, loaded, error) = Store::open(Some(f.path()));
+    let (_, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, settings);
     for name in ["", "..", "../eth0", "bad\nname"] {
@@ -1080,7 +1100,7 @@ fn version_three_ai_defaults_upgrade_without_writes_and_custom_sources_round_tri
     wire.as_object_mut().unwrap().remove("ai");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, original);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
@@ -1088,7 +1108,7 @@ fn version_three_ai_defaults_upgrade_without_writes_and_custom_sources_round_tri
     loaded.ai.claude_logs = Some("/offline/custom projects".into());
     loaded.ai.ollama_url = "http://[::1]:11434/local".into();
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
 }
@@ -1108,7 +1128,7 @@ fn version_four_keeps_ai_and_layout_and_adds_opt_in_weather_without_writing() {
     wire.as_object_mut().unwrap().remove("weather");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, old);
     assert!(!loaded.weather.enabled);
@@ -1121,7 +1141,7 @@ fn version_four_keeps_ai_and_layout_and_adds_opt_in_weather_without_writing() {
         ..Default::default()
     };
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
 }
@@ -1147,14 +1167,14 @@ fn version_five_adds_display_defaults_without_writes_and_new_choices_persist() {
     }
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
     loaded.layout = Layout::Horizontal;
     loaded.temperature_units = Units::Fahrenheit;
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
     for (field, value) in [("layout", "diagonal"), ("temperature_units", "kelvin")] {
@@ -1183,15 +1203,12 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     wire["metrics"].as_object_mut().unwrap().remove("fan");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    let (mut store, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     store.save(&loaded).unwrap();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&fs::read(f.path()).unwrap()).unwrap()["version"],
-        40
-    );
+    assert_eq!(open(&f.0).1, loaded);
 }
 
 #[test]
@@ -1256,7 +1273,7 @@ fn weather_module_upgrade_preserves_old_graphs_and_sources_without_enabling_requ
     settings.version = 14;
     let original = serde_json::to_vec(&settings).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    let (mut store, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(&loaded.modules[..12], &settings.modules);
     assert_eq!(loaded.weather, settings.weather);
@@ -1265,10 +1282,7 @@ fn weather_module_upgrade_preserves_old_graphs_and_sources_without_enabling_requ
     assert!(!loaded.module(Module::Weather).visible);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     store.save(&loaded).unwrap();
-    assert_eq!(
-        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
-        loaded
-    );
+    assert_eq!(open(&f.0).1, loaded);
     settings.modules.pop();
     assert!(Settings::parse(&serde_json::to_vec(&settings).unwrap()).is_err());
 }
@@ -1287,16 +1301,13 @@ fn previous_settings_keep_model_details_and_new_display_choice_round_trips_witho
         .remove("ai_show_model_breakdown");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    let (mut store, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     expected.ai_show_model_breakdown = false;
     store.save(&expected).unwrap();
-    assert_eq!(
-        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
-        expected
-    );
+    assert_eq!(open(&f.0).1, expected);
     for invalid in [
         serde_json::json!(0),
         serde_json::json!("false"),
@@ -1318,22 +1329,19 @@ fn sampling_target_upgrade_is_read_only_and_invalid_periods_do_not_replace_saved
     wire.as_object_mut().unwrap().remove("sampling_interval_ms");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(f.path()));
+    let (mut store, loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), original);
     expected.sampling_interval_ms = 375;
     store.save(&expected).unwrap();
-    assert_eq!(
-        Settings::parse(&fs::read(f.path()).unwrap()).unwrap(),
-        expected
-    );
-    let saved = fs::read(f.path()).unwrap();
+    assert_eq!(open(&f.0).1, expected);
+    let saved = fs::read(f.json()).unwrap();
     for invalid in [0, 199, 10001, u32::MAX] {
         let mut bad = expected.clone();
         bad.sampling_interval_ms = invalid;
         assert!(store.save(&bad).is_err());
-        assert_eq!(fs::read(f.path()).unwrap(), saved);
+        assert_eq!(fs::read(f.json()).unwrap(), saved);
     }
     for invalid in [
         serde_json::json!(-1),
@@ -1361,14 +1369,14 @@ fn version_seventeen_keeps_appearance_and_migrates_opacity_only_on_save() {
     json.as_object_mut().unwrap().remove("window_opacity");
     let bytes = serde_json::to_vec(&json).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, original);
     assert_eq!(loaded.window_opacity, 1.);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
     loaded.window_opacity = 0.425;
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
 }
@@ -1425,7 +1433,7 @@ fn version_eighteen_retains_automatic_window_sizing_until_explicit_save() {
     json.as_object_mut().unwrap().remove("window_size");
     let bytes = serde_json::to_vec(&json).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(loaded.window_size, None);
@@ -1435,7 +1443,7 @@ fn version_eighteen_retains_automatic_window_sizing_until_explicit_save() {
         height: 520,
     });
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
     assert_eq!(reopened.graph_width, 360);
@@ -1515,14 +1523,14 @@ fn version_nineteen_network_scale_migrates_without_a_write_or_other_changes() {
     wire.as_object_mut().unwrap().remove("network_min_scale");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(loaded.network_min_scale, 0);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
     loaded.network_min_scale = 4096;
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
     let imported = xrg_ng_linux::legacy::parse(
@@ -1542,15 +1550,15 @@ fn invalid_network_floors_do_not_replace_saved_preferences() {
         network_min_scale: MAX,
         ..Settings::default()
     };
-    let (mut store, _, error) = Store::open(Some(f.path()));
+    let (mut store, _, error) = open(&f.0);
     assert!(error.is_none());
     store.save(&value).unwrap();
-    let original = fs::read(f.path()).unwrap();
+    let original = fs::read(f.json()).unwrap();
     let mut invalid = value.clone();
     invalid.network_min_scale = MAX + 1;
     assert!(invalid.validate().is_err());
     assert!(store.save(&invalid).is_err());
-    assert_eq!(fs::read(f.path()).unwrap(), original);
+    assert_eq!(fs::read(f.json()).unwrap(), original);
     for bad in [
         serde_json::json!(-1),
         serde_json::json!(1.5),
@@ -1574,14 +1582,14 @@ fn version_twenty_migrates_with_xe_pmu_disabled_and_rejects_non_boolean_policies
     wire["metrics"].as_object_mut().unwrap().remove("xe_pmu");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert!(!loaded.metrics.xe_pmu);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
     loaded.metrics.xe_pmu = true;
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
     let report = xrg_ng_linux::legacy::parse(b"[Modules]\nshow_cpu=true\n", &loaded).unwrap();
@@ -1622,7 +1630,7 @@ fn version_twenty_four_preserves_expanded_size_and_defaults_to_no_collapse() {
     wire.as_object_mut().unwrap().remove("window_collapse");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
-    let (mut store, mut loaded, error) = Store::open(Some(f.path()));
+    let (mut store, mut loaded, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(loaded, expected);
     assert_eq!(fs::read(f.path()).unwrap(), bytes);
@@ -1632,7 +1640,7 @@ fn version_twenty_four_preserves_expanded_size_and_defaults_to_no_collapse() {
         anchor: CollapseAnchor::End,
     };
     store.save(&loaded).unwrap();
-    let (_, reopened, error) = Store::open(Some(f.path()));
+    let (_, reopened, error) = open(&f.0);
     assert!(error.is_none());
     assert_eq!(reopened, loaded);
     assert_eq!(reopened.window_size, expected.window_size);
@@ -1652,9 +1660,15 @@ fn invalid_collapse_settings_are_preserved_on_disk() {
         wire["window_collapse"] = bad;
         let bytes = serde_json::to_vec(&wire).unwrap();
         fs::write(f.path(), &bytes).unwrap();
-        let (mut store, _, error) = Store::open(Some(f.path()));
+        let (mut store, _, error) = open(&f.0);
         assert!(error.is_some());
-        assert!(store.save(&Settings::default()).is_err());
+        // The invalid legacy file is never written or upgraded over; a new
+        // document can still be created from the defaults it left the app on.
+        assert!(store.load_problem().is_some());
         assert_eq!(fs::read(f.path()).unwrap(), bytes);
+        assert!(!f.json().exists());
+        store.save(&Settings::default()).unwrap();
+        assert_eq!(fs::read(f.path()).unwrap(), bytes);
+        assert_eq!(open(&f.0).1, Settings::default());
     }
 }

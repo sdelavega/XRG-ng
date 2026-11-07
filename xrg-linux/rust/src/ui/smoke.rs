@@ -72,8 +72,10 @@ impl Harness {
             graph_reset_expected: None,
         })
     }
-    pub fn path(&self) -> PathBuf {
-        self.directory.join("settings.conf")
+    /// The configuration root the smoke app's settings document lives under.
+    /// The configuration root the smoke app's settings document lives under.
+    pub(super) fn config_root(&self) -> PathBuf {
+        self.directory.clone()
     }
     fn capture(&mut self, ctx: &egui::Context, viewport: egui::ViewportId, variable: &str) {
         let Some(path) = std::env::var_os(variable).map(PathBuf::from) else {
@@ -460,15 +462,19 @@ impl Harness {
                     println!(
                         "SENSOR_HISTORY_SMOKE_OK Temperature=9min/2701positions (1080 fallback) Fans=8min/2401positions (1200 fallback) Battery=10min/3001positions (1320 fallback), capacities applied; unavailable inputs remain unavailable"
                     );
-                    let (_, saved, error) = Store::open(Some(self.path()));
+                    let store = Store::open(&self.directory);
+                    let saved = store.settings();
                     if saved.ai.history_samples != 1440 || saved.ai.history_minutes != 30 {
                         return Err("AI history preference did not survive save/reopen".into());
                     }
                     println!(
                         "AI_HISTORY_PREFS_SMOKE_OK 1440 fallback samples and 30 minute window persisted; live AI collection remains disabled in desktop smoke"
                     );
-                    if error.is_some() || saved != app.settings {
-                        return Err(format!("Settings reopen mismatch: {error:?}"));
+                    if store.load_problem().is_some() || *saved != app.settings {
+                        return Err(format!(
+                            "Settings reopen mismatch: {:?}",
+                            store.load_problem()
+                        ));
                     }
                     // Export and reimport use the same bounded portable formats as Preferences.
                     let palette = app.settings.theme.palette()?;

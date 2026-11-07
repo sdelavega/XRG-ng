@@ -620,11 +620,16 @@ pub fn run(smoke_mode: bool) -> bool {
             return false;
         }
     };
-    let path = harness
+    let root = harness
         .as_ref()
-        .map(|h| h.path())
-        .or_else(settings::preferences_path);
-    let (store, mut settings, error) = Store::open(path);
+        .map(|h| h.config_root())
+        .or_else(settings::config_root)
+        // Without a configuration root the app still runs; every save is
+        // refused and reported through the store's load problem.
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let store = Store::open(&root);
+    let mut settings = store.settings().clone();
+    let error = store.load_problem().map(str::to_owned);
     if smoke_mode {
         settings.ai.enabled = [false; 4];
         settings.ai.ollama = false;

@@ -117,7 +117,8 @@ fn snapshot_guards_include_optional_curves_and_only_invalidate_the_changed_graph
 fn version_eleven_loads_existing_sensor_choices_without_writing_and_protects_invalid_new_files() {
     let root = std::env::temp_dir().join(format!("xrg-sensor-settings-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
-    let path = root.join("settings.conf");
+    let path = root.join("xrg-ng/settings.conf");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut expected = Settings::default();
     expected.metrics.temperature = Some("saved-offline-temperature".into());
     expected.metrics.fan = Some("saved-offline-fan".into());
@@ -131,19 +132,24 @@ fn version_eleven_loads_existing_sensor_choices_without_writing_and_protects_inv
         .retain(|m| m["id"] != "weather");
     let original = serde_json::to_vec(&wire).unwrap();
     std::fs::write(&path, &original).unwrap();
-    let (mut store, loaded, error) = Store::open(Some(path.clone()));
-    assert!(error.is_none());
+    let mut store = Store::open(&root);
+    assert!(store.load_problem().is_none());
+    let loaded = store.settings().clone();
     assert_eq!(loaded, expected);
     assert_eq!(std::fs::read(&path).unwrap(), original);
     store.save(&loaded).unwrap();
+    assert_eq!(Store::open(&root).settings(), &expected);
     let mut invalid = serde_json::to_value(&expected).unwrap();
     invalid["metrics"]["temperature_extra"] =
         serde_json::json!(["saved-offline-temperature", null]);
     let original = serde_json::to_vec(&invalid).unwrap();
     std::fs::write(&path, &original).unwrap();
-    let (mut protected, fallback, error) = Store::open(Some(path.clone()));
-    assert!(error.is_some());
-    assert!(protected.save(&fallback).is_err());
+    let protected = Store::open(&root);
+    // The settings document from the successful save is the store's file now;
+    // the invalid legacy file is never written over.
+    assert!(protected.load_problem().is_none());
+    let fallback = protected.settings().clone();
+    assert_eq!(fallback, expected);
     assert_eq!(std::fs::read(&path).unwrap(), original);
     std::fs::remove_dir_all(&root).unwrap();
 }

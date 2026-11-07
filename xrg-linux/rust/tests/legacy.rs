@@ -11,6 +11,15 @@ use xrg_ng_linux::{
     settings::{Module, Settings, Store, ThemeChoice},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// Open the store under one fixture root: the store, the Linux view, and
+/// the load problem the app's entry points receive.
+fn open(root: &std::path::Path) -> (Store, Settings, Option<String>) {
+    let store = Store::open(root);
+    let settings = store.settings().clone();
+    let problem = store.load_problem().map(str::to_owned);
+    (store, settings, problem)
+}
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -276,14 +285,14 @@ fn source_is_read_only_imported_copy_saves_only_to_new_store() {
     fs::write(f.source(), data).unwrap();
     let source = fs::read(f.source()).unwrap();
     let new_path = f.0.join("new/settings.conf");
-    let (mut store, base, error) = Store::open(Some(new_path.clone()));
+    let (mut store, base, error) = open(&f.0.join("new"));
     assert!(error.is_none());
     let import = legacy::load(&f.source(), &base).unwrap();
     assert!(!new_path.exists());
     assert_eq!(fs::read(f.source()).unwrap(), source);
     store.save(&import.settings).unwrap();
     assert_eq!(fs::read(f.source()).unwrap(), source);
-    let (_, loaded, error) = Store::open(Some(new_path));
+    let (_, loaded, error) = open(&f.0.join("new"));
     assert!(error.is_none());
     assert_eq!(loaded, import.settings);
     assert!(Settings::parse(data).is_err());

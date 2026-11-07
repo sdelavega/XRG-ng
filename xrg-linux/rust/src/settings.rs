@@ -18,7 +18,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -877,7 +877,12 @@ impl Settings {
         }
     }
 }
-pub fn path_from(
+/// The settings document's input bound: the same 1 MiB the settings ABI
+/// accepts, so an oversized document is reported instead of truncated.
+const DOCUMENT_LIMIT: usize = 1_048_576;
+
+/// The configuration root `$XDG_CONFIG_HOME` (absolute) or `~/.config`.
+pub fn config_root_from(
     config_home: Option<&std::ffi::OsStr>,
     home: Option<&std::ffi::OsStr>,
 ) -> Option<PathBuf> {
@@ -885,12 +890,26 @@ pub fn path_from(
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .filter(|p| p.is_absolute());
-    let root = config.or_else(|| {
-        home.map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .map(|p| p.join(".config"))
-    })?;
-    Some(root.join("xrg-ng/settings.conf"))
+    config
+        .or_else(|| {
+            home.map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .map(|p| p.join(".config"))
+        })
+        .filter(|root| root.as_os_str() != "/")
+}
+pub fn config_root() -> Option<PathBuf> {
+    config_root_from(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+/// The unified settings document: `<config root>/xrg-ng/settings.json`.
+pub fn path_from(
+    config_home: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    config_root_from(config_home, home).map(|root| root.join("xrg-ng/settings.json"))
 }
 pub fn preferences_path() -> Option<PathBuf> {
     path_from(
@@ -898,74 +917,312 @@ pub fn preferences_path() -> Option<PathBuf> {
         std::env::var_os("HOME").as_deref(),
     )
 }
-fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match system_file::read(path, LIMIT) {
+fn read_optional(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String> {
+    match system_file::read(path, limit) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
-pub struct Store {
-    path: Option<PathBuf>,
-    expected: Option<Vec<u8>>,
-    blocked: Option<String>,
-}
-impl Store {
-    /// Invalid/unreadable files remain protected for this session. The UI may
-    /// still apply changes in memory and can explain why persistence is unavailable.
-    pub fn open(path: Option<PathBuf>) -> (Self, Settings, Option<String>) {
-        let loaded = path
-            .as_ref()
-            .ok_or_else(|| "No configuration directory available".to_owned())
-            .and_then(|p| read_optional(p));
-        match loaded {
-            Ok(expected) => match expected.as_deref().map(Settings::parse).transpose() {
-                Ok(settings) => (
-                    Self {
-                        path,
-                        expected,
-                        blocked: None,
-                    },
-                    settings.unwrap_or_default(),
-                    None,
-                ),
-                Err(error) => (
-                    Self {
-                        path,
-                        expected,
-                        blocked: Some(error.clone()),
-                    },
-                    Settings::default(),
-                    Some(error),
-                ),
-            },
-            Err(error) => (
-                Self {
-                    path,
-                    expected: None,
-                    blocked: Some(error.clone()),
-                },
-                Settings::default(),
-                Some(error),
-            ),
+/// The canonical bytes of the document with every setting at its default.
+fn default_document() -> Vec<u8> {
+    match document::load(br#"{"format": "xrg-ng-settings", "version": 1, "settings": {}}"#) {
+        document::Loaded::Ok { document, .. } => document,
+        // Unreachable for this constant input: the corpus fixtures hold the
+        // exact bytes the pinned core answers the empty document with.
+        document::Loaded::Unreadable { .. } => {
+            unreachable!("the shared core refuses its own defaults document")
         }
     }
-    pub fn save(&mut self, settings: &Settings) -> Result<(), String> {
-        settings.validate()?;
-        if let Some(error) = &self.blocked {
-            return Err(error.clone());
+}
+/// Every catalog id with its default, from the core, once.
+fn catalog_defaults() -> &'static Vec<(String, serde_json::Value)> {
+    static DEFAULTS: OnceLock<Vec<(String, serde_json::Value)>> = OnceLock::new();
+    DEFAULTS.get_or_init(|| {
+        document::catalog()
+            .expect("the shared core provides the settings catalog")
+            .entries
+            .into_iter()
+            .map(|entry| (entry.id, entry.default))
+            .collect()
+    })
+}
+/// The shared settings document as the Linux app stores it: the canonical
+/// bytes on disk, the Linux view the app reads, and the one load problem
+/// that keeps an unhealthy file safe. Nothing is parsed, validated or
+/// migrated here — every question goes through the shared core's C ABI —
+/// and every write is the bytes the core returned, written atomically with
+/// mode 0600. A file that exists but does not load is never overwritten:
+/// the app runs on defaults, `load_problem` explains, and only
+/// `replace_unreadable` (the user's explicit action) rewrites it.
+pub struct Store {
+    path: PathBuf,
+    document: Vec<u8>,
+    settings: Settings,
+    expected: Option<Vec<u8>>,
+    blocked: bool,
+    problem: Option<String>,
+}
+impl Store {
+    /// Open the settings under one configuration root. An existing
+    /// `xrg-ng/settings.json` is loaded through the core. A missing one is
+    /// migrated once from the legacy `xrg-ng/settings.conf` (which is read
+    /// and left byte-identical for downgrades), and a configuration tree
+    /// with neither starts from the defaults without writing anything.
+    pub fn open(config_root: &Path) -> Self {
+        let path = config_root.join("xrg-ng/settings.json");
+        let conf = config_root.join("xrg-ng/settings.conf");
+        let mut store = Self {
+            path,
+            document: default_document(),
+            settings: Settings::default(),
+            expected: None,
+            blocked: false,
+            problem: None,
+        };
+        match read_optional(&store.path, DOCUMENT_LIMIT) {
+            // The document exists but cannot be read (permissions, size,
+            // special file): it stays untouched and the app runs on defaults.
+            Err(problem) => store.unreadable_file(&problem),
+            Ok(None) => match read_optional(&conf, LIMIT) {
+                Ok(None) => {}
+                Ok(Some(bytes)) => store.migrate_legacy(&bytes),
+                Err(problem) => {
+                    store.problem = Some(format!(
+                        "the legacy settings.conf could not be read: {problem}"
+                    ));
+                }
+            },
+            Ok(Some(bytes)) => match document::load(&bytes) {
+                document::Loaded::Ok {
+                    document,
+                    diagnostics,
+                } => {
+                    store.document = document;
+                    store.expected = Some(bytes);
+                    if let Some(diagnostic) = diagnostics.first() {
+                        store.problem = Some(format!(
+                            "a settings value was replaced: {}",
+                            diagnostic.problem
+                        ));
+                    }
+                }
+                document::Loaded::Unreadable { diagnostic } => {
+                    store.expected = Some(bytes);
+                    store.unreadable_file(&diagnostic.problem);
+                }
+            },
         }
-        let path = self
-            .path
-            .as_ref()
-            .ok_or("No configuration directory available")?;
-        let bytes = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-        if read_optional(path)? != self.expected {
+        // Whatever the load produced, the view the app reads is the one the
+        // core renders from the document the store holds: fresh, migrated
+        // and blocked states alike never fall back to the legacy Rust model.
+        match document::linux_view(&store.document) {
+            Ok(view) => store.settings = view,
+            Err(problem) => {
+                store.document = default_document();
+                store.settings = Settings::default();
+                store.problem = Some(format!(
+                    "the settings document could not be rendered: {problem}"
+                ));
+            }
+        }
+        store
+    }
+    /// The Linux view: the typed settings the core renders from the document.
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+    /// The one problem that keeps the settings from being the file's: an
+    /// unreadable document, a failed migration, or a value the core
+    /// replaced. None while the file and the view agree.
+    pub fn load_problem(&self) -> Option<&str> {
+        self.problem.as_deref()
+    }
+    /// Store one value, validating it through the core, and write the
+    /// resulting document atomically with mode 0600. Refused values leave
+    /// the file and the in-memory settings untouched; a blocked file (it
+    /// exists but does not load) must be `replace_unreadable`d first.
+    pub fn set(&mut self, id: &str, value: serde_json::Value) -> Result<(), document::SetError> {
+        if self.blocked {
+            return Err(document::SetError::InvalidDocument);
+        }
+        let document = document::set(&self.document, id, &value)?;
+        self.commit(document)
+            .map_err(|_| document::SetError::Transport)?;
+        Ok(())
+    }
+    /// Restore every entry of one catalog section to its default, in the
+    /// document the core returns; unknown keys and other sections are
+    /// untouched, and the result is written atomically with mode 0600.
+    pub fn reset_section(&mut self, section: &str) -> Result<(), String> {
+        if self.blocked {
+            return Err("The settings document did not load; replace it before saving".into());
+        }
+        let document = document::reset_section(&self.document, section)?;
+        self.commit(document)
+    }
+    /// The user's explicit replacement of a document that does not load:
+    /// write the current (default) document over it and clear the problem.
+    pub fn replace_unreadable(&mut self) -> Result<(), String> {
+        if !self.blocked {
+            return Ok(());
+        }
+        let settings = document::linux_view(&self.document)?;
+        atomic_write_bounded(&self.path, &self.document, true, true, DOCUMENT_LIMIT)?;
+        self.settings = settings;
+        self.expected = Some(self.document.clone());
+        self.blocked = false;
+        self.problem = None;
+        Ok(())
+    }
+    /// Persist a whole settings view: the transitional whole-object save the
+    /// preferences editor and `Writer` use. The desired document is the one
+    /// the core itself derives from the view (`migrate_v40`), reconciled onto
+    /// the current document key by key through `document::set`, so unknown
+    /// keys (macOS-side settings, future versions) survive untouched and any
+    /// value the core refuses aborts the save before anything is written.
+    pub fn save(&mut self, settings: &Settings) -> Result<(), String> {
+        if self.blocked {
+            return Err("The settings document did not load; replace it before saving".into());
+        }
+        let v40 = serde_json::to_vec(settings).map_err(|e| e.to_string())?;
+        let wanted = match document::migrate_v40(&v40)? {
+            document::Loaded::Ok {
+                document,
+                diagnostics,
+            } => {
+                if let Some(diagnostic) = diagnostics.first() {
+                    return Err(format!(
+                        "the settings did not convert: {}",
+                        diagnostic.problem
+                    ));
+                }
+                document
+            }
+            document::Loaded::Unreadable { diagnostic } => {
+                return Err(format!(
+                    "the settings did not convert: {}",
+                    diagnostic.problem
+                ));
+            }
+        };
+        let document = self.reconcile(&wanted)?;
+        self.commit(document)
+    }
+    /// The current document brought to the desired document through the
+    /// core: every changed or added catalog key is `set`, every catalog key
+    /// the desired document no longer carries (its setting returned to the
+    /// value the view serialises as absent) is `set` to its default, which
+    /// removes it, and everything else — unknown keys, other platforms'
+    /// keys — is left exactly as it is.
+    fn reconcile(&self, wanted: &[u8]) -> Result<Vec<u8>, String> {
+        let current: serde_json::Value =
+            serde_json::from_slice(&self.document).map_err(|e| e.to_string())?;
+        let desired: serde_json::Value =
+            serde_json::from_slice(wanted).map_err(|e| e.to_string())?;
+        let empty = serde_json::Map::new();
+        let current = current["settings"].as_object().unwrap_or(&empty);
+        let desired = desired["settings"].as_object().unwrap_or(&empty);
+        let mut document = self.document.clone();
+        for (id, value) in desired {
+            if current.get(id) != Some(value) {
+                document = document::set(&document, id, value)
+                    .map_err(|_| format!("the settings did not convert: {id}"))?;
+            }
+        }
+        for id in current.keys() {
+            if desired.contains_key(id) {
+                continue;
+            }
+            let Some((_, default)) = catalog_defaults().iter().find(|(entry, _)| entry == id)
+            else {
+                continue;
+            };
+            document = document::set(&document, id, default)
+                .map_err(|_| format!("the settings did not convert: {id}"))?;
+        }
+        Ok(document)
+    }
+    /// Write one core-produced document: rendered, guarded against external
+    /// edits, written atomically with mode 0600, and only then adopted.
+    fn commit(&mut self, document: Vec<u8>) -> Result<(), String> {
+        let settings = document::linux_view(&document)?;
+        if read_optional(&self.path, DOCUMENT_LIMIT)? != self.expected {
             return Err("Settings changed on disk; reopen the app before saving".into());
         }
-        atomic_write(path, &bytes, true)?;
-        self.expected = Some(bytes);
+        atomic_write_bounded(&self.path, &document, true, true, DOCUMENT_LIMIT)?;
+        self.document = document;
+        self.settings = settings;
+        self.expected = Some(self.document.clone());
+        self.problem = None;
         Ok(())
+    }
+    /// One-time migration of the legacy `settings.conf`: upgraded by Rust's
+    /// existing chain to version 40, converted by the core, written once.
+    /// The legacy file itself is never written, and a write failure (a
+    /// read-only configuration tree) keeps the migrated state in memory and
+    /// reports the problem instead of failing the launch.
+    fn migrate_legacy(&mut self, bytes: &[u8]) {
+        let settings = match Settings::parse(bytes) {
+            Ok(settings) => settings,
+            Err(problem) => {
+                self.problem = Some(format!(
+                    "the legacy settings.conf could not be read: {problem}"
+                ));
+                return;
+            }
+        };
+        let v40 = match serde_json::to_vec(&settings) {
+            Ok(v40) => v40,
+            Err(problem) => {
+                self.problem = Some(format!(
+                    "the legacy settings.conf could not be read: {problem}"
+                ));
+                return;
+            }
+        };
+        let (document, diagnostics) = match document::migrate_v40(&v40) {
+            Ok(document::Loaded::Ok {
+                document,
+                diagnostics,
+            }) => (document, diagnostics),
+            Ok(document::Loaded::Unreadable { diagnostic }) => {
+                self.problem = Some(format!(
+                    "the legacy settings.conf did not convert: {}",
+                    diagnostic.problem
+                ));
+                return;
+            }
+            Err(problem) => {
+                self.problem = Some(format!(
+                    "the legacy settings.conf did not convert: {problem}"
+                ));
+                return;
+            }
+        };
+        if let Some(diagnostic) = diagnostics.first() {
+            self.problem = Some(format!(
+                "a legacy settings value was replaced: {}",
+                diagnostic.problem
+            ));
+        }
+        self.document = document.clone();
+        match atomic_write_bounded(&self.path, &document, true, true, DOCUMENT_LIMIT) {
+            Ok(()) => {
+                self.expected = Some(document);
+            }
+            Err(problem) => {
+                self.problem = Some(format!("could not write the settings document: {problem}"));
+            }
+        }
+    }
+    /// An existing settings document that cannot be read or does not load:
+    /// protect it for the whole session and run on defaults.
+    fn unreadable_file(&mut self, problem: &str) {
+        self.blocked = true;
+        self.problem = Some(format!(
+            "the settings document could not be loaded: {problem}"
+        ));
     }
 }
 fn atomic_write(path: &Path, bytes: &[u8], create_parent: bool) -> Result<(), String> {

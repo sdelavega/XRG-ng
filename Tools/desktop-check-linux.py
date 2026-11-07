@@ -248,7 +248,7 @@ class Desktop:
                    "ui_passes_per_second": rate, "native_report": report}
         (self.output / f"{name}.json").write_text(json.dumps(metrics, indent=2) + "\n")
         if interactions:
-            current = json.loads(prefs.read_text())
+            current = json.loads(run([binary, "--check-settings"], env))
             require(current["window_size"] != {"width": 220, "height": 600}, "Native resize was not saved")
             require(all(abs(current["window_size"][axis] - expected_size[axis]) <= 1 for axis in ["width", "height"]),
                     f"Saved size lost native dimensions under zoom: saved={current['window_size']} expected={expected_size}")
@@ -400,7 +400,10 @@ def main():
                     restored, _ = desktop.profile(args.binary.resolve(), args.fixture.resolve(), "restored", period, opacity, 10,
                                                    seed=False, existing=case)
                     sizes = {(e["native_width"], e["native_height"]) for e in restored["native_report"]["events"]}
-                    saved = json.loads((case / "config/xrg-ng/settings.conf").read_text())["window_size"]
+                    # 0.2.3 persists in the unified settings document; the
+                    # effective view comes from the app itself.
+                    saved = json.loads(run([args.binary.resolve(), "--check-settings"],
+                                            desktop.app_env_reuse(case)))["window_size"]
                     require((saved["width"], saved["height"]) in sizes, "Saved window dimensions did not restore")
             (args.output / "summary.json").write_text(json.dumps({"architecture": os.uname().machine,
                 "software_rendering": True, "backend": args.backend, "profiles": profiles}, indent=2) + "\n")

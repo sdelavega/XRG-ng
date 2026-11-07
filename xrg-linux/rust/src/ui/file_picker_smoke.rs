@@ -251,7 +251,9 @@ impl Harness {
         true
     }
     fn unchanged(&self, app: &App, root: &Path) -> Result<(), String> {
-        if app.settings != *self.baseline.as_ref().unwrap() || root.join("settings.conf").exists() {
+        if app.settings != *self.baseline.as_ref().unwrap()
+            || root.join("xrg-ng/settings.json").exists()
+        {
             Err("A chooser or cancelled draft changed active/saved settings".into())
         } else {
             Ok(())
