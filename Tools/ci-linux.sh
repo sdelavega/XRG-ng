@@ -31,6 +31,34 @@ if [[ "$configuration" == release ]]; then cargo_options+=(--release); fi
 cargo fmt --manifest-path xrg-linux/rust/Cargo.toml --check
 cargo clippy "${cargo_options[@]}" --all-targets -- -D warnings
 cargo test "${cargo_options[@]}"
+# The permission tests need the write failures only a non-root user gets;
+# root bypasses file and directory permissions, so the suite self-skips them
+# there (a note for local developer runs only). Run both cases as uid/gid
+# 65534 (nobody) against the binary cargo just built: this invocation is
+# the authority, and the gate fails when that coverage cannot execute.
+cargo_target=$(cargo metadata --manifest-path xrg-linux/rust/Cargo.toml --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+permission_deps="$cargo_target/$configuration/deps"
+permission_bin=""
+for candidate in "$permission_deps"/settings_document-*; do
+    if [[ -f "$candidate" && -x "$candidate" && "$candidate" != *.d ]]; then
+        if [[ -z "$permission_bin" || "$candidate" -nt "$permission_bin" ]]; then
+            permission_bin="$candidate"
+        fi
+    fi
+done
+if [[ -z "$permission_bin" ]]; then
+    echo "The settings_document test binary is missing under $permission_deps" >&2
+    exit 1
+fi
+command -v setpriv >/dev/null || { echo "setpriv is required to run the permission tests without privileges" >&2; exit 1; }
+# The build above ran as root; let nobody read and traverse the artifacts,
+# the shared library the test binary loads among them.
+chmod -R a+rX "$output"
+chmod a+rX "$cargo_target" "$permission_deps"
+chmod a+rx "$permission_bin"
+for test_name in read_only_config_dir_reports_and_runs read_only_document_reports_and_runs; do
+    setpriv --reuid=65534 --regid=65534 --clear-groups env HOME=/tmp "$permission_bin" "$test_name"
+done
 cargo run "${cargo_options[@]}" -- --headless --samples 3
 # Fail if the new frontend acquires GTK/GSK/Cairo/GLib through a helper crate.
 python3 Tools/check-linux-ui-deps.py

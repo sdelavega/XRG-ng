@@ -12,7 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -954,7 +954,9 @@ fn catalog_defaults() -> &'static Vec<(String, serde_json::Value)> {
 /// and every write is the bytes the core returned, written atomically with
 /// mode 0600. A file that exists but does not load is never overwritten:
 /// the app runs on defaults, `load_problem` explains, and only
-/// `replace_unreadable` (the user's explicit action) rewrites it.
+/// `replace_unreadable` (the user's explicit action) rewrites it. A file the
+/// owner cannot write is just as safe: it loads, the app runs on it, and no
+/// save ever replaces it.
 pub struct Store {
     path: PathBuf,
     document: Vec<u8>,
@@ -1000,7 +1002,16 @@ impl Store {
                 } => {
                     store.document = document;
                     store.expected = Some(bytes);
-                    if let Some(diagnostic) = diagnostics.first() {
+                    // A readable file the owner cannot write is a problem the
+                    // app reports and runs with, like any other: it is never
+                    // replaced, and only the owner restoring the write
+                    // permission (not `replace_unreadable`) clears it.
+                    if destination_not_writable(&store.path) {
+                        store.problem = Some(format!(
+                            "the settings document is not writable: {}",
+                            store.path.display()
+                        ));
+                    } else if let Some(diagnostic) = diagnostics.first() {
                         store.problem = Some(format!(
                             "a settings value was replaced: {}",
                             diagnostic.problem
@@ -1033,8 +1044,9 @@ impl Store {
         &self.settings
     }
     /// The one problem that keeps the settings from being the file's: an
-    /// unreadable document, a failed migration, or a value the core
-    /// replaced. None while the file and the view agree.
+    /// unreadable document, a failed migration, a file the owner cannot
+    /// write, or a value the core replaced. None while the file and the view
+    /// agree.
     pub fn load_problem(&self) -> Option<&str> {
         self.problem.as_deref()
     }
@@ -1076,17 +1088,33 @@ impl Store {
         Ok(())
     }
     /// Persist a whole settings view: the transitional whole-object save the
-    /// preferences editor and `Writer` use. The desired document is the one
-    /// the core itself derives from the view (`migrate_v40`), reconciled onto
-    /// the current document key by key through `document::set`, so unknown
-    /// keys (macOS-side settings, future versions) survive untouched and any
-    /// value the core refuses aborts the save before anything is written.
+    /// preferences editor and `Writer` use. Only the entries whose value
+    /// changed since the last loaded or saved view travel through the core's
+    /// `set` path, so a save can never reset a document entry it did not
+    /// derive: the Stocks settings (ruling R2 — a view migration names none
+    /// of them), other platforms' catalog keys and unknown keys are left
+    /// exactly as the document holds them. Any value the core refuses aborts
+    /// the save before anything is written.
     pub fn save(&mut self, settings: &Settings) -> Result<(), String> {
         if self.blocked {
             return Err("The settings document did not load; replace it before saving".into());
         }
+        let desired = self.view_entries(settings)?;
+        let baseline = self.view_entries(&self.settings)?;
+        let document = self.changed_document(&desired, &baseline)?;
+        self.commit(document)
+    }
+    /// The settings map the core derives from one Linux view through
+    /// `migrate_v40`: every entry with a legacy Linux mapping, at the value
+    /// the view carries. Entries at their default are absent, exactly as the
+    /// core's migration writes them, so this map is the complete set of
+    /// document ids a view save may ever touch.
+    fn view_entries(
+        &self,
+        settings: &Settings,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
         let v40 = serde_json::to_vec(settings).map_err(|e| e.to_string())?;
-        let wanted = match document::migrate_v40(&v40)? {
+        match document::migrate_v40(&v40)? {
             document::Loaded::Ok {
                 document,
                 diagnostics,
@@ -1097,40 +1125,35 @@ impl Store {
                         diagnostic.problem
                     ));
                 }
-                document
+                let value: serde_json::Value =
+                    serde_json::from_slice(&document).map_err(|e| e.to_string())?;
+                Ok(value["settings"].as_object().cloned().unwrap_or_default())
             }
-            document::Loaded::Unreadable { diagnostic } => {
-                return Err(format!(
-                    "the settings did not convert: {}",
-                    diagnostic.problem
-                ));
-            }
-        };
-        let document = self.reconcile(&wanted)?;
-        self.commit(document)
+            document::Loaded::Unreadable { diagnostic } => Err(format!(
+                "the settings did not convert: {}",
+                diagnostic.problem
+            )),
+        }
     }
-    /// The current document brought to the desired document through the
-    /// core: every changed or added catalog key is `set`, every catalog key
-    /// the desired document no longer carries (its setting returned to the
-    /// value the view serialises as absent) is `set` to its default, which
-    /// removes it, and everything else — unknown keys, other platforms'
-    /// keys — is left exactly as it is.
-    fn reconcile(&self, wanted: &[u8]) -> Result<Vec<u8>, String> {
-        let current: serde_json::Value =
-            serde_json::from_slice(&self.document).map_err(|e| e.to_string())?;
-        let desired: serde_json::Value =
-            serde_json::from_slice(wanted).map_err(|e| e.to_string())?;
-        let empty = serde_json::Map::new();
-        let current = current["settings"].as_object().unwrap_or(&empty);
-        let desired = desired["settings"].as_object().unwrap_or(&empty);
+    /// The current document with the desired view's changed entries stored
+    /// through the core: every entry whose value differs from the baseline
+    /// view is `set`, every entry the desired view reverted to its default
+    /// is `set` to that default, which removes it again. Entries neither
+    /// map names — the Stocks settings, other platforms' keys, unknown keys
+    /// — are left exactly as they are.
+    fn changed_document(
+        &self,
+        desired: &serde_json::Map<String, serde_json::Value>,
+        baseline: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<u8>, String> {
         let mut document = self.document.clone();
         for (id, value) in desired {
-            if current.get(id) != Some(value) {
+            if baseline.get(id) != Some(value) {
                 document = document::set(&document, id, value)
                     .map_err(|_| format!("the settings did not convert: {id}"))?;
             }
         }
-        for id in current.keys() {
+        for id in baseline.keys() {
             if desired.contains_key(id) {
                 continue;
             }
@@ -1212,7 +1235,12 @@ impl Store {
                 self.expected = Some(document);
             }
             Err(problem) => {
-                self.problem = Some(format!("could not write the settings document: {problem}"));
+                // The path names the file the write failed on, so a
+                // permission problem can be told from any other tree.
+                self.problem = Some(format!(
+                    "could not write {}: {problem}",
+                    self.path.display()
+                ));
             }
         }
     }
@@ -1261,6 +1289,15 @@ fn atomic_write_bounded(
     {
         return Err("Destination must be a regular file, without symlinks".into());
     }
+    // POSIX rename would replace a destination regardless of the file's own
+    // mode, whatever the writable directory allows: a file its owner made
+    // read-only is never replaced.
+    if destination_not_writable(path) {
+        return Err(format!(
+            "Destination is not writable by its owner: {}",
+            path.display()
+        ));
+    }
     for _ in 0..16 {
         let temporary = parent.join(format!(
             ".xrg-ng-{}-{}.tmp",
@@ -1306,6 +1343,24 @@ fn atomic_write_bounded(
         return result.map_err(|e| e.to_string());
     }
     Err("Could not create a unique settings temporary file".into())
+}
+/// Whether an existing file lacks its owner's write permission, so the
+/// atomic write refuses to replace it. The file's own mode decides — not
+/// the uid — so a read-only destination is never rewritten, whatever the
+/// directory permissions or the caller's privileges allow.
+#[cfg(unix)]
+fn destination_not_writable(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o200 == 0)
+        .unwrap_or(false)
+}
+/// Whether an existing file is marked read-only, on the platforms without
+/// POSIX mode bits.
+#[cfg(not(unix))]
+fn destination_not_writable(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().readonly())
+        .unwrap_or(false)
 }
 /// Prefer atomic no-replace rename on Linux (also works on filesystems without
 /// hard links). The hard-link fallback likewise cannot replace a racing writer.

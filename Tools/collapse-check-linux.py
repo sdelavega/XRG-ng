@@ -85,6 +85,9 @@ def exercise(d, binary, fixture, layout, anchor):
     config["layout"] = layout
     config["window_collapse"] = {"collapsed": False, "expand_on_hover": True, "anchor": anchor}
     prefs.write_text(json.dumps(config))
+    # The downgrade-safety baseline is the fixture itself, captured the moment
+    # it is created: both application runs below must leave these exact bytes.
+    seeded = prefs.read_bytes()
     outside(d)
     log = d.output / f"{name}-app.log"
     process = d.start(f"{name}-app", [binary], env)
@@ -140,7 +143,6 @@ def exercise(d, binary, fixture, layout, anchor):
     # 0.2.3 migrates the seeded legacy file once and persists in the unified
     # settings document; the effective state comes from the app itself, and
     # the legacy file must remain byte-identical for downgrades.
-    seeded = prefs.read_bytes()
     saved = json.loads(run([binary, "--check-settings"], env))
     require(saved["window_size"] == {"width": 220, "height": 600}, f"Transient dimensions were saved: {saved['window_size']}")
     require(saved["window_collapse"] == {"collapsed": True, "expand_on_hover": True, "anchor": anchor}, "Manual latch did not persist")
@@ -164,6 +166,7 @@ def exercise(d, binary, fixture, layout, anchor):
     state(restored_log, False, False, 220, 600)
     restored = d.close(process, restored_log, identifier)
     require(json.loads(run([binary, "--check-settings"], d.app_env_reuse(case)))["window_size"] == {"width": 220, "height": 600}, "Expanded restore dimensions changed after relaunch")
+    require(prefs.read_bytes() == seeded, "The restored application run rewrote the legacy settings.conf")
     require(report["valid_snapshots"] > 0 and restored["dropped_events"] == 0, "Missing samples or diagnostic overflow")
     require(report["ui_passes"] < 450, f"Unexpected repaint loop: {report['ui_passes']}")
     (d.output / f"{name}.json").write_text(json.dumps({"initial": before, "collapsed": collapsed, "native_report": report, "restored_report": restored}, indent=2) + "\n")

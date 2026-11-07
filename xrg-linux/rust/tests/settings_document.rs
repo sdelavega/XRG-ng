@@ -56,10 +56,18 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let mut permissions = fs::metadata(&self.0).unwrap().permissions();
-        permissions.set_mode(0o700);
-        let _ = fs::set_permissions(&self.0, permissions);
-        fs::remove_dir_all(&self.0).unwrap();
+        // Restore the owner's permissions on every directory the tests made
+        // read-only — the root and the nested `xrg-ng` — before removal, and
+        // never panic from `Drop`: a failed test must unwind, not abort the
+        // whole binary and leak every remaining fixture.
+        for directory in [self.0.as_path(), &self.0.join("xrg-ng")] {
+            if let Ok(metadata) = fs::metadata(directory) {
+                let mut permissions = metadata.permissions();
+                permissions.set_mode(0o700);
+                let _ = fs::set_permissions(directory, permissions);
+            }
+        }
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -433,6 +441,53 @@ fn read_only_config_dir_reports_and_runs() {
 }
 
 #[test]
+fn read_only_document_reports_and_runs() {
+    // A readable document the owner cannot write, inside a writable
+    // directory: POSIX rename would replace it regardless, so the store must
+    // refuse on its own — the file is never rewritten, the problem names the
+    // path, and the loaded settings keep running in memory. The check is the
+    // file's own mode, so this pin holds for every uid, root included.
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    let original = custom_settings();
+    store.save(&original).unwrap();
+    let expected = store.settings().clone();
+    let bytes = fs::read(f.json()).unwrap();
+    let mut permissions = fs::metadata(f.json()).unwrap().permissions();
+    permissions.set_mode(0o444);
+    fs::set_permissions(f.json(), permissions).unwrap();
+    let mut store = Store::open(f.root());
+    // The readable file still decides the settings; only the problem appears.
+    assert_eq!(store.settings(), &expected);
+    let problem = store
+        .load_problem()
+        .expect("the read-only document is reported");
+    assert!(problem.contains("settings.json"), "{problem}");
+    // Neither a set nor a whole-view save replaces the file or the view.
+    assert!(
+        store
+            .set("general.window.opacity", serde_json::json!(0.5))
+            .is_err()
+    );
+    let mut edited = expected.clone();
+    edited.graph_height = 120;
+    assert!(store.save(&edited).is_err());
+    assert_eq!(fs::read(f.json()).unwrap(), bytes);
+    assert_eq!(store.settings(), &expected);
+    // Restoring the owner's write access lets the next set through.
+    let mut permissions = fs::metadata(f.json()).unwrap().permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(f.json(), permissions).unwrap();
+    store
+        .set("general.window.opacity", serde_json::json!(0.5))
+        .unwrap();
+    assert!(store.load_problem().is_none());
+    let mut changed = expected;
+    changed.window_opacity = 0.5;
+    assert_eq!(Store::open(f.root()).settings(), &changed);
+}
+
+#[test]
 fn unknown_keys_from_macos_survive() {
     let f = Fixture::new();
     let macos = br#"{
@@ -484,6 +539,61 @@ fn unknown_keys_from_macos_survive() {
     let mut reset_view = reloaded;
     reset_view.graph_height = 90;
     assert_eq!(reopened.settings(), &reset_view);
+}
+
+#[test]
+fn ordinary_saves_never_reset_stocks_or_unknown_keys() {
+    // A whole-view save owns only the entries a Linux view can derive: a
+    // migration of the view names no Stocks entry (they ride along, ruling
+    // R2), no macOS-only key and nothing unknown. Whatever the document
+    // already holds there must survive `set` → an unrelated save → a Writer
+    // flush → reopen, byte for byte.
+    let f = Fixture::new();
+    let macos = br#"{
+  "format": "xrg-ng-settings",
+  "settings": {
+    "experiments.alpha.flag": true,
+    "general.window.border_width": 12,
+    "graphs.refresh": 5
+  },
+  "version": 1
+}
+"#
+    .to_vec();
+    f.write_json(&macos);
+    let mut store = Store::open(f.root());
+    assert!(store.load_problem().is_none());
+    // Nondefault Stocks values, stored through the core's own set path.
+    store
+        .set("stocks.symbols", serde_json::json!("MSFT"))
+        .unwrap();
+    store.set("stocks.timeframe", serde_json::json!(6)).unwrap();
+    let expected = store.settings().clone();
+    assert_eq!(expected.stocks.symbols, "MSFT");
+    // An unrelated whole-view save: the path the preferences editor and the
+    // window-resize flush take. It must carry the change and touch nothing
+    // the view does not derive.
+    let mut edited = expected.clone();
+    edited.window_opacity = 0.75;
+    store.save(&edited).unwrap();
+    // A Writer flush of an unchanged view is the same save path again.
+    let store = Store::open(f.root());
+    let writer = Writer::start(store);
+    writer.queue(1, edited.clone());
+    drop(writer);
+    // Reopen: the Stocks values and every key the view cannot name survived
+    // both saves, and the unrelated change did land.
+    let reopened = Store::open(f.root());
+    assert!(reopened.load_problem().is_none());
+    assert_eq!(reopened.settings(), &edited);
+    assert_eq!(reopened.settings().stocks.symbols, "MSFT");
+    assert_eq!(reopened.settings().stocks.timeframe, 6);
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(f.json()).unwrap()).unwrap();
+    assert_eq!(saved["settings"]["stocks.symbols"], "MSFT");
+    assert_eq!(saved["settings"]["stocks.timeframe"], 6);
+    assert_eq!(saved["settings"]["experiments.alpha.flag"], true);
+    assert_eq!(saved["settings"]["general.window.border_width"], 12);
+    assert_eq!(saved["settings"]["graphs.refresh"], 5);
 }
 
 #[test]
