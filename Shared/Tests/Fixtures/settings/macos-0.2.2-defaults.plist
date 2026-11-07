@@ -18,22 +18,22 @@
 	<integer>240</integer>
 	<key>XRGCPUView.Source.v1</key>
 	<data>
-	eyJ2ZXJzaW9uIjoxLCJzb3VyY2UiOiI0In0=
+	eyJzb3VyY2UiOiI0IiwidmVyc2lvbiI6MX0=
 	</data>
 	<key>XRGGPUView.PlotMode.v1</key>
 	<string>utilization</string>
 	<key>XRGGPUView.Source.v1</key>
 	<data>
-	eyJ2ZXJzaW9uIjoxLCJzb3VyY2UiOiJncHUtZXZlLTBhIn0=
+	eyJzb3VyY2UiOiJncHUtZXZlLTBhIiwidmVyc2lvbiI6MX0=
 	</data>
 	<key>XRGMemoryView.HistorySamples.v1</key>
 	<integer>480</integer>
 	<key>XRGModule_CPU_height</key>
-	<real>96</real>
+	<integer>96</integer>
 	<key>XRGModule_CPU_width</key>
 	<real>142.5</real>
 	<key>XRGModule_Memory_height</key>
-	<real>120</real>
+	<integer>120</integer>
 	<key>XRGNetView.HistoryMinutes.v1</key>
 	<integer>3</integer>
 	<key>aiTokensAggregateByModel</key>
@@ -64,7 +64,7 @@
 	<data>
 	YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMS
 	AAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGjCwwTVSRudWxs0w0ODxARElVO
-	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxARMC4xIDAuMiAwLjMgMC44NQAQAYAC0hQV
+	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxARMC4xIDAuMiAwLjMgMC44NQAQAoAC0hQV
 	FhdaJGNsYXNzbmFtZVgkY2xhc3Nlc1dOU0NvbG9yohYYWE5TT2JqZWN0CBEaJCkyN0lM
 	UVNXXWRqd36SlJabpq+3ugAAAAAAAAEBAAAAAAAAABkAAAAAAAAAAAAAAAAAAADD
 	</data>
@@ -74,7 +74,7 @@
 	<data>
 	YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMS
 	AAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGjCwwTVSRudWxs0w0ODxARElVO
-	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxAUMC4wNSAwLjA1IDAuMDggMC4zNQAQAYAC
+	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxAUMC4wNSAwLjA1IDAuMDggMC4zNQAQAoAC
 	0hQVFhdaJGNsYXNzbmFtZVgkY2xhc3Nlc1dOU0NvbG9yohYYWE5TT2JqZWN0CBEaJCky
 	N0lMUVNXXWRqd36Vl5meqbK6vQAAAAAAAAEBAAAAAAAAABkAAAAAAAAAAAAAAAAAAADG
 	</data>
@@ -98,8 +98,8 @@
 	<true/>
 	<key>fanGraphSourcesV1</key>
 	<data>
-	eyJ2ZXJzaW9uIjoxLCJzb3VyY2VzIjpbImZhbi1jcHUtMCIsbnVsbCwiZmFuLXBzdS0y
-	Il19
+	eyJzb3VyY2VzIjpbImZhbi1jcHUtMCIsbnVsbCwiZmFuLXBzdS0yIl0sInZlcnNpb24i
+	OjF9
 	</data>
 	<key>fastCPUUsage</key>
 	<false/>
@@ -186,7 +186,7 @@
 	<data>
 	YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMS
 	AAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGjCwwTVSRudWxs0w0ODxARElVO
-	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTjAuMjUgMC41IDAuNzUAEAGAAtIUFRYXWiRj
+	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTjAuMjUgMC41IDAuNzUAEAKAAtIUFRYXWiRj
 	bGFzc25hbWVYJGNsYXNzZXNXTlNDb2xvcqIWGFhOU09iamVjdAgRGiQpMjdJTFFTV11k
 	and+jY+RlqGqsrUAAAAAAAABAQAAAAAAAAAZAAAAAAAAAAAAAAAAAAAAvg==
 	</data>
@@ -272,7 +272,7 @@
 	<data>
 	YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMS
 	AAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGjCwwTVSRudWxs0w0ODxARElVO
-	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxASMC43IDAuMSAwLjE1IDAuOTUAEAGAAtIU
+	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTxASMC43IDAuMSAwLjE1IDAuOTUAEAKAAtIU
 	FRYXWiRjbGFzc25hbWVYJGNsYXNzZXNXTlNDb2xvcqIWGFhOU09iamVjdAgRGiQpMjdJ
 	TFFTV11kand+k5WXnKewuLsAAAAAAAABAQAAAAAAAAAZAAAAAAAAAAAAAAAAAAAAxA==
 	</data>
@@ -291,13 +291,14 @@
 	<false/>
 	<key>graphPresentationV1</key>
 	<data>
-	eyJ2ZXJzaW9uIjoxLCJvcmRlciI6WyJtZW1vcnkiLCJjcHUiLCJncHUiLCJ3ZWF0aGVy
+	eyJvdmVycmlkZXMiOnsiY3B1Ijp7ImN1cnZlIjoiZG90IiwiaGVpZ2h0IjoxNDAsImNv
+	bG9ycyI6W251bGwsWzAuMSwwLjksMC4xLDFdLG51bGwsWzAsMCwxLDFdXSwiZWZmZWN0
+	IjoyfSwiZ3B1Ijp7ImNvbG9ycyI6W251bGwsbnVsbCxudWxsLG51bGxdLCJoZWlnaHQi
+	OjcyfSwidHB1Ijp7ImNvbG9ycyI6W1swLjIsMC4yLDAuMiwxXSxudWxsLG51bGwsbnVs
+	bF19LCJtZW1vcnkiOnsiY29sb3JzIjpbbnVsbCxudWxsLG51bGwsbnVsbF0sImN1cnZl
+	IjoiaG9sbG93In19LCJvcmRlciI6WyJtZW1vcnkiLCJjcHUiLCJncHUiLCJ3ZWF0aGVy
 	Iiwic3RvY2siLCJiYXR0ZXJ5IiwidGVtcGVyYXR1cmUiLCJmYW5zIiwibmV0d29yayIs
-	ImRpc2siLCJhaSIsInRwdSIsInZyYW0iXSwib3ZlcnJpZGVzIjp7ImNwdSI6eyJoZWln
-	aHQiOjE0MCwiY3VydmUiOiJkb3QiLCJlZmZlY3QiOjIsImNvbG9ycyI6W251bGwsWzAu
-	MSwwLjksMC4xLDFdLG51bGwsWzAsMCwxLDFdXX0sImdwdSI6eyJoZWlnaHQiOjcyfSwi
-	bWVtb3J5Ijp7ImN1cnZlIjoiaG9sbG93In0sInRwdSI6eyJjb2xvcnMiOltbMC4yLDAu
-	MiwwLjIsMV0sbnVsbCxudWxsLG51bGxdfX19
+	ImRpc2siLCJhaSIsInRwdSIsInZyYW0iXSwidmVyc2lvbiI6MX0=
 	</data>
 	<key>graphRefresh</key>
 	<real>0.5</real>
@@ -331,10 +332,16 @@
 	<string>smoke</string>
 	<key>portableThemeDocument</key>
 	<data>
-	eyJmb3JtYXQiOiJ4cmctbmctdGhlbWUiLCJ2ZXJzaW9uIjoxLCJuYW1lIjoiTWlkbmln
-	aHQiLCJjb2xvcnMiOltbMCwwLjA1LDAuMSwwLjg1XSxbMC4wMiwwLjA4LDAuMTIsMC45
-	XSxbMC4xLDAuNiwxLDFdLFswLjksMC43LDAuMiwxXSxbMC43LDAuMiwwLjksMV0sWzAu
-	MDUsMC4wNiwwLjEsMC40XSxbMC45LDAuOTUsMSwxXV19
+	ewogICJjb2xvcnMiIDogWwogICAgWwogICAgICAwLAogICAgICAwLjA1LAogICAgICAw
+	LjEsCiAgICAgIDAuODUKICAgIF0sCiAgICBbCiAgICAgIDAuMDIsCiAgICAgIDAuMDgs
+	CiAgICAgIDAuMTIsCiAgICAgIDAuOQogICAgXSwKICAgIFsKICAgICAgMC4xLAogICAg
+	ICAwLjYsCiAgICAgIDEsCiAgICAgIDEKICAgIF0sCiAgICBbCiAgICAgIDAuOSwKICAg
+	ICAgMC43LAogICAgICAwLjIsCiAgICAgIDEKICAgIF0sCiAgICBbCiAgICAgIDAuNywK
+	ICAgICAgMC4yLAogICAgICAwLjksCiAgICAgIDEKICAgIF0sCiAgICBbCiAgICAgIDAu
+	MDUsCiAgICAgIDAuMDYsCiAgICAgIDAuMSwKICAgICAgMC40CiAgICBdLAogICAgWwog
+	ICAgICAwLjksCiAgICAgIDAuOTUsCiAgICAgIDEsCiAgICAgIDEKICAgIF0KICBdLAog
+	ICJmb3JtYXQiIDogInhyZy1uZy10aGVtZSIsCiAgIm5hbWUiIDogIk1pZG5pZ2h0IiwK
+	ICAidmVyc2lvbiIgOiAxCn0K
 	</data>
 	<key>portableThemeName</key>
 	<string>Midnight</string>
@@ -342,8 +349,8 @@
 	<integer>0</integer>
 	<key>processInspectorV1</key>
 	<data>
-	eyJzb3J0IjoibWVtb3J5Iiwic2VhcmNoIjoieHJnIiwidXNlciI6InJ1bm5lciIsImxp
-	bWl0IjoyMDB9
+	eyJsaW1pdCI6MjAwLCJzZWFyY2giOiJ4cmciLCJzb3J0IjoibWVtb3J5IiwidXNlciI6
+	InJ1bm5lciJ9
 	</data>
 	<key>secondaryWeatherGraph</key>
 	<integer>4</integer>
@@ -419,7 +426,7 @@
 	<data>
 	YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMS
 	AAGGoF8QD05TS2V5ZWRBcmNoaXZlctEICVRyb290gAGjCwwTVSRudWxs0w0ODxARElVO
-	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTDAuOTUgMC45NSAxABABgALSFBUWF1okY2xh
+	U1JHQlxOU0NvbG9yU3BhY2VWJGNsYXNzTDAuOTUgMC45NSAxABACgALSFBUWF1okY2xh
 	c3NuYW1lWCRjbGFzc2VzV05TQ29sb3KiFhhYTlNPYmplY3QIERokKTI3SUxRU1ddZGp3
 	fouNj5SfqLCzAAAAAAAAAQEAAAAAAAAAGQAAAAAAAAAAAAAAAAAAALw=
 	</data>
@@ -429,8 +436,8 @@
 	<string>{{216, 136}, {280, 684}}</string>
 	<key>vramGraphSourcesV1</key>
 	<data>
-	eyJ2ZXJzaW9uIjoxLCJzb3VyY2VzIjpbImdwdS1ldmUtMGEiLG51bGwsImdwdS1mbm4t
-	NzciXX0=
+	eyJzb3VyY2VzIjpbImdwdS1ldmUtMGEiLG51bGwsImdwdS1mbm4tNzciXSwidmVyc2lv
+	biI6MX0=
 	</data>
 	<key>weatherHistoryHours</key>
 	<integer>12</integer>

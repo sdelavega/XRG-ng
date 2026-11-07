@@ -57,10 +57,16 @@ public enum XRGSettingsMigration {
 
     /// Migrate a version-40 Linux settings file, already upgraded by Rust's
     /// chain, into the shared document. Each `legacy.linux` pointer is
-    /// resolved against the JSON the same way Rust's serde model names it; a
-    /// pointer that is not there leaves the entry at its default, while a
-    /// JSON null is a value like any other ("not set", or "follow the unit
-    /// system") and is migrated as such.
+    /// resolved against the JSON the same way Rust's serde model names it.
+    /// A pointer that is not there is the option it names, unset: serde
+    /// omits a `None` option entirely (`skip_serializing_if`,
+    /// xrg-linux/rust/src/weather.rs), so an absent pointer is handed to
+    /// the entry's transform as a JSON null, and the transform decides what
+    /// that means — the unit overrides read it as the document's null
+    /// ("follow the unit system"). A transform that cannot read null leaves
+    /// the entry at its default, exactly as before, and an absent value is
+    /// never a failed conversion; a JSON null that is really written is a
+    /// value like any other.
     public static func fromLinuxV40(_ json: Data, catalog: XRGSettingsCatalog) throws
         -> (XRGSettingsDocument, [XRGSettingsDiagnostic]) {
         guard let text = String(data: json, encoding: .utf8),
@@ -70,12 +76,21 @@ public enum XRGSettingsMigration {
         var document = XRGSettingsDocument()
         var diagnostics: [XRGSettingsDiagnostic] = []
         for entry in catalog.entries.sorted(by: { XRGSettingsDocument.precedes($0.id, $1.id) }) {
-            guard let pointer = entry.legacy?.linux,
-                  let raw = value(at: pointer, in: .object(root)) else { continue }
+            guard let pointer = entry.legacy?.linux else { continue }
+            let raw = value(at: pointer, in: .object(root))
             let value: XRGSettingsValue?
             if let name = entry.legacy?.linuxTransform, let transform = linuxTransform(named: name) {
-                value = transform(raw, entry)
+                let converted = transform(raw ?? .null, entry)
+                if converted == nil && raw == nil {
+                    // The pointer is absent and the transform cannot read
+                    // the unset option it stands for, so the entry keeps its
+                    // default — silently, as before: an absent value is not
+                    // a failed conversion.
+                    continue
+                }
+                value = converted
             } else {
+                guard let raw else { continue }
                 value = XRGSettingsValue(json: raw)
             }
             store(value, for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
@@ -406,6 +421,7 @@ public enum XRGSettingsMigration {
         case "inchesHectopascalsIndex": return inchesHectopascalsIndex
         case "secondaryIndex": return secondaryIndex
         case "stockTimeframeIndex": return stockTimeframeIndex
+        case "graphStyleIndex": return graphStyleIndex
         case "gpuPlotMode": return gpuPlotMode
         case "zeroToNull": return zeroToNull
         case "networkInterfaceAll": return networkInterfaceAll
@@ -609,6 +625,15 @@ public enum XRGSettingsMigration {
         }
     }
 
+    private static func graphStyleIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
+        // The Color pane's Display Effect popup stores its index; the four
+        // effects it offers are the graph options editor's effect names, in
+        // the same order.
+        guard let index = macInt(raw), let effect = Int(exactly: index),
+              effectNames.indices.contains(effect) else { return nil }
+        return .string(effectNames[effect])
+    }
+
     private static func gpuPlotMode(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
         guard let mode = raw as? String else { return nil }
         switch mode {
@@ -729,16 +754,25 @@ public enum XRGSettingsMigration {
 
     private static func archiveClassName(of root: ArchiveValue, objects: [ArchiveValue]) -> String? {
         guard case .object(let fields) = root,
-              case .uid(let index)? = fields["$class"], objects.indices.contains(Int(index)),
-              case .object(let classInfo) = objects[Int(index)],
+              case .uid(let index)? = fields["$class"], let position = objectIndex(index, in: objects),
+              case .object(let classInfo) = objects[position],
               case .string(let name)? = classInfo["$classname"] else { return nil }
         return name
     }
 
     private static func archiveReferenced(_ key: String, in fields: [String: ArchiveValue],
                                           objects: [ArchiveValue]) -> ArchiveValue? {
-        guard case .uid(let index)? = fields[key], objects.indices.contains(Int(index)) else { return nil }
-        return objects[Int(index)]
+        guard case .uid(let index)? = fields[key],
+              let position = objectIndex(index, in: objects) else { return nil }
+        return objects[position]
+    }
+
+    /// The object-table position a keyed-archive UID names, nil when the
+    /// value is not a representable index or points outside the table.
+    /// Archive UIDs are untrusted input, so the conversion is exact.
+    private static func objectIndex(_ uid: UInt64, in objects: [ArchiveValue]) -> Int? {
+        guard let index = Int(exactly: uid), objects.indices.contains(index) else { return nil }
+        return index
     }
 
     // MARK: Keyed archives
@@ -761,7 +795,9 @@ public enum XRGSettingsMigration {
     }
 
     /// One `NSKeyedArchiver` archive: the object table and the root object
-    /// its `$top` names.
+    /// its `$top` names. Every index the archive names is untrusted input
+    /// and converted exactly, so a malformed archive is refused here rather
+    /// than trapping.
     private struct KeyedArchive {
         let root: ArchiveValue
         let objects: [ArchiveValue]
@@ -775,19 +811,27 @@ public enum XRGSettingsMigration {
                   case .string("$null")? = objects.first,
                   case .object(let top)? = fields["$top"],
                   case .uid(let rootIndex)? = top["root"],
-                  objects.indices.contains(Int(rootIndex)) else { return nil }
-            self.root = objects[Int(rootIndex)]
+                  let rootPosition = XRGSettingsMigration.objectIndex(rootIndex, in: objects) else {
+                return nil
+            }
+            self.root = objects[rootPosition]
             self.objects = objects
         }
     }
 
     /// A reader for the subset of the binary property-list format keyed
     /// archives use, with the same bounded shapes the XTF decoder accepts.
+    /// Every input it reads is untrusted: the trailer's arithmetic is
+    /// checked (a corrupt table offset must not wrap around into range),
+    /// every byte range is bounds-checked before it is read, and every
+    /// object reference is converted exactly, so a malformed archive is
+    /// refused with an error instead of trapping.
     private struct BinaryPlistReader {
         private static let maximumInput = 64 * 1024
         private static let maximumObjects = 4096
         private static let maximumDepth = 32
         private static let header = Data("bplist00".utf8)
+        private static let corrupt = CocoaError(.fileReadCorruptFile)
 
         private let data: Data
         private let offsets: [Int]
@@ -795,24 +839,30 @@ public enum XRGSettingsMigration {
 
         init(_ input: Data) throws {
             guard input.count >= Self.header.count + 32 + 1, input.count <= Self.maximumInput,
-                  input.prefix(Self.header.count) == Self.header else { throw CocoaError(.fileReadCorruptFile) }
+                  input.prefix(Self.header.count) == Self.header else { throw Self.corrupt }
             let trailer = input.count - 32
-            let offsetIntSize = Int(input[input.count - 26])
-            let referenceSize = Int(input[input.count - 25])
-            let count = Self.uint64(input, input.count - 24, 8)
-            let tableOffset = Self.uint64(input, input.count - 8, 8)
-            guard (1...8).contains(offsetIntSize), (1...8).contains(referenceSize),
+            guard let offsetIntSize = Int(exactly: input[input.count - 26]),
+                  let referenceSize = Int(exactly: input[input.count - 25]),
+                  let count = Self.uint64(input, input.count - 24, 8),
+                  let tableOffset = Self.uint64(input, input.count - 8, 8),
+                  (1...8).contains(offsetIntSize), (1...8).contains(referenceSize),
                   count >= 1, count <= Self.maximumObjects,
-                  tableOffset >= Self.header.count,
-                  tableOffset + count * UInt64(offsetIntSize) <= UInt64(trailer) else {
-                throw CocoaError(.fileReadCorruptFile)
+                  tableOffset >= UInt64(Self.header.count),
+                  // Checked arithmetic: the table must fit inside the input
+                  // without wrapping. The subtraction cannot underflow and
+                  // the multiplication cannot overflow once the earlier
+                  // clauses have held, and guard clauses evaluate in order.
+                  count * UInt64(offsetIntSize) <= UInt64(trailer) &- tableOffset else {
+                throw Self.corrupt
             }
             var offsets: [Int] = []
-            offsets.reserveCapacity(Int(count))
+            offsets.reserveCapacity(Int(clamping: count))
             for index in 0..<count {
-                let offset = Self.uint64(input, Int(tableOffset) + Int(index) * offsetIntSize, offsetIntSize)
-                guard offset < UInt64(trailer) else { throw CocoaError(.fileReadCorruptFile) }
-                offsets.append(Int(offset))
+                let position = tableOffset &+ index &* UInt64(offsetIntSize)
+                guard let offset = Self.uint64(input, Int(clamping: position), offsetIntSize),
+                      offset < UInt64(trailer),
+                      let start = Int(exactly: offset) else { throw Self.corrupt }
+                offsets.append(start)
             }
             self.data = input
             self.offsets = offsets
@@ -827,14 +877,21 @@ public enum XRGSettingsMigration {
 
         private func object(at index: Int, depth: Int) throws -> ArchiveValue {
             guard offsets.indices.contains(index), depth <= Self.maximumDepth else {
-                throw CocoaError(.fileReadCorruptFile)
+                throw Self.corrupt
             }
             var cursor = offsets[index]
             return try parse(at: &cursor, depth: depth)
         }
 
+        /// The object-table position an array or dictionary reference names,
+        /// nil when the reference is not a representable index.
+        private func referenced(_ reference: UInt64) -> Int? {
+            guard let index = Int(exactly: reference) else { return nil }
+            return index
+        }
+
         private func parse(at cursor: inout Int, depth: Int) throws -> ArchiveValue {
-            guard cursor < data.count else { throw CocoaError(.fileReadCorruptFile) }
+            guard cursor < data.count else { throw Self.corrupt }
             let marker = data[cursor]
             cursor += 1
             switch marker >> 4 {
@@ -845,106 +902,118 @@ public enum XRGSettingsMigration {
                 switch marker {
                 case 0x08: return .bool(false)
                 case 0x09: return .bool(true)
-                default: throw CocoaError(.fileReadCorruptFile)
+                default: throw Self.corrupt
                 }
             case 0x1:  // int, big-endian two's complement
                 let size = 1 << Int(marker & 0x0f)
-                guard size <= 8 else { throw CocoaError(.fileReadCorruptFile) }  // no 128-bit
-                let bits = Self.uint64(data, cursor, size)
+                guard size <= 8, let bits = Self.uint64(data, cursor, size) else {
+                    throw Self.corrupt  // no 128-bit ints, no reads past the end
+                }
                 cursor += size
                 let value = Int64(bitPattern: bits << (64 - 8 * size)) >> (64 - 8 * size)
                 return .int(value)
             case 0x2:  // real
                 switch marker & 0x0f {
                 case 0x2:
-                    let bits = UInt32(truncatingIfNeeded: Self.uint64(data, cursor, 4))
+                    guard let bits = Self.uint64(data, cursor, 4) else { throw Self.corrupt }
                     cursor += 4
-                    return .double(Double(Float(bitPattern: bits)))
+                    return .double(Double(Float(bitPattern: UInt32(truncatingIfNeeded: bits))))
                 case 0x3:
-                    let bits = Self.uint64(data, cursor, 8)
+                    guard let bits = Self.uint64(data, cursor, 8) else { throw Self.corrupt }
                     cursor += 8
                     return .double(Double(bitPattern: bits))
-                default: throw CocoaError(.fileReadCorruptFile)
+                default: throw Self.corrupt
                 }
             case 0x4:  // data
                 let count = try length(Int(marker & 0x0f), at: &cursor)
-                guard cursor + count <= data.count else { throw CocoaError(.fileReadCorruptFile) }
+                guard count <= data.count - cursor else { throw Self.corrupt }
                 let payload = data.subdata(in: cursor..<(cursor + count))
                 cursor += count
                 return .data(payload)
             case 0x5:  // ASCII string
                 let count = try length(Int(marker & 0x0f), at: &cursor)
-                guard cursor + count <= data.count,
+                guard count <= data.count - cursor,
                       let text = String(data: data.subdata(in: cursor..<(cursor + count)), encoding: .ascii) else {
-                    throw CocoaError(.fileReadCorruptFile)
+                    throw Self.corrupt
                 }
                 cursor += count
                 return .string(text)
             case 0x6:  // UTF-16BE string; the length counts code units
                 let units = try length(Int(marker & 0x0f), at: &cursor)
-                guard cursor + units * 2 <= data.count,
+                guard units <= (data.count - cursor) / 2,
                       let text = String(data: data.subdata(in: cursor..<(cursor + units * 2)),
                                        encoding: .utf16BigEndian) else {
-                    throw CocoaError(.fileReadCorruptFile)
+                    throw Self.corrupt
                 }
                 cursor += units * 2
                 return .string(text)
             case 0x8:  // UID
                 let size = Int(marker & 0x0f) + 1
-                guard size <= 8 else { throw CocoaError(.fileReadCorruptFile) }
-                let value = Self.uint64(data, cursor, size)
+                guard size <= 8, let value = Self.uint64(data, cursor, size) else {
+                    throw Self.corrupt
+                }
                 cursor += size
                 return .uid(value)
             case 0xa:  // array
                 let count = try length(Int(marker & 0x0f), at: &cursor)
                 var items: [ArchiveValue] = []
                 for _ in 0..<count {
-                    items.append(try object(at: Int(try reference(at: &cursor)), depth: depth + 1))
+                    guard let index = referenced(try reference(at: &cursor)) else { throw Self.corrupt }
+                    items.append(try object(at: index, depth: depth + 1))
                 }
                 return .array(items)
             case 0xd:  // dictionary
                 let count = try length(Int(marker & 0x0f), at: &cursor)
                 var keys: [Int] = []
-                for _ in 0..<count { keys.append(Int(try reference(at: &cursor))) }
+                for _ in 0..<count {
+                    guard let key = referenced(try reference(at: &cursor)) else { throw Self.corrupt }
+                    keys.append(key)
+                }
                 var fields: [String: ArchiveValue] = [:]
                 for key in keys {
                     let keyObject = try object(at: key, depth: depth + 1)
                     guard case .string(let name) = keyObject, name.utf8.count <= 128 else {
-                        throw CocoaError(.fileReadCorruptFile)
+                        throw Self.corrupt
                     }
-                    fields[name] = try object(at: Int(try reference(at: &cursor)), depth: depth + 1)
+                    guard let index = referenced(try reference(at: &cursor)) else { throw Self.corrupt }
+                    fields[name] = try object(at: index, depth: depth + 1)
                 }
                 return .object(fields)
             default:
-                throw CocoaError(.fileReadCorruptFile)
+                throw Self.corrupt
             }
         }
 
         /// A collection length, short form or the int object that follows the
         /// 0xf marker, bounded to the input size.
         private func length(_ info: Int, at cursor: inout Int) throws -> Int {
-            guard cursor < data.count else { throw CocoaError(.fileReadCorruptFile) }
+            guard cursor < data.count else { throw Self.corrupt }
             guard info == 0x0f else { return info }
             let marker = data[cursor]
-            guard marker >> 4 == 0x1, 1 << Int(marker & 0x0f) <= 8 else { throw CocoaError(.fileReadCorruptFile) }
+            guard marker >> 4 == 0x1, 1 << Int(marker & 0x0f) <= 8 else { throw Self.corrupt }
             cursor += 1
             let size = 1 << Int(marker & 0x0f)
-            let value = Self.uint64(data, cursor, size)
+            guard let value = Self.uint64(data, cursor, size) else { throw Self.corrupt }
             cursor += size
-            guard value <= Self.maximumInput else { throw CocoaError(.fileReadCorruptFile) }
-            return Int(value)
+            guard value <= Self.maximumInput, let count = Int(exactly: value) else { throw Self.corrupt }
+            return count
         }
 
         private func reference(at cursor: inout Int) throws -> UInt64 {
-            let value = Self.uint64(data, cursor, referenceSize)
+            guard let value = Self.uint64(data, cursor, referenceSize) else { throw Self.corrupt }
             cursor += referenceSize
             return value
         }
 
-        private static func uint64(_ data: Data, _ start: Int, _ size: Int) -> UInt64 {
+        /// The big-endian unsigned integer `size` bytes wide at `start`, nil
+        /// when those bytes are not all inside the input. Reading past the
+        /// end of a truncated or corrupt archive must refuse, not trap.
+        private static func uint64(_ data: Data, _ start: Int, _ size: Int) -> UInt64? {
+            guard size >= 1, size <= 8, start >= 0, start <= data.count,
+                  size <= data.count - start else { return nil }
             var value: UInt64 = 0
-            for index in start..<(start + size) {
-                value = value << 8 | UInt64(data[index])
+            for byte in data[start..<(start + size)] {
+                value = value << 8 | UInt64(byte)
             }
             return value
         }
@@ -1320,29 +1389,66 @@ public enum XRGSettingsMigration {
         }
     }
 
-    private static func viewTheme(_ document: XRGSettingsDocument, _ catalog: XRGSettingsCatalog) -> JSONValue {
-        let preset = document.value("themes.preset", catalog: catalog)
-        if case .string(let name) = preset, name != "Custom",
-           XRGBuiltinTheme.allCases.contains(where: { $0.name == name }) {
-            return .object(["kind": .string("builtin"), "name": .string(name)])
-        }
-        // A custom theme's document is the palette the appearance entries
-        // carry, in the shared ABI's order, under the theme's name.
-        let paletteIds = ["appearance.window.color", "appearance.graph_background.color",
-                          "appearance.series1.color", "appearance.series2.color", "appearance.series3.color",
-                          "appearance.border.color", "appearance.text.color"]
-        let palette: [[Double]] = paletteIds.map { id in
+    /// The appearance palette entry ids, in the shared ABI's order: window
+    /// background, graph background, three fills, border, text.
+    private static let paletteIds = ["appearance.window.color", "appearance.graph_background.color",
+                                     "appearance.series1.color", "appearance.series2.color",
+                                     "appearance.series3.color", "appearance.border.color",
+                                     "appearance.text.color"]
+
+    /// The colors the platform actually draws: each appearance entry's
+    /// stored color, or its catalog default.
+    private static func effectivePalette(_ document: XRGSettingsDocument, _ catalog: XRGSettingsCatalog)
+        -> [[Double]] {
+        paletteIds.map { id in
             let value = document.value(id, catalog: catalog)
             if case .color(let rgba) = value { return rgba }
             if let entry = catalog.entry(id), case .color(let fallback) = entry.defaultValue { return fallback }
             return [0, 0, 0, 1]
         }
-        return .object([
+    }
+
+    private static func viewTheme(_ document: XRGSettingsDocument, _ catalog: XRGSettingsCatalog) -> JSONValue {
+        let preset = document.value("themes.preset", catalog: catalog)
+        if case .string(let name) = preset, name != "Custom",
+           let builtin = XRGBuiltinTheme.allCases.first(where: { $0.name == name }) {
+            // A selected built-in is only the theme the platform draws while
+            // the palette still is the built-in's. One edited color makes
+            // the effective palette a custom theme — Linux keeps the edit,
+            // under the name of the theme it was edited from.
+            if effectivePalette(document, catalog) == builtin.rgba {
+                return .object(["kind": .string("builtin"), "name": .string(name)])
+            }
+            return customTheme(document, catalog, name: themeName(document, catalog, preset: name))
+        }
+        // A custom theme's document is the palette the appearance entries
+        // carry, in the shared ABI's order, under the theme's name: the
+        // stored name, or the catalog default when no name is stored.
+        if case .string(let stored) = document.values["themes.name"] {
+            return customTheme(document, catalog, name: stored)
+        }
+        if case .string(let resolved) = viewString("themes.name", document, catalog) {
+            return customTheme(document, catalog, name: resolved)
+        }
+        return customTheme(document, catalog, name: "Custom")
+    }
+
+    /// A stored theme name when there is one; otherwise the selected
+    /// preset's name, so an edited preset stays recognisable.
+    private static func themeName(_ document: XRGSettingsDocument, _ catalog: XRGSettingsCatalog,
+                                  preset: String) -> String {
+        if case .string(let stored) = document.values["themes.name"] { return stored }
+        return preset
+    }
+
+    private static func customTheme(_ document: XRGSettingsDocument, _ catalog: XRGSettingsCatalog,
+                                    name: String) -> JSONValue {
+        .object([
             "kind": .string("custom"),
             "theme": .object([
-                "colors": .array(palette.map { viewJSON(.color($0)) }),
+                "colors": .array(effectivePalette(document, catalog).map { viewJSON(.color($0)) }),
                 "format": .string("xrg-ng-theme"),
-                "name": viewString("themes.name", document, catalog),
+                "name": .string(name),
                 "version": .number("1"),
             ]),
         ])

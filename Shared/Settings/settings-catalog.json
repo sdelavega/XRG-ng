@@ -435,7 +435,8 @@
       "macos"
     ],
     "legacy": {
-      "macos": "graphStyle"
+      "macos": "graphStyle",
+      "macosTransform": "graphStyleIndex"
     }
   },
   {

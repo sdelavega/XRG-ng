@@ -443,7 +443,8 @@ public enum XRGSettingsCatalogData {
       "macos"
     ],
     "legacy": {
-      "macos": "graphStyle"
+      "macos": "graphStyle",
+      "macosTransform": "graphStyleIndex"
     }
   },
   {

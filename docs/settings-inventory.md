@@ -86,6 +86,7 @@ the catalog value. Task 4 implements them; this task only names them.
 | `inchesHectopascalsIndex` | converts a pressure units index (0 inches, 1 hectopascals) into its value name. |
 | `secondaryIndex` | converts the secondary weather graph index (0 none, 1 wind, 2 humidity, 3 visibility, 4 dewpoint, 5 pressure) into its value name. |
 | `stockTimeframeIndex` | converts the stock chart index (0, 1, 2, 3) into its month count 1, 3, 6 or 12. |
+| `graphStyleIndex` | converts the display effect index (0 normal, 1 scanlines, 2 pixel grid, 3 retro dots) into its value name. |
 | `gpuPlotMode` | converts the saved GPU plot mode raw value (memoryAndActivity, utilization) into the value name. |
 | `zeroToNull` | converts the macOS value 0, meaning the session or legacy behaviour, into null. |
 | `networkInterfaceAll` | maps the All sentinel, meaning every active interface, to null; other interface names pass through. |

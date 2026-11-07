@@ -178,7 +178,6 @@
     "secondary": "humidity",
     "station": "KSEA",
     "units": "us",
-    "temperature_units": null,
     "distance_units": "metric",
     "pressure_units": "us",
     "wind_units": "mph",
