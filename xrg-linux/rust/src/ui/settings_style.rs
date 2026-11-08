@@ -4,8 +4,8 @@
 //! colour, corner radius, spacing and font size comes from the generated
 //! tokens in `super::aether7b`, and both the style and every painted shape
 //! are audited against exactly this module's colour set. Light and dark
-//! follow the system; the window draws no timed transitions, so reduced
-//! motion is honoured by construction.
+//! follow the system; egui's animation time comes from the motion tokens
+//! and reduced motion makes every transition instant.
 use super::aether7b;
 use eframe::egui::{
     self, Color32, CornerRadius, FontId, Margin, Response, Sense, Stroke, Vec2,
@@ -56,6 +56,45 @@ pub fn dark(ctx: &egui::Context) -> bool {
         Ok("dark") => true,
         _ => ctx.system_theme().unwrap_or_else(|| ctx.theme()) == egui::Theme::Dark,
     }
+}
+
+/// Whether reduced motion was requested: the explicit environment pin
+/// first (`XRG_SETTINGS_REDUCED_MOTION`, standing in for the desktop's
+/// request exactly the way `XRG_SETTINGS_THEME` stands in for its
+/// appearance — the macOS counterpart reads
+/// `accessibilityDisplayShouldReduceMotion`), then the GTK desktop's
+/// own animation preference, read once per process. Absent tools and
+/// failed reads mean "not requested".
+pub fn reduced_motion_requested() -> bool {
+    match std::env::var("XRG_SETTINGS_REDUCED_MOTION").as_deref() {
+        Ok("1" | "true" | "yes" | "on") => return true,
+        Ok("0" | "false" | "no" | "off") => return false,
+        _ => (),
+    }
+    !desktop_animations_enabled()
+}
+
+/// The desktop's animation preference, read once: a GNOME/GTK session
+/// honours `gtk-enable-animations`, so a desktop that turned animations
+/// off asks for reduced motion. The query is bounded and cached; a
+/// missing `gsettings` (headless CI, other desktops) is "not requested".
+fn desktop_animations_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        crate::command::BoundedCommand::default()
+            .output(
+                std::path::Path::new("gsettings"),
+                &[
+                    "get",
+                    "org.gnome.desktop.interface",
+                    "gtk-enable-animations",
+                ],
+                std::time::Duration::from_secs(2),
+                32,
+            )
+            .map(|answer| String::from_utf8_lossy(&answer).trim() != "false")
+            .unwrap_or(true)
+    })
 }
 
 /// The CSS-clamped pill radius (W1): `border-radius` clamps to half the
@@ -115,7 +154,9 @@ pub const TOKEN_RADII: [u8; 5] = [
 /// The complete egui style for one appearance. Everything egui paints
 /// itself — text edits, combos, popups, menus, sliders, tooltips, carets,
 /// scroll bars — takes its colours from these visuals, so the token
-/// palette holds even inside egui's own widget chrome.
+/// palette holds even inside egui's own widget chrome. Animation time
+/// comes from the motion tokens, and a reduced-motion request makes
+/// every egui transition instant (spec §5).
 pub fn style(dark: bool) -> egui::Style {
     let mut style = egui::Style::default();
     let visuals = &mut style.visuals;
@@ -127,8 +168,15 @@ pub fn style(dark: bool) -> egui::Style {
     visuals.extreme_bg_color = aether7b::surface_card(dark);
     visuals.code_bg_color = aether7b::surface_code(dark);
     visuals.hyperlink_color = aether7b::accent_active(dark);
+    visuals.warn_fg_color = aether7b::status_warning(dark);
+    visuals.error_fg_color = aether7b::status_danger(dark);
     visuals.window_shadow = egui::Shadow::NONE;
     visuals.popup_shadow = egui::Shadow::NONE;
+    visuals.text_cursor.stroke = Stroke::new(2., aether7b::text_main(dark));
+    visuals.ime_composition.active_underline_stroke =
+        Stroke::new(1., aether7b::accent_active(dark));
+    visuals.ime_composition.inactive_underline_stroke =
+        Stroke::new(1., aether7b::border_strong(dark));
     // Inputs sit on the strong 3:1 rim (spec §5); everything else is flat.
     let (rim, flat) = (
         Stroke::new(1., aether7b::border_strong(dark)),
@@ -174,6 +222,15 @@ pub fn style(dark: bool) -> egui::Style {
     style.spacing.button_padding = Vec2::new(aether7b::SPACE_S3, aether7b::SPACE_S2);
     style.spacing.window_margin = Margin::same(aether7b::SPACE_S2 as i8);
     style.spacing.menu_margin = Margin::same(aether7b::SPACE_S2 as i8);
+    // The mockup's slider width, through the style's spacing.
+    style.spacing.slider_width = SLIDER_WIDTH;
+    // Motion (spec §5): a typical transition lasts the base motion token,
+    // and reduced motion makes every egui animation instant.
+    style.animation_time = if reduced_motion_requested() {
+        0.
+    } else {
+        aether7b::MOTION_BASE.as_secs_f32()
+    };
     style
 }
 
@@ -214,6 +271,11 @@ pub fn rim_stroke(dark: bool, danger: bool, focused: bool) -> Stroke {
         },
     )
 }
+
+/// The mockup's slider width (`.slider { width: 150px }`): the width the
+/// window's sliders draw at, set through the style's spacing so both the
+/// row sliders and the colour editor's channel sliders share it.
+pub const SLIDER_WIDTH: f32 = 150.;
 
 /// The mockup's aurora wash: concentric circles of the orb token at the
 /// enumerated `WASH_STOPS`, anchored above-left of the canvas — one soft
@@ -280,19 +342,31 @@ pub fn eyebrow(ui: &mut egui::Ui, text: &str, dark: bool) -> Response {
 /// the Carolina rim and the 2 px halo. A disabled ghost button takes no
 /// interaction and no focus, but still lays out and paints. A click takes
 /// the focus — egui leaves it with the pointer alone, and the macOS window
-/// makes a pressed control the first responder.
-pub fn ghost_button(ui: &mut egui::Ui, label: &str, enabled: bool, dark: bool) -> Response {
+/// makes a pressed control the first responder. The salt gives the button
+/// a stable id, so its hover and focus state never bleed onto another
+/// button that allocates at the same point in egui's auto-id sequence.
+pub fn ghost_button(
+    ui: &mut egui::Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    enabled: bool,
+    dark: bool,
+) -> Response {
     let font = sans(aether7b::TYPE_SM.0);
     let galley =
         ui.painter()
             .layout_no_wrap(label.to_owned(), font.clone(), aether7b::text_main(dark));
     let size = galley.size() + Vec2::new(2. * aether7b::SPACE_S3, 2. * aether7b::SPACE_S2);
-    let (rect, response) = if enabled {
-        ui.allocate_exact_size(size, Sense::click())
-    } else {
-        ui.add_enabled_ui(false, |ui| ui.allocate_exact_size(size, Sense::click()))
-            .inner
-    };
+    let (rect, response) = ui
+        .push_id(salt, |ui| {
+            if enabled {
+                ui.allocate_exact_size(size, Sense::click())
+            } else {
+                ui.add_enabled_ui(false, |ui| ui.allocate_exact_size(size, Sense::click()))
+                    .inner
+            }
+        })
+        .inner;
     let corner = CornerRadius::same(aether7b::RADIUS_MD as u8);
     let (fill, stroke) = if !enabled {
         (

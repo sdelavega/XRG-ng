@@ -73,6 +73,20 @@ impl Harness {
     fn quiet(&mut self) -> egui::FullOutput {
         self.frame(vec![])
     }
+    /// One quiet frame on a taller screen: the whole section renders with
+    /// nothing below the scroll fold, for the geometry test's painted-
+    /// label checks over every row.
+    fn quiet_tall(&mut self) -> egui::FullOutput {
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(SCREEN.x, 8000.))),
+            ..Default::default()
+        };
+        let mut output = self.ctx.run_ui(raw, |ui| {
+            self.window.render(ui, &mut self.store, &FixtureSources)
+        });
+        output.textures_delta.clear();
+        output
+    }
     fn click_at(&mut self, centre: Pos2) -> egui::FullOutput {
         let press = vec![
             egui::Event::PointerMoved(centre),
@@ -208,6 +222,92 @@ fn node_centre(output: &egui::FullOutput, label: &str) -> Option<Pos2> {
                 (bounds.y0 + bounds.y1) as f32 / 2.,
             )
         })
+}
+
+/// Every node's bounds carrying this exact label.
+#[allow(dead_code)]
+fn all_labelled(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .map(|tree| {
+            tree.nodes
+                .iter()
+                .filter(|(_, node)| node.label() == Some(label))
+                .filter_map(|(_, node)| node.bounds())
+                .map(|bounds| {
+                    Rect::from_min_max(
+                        Pos2::new(bounds.x0 as f32, bounds.y0 as f32),
+                        Pos2::new(bounds.x1 as f32, bounds.y1 as f32),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The focused widget's exact accessible name, from the frame's tree.
+fn focused_label(output: &egui::FullOutput, focused: Option<egui::Id>) -> Option<String> {
+    let tree = output.platform_output.accesskit_update.as_ref()?;
+    let id = focused?.accesskit_id();
+    tree.nodes
+        .iter()
+        .find(|(node_id, _)| *node_id == id)
+        .and_then(|(_, node)| node.label().map(str::to_owned))
+}
+
+/// Every node of one frame's tree with the given role and exact label.
+fn nodes_with_role(
+    output: &egui::FullOutput,
+    role: egui::accesskit::Role,
+    label: &str,
+) -> Vec<Rect> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .map(|tree| {
+            tree.nodes
+                .iter()
+                .filter(|(_, node)| node.role() == role && node.label() == Some(label))
+                .filter_map(|(_, node)| node.bounds())
+                .map(|bounds| {
+                    Rect::from_min_max(
+                        Pos2::new(bounds.x0 as f32, bounds.y0 as f32),
+                        Pos2::new(bounds.x1 as f32, bounds.y1 as f32),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The rect a painted text shape with exactly this galley text occupies,
+/// overlapping `around`.
+fn painted_text(frame: &egui::FullOutput, text: &str, around: Rect) -> Rect {
+    for clipped in &frame.shapes {
+        if let egui::Shape::Text(painted) = &clipped.shape {
+            let rect = Rect::from_min_size(painted.pos, painted.galley.rect.size());
+            if painted.galley.text() == text && rect.intersects(around) {
+                return rect;
+            }
+        }
+    }
+    panic!("no painted text {text:?} around {around:?}");
+}
+
+/// The value of the text field named `label` — role-filtered, because a
+/// composite row's slider and field can share the catalog label.
+fn field_value(output: &egui::FullOutput, label: &str) -> Option<String> {
+    let tree = output.platform_output.accesskit_update.as_ref()?;
+    tree.nodes
+        .iter()
+        .find(|(_, node)| {
+            node.role() == egui::accesskit::Role::TextInput && node.label() == Some(label)
+        })
+        .and_then(|(_, node)| node.value())
+        .map(|value| value.to_string())
 }
 
 /// The accesskit value of the node labelled `label`, if any.
@@ -601,69 +701,152 @@ fn legacy_import_still_works() {
     assert!(harness.window.take_dirty(), "the import was not reported");
 }
 
+/// The accessible names a section's enabled controls announce, derived
+/// from the catalog exactly as the controls build them (lesson d): the
+/// entry labels, and the subcontrol names composites add.
+fn expected_names(
+    catalog: &Catalog,
+    values: &serde_json::Map<String, Value>,
+    section: &str,
+) -> std::collections::BTreeSet<String> {
+    let mut expected = std::collections::BTreeSet::new();
+    for entry in linux_entries(catalog, section) {
+        if !super::settings_controls::depends_holds(values, &catalog.entries, entry) {
+            continue; // disabled controls never join the focus walk
+        }
+        let label = entry.label.as_str();
+        match entry.control.as_str() {
+            "toggle" | "choice" | "source" | "integer" | "decimal" | "duration" | "text"
+            | "action" => {
+                expected.insert(label.to_owned());
+                // A bytes/s entry also offers its unit selector.
+                if entry
+                    .range
+                    .as_ref()
+                    .is_some_and(|range| range.unit.as_deref() == Some("bytes/s"))
+                {
+                    expected.insert(format!("{label} unit"));
+                }
+            }
+            "color" => {
+                expected.insert(label.to_owned());
+                expected.insert(format!("Inherit the default {label}"));
+            }
+            "path" => {
+                expected.insert(label.to_owned());
+                expected.insert(format!("Choose {label}"));
+            }
+            "segmented" => {
+                for option in entry.options.iter().flatten() {
+                    expected.insert(format!("{label}: {}", option.label));
+                }
+            }
+            "order" => {
+                let ids: Vec<&str> = entry
+                    .default
+                    .as_str()
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                for (index, id) in ids.iter().enumerate() {
+                    let name = super::settings_controls::graph_name(id);
+                    // The endpoint rows' outward buttons are disabled and
+                    // never join the focus walk (lesson d).
+                    if index > 0 {
+                        expected.insert(format!("Move {name} up"));
+                    }
+                    if index + 1 < ids.len() {
+                        expected.insert(format!("Move {name} down"));
+                    }
+                }
+            }
+            other => panic!("unknown control {other}"),
+        }
+    }
+    expected
+}
+
 #[test]
 fn keyboard_navigation_reaches_every_control() {
     let mut harness = Harness::new();
-    harness.window.select_section("weather");
-    // Tab order: the sidebar first, then every control of the section,
-    // each with its catalog label as the accessible name (lesson d).
+    // The sidebar first, in catalog order, then the section's controls —
+    // each focused node's accessible name is exactly its catalog name
+    // (or the subcontrol name its composite derives), never a substring
+    // matched against some other node (lesson d, review issue 6).
     let _ = harness.quiet();
-    let entries: Vec<String> = linux_entries(&harness.catalog, "weather")
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect();
-    let mut visited = Vec::new();
-    let mut sidebar_seen = Vec::new();
-    for _ in 0..96 {
+    let mut sidebar = Vec::new();
+    for _ in 0..8 {
         let frame = harness.frame(vec![key(egui::Key::Tab)]);
         let focused = harness.ctx.memory(|memory| memory.focused());
-        let Some(focused) = focused else {
-            continue;
-        };
-        if let Some(control) = harness
-            .window
-            .rendered()
+        let label = focused_label(&frame, focused)
+            .unwrap_or_else(|| panic!("the Tab walk focused an unnamed node"));
+        sidebar.push(label);
+    }
+    assert_eq!(
+        sidebar,
+        SECTION_TITLES
             .iter()
-            .find(|rendered| rendered.response.id == focused)
-        {
-            if !visited.contains(&control.id) {
-                assert!(
-                    control.label.is_empty() || labelled(&frame, &control.label),
-                    "{} lost its catalog label",
-                    control.id
+            .map(|(_, title)| title.to_owned())
+            .collect::<Vec<_>>(),
+        "the Tab walk did not visit the sidebar first, in order"
+    );
+    let sidebar_names: Vec<&str> = SECTION_TITLES.iter().map(|(_, t)| *t).collect();
+    let mut identities: std::collections::HashMap<egui::Id, String> =
+        std::collections::HashMap::new();
+    for section in harness.catalog.sections.clone() {
+        harness.window.select_section(&section);
+        let _ = harness.quiet();
+        let mut expected = expected_names(&harness.catalog, &harness.values(), &section);
+        if section == "themes" {
+            // The Linux-specific legacy import block, inside the Themes
+            // section's "Import and export" card, is window chrome the
+            // walk must cover with the rest.
+            expected.insert("Legacy Linux settings path".into());
+            expected.insert("Browse legacy settings…".into());
+            expected.insert("Review pasted path…".into());
+        }
+        let mut covered = std::collections::BTreeSet::new();
+        // One full Tab cycle: the sidebar, every focusable control of the
+        // section (composites included), the close button, then back to
+        // the sidebar — egui's Tab order is geometric (the nearest widget
+        // below), so a tall section wraps through off-screen rows and
+        // needs a generous budget.
+        let mut budget = expected.len() * 8 + 64;
+        while covered.len() < expected.len() {
+            if budget == 0 {
+                panic!(
+                    "{section}: the Tab walk never covered {:?}",
+                    expected.difference(&covered).collect::<Vec<_>>()
                 );
-                visited.push(control.id.clone());
             }
-        } else if let Some(title) =
-            frame
-                .platform_output
-                .accesskit_update
-                .as_ref()
-                .and_then(|tree| {
-                    tree.nodes
-                        .iter()
-                        .find(|(id, _)| *id == focused.accesskit_id())
-                        .and_then(|(_, node)| node.label().map(str::to_owned))
-                })
-            && !sidebar_seen.contains(&title)
-        {
-            sidebar_seen.push(title);
+            budget -= 1;
+            let frame = harness.frame(vec![key(egui::Key::Tab)]);
+            let focused = harness.ctx.memory(|memory| memory.focused());
+            let Some(focused) = focused else {
+                continue;
+            };
+            let Some(label) = focused_label(&frame, Some(focused)) else {
+                panic!("{section}: the walk focused a node with no name");
+            };
+            // Identity: the same widget always announces the same name.
+            if let Some(previous) = identities.insert(focused, label.clone()) {
+                assert_eq!(
+                    previous, label,
+                    "{section}: one focusable widget announced two names"
+                );
+            }
+            let known = expected.contains(&label)
+                || sidebar_names.contains(&label.as_str())
+                || label == "Close settings";
+            assert!(
+                known,
+                "{section}: the walk focused an unexpected name {label:?} (expected {expected:?})"
+            );
+            if expected.contains(&label) {
+                covered.insert(label);
+            }
         }
-        if visited.len() == entries.len() {
-            break;
-        }
-    }
-    for title in ["General", "Weather", "Themes & import"] {
-        assert!(
-            sidebar_seen.iter().any(|label| label == title),
-            "the Tab walk never visited the sidebar's {title} button (walked {sidebar_seen:?})"
-        );
-    }
-    for entry in &entries {
-        assert!(
-            visited.iter().any(|id| id == entry),
-            "Tab never reached {entry} (walked {visited:?})"
-        );
     }
 }
 
@@ -878,12 +1061,11 @@ fn builtin_theme_selection_applies_the_palette() {
         "the preset did not report its change"
     );
     // Editing one colour under the preset marks the theme Custom — the
-    // catalog's documented rule, driven through the window's apply path.
-    harness
-        .store
-        .set("appearance.series2.color", json!([0.9, 0.1, 0.1, 1.0]))
-        .expect("valid colour");
+    // catalog's documented rule, driven through the window's apply path
+    // (an edit operation, never a render).
+    harness.window.select_section("appearance");
     let _ = harness.quiet();
+    harness.click_labelled("Inherit the default Series 2 color");
     assert_eq!(
         harness.values()["themes.preset"],
         json!("Custom"),
@@ -1009,31 +1191,219 @@ fn network_minimum_scale_presents_in_units_and_hides_the_sentinel() {
 }
 
 #[test]
+fn network_scale_round_trips_through_every_unit_and_the_boundary() {
+    let mut harness = Harness::new();
+    let id = "graphs.network.minimum_scale";
+    let document = harness.document();
+    // Every unit presents the exact bytes it stands for and stores them
+    // back exactly — checked conversions, the core the only validator
+    // (lesson g, review issue 4). Re-selecting the section re-seeds the
+    // presentation's unit from the stored value, so each unit presents.
+    for (bytes, presented) in [
+        (512i64, "512"),      // bytes/s: no larger unit divides it
+        (2048, "2"),          // KB/s
+        (1_572_864, "1536"),  // KB/s again: MB does not divide it
+        (3_221_225_472, "3"), // GB/s
+    ] {
+        harness.store.set(id, json!(bytes)).expect("valid bytes");
+        assert!(harness.window.select_section("graphs"));
+        let frame = harness.quiet();
+        assert_eq!(
+            node_value(&frame, "Minimum scale").as_deref(),
+            Some(presented),
+            "{bytes} bytes did not present as {presented}"
+        );
+        // Retyping the presented value is an unchanged-value submission:
+        // it saves nothing new, shows no reason and leaves the document
+        // byte-identical.
+        let before = fs::read(&document).unwrap();
+        harness.type_into(id, presented);
+        assert_eq!(
+            harness.values()[id],
+            json!(bytes),
+            "{presented} did not round-trip to {bytes}"
+        );
+        assert!(
+            harness.window.error(id).is_none(),
+            "the unchanged submission for {presented} showed a reason"
+        );
+        assert_eq!(
+            fs::read(&document).unwrap(),
+            before,
+            "the unchanged submission rewrote the document"
+        );
+    }
+    // The catalog's upper bound round-trips through the field: the whole
+    // max-safe-integer is a valid stored value (issue 4) — its largest
+    // dividing unit is bytes/s (it is odd).
+    harness.store.set(id, json!(0)).expect("valid bytes");
+    assert!(harness.window.select_section("graphs"));
+    harness.type_into(id, "9007199254740991");
+    assert_eq!(
+        harness.values()[id],
+        json!(9_007_199_254_740_991u64),
+        "the valid boundary value was refused"
+    );
+    // Range validity is the core's: a negative value reaches it and comes
+    // back as its refusal with the bounds in the reason.
+    harness.type_into(id, "-5");
+    assert_eq!(
+        harness.window.error(id),
+        Some("Between 0 bytes/s and 9007199254740991 bytes/s."),
+        "the core's range refusal did not reach the row"
+    );
+    // A unit conversion that is not a whole number of bytes never
+    // reaches the store.
+    harness.type_into(id, "1.5");
+    assert!(
+        harness
+            .window
+            .error(id)
+            .is_some_and(|reason| reason.contains("whole number of bytes")),
+        "a fractional byte count was not refused"
+    );
+    assert_eq!(harness.values()[id], json!(9_007_199_254_740_991u64));
+    // And a scaled value that cannot fit the ABI's whole numbers is
+    // refused before the core is asked: 8589934592 GB/s is 2^63 bytes.
+    harness
+        .store
+        .set(id, json!(1_073_741_824))
+        .expect("valid bytes");
+    assert!(harness.window.select_section("graphs"));
+    harness.type_into(id, "8589934592");
+    assert!(
+        harness
+            .window
+            .error(id)
+            .is_some_and(|reason| reason.contains("too large")),
+        "an unrepresentable byte count was not refused"
+    );
+}
+
+#[test]
 fn changes_reach_the_live_dashboard_immediately() {
     let mut harness = Harness::new();
-    harness.window.select_section("general");
-    let _ = harness.quiet();
-    // A saved change reports itself; the App-facing host (ui.rs) adopts the
-    // store's view on that flag, and adopt_live pushes it to the live
-    // settings and workers (lesson h). The live-worker end of the chain is
-    // the egui smoke gate's stage 5, unchanged.
-    harness.click("general.window.expand_on_hover");
-    assert!(
-        !harness.store.settings().window_collapse.expand_on_hover,
-        "the stored view the dashboard adopts is stale"
-    );
-    assert!(harness.window.take_dirty(), "the change was not reported");
+    // A custom series-2 override the live dashboard starts from: the
+    // adoption below has to move it back to the inherited default.
+    harness
+        .store
+        .set("appearance.series2.color", json!([0.8, 0.3, 0.2, 1.0]))
+        .expect("valid colour");
+    // The live state starts BEFORE any edit (review issue 6): a no-op
+    // adoption cannot move it, so each leg asserts a real difference.
     let mut live = harness.store.settings().clone();
     let worker = crate::engine::Worker::start_with_settings(false, &live);
     let mut theme = live.theme.palette().expect("the palette");
+    assert_eq!(theme.colors[3], [0.8, 0.3, 0.2, 1.0]);
+    assert_eq!(live.layout, settings::Layout::Vertical);
+    // Orientation, through the choice menu.
+    harness.window.select_section("general");
+    let _ = harness.quiet();
+    harness.click_labelled("Orientation");
+    harness.click_labelled("Horizontal");
+    assert_eq!(
+        harness.values()["general.window.orientation"],
+        json!("horizontal")
+    );
+    // Size, through the number field.
+    harness.type_into("general.window.graph_width", "300");
+    assert_eq!(harness.values()["general.window.graph_width"], json!(300));
+    // Order, through the reorderable list.
+    harness.window.select_section("graphs");
+    let _ = harness.quiet();
+    harness.click_labelled("Move CPU down");
+    // Visibility, through the toggle.
+    harness.click("graphs.memory.visible");
+    assert_eq!(harness.values()["graphs.memory.visible"], json!(false));
+    // Colour, through Inherit.
+    harness.window.select_section("appearance");
+    let _ = harness.quiet();
+    harness.click_labelled("Inherit the default Series 2 color");
+    assert_eq!(harness.values()["appearance.series2.color"], json!(null));
+    assert!(
+        harness.window.take_dirty(),
+        "the edits were not reported for adoption"
+    );
+    // The host's adoption pushes the stored view into the live state
+    // (lesson h): orientation, size, order, visibility and colour all
+    // follow, against the pre-edit values asserted above.
     let stored = harness.store.settings().clone();
     super::super::adopt_live(&mut live, &mut theme, &worker, stored)
         .expect("the live dashboard adopts the stored view");
-    assert!(
-        !live.window_collapse.expand_on_hover,
-        "the live settings did not follow the stored view"
+    assert_eq!(live.layout, settings::Layout::Horizontal);
+    assert_eq!(live.graph_width, 300);
+    assert_eq!(
+        live.modules
+            .iter()
+            .position(|m| m.id == settings::Module::Cpu),
+        Some(1),
+        "the moved graph did not reach the live order"
     );
-    assert_eq!(theme.name, "Classic");
+    assert!(
+        !live
+            .modules
+            .iter()
+            .find(|m| m.id == settings::Module::Memory)
+            .expect("the module")
+            .visible,
+        "the visibility change did not reach the live dashboard"
+    );
+    let classic = crate::shared::themes()
+        .into_iter()
+        .find(|theme| theme.name == "Classic")
+        .expect("Classic is a built-in theme");
+    assert_eq!(
+        theme.colors[3], classic.colors[3],
+        "the colour change did not reach the live theme"
+    );
+    assert_ne!(theme.colors[3], [0.8, 0.3, 0.2, 1.0]);
+}
+
+#[test]
+fn rendering_never_writes_a_mismatched_document() {
+    // Review issue 1: opening or rendering the window must never write.
+    // The fixture is the exact document the old code rewrote on every
+    // frame — a custom palette under a still-selected built-in preset.
+    let mut harness = Harness::new();
+    harness
+        .store
+        .set("themes.preset", json!("Midnight"))
+        .expect("valid preset");
+    harness
+        .store
+        .set("appearance.series1.color", json!([0.9, 0.1, 0.1, 1.0]))
+        .expect("valid colour");
+    let before = fs::read(harness.document()).unwrap();
+    // Many frames across every section: the file stays byte-identical.
+    for section in harness.catalog.sections.clone() {
+        harness.window.select_section(&section);
+        for _ in 0..4 {
+            let _ = harness.quiet();
+        }
+        assert_eq!(
+            fs::read(harness.document()).unwrap(),
+            before,
+            "rendering {section} wrote the settings document"
+        );
+    }
+    // The mismatch stays as the document holds it: the preset still
+    // reads Midnight — nothing reconciled it behind the user's back.
+    assert_eq!(harness.values()["themes.preset"], json!("Midnight"));
+    assert!(
+        !harness.window.take_dirty(),
+        "a read-only frame reported a change"
+    );
+    // Reconciliation happens inside the window's own edit operations:
+    // an edit through the window marks the theme Custom (the catalog's
+    // documented rule, at edit time).
+    harness.window.select_section("appearance");
+    let _ = harness.quiet();
+    harness.click_labelled("Inherit the default Series 2 color");
+    assert_eq!(
+        harness.values()["themes.preset"],
+        json!("Custom"),
+        "the window edit did not reconcile the preset"
+    );
 }
 
 #[test]
@@ -1092,6 +1462,534 @@ fn rendering_is_stable_and_writes_nothing() {
     }
 }
 
+// The row layout the macOS window has and the snapshots were missing
+// (fix L1/L2): every entry's catalog label painted in the card's left
+// column, the controls in one aligned right-hand column, cards filling
+// the content pane inside the token gutter and aligned with the section
+// eyebrow — proven over every section with geometry, because this
+// implementer cannot view images.
+
+#[test]
+fn every_row_paints_its_label_left_of_its_aligned_control() {
+    let mut harness = Harness::new();
+    let gutter = super::super::aether7b::SPACE_S6;
+    let pane_left = super::SIDEBAR_WIDTH + gutter;
+    let pane_right = SCREEN.x - gutter;
+    for section in harness.catalog.sections.clone() {
+        harness.window.select_section(&section);
+        let frame = harness.quiet_tall();
+        // L2: the section eyebrow and the cards share the gutter's left
+        // edge, and every card spans the pane's width inside the gutter.
+        let eyebrow = painted_text(
+            &frame,
+            &format!("// {}", section.to_uppercase()),
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(SCREEN.x, 8000.)),
+        );
+        assert!(
+            (eyebrow.left() - pane_left).abs() <= 1.5,
+            "{section}: the eyebrow does not sit at the pane's left inset ({eyebrow:?})"
+        );
+        let mut cards: Vec<Rect> = Vec::new();
+        for rendered in harness.window.rendered() {
+            if rendered.card_rect.width() > 0. && !cards.contains(&rendered.card_rect) {
+                cards.push(rendered.card_rect);
+            }
+        }
+        assert!(!cards.is_empty(), "{section} rendered no cards");
+        for card in &cards {
+            assert!(
+                (card.left() - pane_left).abs() <= 1.5,
+                "{section}: a card does not align with the eyebrow ({card:?} vs {eyebrow:?})"
+            );
+            assert!(
+                (card.right() - pane_right).abs() <= 1.5,
+                "{section}: a card does not fill the pane ({card:?})"
+            );
+            assert!(
+                (card.width() - (pane_right - pane_left)).abs() <= 3.,
+                "{section}: a card does not span the pane's width ({card:?})"
+            );
+        }
+        for entry in linux_entries(&harness.catalog, &section) {
+            let rendered = harness
+                .window
+                .rendered()
+                .iter()
+                .find(|rendered| rendered.id == entry.id)
+                .unwrap_or_else(|| panic!("{} rendered no control", entry.id));
+            let card = rendered.card_rect;
+            let room = card.expand(1.5);
+            assert!(
+                room.contains_rect(rendered.control_rect),
+                "{}: the control left its card ({:?} vs {card:?})",
+                entry.id,
+                rendered.control_rect
+            );
+            assert!(
+                room.contains_rect(rendered.response.rect),
+                "{}: the widget left its card",
+                entry.id
+            );
+            match entry.control.as_str() {
+                // An action button sits in the label column (fix V8); its
+                // own text is the label it paints.
+                "action" => {
+                    let label = painted_text(&frame, &entry.label, rendered.response.rect);
+                    assert!(
+                        room.contains_rect(label),
+                        "{}: the button's label left its card",
+                        entry.id
+                    );
+                }
+                // The order list spans the card below its label.
+                "order" => {
+                    let label = rendered
+                        .label_rect
+                        .unwrap_or_else(|| panic!("{} painted no row label", entry.id));
+                    let painted = painted_text(&frame, &entry.label, label);
+                    assert!(
+                        room.contains_rect(label) && room.contains_rect(painted),
+                        "{}: the label left its card",
+                        entry.id
+                    );
+                    assert!(
+                        label.bottom() <= rendered.control_rect.top() + 1.5,
+                        "{}: the list does not sit below its label",
+                        entry.id
+                    );
+                    assert!(
+                        (label.left() - rendered.control_rect.left()).abs() <= 1.5,
+                        "{}: the label and list do not share the left column",
+                        entry.id
+                    );
+                }
+                _ => {
+                    // L1: the label is painted, left of the control,
+                    // vertically centred with it.
+                    let label = rendered
+                        .label_rect
+                        .unwrap_or_else(|| panic!("{} painted no row label", entry.id));
+                    let painted = painted_text(&frame, &entry.label, label);
+                    assert!(
+                        room.contains_rect(label) && room.contains_rect(painted),
+                        "{}: the label left its card ({label:?} vs {card:?})",
+                        entry.id
+                    );
+                    assert!(
+                        label.right() <= rendered.control_rect.left() - 4.,
+                        "{}: the label is not left of its control ({label:?} vs {:?})",
+                        entry.id,
+                        rendered.control_rect
+                    );
+                    assert!(
+                        (label.center().y - rendered.control_rect.center().y).abs() <= 2.5,
+                        "{}: the label is not vertically centred with its control",
+                        entry.id
+                    );
+                    // The one right-hand column: every control group in a
+                    // card ends at the card's inner right edge.
+                    let inner = card.right() - super::super::aether7b::SPACE_S4;
+                    assert!(
+                        (rendered.control_rect.right() - inner).abs() <= 1.5,
+                        "{}: the control group is not flush with the card's right edge",
+                        entry.id
+                    );
+                }
+            }
+        }
+        // All the rows of one card share that right edge exactly.
+        for card in &cards {
+            let mut edges: Vec<f32> = Vec::new();
+            for rendered in harness.window.rendered().iter().filter(|rendered| {
+                rendered.card_rect == *card
+                    && !matches!(rendered.control.as_str(), "order" | "action")
+            }) {
+                edges.push(rendered.control_rect.right());
+            }
+            if let (Some(min), Some(max)) = (
+                edges.iter().cloned().reduce(f32::min),
+                edges.iter().cloned().reduce(f32::max),
+            ) {
+                assert!(
+                    (max - min) <= 1.5,
+                    "{section}: a card's controls do not share one right edge ({edges:?})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn stepped_entries_are_one_composite_row_with_a_named_synchronized_slider() {
+    let mut harness = Harness::new();
+    harness.window.select_section("general");
+    // A stored, non-default opacity, so the slider edit moves a value
+    // the document actually holds.
+    harness
+        .store
+        .set("general.window.opacity", json!(0.8))
+        .expect("valid opacity");
+    let _ = harness.quiet();
+    // Fix L4 / review issue 3: the stepped opacity entry is ONE composite
+    // row — field, range and slider inside the row's control group — and
+    // the slider carries the catalog label as its accessible name.
+    let frame = harness.quiet();
+    let rendered = harness
+        .window
+        .rendered()
+        .iter()
+        .find(|rendered| rendered.id == "general.window.opacity")
+        .expect("the opacity entry rendered");
+    let group = rendered.control_rect;
+    let slider = nodes_with_role(&frame, egui::accesskit::Role::Slider, "Window opacity")
+        .pop()
+        .expect("the slider is named by the catalog label");
+    assert!(
+        group.contains_rect(slider),
+        "the slider is detached from its composite row ({slider:?} vs {group:?})"
+    );
+    let field = nodes_with_role(&frame, egui::accesskit::Role::TextInput, "Window opacity")
+        .pop()
+        .expect("the field rendered");
+    assert!(
+        group.contains_rect(field),
+        "the field is detached from its composite row"
+    );
+    let range = painted_text(&frame, "0.1 – 1", group);
+    assert!(
+        group.contains_rect(range),
+        "the range text is detached from its composite row"
+    );
+    // The slider is keyboard-focusable with the 2 px halo (lesson d).
+    let mut halo_frame = None;
+    for _ in 0..40 {
+        let frame = harness.frame(vec![key(egui::Key::Tab)]);
+        let focused = harness.ctx.memory(|memory| memory.focused());
+        let reached = focused_label(&frame, focused).is_some_and(|label| label == "Window opacity")
+            && frame
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .and_then(|tree| {
+                    tree.nodes
+                        .iter()
+                        .find(|(id, _)| Some(*id) == focused.map(|f| f.accesskit_id()))
+                })
+                .is_some_and(|(_, node)| node.role() == egui::accesskit::Role::Slider);
+        if reached {
+            halo_frame = Some(frame);
+            break;
+        }
+    }
+    let frame = halo_frame.expect("Tab never reached the slider");
+    let halo = super::super::settings_style::focus_halo();
+    let slider = nodes_with_role(&frame, egui::accesskit::Role::Slider, "Window opacity")
+        .pop()
+        .expect("the focused slider");
+    assert!(
+        frame.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Rect(rect)
+                if rect.stroke.width == 2. && rect.stroke.color == halo
+                    && rect.rect.expand(1.).intersects(slider))
+        }),
+        "the focused slider paints no 2 px halo"
+    );
+    // A slider edit saves instantly and synchronizes the field: the
+    // displayed number follows the stored value (review issue 3) —
+    // click the track's left third.
+    let before = harness.values()["general.window.opacity"].as_f64().unwrap();
+    let click = Pos2::new(slider.left() + slider.width() / 3., slider.center().y);
+    harness.click_at(click);
+    let after = harness.values()["general.window.opacity"].as_f64().unwrap();
+    assert!(
+        after < before,
+        "the slider edit did not save ({before} → {after})"
+    );
+    let frame = harness.quiet();
+    assert_eq!(
+        field_value(&frame, "Window opacity").as_deref(),
+        Some(
+            super::settings_controls::value_text(&harness.values()["general.window.opacity"])
+                .as_str()
+        ),
+        "the field did not resynchronize with the slider edit"
+    );
+}
+
+#[test]
+fn colour_popup_sliders_are_named_and_apply_on_click() {
+    let mut harness = Harness::new();
+    harness.window.select_section("appearance");
+    let _ = harness.quiet();
+    // Review issue 3: the colour editor's component sliders are named
+    // by their channel, and a click on the track applies through the
+    // window's instant-apply path. (Their focus halo paints through the
+    // same helper the row slider's halo test exercises; egui's
+    // geometric Tab order cannot be driven into a non-menu popup.)
+    let well = harness
+        .window
+        .rendered()
+        .iter()
+        .find(|rendered| rendered.id == "appearance.window.color")
+        .expect("the colour well rendered");
+    harness.click_at(well.response.rect.center());
+    let frame = harness.quiet();
+    for channel in ["Red", "Green", "Blue", "Opacity"] {
+        assert!(
+            !nodes_with_role(&frame, egui::accesskit::Role::Slider, channel).is_empty(),
+            "the colour editor's {channel} slider carries no name"
+        );
+    }
+    // A click on the Red track sets the component and saves instantly.
+    let red = nodes_with_role(&frame, egui::accesskit::Role::Slider, "Red")
+        .pop()
+        .expect("the named Red slider");
+    let before = harness.values().get("appearance.window.color").cloned();
+    harness.click_at(egui::Pos2::new(
+        red.left() + red.width() / 10.,
+        red.center().y,
+    ));
+    let after = harness.values()["appearance.window.color"].clone();
+    assert_ne!(
+        before,
+        Some(after.clone()),
+        "the popup slider click did not apply a colour"
+    );
+    assert!(
+        after
+            .as_array()
+            .and_then(|rgba| rgba.first())
+            .and_then(serde_json::Value::as_f64)
+            .expect("the stored colour")
+            < 0.5,
+        "clicking the left of the Red track did not lower the component"
+    );
+    assert!(
+        harness.window.take_dirty(),
+        "the popup slider edit was not reported"
+    );
+    // Escape belongs to the popup first: it closes the editor.
+    let _ = harness.frame(vec![key(egui::Key::Escape)]);
+    let frame = harness.quiet();
+    assert!(
+        nodes_with_role(&frame, egui::accesskit::Role::Slider, "Red").is_empty(),
+        "Escape did not close the colour editor"
+    );
+}
+
+#[test]
+fn blocked_documents_validate_held_edits_through_the_core() {
+    // Review issue 2: while the document is blocked, a parseable but
+    // invalid edit is refused by the shared core — the danger reason
+    // shows, nothing is held — and a valid edit is held in memory only,
+    // presented in its control, and lands when the file is replaced.
+    let root = std::env::temp_dir().join(format!(
+        "xrg-settings-blocked-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(root.join("xrg-ng")).unwrap();
+    let path = root.join("xrg-ng/settings.json");
+    fs::write(&path, b"certainly not json").unwrap();
+    let catalog = document::catalog().expect("the shared core provides the catalog");
+    let mut harness = Harness {
+        ctx: egui::Context::default(),
+        window: SettingsWindow::new(catalog),
+        store: Store::open(&root),
+        root: root.clone(),
+        catalog: document::catalog().expect("the catalog"),
+    };
+    harness.ctx.enable_accesskit();
+    let frame = harness.quiet();
+    assert!(
+        labelled(&frame, "The settings document needs attention"),
+        "the unreadable file did not show its banner"
+    );
+    assert!(harness.store.blocked(), "the fixture is not blocked");
+    // An invalid width is refused with the core's reason, held nothing.
+    harness.type_into("general.window.graph_width", "99");
+    let frame = harness.quiet();
+    let reason = harness
+        .window
+        .error("general.window.graph_width")
+        .expect("a blocked document accepted an invalid edit");
+    assert_eq!(reason, "Between 100 px and 1200 px.");
+    assert!(
+        labelled(&frame, reason),
+        "the refusal reason did not render inside the row"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        b"certainly not json",
+        "a blocked document was written"
+    );
+    // A valid edit is held in memory, presented in its control.
+    harness.type_into("general.window.graph_width", "300");
+    assert!(
+        harness.window.error("general.window.graph_width").is_none(),
+        "the valid held edit kept the invalid reason"
+    );
+    let frame = harness.quiet();
+    assert_eq!(
+        node_value(&frame, "Graph width").as_deref(),
+        Some("300"),
+        "the held edit did not present in its control"
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        b"certainly not json",
+        "the held edit wrote the blocked file"
+    );
+    // Replacing the file lands the held edit; the refused one is gone.
+    harness.click_labelled("Replace the file with the current settings");
+    let reopened = Store::open(&root);
+    assert_eq!(
+        reopened.values()["general.window.graph_width"],
+        json!(300),
+        "the held edit did not land in the replaced document"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn reduced_motion_makes_egui_animation_instant() {
+    // The window's animation time comes from the motion tokens, and a
+    // reduced-motion request makes every egui transition instant.
+    for (pin, requested) in [("0", false), ("1", true)] {
+        unsafe {
+            std::env::set_var("XRG_SETTINGS_REDUCED_MOTION", pin);
+        }
+        assert_eq!(
+            super::super::settings_style::reduced_motion_requested(),
+            requested,
+            "the pin {pin:?} was not honoured"
+        );
+        let style = super::super::settings_style::style(false);
+        assert_eq!(
+            style.animation_time,
+            if requested {
+                0.
+            } else {
+                super::super::aether7b::MOTION_BASE.as_secs_f32()
+            },
+            "egui's animation time does not follow the motion tokens"
+        );
+        // The rendered window carries the configured time in its style.
+        let mut harness = Harness::new();
+        let animation_time = if requested {
+            0.
+        } else {
+            super::super::aether7b::MOTION_BASE.as_secs_f32()
+        };
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SCREEN)),
+            ..Default::default()
+        };
+        let ctx = harness.ctx.clone();
+        let mut window = std::mem::replace(
+            &mut harness.window,
+            SettingsWindow::new(document::catalog().expect("the shared core provides the catalog")),
+        );
+        let mut store = std::mem::replace(&mut harness.store, Store::open(&harness.root));
+        let mut output = ctx.run_ui(raw, |ui| {
+            window.render(ui, &mut store, &FixtureSources);
+            // Inside the pass, the window's style is the applied one.
+            assert_eq!(
+                ui.style().animation_time,
+                animation_time,
+                "the window did not apply the configured animation time"
+            );
+        });
+        output.textures_delta.clear();
+    }
+    unsafe {
+        std::env::remove_var("XRG_SETTINGS_REDUCED_MOTION");
+    }
+}
+
+#[test]
+fn cancelling_the_replacement_dialog_through_its_buttons_writes_nothing() {
+    // Review issue 7: Back, Cancel and Escape drive the replacement
+    // dialog itself, and the existing file stays byte-identical through
+    // the frames that follow.
+    let mut harness = Harness::new();
+    let saved = harness.root.join("Saved palette.json");
+    fs::write(&saved, b"original export").unwrap();
+    for affordance in ["Back", "Cancel", "escape"] {
+        harness
+            .window
+            .choose_at(super::Action::SaveTheme, saved.clone(), &harness.ctx);
+        for _ in 0..80 {
+            let _ = harness.quiet();
+            if harness
+                .window
+                .picker
+                .as_ref()
+                .is_some_and(|picker| !picker.is_loading())
+            {
+                break;
+            }
+        }
+        harness.window.picker.as_mut().unwrap().accept();
+        for _ in 0..80 {
+            let _ = harness.quiet();
+            if harness
+                .window
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.needs_replacement())
+            {
+                break;
+            }
+        }
+        let frame = harness.quiet();
+        assert!(
+            labelled(&frame, "Replace the existing file with this JSON theme?"),
+            "{affordance}: the replacement dialog did not render"
+        );
+        match affordance {
+            "Back" => {
+                harness.click_labelled("Back");
+                assert!(
+                    harness
+                        .window
+                        .picker
+                        .as_ref()
+                        .is_some_and(|picker| !picker.needs_replacement()),
+                    "Back did not leave the dialog"
+                );
+            }
+            "Cancel" => {
+                harness.click_labelled("Cancel");
+                assert!(
+                    harness.window.picker.is_none(),
+                    "Cancel did not cancel the chooser"
+                );
+            }
+            _ => {
+                let _ = harness.frame(vec![key(egui::Key::Escape)]);
+                assert!(
+                    harness.window.picker.is_none(),
+                    "Escape did not cancel the chooser"
+                );
+                assert!(
+                    !harness.window.closed(),
+                    "Escape closed the whole window instead of the dialog"
+                );
+            }
+        }
+        // The existing file is byte-identical, across subsequent frames.
+        for _ in 0..4 {
+            let _ = harness.quiet();
+            assert_eq!(
+                fs::read(&saved).unwrap(),
+                b"original export",
+                "{affordance}: cancelling the replacement changed the existing file"
+            );
+        }
+    }
+}
+
 // The token-only audit (lesson j): the style and every painted shape, with
 // no blanket exclusions — the only allowance is a colour well's own swatch
 // content, bounded to the well's rect.
@@ -1128,53 +2026,169 @@ fn audit(harness: &Harness, frame: &egui::FullOutput, dark: bool) {
                 && (ta as i32 - a as i32).abs() <= 8
         })
     };
+    let mut audited = |color: egui::Color32, what: &str| {
+        assert!(
+            allowed(color),
+            "non-token {what} {color:?} in {} (dark {dark}) painting {:?}",
+            harness.window.section(),
+            CURRENT_TEXT.with(|text| text.borrow().clone())
+        );
+    };
+    thread_local! {
+        /// The text a Text shape is auditing, for the audit's message.
+        static CURRENT_TEXT: std::cell::RefCell<String> =
+            const { std::cell::RefCell::new(String::new()) };
+    }
+    // The style itself, whole (review issue 5): every colour field the
+    // window's style carries — the chrome egui paints from it included.
+    let style = super::super::settings_style::style(dark);
+    let visuals = &style.visuals;
+    let mut style_colors = vec![
+        visuals.panel_fill,
+        visuals.window_fill,
+        visuals.faint_bg_color,
+        visuals.extreme_bg_color,
+        visuals.code_bg_color,
+        visuals.hyperlink_color,
+        visuals.warn_fg_color,
+        visuals.error_fg_color,
+        visuals.window_stroke.color,
+        visuals.window_shadow.color,
+        visuals.popup_shadow.color,
+        visuals.selection.bg_fill,
+        visuals.selection.stroke.color,
+        visuals.text_cursor.stroke.color,
+        visuals.ime_composition.active_underline_stroke.color,
+        visuals.ime_composition.inactive_underline_stroke.color,
+    ];
+    for optional in [
+        visuals.override_text_color,
+        visuals.weak_text_color,
+        visuals.text_edit_bg_color,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        style_colors.push(optional);
+    }
+    for state in [
+        &visuals.widgets.noninteractive,
+        &visuals.widgets.inactive,
+        &visuals.widgets.hovered,
+        &visuals.widgets.active,
+        &visuals.widgets.open,
+    ] {
+        style_colors.extend([
+            state.bg_fill,
+            state.weak_bg_fill,
+            state.bg_stroke.color,
+            state.fg_stroke.color,
+        ]);
+    }
+    for color in style_colors {
+        audited(color, "style colour");
+    }
     // The colour wells' swatches are the user's own content (the one
-    // allowance); their pixels lie inside the rendered colour rects.
+    // allowance): a shape is exempt only inside the swatch itself, not
+    // anywhere on a card a well happens to sit on.
     let wells: Vec<Rect> = harness
         .window
         .rendered()
         .iter()
         .filter(|rendered| rendered.control == "color")
-        .map(|rendered| rendered.response.rect.expand(1.5))
+        .map(|rendered| rendered.response.rect.shrink(1.))
         .collect();
+    let inside_well = |rect: Rect| wells.iter().any(|well| well.contains_rect(rect));
     let mut painted = 0;
-    for clipped in &frame.shapes {
-        let _ = clipped.clip_rect;
-        match &clipped.shape {
-            egui::Shape::Rect(shape) => {
-                painted += 1;
-                if shape.fill != egui::Color32::TRANSPARENT
-                    && !wells.iter().any(|well| well.intersects(shape.rect))
-                {
-                    assert!(
-                        allowed(shape.fill),
-                        "non-token fill {:?} in {}",
-                        shape.fill,
-                        harness.window.section()
-                    );
+    let mut callbacks = 0;
+    // Every painted shape, recursively, in every variant (issue 5): no
+    // kind is skipped and text is audited through its glyphs.
+    fn walk(
+        shape: &egui::Shape,
+        painted: &mut usize,
+        callbacks: &mut usize,
+        inside_well: &impl Fn(Rect) -> bool,
+        audited: &mut impl FnMut(egui::Color32, &str),
+    ) {
+        match shape {
+            egui::Shape::Noop => (),
+            egui::Shape::Vec(list) => {
+                for shape in list {
+                    walk(shape, painted, callbacks, inside_well, audited);
                 }
-                if shape.stroke.color != egui::Color32::TRANSPARENT {
-                    assert!(
-                        allowed(shape.stroke.color),
-                        "non-token stroke {:?} in {}",
-                        shape.stroke.color,
-                        harness.window.section()
-                    );
+            }
+            egui::Shape::Circle(circle) => {
+                *painted += 1;
+                if circle.fill != egui::Color32::TRANSPARENT {
+                    audited(circle.fill, "circle fill");
+                }
+                if circle.stroke.color != egui::Color32::TRANSPARENT {
+                    audited(circle.stroke.color, "circle stroke");
+                }
+            }
+            egui::Shape::Ellipse(ellipse) => {
+                *painted += 1;
+                if ellipse.fill != egui::Color32::TRANSPARENT {
+                    audited(ellipse.fill, "ellipse fill");
+                }
+                if ellipse.stroke.color != egui::Color32::TRANSPARENT {
+                    audited(ellipse.stroke.color, "ellipse stroke");
+                }
+            }
+            egui::Shape::LineSegment { points, stroke } => {
+                *painted += 1;
+                if stroke.color != egui::Color32::TRANSPARENT {
+                    audited(stroke.color, "line stroke");
+                }
+                let _ = points;
+            }
+            egui::Shape::Path(path) => {
+                *painted += 1;
+                if path.fill != egui::Color32::TRANSPARENT {
+                    audited(path.fill, "path fill");
+                }
+                match &path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => {
+                        if *color != egui::Color32::TRANSPARENT {
+                            audited(*color, "path stroke");
+                        }
+                    }
+                    // The window paints no procedural colour paths.
+                    egui::epaint::ColorMode::UV(_) => *callbacks += 1,
+                }
+            }
+            egui::Shape::Band(band) => {
+                *painted += 1;
+                if band.fill != egui::Color32::TRANSPARENT {
+                    audited(band.fill, "band fill");
+                }
+                if band.stroke.color != egui::Color32::TRANSPARENT {
+                    audited(band.stroke.color, "band stroke");
+                }
+            }
+            egui::Shape::Rect(rect) => {
+                *painted += 1;
+                if rect.fill != egui::Color32::TRANSPARENT
+                    && !inside_well(Rect::from_min_size(rect.rect.min, rect.rect.size()))
+                {
+                    audited(rect.fill, "rect fill");
+                }
+                if rect.stroke.color != egui::Color32::TRANSPARENT {
+                    audited(rect.stroke.color, "rect stroke");
                 }
                 // An invisible rect paints nothing — the desktop shows
                 // through — so it draws no corner the audit can read.
-                let painted_shape = shape.fill != egui::Color32::TRANSPARENT
-                    || (shape.stroke.color != egui::Color32::TRANSPARENT
-                        && shape.stroke.width > 0.);
+                let painted_shape = rect.fill != egui::Color32::TRANSPARENT
+                    || (rect.stroke.color != egui::Color32::TRANSPARENT && rect.stroke.width > 0.);
                 // A rect may round only its bottom corners (the sidebar
                 // under the headerbar): the largest corner is the one drawn.
-                let radius = shape
+                let radius = rect
                     .corner_radius
                     .nw
-                    .max(shape.corner_radius.ne)
-                    .max(shape.corner_radius.sw)
-                    .max(shape.corner_radius.se);
-                let half = 0.5 * shape.rect.size().min_elem();
+                    .max(rect.corner_radius.ne)
+                    .max(rect.corner_radius.sw)
+                    .max(rect.corner_radius.se);
+                let half = 0.5 * rect.rect.size().min_elem();
                 if painted_shape {
                     // The paint clamps every corner to half the shortest
                     // side (the CSS rule), so the corner the user sees is
@@ -1186,54 +2200,87 @@ fn audit(harness: &Harness, frame: &egui::FullOutput, dark: bool) {
                         super::super::settings_style::TOKEN_RADII
                             .contains(&(painted_corner.round() as u8))
                             || (painted_corner - half).abs() <= 1.5,
-                        "non-token corner radius {radius} in {}",
-                        harness.window.section()
+                        "non-token corner radius {radius} in the settings window"
                     );
                 }
             }
-            egui::Shape::Circle(circle) => {
-                painted += 1;
-                if circle.fill != egui::Color32::TRANSPARENT {
-                    assert!(
-                        allowed(circle.fill),
-                        "non-token circle fill {:?} in {}",
-                        circle.fill,
-                        harness.window.section()
-                    );
+            egui::Shape::Text(text) => {
+                *painted += 1;
+                CURRENT_TEXT.with(|current| {
+                    *current.borrow_mut() = text.galley.text().to_owned();
+                });
+                if text.fallback_color != egui::Color32::PLACEHOLDER {
+                    audited(text.fallback_color, "text colour");
                 }
-                if circle.stroke.color != egui::Color32::TRANSPARENT {
-                    assert!(
-                        allowed(circle.stroke.color),
-                        "non-token circle stroke {:?} in {} (dark {dark})",
-                        circle.stroke.color,
-                        harness.window.section()
-                    );
+                if let Some(color) = text.override_text_color {
+                    audited(color, "text override colour");
+                }
+                for row in &text.galley.rows {
+                    for vertex in &row.row.visuals.mesh.vertices {
+                        // egui lays text out with PLACEHOLDER colours and
+                        // the tessellator paints them as the shape's
+                        // fallback — audited above.
+                        if vertex.color == egui::Color32::PLACEHOLDER {
+                            continue;
+                        }
+                        *painted += 1;
+                        let spot = Rect::from_center_size(vertex.pos, Vec2::splat(2.));
+                        if !inside_well(spot) {
+                            audited(vertex.color, "text glyph colour");
+                        }
+                    }
                 }
             }
             egui::Shape::Mesh(mesh) => {
                 for vertex in &mesh.vertices {
-                    painted += 1;
+                    *painted += 1;
                     let spot = Rect::from_center_size(vertex.pos, Vec2::splat(2.));
-                    if !wells.iter().any(|well| well.intersects(spot)) {
-                        assert!(
-                            allowed(vertex.color),
-                            "non-token mesh colour {:?} in {} (dark {dark})",
-                            vertex.color,
-                            harness.window.section()
-                        );
+                    if !inside_well(spot) {
+                        audited(vertex.color, "mesh colour");
                     }
                 }
             }
-            egui::Shape::Text(text) => {
-                painted += 1;
-                // Text colour is one of the tokens it was laid out with;
-                // the glyph vertices carry it into the tessellation audit
-                // (the Mesh arm) and the label audit below.
-                let _ = text;
+            egui::Shape::QuadraticBezier(curve) => {
+                *painted += 1;
+                if curve.fill != egui::Color32::TRANSPARENT {
+                    audited(curve.fill, "bezier fill");
+                }
+                match &curve.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => {
+                        if *color != egui::Color32::TRANSPARENT {
+                            audited(*color, "bezier stroke");
+                        }
+                    }
+                    egui::epaint::ColorMode::UV(_) => *callbacks += 1,
+                }
             }
-            _ => painted += 1,
+            egui::Shape::CubicBezier(curve) => {
+                *painted += 1;
+                if curve.fill != egui::Color32::TRANSPARENT {
+                    audited(curve.fill, "bezier fill");
+                }
+                match &curve.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => {
+                        if *color != egui::Color32::TRANSPARENT {
+                            audited(*color, "bezier stroke");
+                        }
+                    }
+                    egui::epaint::ColorMode::UV(_) => *callbacks += 1,
+                }
+            }
+            egui::Shape::Callback(_) => *callbacks += 1,
         }
     }
+    for clipped in &frame.shapes {
+        walk(
+            &clipped.shape,
+            &mut painted,
+            &mut callbacks,
+            &inside_well,
+            &mut audited,
+        );
+    }
+    assert_eq!(callbacks, 0, "the settings window paints no GPU callbacks");
     assert!(
         painted > 40,
         "{} painted too little: {painted}",

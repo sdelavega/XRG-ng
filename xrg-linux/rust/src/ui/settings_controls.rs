@@ -78,6 +78,11 @@ impl Fields {
     pub fn error(&self, id: &str) -> Option<&str> {
         self.errors.get(id).map(String::as_str)
     }
+    /// Show one entry's danger reason from outside the controls — the
+    /// replacement reporting an edit the core refused (review issue 2).
+    pub fn refuse(&mut self, id: &str, reason: String) {
+        self.errors.insert(id.to_owned(), reason);
+    }
     /// How many colour pickers are open (Escape belongs to them first).
     pub fn color_popups_open(&self) -> usize {
         self.colors_open.len()
@@ -91,6 +96,14 @@ pub struct Rendered {
     pub label: String,
     pub enabled: bool,
     pub response: Response,
+    /// The painted row label's rect, when the row paints one beside the
+    /// control (order rows paint theirs above the list; action buttons
+    /// are their own label).
+    pub label_rect: Option<Rect>,
+    /// The whole control group's bounding rect: the right-hand column.
+    pub control_rect: Rect,
+    /// The card the entry rendered in — patched by the window's frame.
+    pub card_rect: Rect,
 }
 
 /// What an action control asked the window to do.
@@ -222,14 +235,25 @@ fn apply(
 
 /// The sized, keyboard-focusable region custom controls are built on.
 /// Disabled controls keep their size but take no interaction and never
-/// join the focus walk.
-fn region(ui: &mut egui::Ui, size: Vec2, enabled: bool) -> (Rect, Response) {
-    if enabled {
-        ui.allocate_exact_size(size, Sense::click())
-    } else {
-        ui.add_enabled_ui(false, |ui| ui.allocate_exact_size(size, Sense::click()))
-            .inner
-    }
+/// join the focus walk. The region's id is the entry's, so focus and
+/// hover survive section switches and never bleed onto another control
+/// that happens to allocate at the same point in egui's auto-id
+/// sequence.
+fn region(
+    ui: &mut egui::Ui,
+    size: Vec2,
+    enabled: bool,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+) -> (Rect, Response) {
+    ui.push_id(salt, |ui| {
+        if enabled {
+            ui.allocate_exact_size(size, Sense::click())
+        } else {
+            ui.add_enabled_ui(false, |ui| ui.allocate_exact_size(size, Sense::click()))
+                .inner
+        }
+    })
+    .inner
 }
 
 /// Paint a control's rim — the strong 3:1 border, the danger colour while
@@ -253,14 +277,20 @@ fn rendered(entry: &CatalogEntry, control: &str, enabled: bool, response: Respon
         control: control.to_owned(),
         label: entry.label.clone(),
         enabled,
+        control_rect: response.rect,
+        label_rect: None,
+        card_rect: Rect::ZERO,
         response,
     }
 }
 
-/// Lay one entry out as the macOS window does: the label on the left and
-/// the control right-aligned in one column, the reason — dot and mono
-/// text — inside its row below; action buttons align with the label
-/// column (fix V8), and the order list spans below its label.
+/// Lay one entry out as the macOS window does (fix L1): the catalog label
+/// painted in the card's left column, wrapped to the width the control
+/// group leaves, and the control group right-aligned — every row's group
+/// ends at the card's inner right edge, so a card's controls share one
+/// right-hand column. The reason — dot and mono text — stays inside its
+/// row below; action buttons align with the label column (fix V8), and
+/// the order list spans below its label.
 #[allow(clippy::too_many_arguments)]
 pub fn entry_row(
     ui: &mut egui::Ui,
@@ -277,42 +307,215 @@ pub fn entry_row(
         return show(ui, dark, entry, value, enabled, fields, sources, set);
     }
     if control == "order" {
-        row_label(ui, entry, dark, enabled);
-        return show(ui, dark, entry, value, enabled, fields, sources, set);
+        let label = row_label(ui, entry, dark, enabled, ui.available_width());
+        let (mut rendered, outcome) = show(ui, dark, entry, value, enabled, fields, sources, set);
+        rendered.label_rect = Some(label.rect);
+        return (rendered, outcome);
     }
     let reason = fields.errors.get(&entry.id).cloned();
+    let group = group_width(ui, dark, entry, value, sources);
     let mut rendered: Option<(Rendered, Outcome)> = None;
     ui.vertical(|ui| {
-        let inner = ui
-            .horizontal(|ui| {
-                ui.set_min_height(30.);
+        ui.horizontal(|ui| {
+            ui.set_min_height(30.);
+            let label = row_label(
+                ui,
+                entry,
+                dark,
+                enabled,
+                (ui.available_width() - group - aether7b::SPACE_S3).max(24.),
+            );
+            let rtl = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 show(ui, dark, entry, value, enabled, fields, sources, set)
-            })
-            .inner;
+            });
+            let (mut inner, outcome) = rtl.inner;
+            inner.label_rect = Some(label.rect);
+            inner.control_rect = rtl.response.rect;
+            rendered = Some((inner, outcome));
+        });
         if let Some(reason) = reason {
             reason_line(ui, dark, &reason);
         }
-        rendered = Some(inner);
     });
     rendered.expect("the row always renders")
 }
 
-fn row_label(ui: &mut egui::Ui, entry: &CatalogEntry, dark: bool, enabled: bool) {
+/// The row's label, painted in the card's left column and wrapped to
+/// `wrap` so the control group keeps its space; vertically centred with
+/// whatever the row grows to (the group added after it centres in the
+/// row's full height).
+fn row_label(
+    ui: &mut egui::Ui,
+    entry: &CatalogEntry,
+    dark: bool,
+    enabled: bool,
+    wrap: f32,
+) -> Response {
     let color = if enabled {
         aether7b::text_main(dark)
     } else {
         aether7b::text_muted(dark)
     };
-    let label = ui.add(
-        egui::Label::new(
-            egui::RichText::new(entry.label.clone())
-                .font(settings_style::sans(aether7b::TYPE_SM.0))
-                .color(color),
-        )
-        .wrap(),
-    );
-    if let Some(help) = &entry.help {
-        label.on_hover_text(help);
+    let mut label = None;
+    ui.allocate_ui(Vec2::new(wrap, ui.available_height()), |ui| {
+        let text = ui.add(
+            egui::Label::new(
+                egui::RichText::new(entry.label.clone())
+                    .font(settings_style::sans(aether7b::TYPE_SM.0))
+                    .color(color),
+            )
+            .wrap(),
+        );
+        let text = if let Some(help) = &entry.help {
+            text.on_hover_text(help)
+        } else {
+            text
+        };
+        label = Some(text);
+    });
+    label.expect("the label always renders")
+}
+
+/// The text a choice control shows for its stored value — the option's
+/// label, or the value itself when it is not one of the listed options.
+/// The extra width a `TextEdit` adds around its desired width (frame
+/// padding), reserved so the label's wrap region never eats the field.
+/// The extra width a `TextEdit` adds around its desired width (frame
+/// padding), reserved so the label's wrap region never eats the field.
+const FIELD_EXTRA: f32 = 2. * aether7b::SPACE_S3;
+
+/// The text a choice control shows for its stored value — the option's
+/// label, or the value itself when it is not one of the listed options.
+fn choice_text(entry: &CatalogEntry, value: &Value) -> String {
+    let options = entry.options.as_deref().unwrap_or_default();
+    options
+        .iter()
+        .find(|option| same_value(&option.value, value))
+        .map(|option| option.label.clone())
+        .unwrap_or_else(|| value_text(value))
+}
+
+/// The text a source picker shows for its stored value: the none option,
+/// an offered option's label, or `Unavailable: …` for a source the
+/// enumeration no longer offers (lesson c).
+fn source_text(entry: &CatalogEntry, value: &Value, sources: &dyn SourceProvider) -> String {
+    let kind = entry.source.clone().unwrap_or_default();
+    let current = value.as_str().unwrap_or_default().to_owned();
+    let none_label = if kind == "temperature" {
+        "None"
+    } else {
+        "Automatic"
+    };
+    if current.is_empty() {
+        none_label.to_owned()
+    } else {
+        sources
+            .options(&kind)
+            .iter()
+            .find(|option| option.id == current)
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| format!("Unavailable: {current}"))
+    }
+}
+
+/// The width the control group needs in its row — an upper bound, so the
+/// label's wrap region never eats the group's space and the two columns
+/// can never overlap. Every piece is measured with the very galley that
+/// paints it, and the fixed widths are the ones the controls request.
+fn group_width(
+    ui: &mut egui::Ui,
+    dark: bool,
+    entry: &CatalogEntry,
+    value: &Value,
+    sources: &dyn SourceProvider,
+) -> f32 {
+    let _ = dark;
+    let spacing = ui.spacing().item_spacing.x;
+    let measure = |ui: &mut egui::Ui, text: &str, font: egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE)
+            .size()
+            .x
+    };
+    match entry.control.as_str() {
+        "toggle" => 50.,
+        "choice" => (160_f32).max(
+            measure(
+                ui,
+                &choice_text(entry, value),
+                settings_style::mono(aether7b::TYPE_SM.0),
+            ) + 2. * aether7b::SPACE_S3
+                + ui.spacing().icon_width
+                + aether7b::SPACE_S2,
+        ),
+        "source" => (240_f32).max(
+            measure(
+                ui,
+                &source_text(entry, value, sources),
+                settings_style::mono(aether7b::TYPE_SM.0),
+            ) + 2. * aether7b::SPACE_S3
+                + ui.spacing().icon_width
+                + aether7b::SPACE_S2,
+        ),
+        "text" => 150. + FIELD_EXTRA,
+        "path" => {
+            180. + FIELD_EXTRA
+                + spacing
+                + measure(ui, "Choose…", settings_style::sans(aether7b::TYPE_SM.0))
+                + 2. * aether7b::SPACE_S3
+                + 2. * aether7b::SPACE_S2
+        }
+        "color" => {
+            44. + spacing
+                + measure(ui, "Inherit", settings_style::sans(aether7b::TYPE_SM.0))
+                + 2. * aether7b::SPACE_S3
+                + 2. * aether7b::SPACE_S2
+        }
+        "segmented" => entry
+            .options
+            .iter()
+            .flatten()
+            .map(|option| {
+                measure(ui, &option.label, settings_style::sans(aether7b::TYPE_XS.0))
+                    + 2. * aether7b::SPACE_S3
+            })
+            .reduce(|sum, width| sum + spacing + width)
+            .unwrap_or(0.),
+        "integer" | "decimal" | "duration" => {
+            let range = entry.range.as_ref();
+            let stored_in_bytes =
+                range.is_some_and(|range| range.unit.as_deref() == Some("bytes/s"));
+            let bounded = range.is_some_and(|range| range.max < UNBOUNDED_MAXIMUM);
+            let mut width = 72. + FIELD_EXTRA;
+            if stored_in_bytes {
+                width += spacing + 72. + FIELD_EXTRA;
+            } else if let Some(unit) = range
+                .and_then(|range| range.unit.clone())
+                .filter(|unit| !unit.is_empty())
+            {
+                width += spacing + measure(ui, &unit, settings_style::mono(aether7b::TYPE_XS.0));
+            }
+            if bounded {
+                let range = range.expect("a bounded entry has a range");
+                let unit = range.unit.clone().unwrap_or_default();
+                let (min, max) = if entry.control == "duration" {
+                    (range_text(range.min, &unit), range_text(range.max, &unit))
+                } else {
+                    (number_text(range.min), number_text(range.max))
+                };
+                width += spacing
+                    + measure(
+                        ui,
+                        &format!("{min} – {max}"),
+                        settings_style::sans(aether7b::TYPE_XS.0),
+                    );
+                if range.step.is_some_and(|step| step > 0.) {
+                    width += spacing + settings_style::SLIDER_WIDTH;
+                }
+            }
+            width
+        }
+        other => unreachable!("the row lays out the control kinds: {other}"),
     }
 }
 
@@ -439,7 +642,7 @@ fn toggle(
     set: &mut dyn FnMut(&str, Value) -> Result<(), SetError>,
 ) -> Rendered {
     let on = value.as_bool().unwrap_or_default();
-    let (rect, response) = region(ui, Vec2::new(50., 24.), enabled);
+    let (rect, response) = region(ui, Vec2::new(50., 24.), enabled, &entry.id);
     let focused = response.has_focus() && enabled;
     rim(ui, rect, aether7b::RADIUS_MD as u8, dark, danger, focused);
     let track = Rect::from_min_size(
@@ -512,11 +715,7 @@ fn choice(
     set: &mut dyn FnMut(&str, Value) -> Result<(), SetError>,
 ) -> Rendered {
     let options = entry.options.as_deref().unwrap_or_default();
-    let selected = options
-        .iter()
-        .find(|option| same_value(&option.value, value))
-        .map(|option| option.label.clone());
-    let text = selected.unwrap_or_else(|| value_text(value));
+    let text = choice_text(entry, value);
     let mut response = None;
     ui.add_enabled_ui(enabled, |ui| {
         ui.scope(|ui| {
@@ -576,20 +775,12 @@ fn source(
     let kind = entry.source.clone().unwrap_or_default();
     let options = sources.options(&kind);
     let current = value.as_str().unwrap_or_default().to_owned();
-    let none_label = if kind == "temperature" {
+    let none_label: &str = if kind == "temperature" {
         "None"
     } else {
         "Automatic"
     };
-    let text = if current.is_empty() {
-        none_label.to_owned()
-    } else {
-        options
-            .iter()
-            .find(|option| option.id == current)
-            .map(|option| option.label.clone())
-            .unwrap_or_else(|| format!("Unavailable: {current}"))
-    };
+    let text = source_text(entry, value, sources);
     let mut response = None;
     ui.add_enabled_ui(enabled, |ui| {
         ui.scope(|ui| {
@@ -655,58 +846,60 @@ fn segmented(
     let options = entry.options.as_deref().unwrap_or_default();
     let mut responses = Vec::new();
     let mut bounds: Option<Rect> = None;
-    ui.horizontal(|ui| {
-        for option in options {
-            let selected = same_value(&option.value, value);
-            let text = if selected {
-                aether7b::accent_active(dark)
-            } else {
-                aether7b::text_muted(dark)
-            };
-            let galley = ui.painter().layout_no_wrap(
-                option.label.clone(),
-                settings_style::sans(aether7b::TYPE_XS.0),
-                text,
+    // Right-to-left row: the options are added in reverse so they read
+    // left-to-right, the group ending flush at the row's right edge.
+    for option in options.iter().rev() {
+        let selected = same_value(&option.value, value);
+        let text = if selected {
+            aether7b::accent_active(dark)
+        } else {
+            aether7b::text_muted(dark)
+        };
+        let galley = ui.painter().layout_no_wrap(
+            option.label.clone(),
+            settings_style::sans(aether7b::TYPE_XS.0),
+            text,
+        );
+        let size = galley.size() + Vec2::new(2. * aether7b::SPACE_S3, 2. * aether7b::SPACE_S1);
+        let (rect, response) = region(ui, size, enabled, (&entry.id, option.label.as_str()));
+        if selected {
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(aether7b::RADIUS_SM as u8),
+                aether7b::accent_tint(dark),
             );
-            let size = galley.size() + Vec2::new(2. * aether7b::SPACE_S3, 2. * aether7b::SPACE_S1);
-            let (rect, response) = region(ui, size, enabled);
-            if selected {
-                ui.painter().rect_filled(
-                    rect,
-                    CornerRadius::same(aether7b::RADIUS_SM as u8),
-                    aether7b::accent_tint(dark),
-                );
-            }
-            ui.painter().add(egui::epaint::TextShape::new(
-                egui::pos2(
-                    rect.center().x - galley.size().x / 2.,
-                    rect.center().y - galley.size().y / 2.,
-                ),
-                galley,
-                text,
-            ));
-            if response.has_focus() && enabled {
-                settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_SM as u8);
-            }
-            if response.clicked() {
-                response.request_focus();
-                let _ = apply(set, fields, entry, option.value.clone());
-            }
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::accesskit::Role::Button,
-                    enabled,
-                    format!("{}: {}", entry.label, option.label),
-                )
-            });
-            bounds = Some(bounds.map_or(rect, |bounds: Rect| bounds.union(rect)));
-            responses.push(response);
         }
-    });
+        ui.painter().add(egui::epaint::TextShape::new(
+            egui::pos2(
+                rect.center().x - galley.size().x / 2.,
+                rect.center().y - galley.size().y / 2.,
+            ),
+            galley,
+            text,
+        ));
+        if response.has_focus() && enabled {
+            settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_SM as u8);
+        }
+        if response.clicked() {
+            response.request_focus();
+            let _ = apply(set, fields, entry, option.value.clone());
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::accesskit::Role::Button,
+                enabled,
+                format!("{}: {}", entry.label, option.label),
+            )
+        });
+        bounds = Some(bounds.map_or(rect, |bounds: Rect| bounds.union(rect)));
+        responses.push(response);
+    }
     let bounds = bounds.expect("a segmented control has options");
     rim(ui, bounds, aether7b::RADIUS_SM as u8, dark, danger, false);
+    // The options were added in reverse; the first option's response is
+    // the group's leftmost, in reading order.
     let response = responses
-        .first()
+        .last()
         .expect("a segmented control has options")
         .clone();
     rendered(entry, "segmented", enabled, response)
@@ -736,6 +929,20 @@ fn field_text(bytes: i64, multiplier: i64) -> String {
             format!("{value}")
         }
     }
+}
+
+/// A whole number that is exactly an `i64`: the value must survive the
+/// f64 → i64 → f64 round trip — and be strictly inside the i64 range, so
+/// the saturating cast cannot mask an overflow — which means the
+/// max-safe-integer sentinel stores (review issue 4) while anything past
+/// the ABI's whole numbers is refused before the core is asked.
+fn exact_i64(value: f64) -> Option<i64> {
+    const TWO_POW_63: f64 = 9223372036854775808.;
+    if !value.is_finite() || value.abs() >= TWO_POW_63 {
+        return None;
+    }
+    let bytes = value as i64;
+    (bytes as f64 == value).then_some(bytes)
 }
 
 /// One range bound as the mockup prints plain numbers: whole numbers
@@ -785,10 +992,14 @@ fn presented_text(entry: &CatalogEntry, value: &Value, fields: &mut Fields) -> S
 
 /// A number or duration field with its unit and range shown, a bytes/s unit
 /// selector where the entry is stored in bytes/s, and a slider when the
-/// catalog gives a step. Malformed text is refused before submission — the
-/// store is never offered a phantom default, and the field keeps what the
-/// user typed (lesson a). The bytes/s value is held exactly, independently
-/// of the displayed text, and every conversion is checked (lesson g).
+/// catalog gives a step — ONE composite row: field, unit, range, slider
+/// (fix L4), the slider named by the catalog label (review issue 3). The
+/// row's ui packs right-to-left, so the group ends flush at the row's
+/// right edge and the pieces read left-to-right in that order. Malformed
+/// text is refused before submission — the store is never offered a
+/// phantom default, and the field keeps what the user typed (lesson a).
+/// The bytes/s value is held exactly, independently of the displayed text,
+/// and every conversion is checked (lesson g).
 #[allow(clippy::too_many_arguments)]
 fn number(
     ui: &mut egui::Ui,
@@ -804,119 +1015,149 @@ fn number(
     let stored_in_bytes = range.is_some_and(|range| range.unit.as_deref() == Some("bytes/s"));
     let bounded = range.is_some_and(|range| range.max < UNBOUNDED_MAXIMUM);
     let control = entry.control.as_str();
+    // Presented first: this seeds the unit selector and the exact bytes
+    // the field stands for, before the group renders.
     let presented = presented_text(entry, value, fields);
+    let mut synchronized: Option<Value> = None;
     let mut edit_response = None;
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(enabled, |ui| {
-            let id = Id::unique(&entry.id).with(fields.generation(&entry.id));
-            let focused = ui.ctx().memory(|m| m.has_focus(id));
-            ui.scope(|ui| {
-                ui.style_mut().visuals.widgets.inactive.bg_stroke =
-                    settings_style::rim_stroke(dark, danger, focused);
-                ui.style_mut().visuals.widgets.hovered.bg_stroke =
-                    settings_style::rim_stroke(dark, danger, focused);
-                ui.style_mut().visuals.widgets.active.bg_stroke =
-                    settings_style::rim_stroke(dark, danger, focused);
-                ui.style_mut().visuals.widgets.inactive.weak_bg_fill = aether7b::surface_card(dark);
-                fields
-                    .edits
-                    .entry(entry.id.clone())
-                    .or_insert_with(|| presented.clone());
-                let edit = ui.add(
-                    egui::TextEdit::singleline(
-                        fields
-                            .edits
-                            .get_mut(&entry.id)
-                            .expect("the buffer was just inserted"),
-                    )
-                    .id(id)
-                    .font(settings_style::mono(aether7b::TYPE_SM.0))
-                    .desired_width(72.)
-                    .clip_text(true),
-                );
-                edit_response = Some(edit.clone());
-                let enter = edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if enter || edit.lost_focus() {
-                    submit_number(entry, fields, set, stored_in_bytes);
-                }
-            });
-        });
-        if stored_in_bytes {
-            let index = *fields.units.entry(entry.id.clone()).or_insert(0);
-            let selected = SCALE_UNITS
-                .get(index)
-                .map(|(label, _)| *label)
-                .unwrap_or("bytes/s");
-            let combo = egui::ComboBox::from_id_salt(format!("{}-unit", entry.id))
-                .selected_text(selected)
-                .width(72.)
-                .show_ui(ui, |ui| {
-                    for (unit_index, (label, _)) in SCALE_UNITS.iter().enumerate() {
-                        if ui.selectable_label(index == unit_index, *label).clicked() {
-                            fields.units.insert(entry.id.clone(), unit_index);
-                            // The exact bytes never move; only the display
-                            // changes, and nothing is submitted (lesson g).
-                            fields.bump(&entry.id);
-                        }
-                    }
-                });
-            combo.response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::accesskit::Role::ComboBox,
-                    enabled,
-                    format!("{} unit", entry.label),
+    // The slider first: in the right-to-left row it lands rightmost.
+    if let (Some(range), Some(step)) = (
+        range.filter(|_| bounded),
+        range.and_then(|range| range.step).filter(|step| *step > 0.),
+    ) {
+        let mut slider_value = value
+            .as_f64()
+            .unwrap_or_default()
+            .clamp(range.min, range.max);
+        let slider = ui
+            .add_enabled_ui(enabled, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut slider_value, range.min..=range.max)
+                        .step_by(step)
+                        .show_value(false),
                 )
-            });
-        } else if let Some(unit) = range
-            .and_then(|range| range.unit.clone())
-            .filter(|unit| !unit.is_empty())
-        {
-            ui.label(
-                egui::RichText::new(unit)
-                    .font(settings_style::mono(aether7b::TYPE_XS.0))
-                    .color(aether7b::text_muted(dark)),
-            );
+            })
+            .inner;
+        slider.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::accesskit::Role::Slider, enabled, &entry.label)
+        });
+        if slider.has_focus() && enabled {
+            settings_style::paint_focus_halo(ui.painter(), slider.rect, aether7b::RADIUS_MD as u8);
         }
-        if bounded {
-            let range = range.expect("a bounded entry has a range");
-            let unit = range.unit.clone().unwrap_or_default();
-            // The mockup's "N – N": a duration carries its units into the
-            // text ("0.2 s – 10 s"); every other control shows plain
-            // numbers, its unit already standing beside the field.
-            let (min, max) = if control == "duration" {
-                (range_text(range.min, &unit), range_text(range.max, &unit))
+        if slider.changed() {
+            let stepped = (slider_value / step).round() * step;
+            let number = if control == "integer" {
+                json!(stepped.round() as i64)
             } else {
-                (number_text(range.min), number_text(range.max))
+                json!(stepped)
             };
-            ui.label(
-                egui::RichText::new(format!("{min} – {max}"))
-                    .font(settings_style::sans(aether7b::TYPE_XS.0))
-                    .color(aether7b::text_muted(dark)),
-            );
-        }
-        if let (Some(range), Some(step)) = (
-            range.filter(|_| bounded),
-            range.and_then(|range| range.step).filter(|step| *step > 0.),
-        ) {
-            let mut slider_value = value
-                .as_f64()
-                .unwrap_or_default()
-                .clamp(range.min, range.max);
-            let slider = ui.add(
-                egui::Slider::new(&mut slider_value, range.min..=range.max)
-                    .step_by(step)
-                    .show_value(false),
-            );
-            if slider.changed() {
-                let stepped = (slider_value / step).round() * step;
-                let number = if control == "integer" {
-                    json!(stepped.round() as i64)
-                } else {
-                    json!(stepped)
-                };
-                let _ = apply(set, fields, entry, number);
+            if apply(set, fields, entry, number.clone()).is_ok() {
+                // The field follows the stored value (review issue 3):
+                // drop the buffer so the next frame re-presents it.
+                fields.bump(&entry.id);
+                synchronized = Some(number);
             }
         }
+    }
+    // The range text, then the unit — then the field, leftmost.
+    if bounded {
+        let range = range.expect("a bounded entry has a range");
+        let unit = range.unit.clone().unwrap_or_default();
+        // The mockup's "N – N": a duration carries its units into the
+        // text ("0.2 s – 10 s"); every other control shows plain
+        // numbers, its unit already standing beside the field.
+        let (min, max) = if control == "duration" {
+            (range_text(range.min, &unit), range_text(range.max, &unit))
+        } else {
+            (number_text(range.min), number_text(range.max))
+        };
+        ui.label(
+            egui::RichText::new(format!("{min} – {max}"))
+                .font(settings_style::sans(aether7b::TYPE_XS.0))
+                .color(aether7b::text_muted(dark)),
+        );
+    }
+    if stored_in_bytes {
+        let index = *fields.units.entry(entry.id.clone()).or_insert(0);
+        let selected = SCALE_UNITS
+            .get(index)
+            .map(|(label, _)| *label)
+            .unwrap_or("bytes/s");
+        let combo = ui
+            .add_enabled_ui(enabled, |ui| {
+                egui::ComboBox::from_id_salt(format!("{}-unit", entry.id))
+                    .selected_text(selected)
+                    .width(72.)
+                    .show_ui(ui, |ui| {
+                        for (unit_index, (label, _)) in SCALE_UNITS.iter().enumerate() {
+                            if ui.selectable_label(index == unit_index, *label).clicked() {
+                                fields.units.insert(entry.id.clone(), unit_index);
+                                // The exact bytes never move; only the
+                                // display changes, and nothing is
+                                // submitted (lesson g).
+                                fields.bump(&entry.id);
+                            }
+                        }
+                    })
+            })
+            .inner;
+        combo.response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::accesskit::Role::ComboBox,
+                enabled,
+                format!("{} unit", entry.label),
+            )
+        });
+    } else if let Some(unit) = range
+        .and_then(|range| range.unit.clone())
+        .filter(|unit| !unit.is_empty())
+    {
+        ui.label(
+            egui::RichText::new(unit)
+                .font(settings_style::mono(aether7b::TYPE_XS.0))
+                .color(aether7b::text_muted(dark)),
+        );
+    }
+    // The field, added last: leftmost of the composite row. A slider edit
+    // that just saved re-presents the value it saved in the same frame
+    // (review issue 3), never a stale buffer.
+    let presented = match &synchronized {
+        Some(number) => value_text(number),
+        None => presented.clone(),
+    };
+    ui.add_enabled_ui(enabled, |ui| {
+        let id = Id::unique(&entry.id).with(fields.generation(&entry.id));
+        let focused = ui.ctx().memory(|m| m.has_focus(id));
+        ui.scope(|ui| {
+            ui.style_mut().visuals.widgets.inactive.bg_stroke =
+                settings_style::rim_stroke(dark, danger, focused);
+            ui.style_mut().visuals.widgets.hovered.bg_stroke =
+                settings_style::rim_stroke(dark, danger, focused);
+            ui.style_mut().visuals.widgets.active.bg_stroke =
+                settings_style::rim_stroke(dark, danger, focused);
+            ui.style_mut().visuals.widgets.inactive.weak_bg_fill = aether7b::surface_card(dark);
+            fields
+                .edits
+                .entry(entry.id.clone())
+                .or_insert_with(|| presented.clone());
+            let edit = ui.add(
+                egui::TextEdit::singleline(
+                    fields
+                        .edits
+                        .get_mut(&entry.id)
+                        .expect("the buffer was just inserted"),
+                )
+                .id(id)
+                .font(settings_style::mono(aether7b::TYPE_SM.0))
+                .desired_width(72.)
+                .clip_text(true),
+            );
+            edit_response = Some(edit.clone());
+            let enter = edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if enter || edit.lost_focus() {
+                submit_number(entry, fields, set, stored_in_bytes);
+            }
+        });
     });
     let edit_response = edit_response.expect("the number field always reports");
     if edit_response.has_focus() && enabled {
@@ -975,8 +1216,10 @@ fn submit_number(
                         "Enter a whole number of bytes per second.".into(),
                     );
                     Err(SetError::UnparsableRequest)
-                } else if scaled.abs() < 9_007_199_254_740_990.0 {
-                    let bytes = scaled as i64;
+                } else if let Some(bytes) = exact_i64(scaled) {
+                    // The checked conversion only makes the value whole
+                    // and representable; whether it is inside the
+                    // entry's range is the core's to say (review issue 4).
                     fields.bytes.insert(entry.id.clone(), bytes);
                     apply(set, fields, entry, json!(bytes))
                 } else {
@@ -1062,9 +1305,23 @@ fn color(
         let rgba: Vec<f64> = rgba.iter().filter_map(Value::as_f64).collect();
         (rgba.len() == 4).then(|| [rgba[0], rgba[1], rgba[2], rgba[3]])
     });
-    let mut well = None;
-    ui.horizontal(|ui| {
-        let (rect, response) = region(ui, Vec2::new(44., 22.), enabled);
+    // Right-to-left row: the Inherit button lands rightmost, the well
+    // beside it — reading left to right, well then Inherit.
+    let well = {
+        let inherit =
+            settings_style::ghost_button(ui, (&entry.id, "inherit"), "Inherit", enabled, dark);
+        if inherit.clicked() {
+            fields.colors_open.remove(&entry.id);
+            let _ = apply(set, fields, entry, Value::Null);
+        }
+        inherit.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::accesskit::Role::Button,
+                enabled,
+                format!("Inherit the default {}", entry.label),
+            )
+        });
+        let (rect, response) = region(ui, Vec2::new(44., 22.), enabled, (&entry.id, "well"));
         let swatch = stored.map(|rgba| {
             egui::Color32::from_rgba_unmultiplied(
                 (rgba[0] * 255.) as u8,
@@ -1096,19 +1353,6 @@ fn color(
         ui.ctx().accesskit_node_builder(response.id, |node| {
             node.set_value(color_description(stored));
         });
-        well = Some(response.clone());
-        let inherit = settings_style::ghost_button(ui, "Inherit", enabled, dark);
-        if inherit.clicked() {
-            fields.colors_open.remove(&entry.id);
-            let _ = apply(set, fields, entry, Value::Null);
-        }
-        inherit.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::accesskit::Role::Button,
-                enabled,
-                format!("Inherit the default {}", entry.label),
-            )
-        });
         let was_open = fields.colors_open.contains(&entry.id);
         let mut open = was_open && enabled;
         egui::Popup::from_response(&response)
@@ -1129,6 +1373,20 @@ fn color(
                             .show_value(true)
                             .text(name),
                     );
+                    // The channel is the slider's accessible name: egui's
+                    // own slider info carries no label (review issue 3).
+                    slider.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::accesskit::Role::Slider, true, name)
+                    });
+                    if slider.has_focus() {
+                        // The channel sliders carry the same 2 px halo as
+                        // every other focusable control (review issue 3).
+                        settings_style::paint_focus_halo(
+                            ui.painter(),
+                            slider.rect,
+                            aether7b::RADIUS_MD as u8,
+                        );
+                    }
                     if slider.changed() {
                         rgba[index] = component / 255.;
                         let _ = apply(set, fields, entry, json!(rgba));
@@ -1142,9 +1400,9 @@ fn color(
                 fields.colors_open.remove(&entry.id);
             }
         }
-    });
-    let response = well.expect("the colour well always reports");
-    rendered(entry, "color", enabled, response)
+        response
+    };
+    rendered(entry, "color", enabled, well)
 }
 
 // MARK: Path and text
@@ -1245,13 +1503,11 @@ fn path(
     set: &mut dyn FnMut(&str, Value) -> Result<(), SetError>,
 ) -> (Rendered, bool) {
     let presented = value.as_str().unwrap_or_default().to_owned();
-    let mut response = None;
-    let mut choose = false;
-    ui.horizontal(|ui| {
-        response = Some(field(
-            ui, dark, entry, &presented, enabled, danger, fields, set, 180.,
-        ));
-        let chooser = settings_style::ghost_button(ui, "Choose…", enabled, dark);
+    // Right-to-left row: the chooser button lands rightmost, the field
+    // beside it — reading left to right, field then Choose.
+    let (response, choose) = {
+        let chooser =
+            settings_style::ghost_button(ui, (&entry.id, "choose"), "Choose…", enabled, dark);
         chooser.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::accesskit::Role::Button,
@@ -1259,17 +1515,13 @@ fn path(
                 format!("Choose {}", entry.label),
             )
         });
-        choose = chooser.clicked();
-    });
-    (
-        rendered(
-            entry,
-            "path",
-            enabled,
-            response.expect("the path field always reports"),
-        ),
-        choose,
-    )
+        let choose = chooser.clicked();
+        let response = field(
+            ui, dark, entry, &presented, enabled, danger, fields, set, 180.,
+        );
+        (response, choose)
+    };
+    (rendered(entry, "path", enabled, response), choose)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1352,7 +1604,7 @@ fn order(
     let mut first_response = None;
     let pending = fields.order_focus.take();
     let mut next_focus: Option<(String, bool)> = None;
-    ui.vertical(|ui| {
+    let list = ui.vertical(|ui| {
         for (index, id) in list.iter().enumerate() {
             let mut moved = None;
             let mut focus_here = None;
@@ -1430,7 +1682,9 @@ fn order(
     });
     fields.order_focus = next_focus;
     let response = first_response.expect("an order list has rows");
-    rendered(entry, "order", enabled, response)
+    let mut rendered = rendered(entry, "order", enabled, response);
+    rendered.control_rect = list.response.rect;
+    rendered
 }
 
 /// One Move button: a ghost button whose widget id is stable across a
@@ -1503,7 +1757,7 @@ fn move_button(ui: &mut egui::Ui, id: &str, up: bool, enabled: bool, dark: bool)
 /// A ghost action button (spec §5): the entry's label is the button's
 /// text — Reset section, Import theme, Export theme.
 fn action(ui: &mut egui::Ui, dark: bool, entry: &CatalogEntry, enabled: bool) -> (Rendered, bool) {
-    let response = settings_style::ghost_button(ui, &entry.label, enabled, dark);
+    let response = settings_style::ghost_button(ui, &entry.id, &entry.label, enabled, dark);
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::accesskit::Role::Button, enabled, &entry.label)
     });

@@ -51,6 +51,19 @@ pub const SECTION_TITLES: [(&str, &str); 8] = [
     ("themes", "Themes & import"),
 ];
 
+/// The sidebar's width, in the 12 px-corner window's canvas.
+pub const SIDEBAR_WIDTH: f32 = 190.;
+
+/// The content pane's side insets — the token gutter (fix L2): the
+/// section eyebrow, title, banner and cards all sit inside it, so the
+/// cards align with the eyebrow and fill the pane's width.
+const PANE_GUTTER: egui::Margin = egui::Margin {
+    left: aether7b::SPACE_S6 as i8,
+    right: aether7b::SPACE_S6 as i8,
+    top: 0,
+    bottom: aether7b::SPACE_S8 as i8,
+};
+
 /// One completed asynchronous file operation: a loaded theme, a saved theme,
 /// a reviewed legacy import.
 enum Loaded {
@@ -93,6 +106,10 @@ impl SettingsWindow {
             .first()
             .cloned()
             .unwrap_or_else(|| "general".into());
+        // The desktop's reduced-motion preference is read once per
+        // process, here — at open, before the first frame — so a slow
+        // query tool can never stall a frame.
+        let _ = settings_style::reduced_motion_requested();
         Self {
             catalog,
             section,
@@ -456,7 +473,8 @@ impl SettingsWindow {
             aether7b::text_main(dark),
         ));
         let body = egui::Rect::from_min_max(egui::pos2(canvas.min.x, header.max.y), canvas.max);
-        let sidebar = egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + 190., body.max.y));
+        let sidebar =
+            egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + SIDEBAR_WIDTH, body.max.y));
         // The sidebar reaches the window's bottom-left corner, so it
         // rounds that one like the canvas: the 12 px corner the desktop
         // shows through stays transparent.
@@ -498,14 +516,22 @@ impl SettingsWindow {
             let catalog = self.catalog.clone();
             let mut held = std::mem::take(&mut self.held);
             let mut set = |id: &str, value: Value| -> Result<(), SetError> {
-                let result = store.set(id, value.clone());
-                if result.is_err() && store.blocked() {
+                if store.blocked() {
                     // The document cannot take the change, so the window
-                    // holds it in memory: the banner's promise, kept until
-                    // the user replaces the file.
-                    held.insert(id.to_owned(), value);
-                    return Ok(());
+                    // holds it in memory — the banner's promise, kept
+                    // until the user replaces the file — but only once
+                    // the shared core has validated it (the only
+                    // validator, review issue 2): a refused edit shows
+                    // its reason and is held for nothing.
+                    return match store.validate_held(&held, id, &value) {
+                        Ok(()) => {
+                            held.insert(id.to_owned(), value);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    };
                 }
+                let result = store.set(id, value.clone());
                 if result.is_ok() {
                     dirty = true;
                     if id == "themes.preset"
@@ -567,97 +593,115 @@ impl SettingsWindow {
             }
             area.show(&mut content_ui, |ui| {
                 ui.add_space(aether7b::SPACE_S12);
-                settings_style::eyebrow(ui, &self.section, dark);
-                ui.label(
-                    egui::RichText::new(section_title(&section))
-                        .font(settings_style::sans(aether7b::TYPE_XL.0))
-                        .color(aether7b::text_main(dark))
-                        .strong(),
-                );
-                ui.add_space(aether7b::SPACE_S2);
-                if let Some(problem) = &problem {
-                    banner(ui, dark, problem, blocked, &mut actions);
-                }
-                if let Some(message) = &self.message {
+                // The pane's token gutter (fix L2): everything — eyebrow,
+                // title, banner, message, cards — sits inside it, so the
+                // cards align with the eyebrow's left edge and fill the
+                // pane's width, exactly the macOS pane's side insets.
+                egui::Frame::new().outer_margin(PANE_GUTTER).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    settings_style::eyebrow(ui, &self.section, dark);
                     ui.label(
-                        egui::RichText::new(message)
-                            .font(settings_style::sans(aether7b::TYPE_XS.0))
-                            .color(aether7b::status_warning(dark)),
+                        egui::RichText::new(section_title(&section))
+                            .font(settings_style::sans(aether7b::TYPE_XL.0))
+                            .color(aether7b::text_main(dark))
+                            .strong(),
                     );
                     ui.add_space(aether7b::SPACE_S2);
-                }
-                let entries: Vec<_> = self
-                    .catalog
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        entry.section == section
-                            && entry.platforms.iter().any(|platform| platform == "linux")
-                            && entry.shown
-                    })
-                    .collect();
-                let mut groups: Vec<(&str, Vec<&crate::settings::document::CatalogEntry>)> =
-                    Vec::new();
-                for entry in entries {
-                    match groups.last_mut() {
-                        Some((group, list)) if *group == entry.group => list.push(entry),
-                        _ => groups.push((entry.group.as_str(), vec![entry])),
+                    if let Some(problem) = &problem {
+                        banner(ui, dark, problem, blocked, &mut actions);
                     }
-                }
-                for (group, entries) in groups {
-                    settings_style::card(dark)
-                        .outer_margin(egui::Margin {
-                            left: aether7b::SPACE_S6 as i8,
-                            right: aether7b::SPACE_S6 as i8,
-                            top: 0,
-                            bottom: aether7b::SPACE_S3 as i8,
+                    if let Some(message) = &self.message {
+                        ui.label(
+                            egui::RichText::new(message)
+                                .font(settings_style::sans(aether7b::TYPE_XS.0))
+                                .color(aether7b::status_warning(dark)),
+                        );
+                        ui.add_space(aether7b::SPACE_S2);
+                    }
+                    let entries: Vec<_> = self
+                        .catalog
+                        .entries
+                        .iter()
+                        .filter(|entry| {
+                            entry.section == section
+                                && entry.platforms.iter().any(|platform| platform == "linux")
+                                && entry.shown
                         })
-                        .show(ui, |ui| {
-                            settings_style::eyebrow(ui, group, dark);
-                            ui.add_space(aether7b::SPACE_S2);
-                            for entry in entries {
-                                let value = settings_controls::entry_value(&values, entry);
-                                let enabled = settings_controls::depends_holds(
-                                    &values,
-                                    &self.catalog.entries,
-                                    entry,
-                                );
-                                let (rendered, outcome) = settings_controls::entry_row(
-                                    ui,
-                                    dark,
-                                    entry,
-                                    &value,
-                                    enabled,
-                                    &mut self.fields,
-                                    sources,
-                                    &mut set,
-                                );
-                                self.rendered.push(rendered);
-                                match outcome {
-                                    Outcome::None => (),
-                                    Outcome::Reset(section) => {
-                                        actions.confirm_reset = Some(section);
-                                    }
-                                    Outcome::ImportTheme => actions.import_theme = true,
-                                    Outcome::ExportTheme => actions.export_theme = true,
-                                    Outcome::ChoosePath(id) => {
-                                        actions.choose_path = Some(id);
+                        .collect();
+                    let mut groups: Vec<(&str, Vec<&crate::settings::document::CatalogEntry>)> =
+                        Vec::new();
+                    for entry in entries {
+                        match groups.last_mut() {
+                            Some((group, list)) if *group == entry.group => list.push(entry),
+                            _ => groups.push((entry.group.as_str(), vec![entry])),
+                        }
+                    }
+                    for (group, entries) in groups {
+                        // Every control this card renders, for its rect.
+                        let before = self.rendered.len();
+                        let card = settings_style::card(dark)
+                            .outer_margin(egui::Margin {
+                                left: 0,
+                                right: 0,
+                                top: 0,
+                                bottom: aether7b::SPACE_S3 as i8,
+                            })
+                            .show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                settings_style::eyebrow(ui, group, dark);
+                                ui.add_space(aether7b::SPACE_S2);
+                                for entry in entries {
+                                    let value = settings_controls::entry_value(&values, entry);
+                                    let enabled = settings_controls::depends_holds(
+                                        &values,
+                                        &self.catalog.entries,
+                                        entry,
+                                    );
+                                    let (rendered, outcome) = settings_controls::entry_row(
+                                        ui,
+                                        dark,
+                                        entry,
+                                        &value,
+                                        enabled,
+                                        &mut self.fields,
+                                        sources,
+                                        &mut set,
+                                    );
+                                    self.rendered.push(rendered);
+                                    match outcome {
+                                        Outcome::None => (),
+                                        Outcome::Reset(section) => {
+                                            actions.confirm_reset = Some(section);
+                                        }
+                                        Outcome::ImportTheme => actions.import_theme = true,
+                                        Outcome::ExportTheme => actions.export_theme = true,
+                                        Outcome::ChoosePath(id) => {
+                                            actions.choose_path = Some(id);
+                                        }
                                     }
                                 }
-                            }
-                            if section == "themes" && group == "Import and export" {
-                                legacy_block(
-                                    ui,
-                                    dark,
-                                    &mut self.legacy_path,
-                                    self.import.as_ref(),
-                                    &mut actions,
-                                );
-                            }
-                        });
-                }
-                ui.add_space(aether7b::SPACE_S8);
-                content_height = ui.min_rect().height() + aether7b::SPACE_S8;
+                                if section == "themes" && group == "Import and export" {
+                                    legacy_block(
+                                        ui,
+                                        dark,
+                                        &mut self.legacy_path,
+                                        self.import.as_ref(),
+                                        &mut actions,
+                                    );
+                                }
+                            });
+                        // The card every entry of this group rendered in —
+                        // the tests' containment and column checks (fix L1).
+                        let rect = card.response.rect;
+                        for rendered in &mut self.rendered[before..] {
+                            rendered.card_rect = rect;
+                        }
+                    }
+                    ui.add_space(aether7b::SPACE_S2);
+                });
+                // The full height of the section's cards, measured for the
+                // snapshot walker's auto-sized capture viewport.
+                content_height = ui.min_rect().height();
             });
             self.content_height = content_height;
             drop(set);
@@ -666,12 +710,6 @@ impl SettingsWindow {
             }
             if let Some(reason) = side_effect.take() {
                 self.message = Some(reason);
-            }
-            // The preset follows the palette every frame, so a change the
-            // window did not apply itself — a store write, a theme import —
-            // still marks the theme Custom (the catalog's documented rule).
-            if mark_custom_preset(store, &catalog) {
-                self.dirty = true;
             }
             self.held = held;
         }
@@ -717,12 +755,35 @@ impl SettingsWindow {
                     self.dirty = true;
                     self.message = Some("The settings document was replaced.".into());
                     // The held changes — the banner's in-memory promise —
-                    // land in the fresh document.
-                    for (id, value) in std::mem::take(&mut self.held) {
-                        let _ = store.set(&id, value);
+                    // land in the fresh document. One the core refuses now
+                    // stays held with its reason on the row, reported
+                    // instead of silently disappearing (review issue 2).
+                    let held = std::mem::take(&mut self.held);
+                    let mut failures: Vec<(String, Value, SetError)> = Vec::new();
+                    for (id, value) in held {
+                        match store.set(&id, value.clone()) {
+                            Ok(()) => (),
+                            Err(error) => failures.push((id, value, error)),
+                        }
                     }
                     for entry in &self.catalog.entries {
-                        self.fields.bump(&entry.id);
+                        if !failures.iter().any(|(id, _, _)| *id == entry.id) {
+                            self.fields.bump(&entry.id);
+                        }
+                    }
+                    for (id, value, error) in failures {
+                        let reason = self
+                            .catalog
+                            .entries
+                            .iter()
+                            .find(|entry| entry.id == id)
+                            .map(|entry| settings_controls::refusal_reason(&error, entry))
+                            .unwrap_or_else(|| "The value could not be saved.".into());
+                        self.fields.refuse(&id, reason.clone());
+                        self.message = Some(reason);
+                        // Retained: the refused edit stays held, so it
+                        // still presents and survives a later repair.
+                        self.held.insert(id, value);
                     }
                 }
                 Err(error) => self.message = Some(error),
@@ -774,7 +835,10 @@ impl SettingsWindow {
         let grip = ui.interact(
             grip,
             ui.scope_id().with("headerbar-grip"),
-            egui::Sense::drag(),
+            // Dragging moves the window, like any headerbar — but the
+            // grip is no keyboard stop; the focus walk belongs to the
+            // sidebar, the controls and the close button (lesson d).
+            egui::Sense::DRAG,
         );
         if grip.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -861,7 +925,11 @@ fn nav_button(
         aether7b::text_muted(dark)
     };
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, text);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 26.), egui::Sense::click());
+    let (rect, response) = ui
+        .push_id(section, |ui| {
+            ui.allocate_exact_size(egui::vec2(width, 26.), egui::Sense::click())
+        })
+        .inner;
     let corner = egui::CornerRadius::same(aether7b::RADIUS_SM as u8);
     if selected || response.hovered() {
         ui.painter()
@@ -888,27 +956,37 @@ fn nav_button(
     response
 }
 
-/// The headerbar's close button.
+/// The headerbar's close button: the ✕ drawn as two token-coloured
+/// strokes, never a font glyph (fix L3 — the bundled fonts carry no ✕,
+/// so the glyph rendered as tofu).
 fn close_button(ui: &mut egui::Ui, dark: bool, header: egui::Rect) -> egui::Response {
     let rect = egui::Rect::from_min_size(
         egui::pos2(header.max.x - 12. - 18., header.center().y - 9.),
         egui::vec2(18., 18.),
     );
-    let response = ui.allocate_rect(rect, egui::Sense::click());
+    let response = ui
+        .push_id("close-settings", |ui| {
+            ui.allocate_rect(rect, egui::Sense::click())
+        })
+        .inner;
     let rect = response.rect;
-    let galley = ui.painter().layout_no_wrap(
-        "✕".to_owned(),
-        settings_style::sans(aether7b::TYPE_SM.0),
-        aether7b::text_muted(dark),
+    let center = rect.center();
+    let half = 5.;
+    let stroke = egui::Stroke::new(1.5, aether7b::text_muted(dark));
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - half, center.y - half),
+            egui::pos2(center.x + half, center.y + half),
+        ],
+        stroke,
     );
-    ui.painter().add(egui::epaint::TextShape::new(
-        egui::pos2(
-            rect.center().x - galley.size().x / 2.,
-            rect.center().y - galley.size().y / 2.,
-        ),
-        galley,
-        aether7b::text_muted(dark),
-    ));
+    ui.painter().line_segment(
+        [
+            egui::pos2(center.x - half, center.y + half),
+            egui::pos2(center.x + half, center.y - half),
+        ],
+        stroke,
+    );
     if response.has_focus() {
         settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_SM as u8);
     }
@@ -927,13 +1005,14 @@ fn banner(ui: &mut egui::Ui, dark: bool, problem: &str, blocked: bool, actions: 
         .stroke(egui::Stroke::new(1., aether7b::status_warning(dark)))
         .corner_radius(aether7b::RADIUS_LG)
         .outer_margin(egui::Margin {
-            left: aether7b::SPACE_S6 as i8,
-            right: aether7b::SPACE_S6 as i8,
+            left: 0,
+            right: 0,
             top: 0,
             bottom: aether7b::SPACE_S3 as i8,
         })
         .inner_margin(egui::Margin::same(aether7b::SPACE_S3 as i8))
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.label(
                 egui::RichText::new(format!("The settings document needs attention: {problem}."))
                     .font(settings_style::sans(aether7b::TYPE_SM.0))
@@ -949,6 +1028,7 @@ fn banner(ui: &mut egui::Ui, dark: bool, problem: &str, blocked: bool, actions: 
                 );
                 let replace = settings_style::ghost_button(
                     ui,
+                    "replace-unreadable-file",
                     "Replace the file with the current settings",
                     true,
                     dark,
@@ -986,11 +1066,12 @@ fn reset_modal(ui: &mut egui::Ui, dark: bool, section: &str, actions: &mut Actio
                 );
                 ui.add_space(aether7b::SPACE_S2);
                 ui.horizontal(|ui| {
-                    let reset = settings_style::ghost_button(ui, "Reset", true, dark);
+                    let reset = settings_style::ghost_button(ui, "reset", "Reset", true, dark);
                     if reset.clicked() {
                         actions.reset_confirmed = true;
                     }
-                    let cancel = settings_style::ghost_button(ui, "Cancel", true, dark);
+                    let cancel =
+                        settings_style::ghost_button(ui, "cancel-reset", "Cancel", true, dark);
                     if cancel.clicked() {
                         actions.cancelled = true;
                     }
@@ -1030,13 +1111,27 @@ fn legacy_block(
         .font(settings_style::sans(aether7b::TYPE_XS.0))
         .color(aether7b::text_muted(dark)),
     );
-    path.edit(ui);
+    let field = path.edit(ui);
+    field.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::accesskit::Role::TextInput,
+            true,
+            "Legacy Linux settings path",
+        )
+    });
     ui.horizontal(|ui| {
-        let browse = settings_style::ghost_button(ui, "Browse legacy settings…", true, dark);
+        let browse = settings_style::ghost_button(
+            ui,
+            "browse-legacy",
+            "Browse legacy settings…",
+            true,
+            dark,
+        );
         if browse.clicked() {
             actions.browse_legacy = true;
         }
-        let review = settings_style::ghost_button(ui, "Review pasted path…", true, dark);
+        let review =
+            settings_style::ghost_button(ui, "review-legacy", "Review pasted path…", true, dark);
         if review.clicked() {
             actions.review_pasted = Some(path.path());
         }
@@ -1064,11 +1159,18 @@ fn legacy_block(
                 }
             });
         ui.horizontal(|ui| {
-            let accept = settings_style::ghost_button(ui, "Import into settings", true, dark);
+            let accept = settings_style::ghost_button(
+                ui,
+                "accept-import",
+                "Import into settings",
+                true,
+                dark,
+            );
             if accept.clicked() {
                 actions.accept_import = true;
             }
-            let cancel = settings_style::ghost_button(ui, "Cancel import", true, dark);
+            let cancel =
+                settings_style::ghost_button(ui, "cancel-import", "Cancel import", true, dark);
             if cancel.clicked() {
                 actions.cancel_import = true;
             }

@@ -74,10 +74,12 @@ impl PathField {
         self.text = display(path.as_os_str());
         self.raw = Some(path);
     }
-    pub fn edit(&mut self, ui: &mut egui::Ui) {
-        if ui.text_edit_singleline(&mut self.text).changed() {
+    pub fn edit(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let response = ui.text_edit_singleline(&mut self.text);
+        if response.changed() {
             self.raw = None;
         }
+        response
     }
 }
 fn display(name: &std::ffi::OsStr) -> String {
@@ -830,17 +832,30 @@ mod tests {
         let s = Scratch::new();
         let path = s.0.join("original.json");
         fs::write(&path, b"keep original").unwrap();
-        let mut p = Picker::new(Action::SaveTheme, path.clone(), &egui::Context::default());
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut p = Picker::new(Action::SaveTheme, path.clone(), &ctx);
         wait(&mut p);
         p.accept();
         wait(&mut p);
         assert_eq!(p.replace, Some(path.clone()));
         assert!(p.ready.is_none());
         assert_eq!(fs::read(&path).unwrap(), b"keep original");
-        p.replace = None;
+        // Back drives the replacement dialog's own button (review
+        // issue 7), through the rendered modal; the frames that follow
+        // write nothing. The modal's first frame is an invisible
+        // settle, so warm up before reading the tree.
+        let _ = frame(&ctx, &mut p, Vec::new());
+        let (_, output) = frame(&ctx, &mut p, Vec::new());
+        let back = button_centre(&output, "Back").expect("the dialog renders Back");
+        let _ = click(&ctx, &mut p, back);
+        assert_eq!(p.replace, None, "Back did not leave the dialog");
         assert!(p.ready.is_none());
-        // Back must leave the existing file byte-identical.
+        for _ in 0..2 {
+            let _ = frame(&ctx, &mut p, Vec::new());
+        }
         assert_eq!(fs::read(&path).unwrap(), b"keep original");
+        // A fresh confirmation still replaces, after the cancelled one.
         p.accept();
         wait(&mut p);
         p.confirm_replace();
@@ -852,6 +867,136 @@ mod tests {
                 replace: true
             })
         );
+        assert_eq!(
+            fs::read(s.0.join("original.json")).unwrap(),
+            b"keep original"
+        );
+    }
+    #[test]
+    fn cancelling_the_replacement_dialog_cancels_the_chooser() {
+        let s = Scratch::new();
+        let path = s.0.join("original.json");
+        fs::write(&path, b"keep original").unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut p = Picker::new(Action::SaveTheme, path.clone(), &ctx);
+        wait(&mut p);
+        p.accept();
+        wait(&mut p);
+        assert_eq!(p.replace, Some(path.clone()));
+        for affordance in ["Cancel", "escape"] {
+            // Re-arm the dialog for the second affordance.
+            if p.replace.is_none() {
+                p.accept();
+                wait(&mut p);
+            }
+            let decision = if affordance == "Cancel" {
+                // The modal's first frame after arming is an invisible
+                // settle; warm up before reading the tree.
+                let _ = frame(&ctx, &mut p, Vec::new());
+                let (_, output) = frame(&ctx, &mut p, Vec::new());
+                let cancel = button_centre(&output, "Cancel").expect("the dialog renders Cancel");
+                click(&ctx, &mut p, cancel)
+            } else {
+                frame(
+                    &ctx,
+                    &mut p,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                )
+                .0
+            };
+            assert!(
+                matches!(decision, Some(Decision::Cancelled)),
+                "{affordance} did not cancel the chooser"
+            );
+            // Cancelled means the caller drops the picker — its armed
+            // flag dies with it, so nothing may produce a choice.
+            assert!(p.ready.is_none(), "{affordance} produced a choice");
+            for _ in 0..2 {
+                let _ = frame(&ctx, &mut p, Vec::new());
+            }
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                b"keep original",
+                "{affordance}: the cancelled replacement wrote the file"
+            );
+        }
+    }
+    /// One headless frame of the picker: the decision `show` returned and
+    /// the frame's full output, for the tree the dialog rendered into.
+    fn frame(
+        ctx: &egui::Context,
+        p: &mut Picker,
+        events: Vec<egui::Event>,
+    ) -> (Option<Decision>, egui::FullOutput) {
+        let mut decision = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(400., 300.),
+                )),
+                events,
+                ..egui::RawInput::default()
+            },
+            |ui| {
+                decision = p.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        (decision, output)
+    }
+    /// One dialog button's screen position, from the frame's tree.
+    fn button_centre(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+        output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .and_then(|tree| {
+                tree.nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(label))
+                    .and_then(|(_, node)| node.bounds())
+                    .map(|bounds| {
+                        egui::Pos2::new(
+                            (bounds.x0 + bounds.x1) as f32 / 2.,
+                            (bounds.y0 + bounds.y1) as f32 / 2.,
+                        )
+                    })
+            })
+    }
+    /// A press-and-release click at `pos`: the release frame's decision.
+    fn click(ctx: &egui::Context, p: &mut Picker, pos: egui::Pos2) -> Option<Decision> {
+        let _ = frame(
+            ctx,
+            p,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame(
+            ctx,
+            p,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        )
+        .0
     }
     #[test]
     fn saving_an_unextended_name_adds_json_but_the_chooser_never_creates_the_file() {
@@ -893,7 +1038,9 @@ mod tests {
         wait(&mut p);
         assert_eq!(p.ready.take().unwrap().path, path);
         let mut field = PathField::new(path.clone());
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| field.edit(ui));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            field.edit(ui);
+        });
         output.textures_delta.clear();
         assert_eq!(field.path(), path);
     }

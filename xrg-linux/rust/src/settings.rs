@@ -1084,6 +1084,25 @@ impl Store {
             .map_err(|_| document::SetError::Transport)?;
         Ok(())
     }
+    /// Validate one edit through the shared core without writing anything:
+    /// the refusal `set` would report for the same value. Held edits —
+    /// the in-memory changes a blocked document carries — are applied to
+    /// the validation document first, so dependencies among them hold
+    /// exactly as they will after the replacement applies them.
+    pub fn validate_held(
+        &self,
+        held: &std::collections::BTreeMap<String, serde_json::Value>,
+        id: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), document::SetError> {
+        let mut document = self.document.clone();
+        for (held_id, held_value) in held {
+            if let Ok(next) = document::set(&document, held_id, held_value) {
+                document = next;
+            }
+        }
+        document::set(&document, id, value).map(|_| ())
+    }
     /// Restore every entry of one catalog section to its default, in the
     /// document the core returns; unknown keys and other sections are
     /// untouched, and the result is written atomically with mode 0600.
