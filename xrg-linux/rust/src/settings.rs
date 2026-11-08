@@ -44,9 +44,10 @@ pub enum Module {
     GpuMemory,
     Fans,
     Weather,
+    Stocks,
 }
 impl Module {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Cpu,
         Self::Memory,
         Self::Network,
@@ -60,6 +61,7 @@ impl Module {
         Self::GpuMemory,
         Self::Fans,
         Self::Weather,
+        Self::Stocks,
     ];
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|m| *m == self).unwrap()
@@ -79,6 +81,7 @@ impl Module {
             Self::GpuMemory => "VRAM · reported pool used",
             Self::Fans => "Fans · RPM",
             Self::Weather => "Weather · station observations",
+            Self::Stocks => "Stocks",
         }
     }
 }
@@ -494,8 +497,9 @@ pub enum Layout {
     Horizontal,
 }
 /// The shared Stocks settings, as the Linux view of the unified settings
-/// document carries them (ruling R2). No `Module::Stocks` exists yet; the
-/// fields ride along until the Stocks graph joins the module list.
+/// document carries them (ruling R2). The core's version-40 view maps no
+/// Stocks graph yet, so the graph's own visibility rides the document's
+/// `graphs.stock.visible` value until the core maps it (see `Store::view`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct StockSettings {
@@ -578,7 +582,11 @@ impl Default for Settings {
                     id,
                     visible: !matches!(
                         id,
-                        Module::Processes | Module::GpuMemory | Module::Fans | Module::Weather
+                        Module::Processes
+                            | Module::GpuMemory
+                            | Module::Fans
+                            | Module::Weather
+                            | Module::Stocks
                     ),
                     style: GraphStyle::Solid,
                     colors: GraphColors::default(),
@@ -609,7 +617,7 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    pub fn default_order() -> [Module; 13] {
+    pub fn default_order() -> [Module; 14] {
         [
             Module::Cpu,
             Module::Gpu,
@@ -624,6 +632,7 @@ impl Settings {
             Module::GpuMemory,
             Module::Fans,
             Module::Weather,
+            Module::Stocks,
         ]
     }
     pub fn module(&self, id: Module) -> &ModuleSetting {
@@ -637,6 +646,23 @@ impl Settings {
             .iter_mut()
             .find(|m| m.id == id)
             .expect("Validated module set")
+    }
+    /// Join every graph the model knows that the module list lacks, hidden,
+    /// exactly as the upgrade chain appends graphs an older file never
+    /// stored. The core's version-40 view names no Stocks graph yet (ruling
+    /// R2), so this is what keeps every in-memory `Settings` complete.
+    pub(crate) fn ensure_modules(&mut self) {
+        for id in Module::ALL {
+            if !self.modules.iter().any(|m| m.id == id) {
+                self.modules.push(ModuleSetting {
+                    id,
+                    visible: false,
+                    style: GraphStyle::Solid,
+                    colors: GraphColors::default(),
+                    height: None,
+                });
+            }
+        }
     }
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 40 {
@@ -705,7 +731,11 @@ impl Settings {
             defaults.activity_bars.visible = false;
             defaults.activity_bars.use_series_colors = false;
             for module in &mut defaults.modules {
-                module.style = GraphStyle::Hollow;
+                // The INI era's line look belongs to the graphs it had;
+                // Stocks joins with the model's own Solid default.
+                if module.id != Module::Stocks {
+                    module.style = GraphStyle::Hollow;
+                }
             }
             Self {
                 theme: ThemeChoice::Builtin { name: name.into() },
@@ -859,6 +889,9 @@ impl Settings {
         if result.version == 39 {
             result.version = 40;
         }
+        // Version 40 never stored the Stocks graph (ruling R2): it joins
+        // hidden, the way the chain already appended earlier opt-in graphs.
+        result.ensure_modules();
         result.validate()?;
         Ok(result)
     }
@@ -949,6 +982,86 @@ fn catalog_defaults() -> &'static Vec<(String, serde_json::Value)> {
             .collect()
     })
 }
+/// The typed view the app runs on: the core's Linux view — which names no
+/// Stocks graph yet, the version-40 shape (ruling R2) — with the Stocks
+/// graph joined hidden and the document's own `graphs.stock.*` catalog
+/// values applied, so the stock graph's controls reach the dashboard before
+/// the core maps the graph. Every read of a stored document goes through
+/// here.
+fn view(document: &[u8]) -> Result<Settings, String> {
+    let mut settings = document::linux_view(document)?;
+    settings.ensure_modules();
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(document) else {
+        // The document the store holds is always the core's canonical JSON;
+        // the defaults stand if it ever were not.
+        return Ok(settings);
+    };
+    let at = |id: &str| value.get("settings").and_then(|settings| settings.get(id));
+    let stocks = settings.module_mut(Module::Stocks);
+    if let Some(visible) = at("graphs.stock.visible").and_then(serde_json::Value::as_bool) {
+        stocks.visible = visible;
+    }
+    if let Some(style) = at("graphs.stock.style").and_then(serde_json::Value::as_str) {
+        stocks.style = match style {
+            "solid" => GraphStyle::Solid,
+            "pixel" => GraphStyle::Pixel,
+            "dot" => GraphStyle::Dot,
+            "hollow" => GraphStyle::Hollow,
+            _ => stocks.style,
+        };
+    }
+    if let Some(height) = at("graphs.stock.height").and_then(serde_json::Value::as_u64) {
+        stocks.height = u32::try_from(height)
+            .ok()
+            .filter(|height| (64..=240).contains(height));
+    }
+    if let Some(color) = color_at(&value, "graphs.stock.color.background") {
+        stocks.colors.background = Some(color);
+    }
+    for (index, id) in [
+        "graphs.stock.color.series1",
+        "graphs.stock.color.series2",
+        "graphs.stock.color.series3",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if let Some(color) = color_at(&value, id) {
+            stocks.colors.series[index] = Some(color);
+        }
+    }
+    Ok(settings)
+}
+
+/// One stored RGBA color, or None when the entry is absent, null or not a
+/// bounded color — the inherit state.
+fn color_at(value: &serde_json::Value, id: &str) -> Option<[f64; 4]> {
+    let array = value
+        .get("settings")?
+        .get(id)?
+        .as_array()?
+        .iter()
+        .map(|component| {
+            component
+                .as_f64()
+                .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    array.try_into().ok()
+}
+
+/// The version-40 JSON the core's migration maps: the view with the Stocks
+/// graph removed, because the core's version-40 model does not know it and
+/// an unknown module id would leak into the migrated `graphs.order`. The
+/// Stocks settings themselves stay in the object, exactly as the pinned
+/// corpus fixtures carry them; the core's migration names none of them
+/// (ruling R2).
+fn v40_bytes(settings: &Settings) -> Result<Vec<u8>, String> {
+    let mut v40 = settings.clone();
+    v40.modules.retain(|m| m.id != Module::Stocks);
+    serde_json::to_vec(&v40).map_err(|e| e.to_string())
+}
+
 /// The shared settings document as the Linux app stores it: the canonical
 /// bytes on disk, the Linux view the app reads, and the one load problem
 /// that keeps an unhealthy file safe. Nothing is parsed, validated or
@@ -1035,7 +1148,7 @@ impl Store {
         // Whatever the load produced, the view the app reads is the one the
         // core renders from the document the store holds: fresh, migrated
         // and blocked states alike never fall back to the legacy Rust model.
-        match document::linux_view(&store.document) {
+        match view(&store.document) {
             Ok(view) => store.settings = view,
             Err(problem) => {
                 store.document = default_document();
@@ -1125,7 +1238,7 @@ impl Store {
         if !self.blocked {
             return Ok(());
         }
-        let settings = document::linux_view(&self.document)?;
+        let settings = view(&self.document)?;
         atomic_write_settings(&self.path, &self.document)?;
         self.settings = settings;
         self.expected = Some(self.document.clone());
@@ -1152,14 +1265,17 @@ impl Store {
     }
     /// The settings map the core derives from one Linux view through
     /// `migrate_v40`: every entry with a legacy Linux mapping, at the value
-    /// the view carries. Entries at their default are absent, exactly as the
-    /// core's migration writes them, so this map is the complete set of
-    /// document ids a view save may ever touch.
+    /// the view carries, plus the Stocks graph's own catalog entries — the
+    /// core's version-40 migration names no Stocks graph (ruling R2), so
+    /// its presentation travels directly the way the settings window's own
+    /// edits do. Entries at their default are absent from the migrated map,
+    /// exactly as the core's migration writes them, so this map is the
+    /// complete set of document ids a view save may ever touch.
     fn view_entries(
         &self,
         settings: &Settings,
     ) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-        let v40 = serde_json::to_vec(settings).map_err(|e| e.to_string())?;
+        let v40 = v40_bytes(settings)?;
         match document::migrate_v40(&v40)? {
             document::Loaded::Ok {
                 document,
@@ -1171,9 +1287,43 @@ impl Store {
                         diagnostic.problem
                     ));
                 }
-                let value: serde_json::Value =
+                let mut value: serde_json::Value =
                     serde_json::from_slice(&document).map_err(|e| e.to_string())?;
-                Ok(value["settings"].as_object().cloned().unwrap_or_default())
+                let map = value["settings"].as_object_mut().expect("canonical map");
+                let stocks = settings.module(Module::Stocks);
+                map.insert("graphs.stock.visible".into(), stocks.visible.into());
+                map.insert(
+                    "graphs.stock.style".into(),
+                    serde_json::to_value(stocks.style).map_err(|e| e.to_string())?,
+                );
+                map.insert(
+                    "graphs.stock.height".into(),
+                    stocks
+                        .height
+                        .map_or(serde_json::Value::Null, |height| height.into()),
+                );
+                map.insert(
+                    "graphs.stock.color.background".into(),
+                    stocks
+                        .colors
+                        .background
+                        .map_or(serde_json::Value::Null, |color| serde_json::json!(color)),
+                );
+                for (index, id) in [
+                    "graphs.stock.color.series1",
+                    "graphs.stock.color.series2",
+                    "graphs.stock.color.series3",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    map.insert(
+                        id.into(),
+                        stocks.colors.series[index]
+                            .map_or(serde_json::Value::Null, |color| serde_json::json!(color)),
+                    );
+                }
+                Ok(map.clone())
             }
             document::Loaded::Unreadable { diagnostic } => Err(format!(
                 "the settings did not convert: {}",
@@ -1227,7 +1377,7 @@ impl Store {
             self.fail_commits -= 1;
             return Err("injected persistence failure".into());
         }
-        let settings = document::linux_view(&document)?;
+        let settings = view(&document)?;
         if read_optional(&self.path, DOCUMENT_LIMIT)? != self.expected {
             return Err("Settings changed on disk; reopen the app before saving".into());
         }
@@ -1253,7 +1403,7 @@ impl Store {
                 return;
             }
         };
-        let v40 = match serde_json::to_vec(&settings) {
+        let v40 = match v40_bytes(&settings) {
             Ok(v40) => v40,
             Err(problem) => {
                 self.problem = Some(format!(

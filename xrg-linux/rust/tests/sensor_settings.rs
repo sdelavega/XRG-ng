@@ -129,7 +129,7 @@ fn version_eleven_loads_existing_sensor_choices_without_writing_and_protects_inv
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     let original = serde_json::to_vec(&wire).unwrap();
     std::fs::write(&path, &original).unwrap();
     let mut store = Store::open(&root);

@@ -9,6 +9,7 @@ use xrg_ng_linux::{
     collectors::LinuxSources,
     engine::{Sampler, Scale},
     hardware,
+    settings::Module,
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
@@ -340,7 +341,7 @@ fn optional_hardware_does_not_fail_the_live_core_gate() {
     f.put("proc/stat", "cpu 150 0 50 840 60 0 0 0");
     let second = sampler.sample();
     assert!(second.valid);
-    assert_eq!(second.panels.len(), 13);
+    assert_eq!(second.panels.len(), Module::ALL.len());
     assert_eq!(second.panels[4].label, "No system battery");
     assert!(second.panels[4].series.is_empty());
     assert_eq!(second.panels[5].label, "No temperature sensors");

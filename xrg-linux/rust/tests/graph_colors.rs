@@ -91,6 +91,11 @@ fn version_eight_upgrades_without_writing_or_changing_styles_sources_and_palette
     expected
         .module_mut(xrg_ng_linux::settings::Module::Weather)
         .visible = false;
+    // Stocks join the view in 0.2.3, appended hidden with the Solid
+    // default — they were never part of a version-8 file's style pattern.
+    let stocks = expected.module_mut(xrg_ng_linux::settings::Module::Stocks);
+    stocks.style = GraphStyle::Solid;
+    stocks.visible = false;
     expected.move_module(Module::Memory, 6);
     expected.metrics.cpu = Some(2);
     expected.ai.ollama = false;
@@ -99,7 +104,7 @@ fn version_eight_upgrades_without_writing_or_changing_styles_sources_and_palette
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     let original = serde_json::to_vec_pretty(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = open(&f.0);

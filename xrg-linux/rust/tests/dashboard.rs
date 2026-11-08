@@ -20,7 +20,11 @@ fn compact_defaults_and_existing_profiles_preserve_custom_choices() {
     );
     let mut old = defaults;
     old.version = 13;
+    // Version 13 predates both opt-in graphs; the chain appends them back.
+    let stocks = old.modules.pop().unwrap();
+    assert_eq!(stocks.id, Module::Stocks);
     let weather = old.modules.pop().unwrap();
+    assert_eq!(weather.id, Module::Weather);
     old.graph_width = 360;
     old.graph_height = 100;
     old.modules.reverse();
@@ -30,6 +34,7 @@ fn compact_defaults_and_existing_profiles_preserve_custom_choices() {
     let loaded = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
     old.version = 40;
     old.modules.push(weather);
+    old.modules.push(stocks);
     assert_eq!(loaded, old);
 }
 #[test]

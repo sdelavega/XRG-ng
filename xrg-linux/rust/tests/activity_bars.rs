@@ -23,7 +23,7 @@ fn old_settings_preserve_appearance_and_only_upgrade_on_explicit_save() {
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     wire.as_object_mut().unwrap().remove("activity_bars");
     let original = serde_json::to_vec(&wire).unwrap();
     std::fs::write(&path, &original).unwrap();

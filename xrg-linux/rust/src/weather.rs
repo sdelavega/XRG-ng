@@ -2,14 +2,10 @@
 // Copyright (C) 2026 Stephen de la Vega.
 //! Opt-in station observations; parsing stays in the shared Swift core.
 mod graph;
-use crate::{
-    command::BoundedCommand,
-    shared::{self, Metar},
-};
+use crate::shared::{self, Metar};
 pub use graph::{Graph, ObservationPlot, SecondaryAxis};
 use serde::{Deserialize, Serialize};
 use std::{
-    path::Path,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -120,9 +116,7 @@ pub trait Fetcher {
     fn get(&mut self, station: &str) -> Result<Vec<u8>, String>;
 }
 #[derive(Default)]
-pub struct Https {
-    command: BoundedCommand,
-}
+pub struct Https;
 pub fn endpoint(station: &str) -> Result<String, String> {
     let station = shared::metar_station(station).ok_or("Invalid ICAO station")?;
     Ok(format!(
@@ -132,34 +126,7 @@ pub fn endpoint(station: &str) -> Result<String, String> {
 impl Fetcher for Https {
     fn get(&mut self, station: &str) -> Result<Vec<u8>, String> {
         let url = endpoint(station)?;
-        self.command.output(
-            Path::new("curl"),
-            &[
-                "-q",
-                "--silent",
-                "--fail",
-                "--globoff",
-                "--noproxy",
-                "*",
-                "--proto",
-                "=https",
-                "--connect-timeout",
-                "3",
-                "--max-time",
-                "5",
-                "--max-filesize",
-                "2097152",
-                "--user-agent",
-                concat!(
-                    "XRG-ng/",
-                    env!("CARGO_PKG_VERSION"),
-                    " (Linux METAR monitor)"
-                ),
-                &url,
-            ],
-            Duration::from_millis(5500),
-            2_097_152,
-        )
+        crate::https::https_get(&url, crate::https::TIMEOUT)
     }
 }
 #[derive(Clone, Debug)]
@@ -472,7 +439,7 @@ pub struct Worker {
 }
 impl Worker {
     pub fn start(preferences: Preferences, control: Control) -> Self {
-        Self::with_fetcher(preferences, control, Https::default())
+        Self::with_fetcher(preferences, control, Https)
     }
     fn with_fetcher(
         preferences: Preferences,

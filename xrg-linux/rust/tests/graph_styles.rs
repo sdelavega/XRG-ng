@@ -71,7 +71,7 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         wire["modules"]
             .as_array_mut()
             .unwrap()
-            .retain(|m| m["id"] != "weather");
+            .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
         let modules = wire["modules"].as_array_mut().unwrap();
         if version <= 2 {
             modules.retain(|m| !["gpu_memory", "fans"].contains(&m["id"].as_str().unwrap()));
@@ -87,7 +87,10 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         assert!(loaded.modules.iter().all(|m| m.height.is_none()
             && m.effective_height(loaded.graph_height) == loaded.graph_height));
         assert!(loaded.modules.iter().all(|m| !m.visible
-            && (m.id == xrg_ng_linux::settings::Module::Weather || m.style == GraphStyle::Hollow)));
+            && (matches!(
+                m.id,
+                xrg_ng_linux::settings::Module::Weather | xrg_ng_linux::settings::Module::Stocks
+            ) || m.style == GraphStyle::Hollow)));
         assert_eq!(loaded.metrics, settings.metrics);
         assert_eq!(loaded.theme, settings.theme);
         assert_eq!(loaded.ai, settings.ai);
@@ -109,7 +112,16 @@ fn real_versions_one_through_seven_keep_line_styles_without_early_writes() {
         assert_eq!(open(&f.0).1, loaded);
     }
     let loaded = Settings::parse(b"theme=Ocean\n").unwrap();
-    assert!(loaded.modules.iter().all(|m| m.style == GraphStyle::Hollow));
+    // The INI era's line look belongs to the graphs it had; Stocks joins
+    // the view with the model's own Solid default.
+    assert!(
+        loaded
+            .modules
+            .iter()
+            .filter(|m| m.id != Module::Stocks)
+            .all(|m| m.style == GraphStyle::Hollow)
+    );
+    assert_eq!(loaded.module(Module::Stocks).style, GraphStyle::Solid);
 }
 #[test]
 fn new_installs_fill_and_each_graph_style_survives_reorder_hide_and_round_trip() {
@@ -122,8 +134,13 @@ fn new_installs_fill_and_each_graph_style_survives_reorder_hide_and_round_trip()
             .all(|m| m.style == GraphStyle::Solid)
     );
     for (index, module) in settings.modules.iter_mut().enumerate() {
-        module.style = GraphStyle::ALL[index % 4];
-        module.visible = index % 2 == 0;
+        // Stocks ride the view only in 0.2.3 (ruling R2): no core mapping
+        // carries their presentation through a save yet, so the per-index
+        // pattern covers the graphs the core maps.
+        if module.id != Module::Stocks {
+            module.style = GraphStyle::ALL[index % 4];
+            module.visible = index % 2 == 0;
+        }
     }
     settings.move_module(Module::Cpu, 8);
     let (mut store, _, error) = open(&f.0);

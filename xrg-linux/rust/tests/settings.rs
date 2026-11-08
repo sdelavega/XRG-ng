@@ -1051,7 +1051,7 @@ fn version_two_preserves_selection_filters_and_all_hidden_layout_with_new_graphs
     old.processes.filter = "worker".into();
     let migrated = Settings::parse(&serde_json::to_vec(&old).unwrap()).unwrap();
     assert_eq!(migrated.version, 40);
-    assert_eq!(migrated.modules.len(), 13);
+    assert_eq!(migrated.modules.len(), 14);
     assert!(migrated.modules.iter().all(|m| !m.visible));
     assert_eq!(migrated.metrics, old.metrics);
     assert_eq!(migrated.processes, old.processes);
@@ -1096,7 +1096,7 @@ fn version_three_ai_defaults_upgrade_without_writes_and_custom_sources_round_tri
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     wire.as_object_mut().unwrap().remove("ai");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
@@ -1124,7 +1124,7 @@ fn version_four_keeps_ai_and_layout_and_adds_opt_in_weather_without_writing() {
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     wire.as_object_mut().unwrap().remove("weather");
     let bytes = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &bytes).unwrap();
@@ -1161,7 +1161,7 @@ fn version_five_adds_display_defaults_without_writes_and_new_choices_persist() {
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     for field in ["layout", "temperature_units"] {
         wire.as_object_mut().unwrap().remove(field);
     }
@@ -1195,7 +1195,7 @@ fn version_six_preserves_choices_and_adds_default_sensor_sources_without_writing
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     wire["metrics"]
         .as_object_mut()
         .unwrap()
@@ -1259,6 +1259,9 @@ fn sensor_source_validation_and_snapshot_matching_are_scoped_to_their_graphs() {
 fn weather_module_upgrade_preserves_old_graphs_and_sources_without_enabling_requests() {
     let f = Fixture::new();
     let mut settings = Settings::default();
+    // The version-14 era carried exactly twelve graphs: no Weather (it
+    // joined at 15) and no Stocks (it joins the Linux view in 0.2.3).
+    settings.modules.pop();
     settings.modules.pop();
     settings.modules.reverse();
     for module in &mut settings.modules {

@@ -136,8 +136,9 @@ fn historical(version: u32) -> (Vec<u8>, Settings) {
         let modules = wire["modules"].as_array_mut().unwrap();
         // Version 15 added Weather to the saved set; version 14 checked for
         // exactly the twelve graphs before it, and so did every older file.
+        // Stocks join the view only in 0.2.3, never an older file.
         if version < 15 {
-            modules.retain(|m| m["id"] != "weather");
+            modules.retain(|m| m["id"] != "weather" && m["id"] != "stocks");
         }
     }
     // The absent fields each version predates, in the same order the
@@ -629,7 +630,11 @@ fn preset_conf_migrates_once_and_never_rewrites() {
     expected.activity_bars.visible = false;
     expected.activity_bars.use_series_colors = false;
     for module in &mut expected.modules {
-        module.style = settings::GraphStyle::Hollow;
+        // The INI era's line look belongs to the graphs it had; Stocks
+        // joins the view with the model's own Solid default.
+        if module.id != Module::Stocks {
+            module.style = settings::GraphStyle::Hollow;
+        }
     }
     assert_eq!(store.settings(), &expected);
     assert_eq!(fs::read(f.conf()).unwrap(), b"theme=Ocean\n");

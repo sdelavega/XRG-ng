@@ -58,6 +58,9 @@ impl Panel {
             Scale::Automatic => format!(
                 "{lower:.2}–{upper:.2} in graph units; scales to recent history, not device capacity"
             ),
+            Scale::Stocks { .. } => {
+                format!("{lower:.2}–{upper:.2}; the displayed period's closes, padded 10% each way")
+            }
             Scale::Celsius | Scale::Weather(_) => format!(
                 "{:.1}–{:.1} °{}; a display range, not a thermal limit",
                 units.convert_celsius(lower),
@@ -123,6 +126,12 @@ pub enum Scale {
     Celsius,
     /// Weather keeps its own display-unit preference; samples remain Celsius.
     Weather(crate::temperature::Units),
+    /// Stocks carries the macOS curve bounds: the period's range padded
+    /// 10% each way, computed when the panel is built.
+    Stocks {
+        lower: f64,
+        upper: f64,
+    },
 }
 impl Scale {
     pub fn temperature_units(
@@ -155,6 +164,7 @@ impl Scale {
                 0.,
                 (series.iter().flatten().copied().fold(1.0, f64::max) * 1.1).max(minimum as f64),
             ),
+            Self::Stocks { lower, upper } => (lower, upper),
             Self::Weather(_) => {
                 let mut values = series.iter().flatten().copied().filter(|v| v.is_finite());
                 if let Some(first) = values.next() {
@@ -185,10 +195,11 @@ pub struct Snapshot {
     pub inventory: crate::metrics::Inventory,
     pub processes: Result<Arc<crate::process::Report>, String>,
     pub sensors: Arc<crate::sensor_stats::Report>,
-    pub graph_generations: [u64; 13],
+    pub graph_generations: [u64; crate::settings::Module::ALL.len()],
     pub transfers: [crate::metrics::TransferTotals; 2],
     pub ai: Option<crate::ai::Update>,
     pub weather: Option<crate::weather::Update>,
+    pub stocks: Option<crate::stocks::Update>,
 }
 struct GpuHistory {
     timed: crate::shared::TimedHistory,
@@ -218,10 +229,15 @@ pub struct Sampler {
     ai_panel: Panel,
     ai_update: Option<crate::ai::Update>,
     minimum_ai_generation: u64,
-    graph_generations: [u64; 13],
+    graph_generations: [u64; crate::settings::Module::ALL.len()],
     weather: Option<crate::weather::Worker>,
     weather_update: Option<crate::weather::Update>,
     weather_view: crate::weather::Graph,
+    stocks: Option<crate::stocks::StockCollector>,
+    stocks_control: crate::stocks::Control,
+    stocks_settings: Option<crate::settings::StockSettings>,
+    stocks_update: Option<crate::stocks::Update>,
+    stocks_view: crate::stocks::Graph,
     process: crate::process::Collector,
     process_histories: [History; 2],
     tpu: crate::tpu::Collector,
@@ -286,10 +302,15 @@ impl Sampler {
             ai_panel: crate::ai::waiting(),
             ai_update: None,
             minimum_ai_generation: 0,
-            graph_generations: [0; 13],
+            graph_generations: [0; crate::settings::Module::ALL.len()],
             weather: None,
             weather_update: None,
             weather_view: Default::default(),
+            stocks: None,
+            stocks_control: Default::default(),
+            stocks_settings: None,
+            stocks_update: None,
+            stocks_view: Default::default(),
             gpu,
             process,
             process_histories: array::from_fn(|_| History::new(120)),
@@ -344,6 +365,7 @@ impl Sampler {
                 }
             }
             Module::Weather => self.weather_view.clear_graph(),
+            Module::Stocks => self.stocks_view.clear_graph(),
             Module::Ai => {
                 if let Some(worker) = &self.ai {
                     self.minimum_ai_generation = worker.clear_graph();
@@ -429,6 +451,22 @@ impl Sampler {
             self.weather_update = Some(update);
         }
         panels.push(self.weather_view.panel(self.weather_update.as_ref()));
+        // The Stocks collector fetches off this thread: poll never blocks.
+        if let Some(settings) = self.stocks_control.take() {
+            self.stocks_settings = settings;
+        }
+        let stocks_update = match (self.stocks.as_mut(), self.stocks_settings.as_ref()) {
+            (Some(collector), Some(settings)) => {
+                let readings = collector.poll(settings, Instant::now());
+                Some(crate::stocks::Update {
+                    settings: settings.clone(),
+                    readings,
+                })
+            }
+            _ => None,
+        };
+        self.stocks_update = stocks_update;
+        panels.push(self.stocks_view.panel(self.stocks_update.as_ref()));
         self.sequence += 1;
         Snapshot {
             sequence: self.sequence,
@@ -442,6 +480,7 @@ impl Sampler {
             transfers: self.metrics.transfer_totals(),
             ai: self.ai_update.clone(),
             weather: self.weather_update.clone(),
+            stocks: self.stocks_update.clone(),
         }
     }
     fn process_panel(&mut self) -> Panel {
@@ -1065,6 +1104,7 @@ pub struct Worker {
     graphs: GraphControl,
     ai: crate::ai::Control,
     weather: crate::weather::Control,
+    stocks: crate::stocks::Control,
 }
 impl Worker {
     pub fn start() -> Self {
@@ -1099,16 +1139,29 @@ impl Worker {
             initial,
             ai_preferences,
             weather_preferences,
+            crate::stocks::Launch::off(),
             crate::sampling::default_interval(),
         )
     }
     pub fn start_with_settings(ai_enabled: bool, settings: &crate::settings::Settings) -> Self {
+        Self::start_with_stocks_fetcher(ai_enabled, settings, None)
+    }
+    /// The same worker with the Stocks fetch path replaced — the smoke's
+    /// recorded responses stand in for the network there.
+    pub fn start_with_stocks_fetcher(
+        ai_enabled: bool,
+        settings: &crate::settings::Settings,
+        stocks_fetcher: Option<crate::stocks::Fetch>,
+    ) -> Self {
         settings.validate().expect("Validated settings");
+        let mut stocks = crate::stocks::Launch::from_settings(settings);
+        stocks.fetcher = stocks_fetcher;
         Self::start_timed(
             ai_enabled,
             settings.metrics.clone(),
             settings.ai.clone(),
             settings.weather.clone(),
+            stocks,
             settings.sampling_interval_ms,
         )
     }
@@ -1120,7 +1173,7 @@ impl Worker {
         Self::spawn(
             settings.metrics.clone(),
             settings.sampling_interval_ms,
-            move |_, _| Sampler::with_sources(source),
+            move |_, _, _| Sampler::with_sources(source),
         )
     }
     fn start_timed(
@@ -1128,35 +1181,59 @@ impl Worker {
         initial: MetricSelection,
         ai_preferences: crate::ai::Preferences,
         weather_preferences: crate::weather::Preferences,
+        stocks_launch: crate::stocks::Launch,
         interval_ms: u32,
     ) -> Self {
         ai_preferences.validate().expect("Validated AI preferences");
         weather_preferences
             .validate()
             .expect("Validated weather preferences");
-        Self::spawn(initial, interval_ms, move |ai_updates, weather_updates| {
-            // Swift handles are created and destroyed on this worker only.
-            let mut sampler = Sampler::live(false);
-            if ai_enabled && let Some(config) = crate::ai::Config::live() {
-                sampler.ai = Some(crate::ai::Worker::controlled(
-                    config,
-                    ai_preferences,
-                    ai_updates,
+        Self::spawn(
+            initial,
+            interval_ms,
+            move |ai_updates, weather_updates, stocks_updates| {
+                // Swift handles are created and destroyed on this worker only.
+                let mut sampler = Sampler::live(false);
+                if ai_enabled && let Some(config) = crate::ai::Config::live() {
+                    sampler.ai = Some(crate::ai::Worker::controlled(
+                        config,
+                        ai_preferences,
+                        ai_updates,
+                    ));
+                }
+                if ai_enabled {
+                    sampler.weather = Some(crate::weather::Worker::start(
+                        weather_preferences,
+                        weather_updates,
+                    ));
+                }
+                // The Stocks collector fetches on its own thread inside
+                // poll, so it runs directly on this sampler thread without
+                // ever blocking it.
+                let crate::stocks::Launch {
+                    settings: stocks_settings,
+                    visible: stocks_visible,
+                    fetcher: stocks_fetcher,
+                } = stocks_launch;
+                sampler.stocks = Some(crate::stocks::StockCollector::new(
+                    stocks_fetcher.unwrap_or_else(crate::stocks::live_fetcher),
                 ));
-            }
-            if ai_enabled {
-                sampler.weather = Some(crate::weather::Worker::start(
-                    weather_preferences,
-                    weather_updates,
-                ));
-            }
-            sampler
-        })
+                sampler.stocks_control = stocks_updates;
+                sampler.stocks_settings = stocks_visible.then_some(stocks_settings);
+                sampler
+            },
+        )
     }
     fn spawn(
         initial: MetricSelection,
         interval_ms: u32,
-        build: impl FnOnce(crate::ai::Control, crate::weather::Control) -> Sampler + Send + 'static,
+        build: impl FnOnce(
+            crate::ai::Control,
+            crate::weather::Control,
+            crate::stocks::Control,
+        ) -> Sampler
+        + Send
+        + 'static,
     ) -> Self {
         initial.validate().expect("Validated initial selection");
         let mut timer =
@@ -1166,6 +1243,8 @@ impl Worker {
         let ai_updates = ai.clone();
         let weather = crate::weather::Control::default();
         let weather_updates = weather.clone();
+        let stocks = crate::stocks::Control::with_wake(sampling.clone());
+        let stocks_updates = stocks.clone();
         let selection = SelectionControl(
             Arc::new(Mutex::new(None::<MetricSelection>)),
             sampling.clone(),
@@ -1186,7 +1265,7 @@ impl Worker {
         let notification = crate::notification::Notification::default();
         let published = notification.clone();
         let join = thread::spawn(move || {
-            let mut sampler = build(ai_updates, weather_updates);
+            let mut sampler = build(ai_updates, weather_updates, stocks_updates);
             sampler
                 .set_selection(initial)
                 .expect("Validated initial selection");
@@ -1242,6 +1321,7 @@ impl Worker {
             graphs,
             ai,
             weather,
+            stocks,
         }
     }
     /// Wake a consumer after publishing; registration also covers a queued sample.
@@ -1265,6 +1345,9 @@ impl Worker {
     }
     pub fn weather_control(&self) -> crate::weather::Control {
         self.weather.clone()
+    }
+    pub fn stocks_control(&self) -> crate::stocks::Control {
+        self.stocks.clone()
     }
     pub fn set_selection(&self, selection: MetricSelection) -> Result<(), String> {
         self.selection.set(selection)
@@ -1472,7 +1555,7 @@ mod sampling_tests {
     use std::time::Duration;
     #[test]
     fn sensor_reset_wakes_the_existing_sampler_and_preserves_selection() {
-        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _, _| {
             let root = std::env::temp_dir().join("xrg-missing-sensor-reset-roots");
             Sampler::with_sources(LinuxSources::with_roots(
                 root.join("proc"),
@@ -1499,7 +1582,7 @@ mod sampling_tests {
     }
     #[test]
     fn publication_notification_reads_slot_and_retiming_without_ui_polling() {
-        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _, _| {
             let root = std::env::temp_dir().join("xrg-missing-notification-roots");
             Sampler::with_sources(LinuxSources::with_roots(
                 root.join("proc"),
@@ -1523,7 +1606,7 @@ mod sampling_tests {
     fn retiming_wakes_the_same_sampler_without_rebuilding_sources_or_resetting_sequence() {
         let builds = Arc::new(AtomicUsize::new(0));
         let observed = builds.clone();
-        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _, _| {
             observed.fetch_add(1, Ordering::Relaxed);
             let root = std::env::temp_dir()
                 .join(format!("xrg-missing-sampling-roots-{}", std::process::id()));
@@ -1712,7 +1795,7 @@ mod xe_policy_wake_tests {
         };
         let builds = Arc::new(AtomicUsize::new(0));
         let count = builds.clone();
-        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _| {
+        let worker = Worker::spawn(MetricSelection::default(), 10000, move |_, _, _| {
             count.fetch_add(1, Ordering::Relaxed);
             let root =
                 std::env::temp_dir().join(format!("xrg-xe-absent-roots-{}", std::process::id()));

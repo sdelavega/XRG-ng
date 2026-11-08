@@ -1287,7 +1287,7 @@ fn legacy_block(
 
 /// Selecting a built-in preset applies its palette, its name and the
 /// preset selection itself through the shared settings model (lesson f).
-fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError> {
+pub(super) fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError> {
     let Some(theme) = crate::shared::themes()
         .into_iter()
         .find(|theme| theme.name == name)

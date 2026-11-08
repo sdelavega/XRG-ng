@@ -9,6 +9,7 @@ use xrg_ng_linux::{
     collectors::LinuxSources,
     engine::Sampler,
     memory::{self, Paging, View},
+    settings::Module,
 };
 const MEM: &str = "MemTotal: 1000 kB\nMemAvailable: 600 kB\nMemFree: 100 kB\nBuffers: 20 kB\nCached: 200 kB\nSlab: 50 kB\nSReclaimable: 30 kB\nSUnreclaim: 20 kB\nShmem: 40 kB\nDirty: 0 kB\nWriteback: 0 kB\nSwapTotal: 400 kB\nSwapFree: 300 kB\nHugePages_Total: 0\n";
 #[test]
@@ -266,7 +267,7 @@ fn sampler_publishes_memory_details_and_bounded_reads_reject_symlinks_special_fi
     let root = f.0.join("proc");
     let mut sampler = Sampler::with_sources(LinuxSources::with_roots(&root, f.0.join("sys")));
     let snapshot = sampler.sample();
-    assert_eq!(snapshot.panels.len(), 13);
+    assert_eq!(snapshot.panels.len(), Module::ALL.len());
     assert_eq!(snapshot.panels[1].series.len(), 3);
     assert!(snapshot.panels[1].detail.contains("Swap used:"));
     fs::remove_file(root.join("meminfo")).unwrap();

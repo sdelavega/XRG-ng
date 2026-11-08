@@ -81,6 +81,13 @@ pub(super) fn adopt_live(
     if live.weather != from.weather {
         worker.weather_control().set(from.weather.clone())?;
     }
+    if live.stocks != from.stocks
+        || live.module(Module::Stocks).visible != from.module(Module::Stocks).visible
+    {
+        worker
+            .stocks_control()
+            .set(from.module(Module::Stocks).visible, from.stocks.clone());
+    }
     let resize = live.layout != from.layout
         || live.graph_width != from.graph_width
         || live.graph_height != from.graph_height
@@ -591,6 +598,11 @@ fn snapshot_matches(snapshot: &Snapshot, settings: &Settings, module: Module) ->
                 .weather
                 .as_ref()
                 .is_some_and(|w| w.preferences == settings.weather))
+        && (module != Module::Stocks
+            || snapshot
+                .stocks
+                .as_ref()
+                .is_some_and(|s| s.settings == settings.stocks))
 }
 
 fn current_window_size(i: &egui::InputState, zoom: f32) -> Option<settings::WindowSize> {
@@ -655,7 +667,7 @@ pub fn run(smoke_mode: bool) -> bool {
         // Without a configuration root the app still runs; every save is
         // refused and reported through the store's load problem.
         .unwrap_or_else(|| std::path::PathBuf::from("/"));
-    let store = Store::open(&root);
+    let mut store = Store::open(&root);
     let mut settings = store.settings().clone();
     let error = store.load_problem().map(str::to_owned);
     if smoke_mode {
@@ -667,6 +679,55 @@ pub fn run(smoke_mode: bool) -> bool {
         settings.theme = settings::ThemeChoice::Builtin {
             name: name.to_string_lossy().into_owned(),
         };
+    }
+    // The Stocks snapshot variant: the recorded chart responses stand in
+    // for the network, so the graph draws its fixture data and no request
+    // is ever made. No production or gate run sets this variable.
+    let stocks_fetcher: Option<crate::stocks::Fetch> =
+        (smoke_mode && std::env::var_os("XRG_SMOKE_STOCKS_IMAGE").is_some()).then(|| {
+            let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../Shared/Tests/Fixtures/stocks");
+            Box::new(move |url: &str| {
+                let name = if url.contains("/v7/") {
+                    "history-1y"
+                } else {
+                    "quote-15m"
+                };
+                std::fs::read(fixtures.join(format!("{name}.json"))).map_err(|e| e.to_string())
+            }) as crate::stocks::Fetch
+        });
+    if smoke_mode && stocks_fetcher.is_some() {
+        // The stock graph is toggled on through the store — the exact path
+        // a settings-window edit takes — before the window exists, so the
+        // dashboard lays out with the graph from the first frame. The other
+        // graphs step aside so the snapshot frames the Stocks graph whole
+        // instead of clipping it at the window's 1000-point height limit.
+        let mut ok = store
+            .set("graphs.stock.visible", serde_json::json!(true))
+            .is_ok();
+        if ok {
+            let mut focused = store.settings().clone();
+            for module in &mut focused.modules {
+                module.visible = matches!(module.id, Module::Cpu | Module::Stocks);
+            }
+            ok = store.save(&focused).is_ok();
+        }
+        // The snapshot's theme goes through the same preset application a
+        // theme row in the settings window takes — palette, name and
+        // preset — so the document, the view and the paint all agree with
+        // the stage machine's reopen check.
+        if ok
+            && let Some(style) = std::env::var_os("XRG_SMOKE_STYLE")
+            && let Err(error) = preferences::apply_preset(&mut store, &style.to_string_lossy())
+        {
+            eprintln!("Stocks snapshot: the theme preset was refused: {error:?}");
+            return false;
+        }
+        if !ok {
+            eprintln!("Stocks snapshot: the store refused the stock graph setup");
+            return false;
+        }
+        settings = store.settings().clone();
     }
     let theme = match settings.theme.palette() {
         Ok(t) => t,
@@ -695,7 +756,7 @@ pub fn run(smoke_mode: bool) -> bool {
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             diagnostics::configure(&cc.egui_ctx);
-            let worker = Worker::start_with_settings(!smoke_mode, &settings);
+            let worker = Worker::start_with_stocks_fetcher(!smoke_mode, &settings, stocks_fetcher);
             let ctx = cc.egui_ctx.clone();
             worker.on_publish(move || ctx.request_repaint_of(ViewportId::ROOT));
             let smoke = harness.map(|mut h| {
@@ -836,13 +897,15 @@ mod tests {
             inventory: Default::default(),
             processes: Err("fixture".into()),
             sensors: Default::default(),
-            graph_generations: [0; 13],
+            graph_generations: [0; Module::ALL.len()],
             transfers: Default::default(),
             ai: None,
             weather: None,
+            stocks: None,
         };
         assert!(!snapshot_matches(&snapshot, &settings, Module::Ai));
         assert!(!snapshot_matches(&snapshot, &settings, Module::Weather));
+        assert!(!snapshot_matches(&snapshot, &settings, Module::Stocks));
         settings.metrics.cpu = Some(7);
         assert!(!snapshot_matches(&snapshot, &settings, Module::Cpu));
         assert!(snapshot_matches(&snapshot, &settings, Module::Memory));

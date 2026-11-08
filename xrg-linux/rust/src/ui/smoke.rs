@@ -25,10 +25,13 @@ pub(super) struct Harness {
     sender: mpsc::Sender<Result<(), String>>,
     receiver: mpsc::Receiver<Result<(), String>>,
     pub success: Arc<AtomicBool>,
-    pub draws: [u32; 13],
+    pub draws: [u32; Module::ALL.len()],
     picker: Option<file_picker_smoke::Harness>,
     clipboard_expected: Option<String>,
-    graph_reset_expected: Option<[u64; 13]>,
+    graph_reset_expected: Option<[u64; Module::ALL.len()]>,
+    /// The Stocks snapshot variant: the PNG path to capture once the
+    /// fixture-fed graph has data.
+    stocks_capture: Option<PathBuf>,
     /// The section-walk isolation check: how many sections rendered, and
     /// the settings and file bytes the walk started from.
     sections: usize,
@@ -71,11 +74,12 @@ impl Harness {
             sender,
             receiver,
             success: Arc::new(AtomicBool::new(false)),
-            draws: [0; 13],
+            draws: [0; Module::ALL.len()],
             picker: std::env::var_os("XRG_SMOKE_FILE_PICKER")
                 .map(|_| file_picker_smoke::Harness::default()),
             clipboard_expected: None,
             graph_reset_expected: None,
+            stocks_capture: std::env::var_os("XRG_SMOKE_STOCKS_IMAGE").map(PathBuf::from),
             sections: 0,
             baseline: None,
             snapshot_index: 0,
@@ -186,6 +190,30 @@ impl Harness {
             .all(|m| self.draws[m.id.index()] >= 3)
         {
             return;
+        }
+        // The Stocks snapshot variant (XRG_SMOKE_STOCKS_IMAGE, set only by
+        // the snapshot runs): the graph was toggled on through the store
+        // before the window existed, and the fixture-fed collector answers
+        // within a few samples — capture the dashboard once it has. The
+        // stage machine keeps running while the fetch settles.
+        if let Some(path) = self.stocks_capture.clone()
+            && !self.waiting
+        {
+            let ready = app.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.stocks.as_ref().is_some_and(|update| {
+                    update.readings.len() >= 2
+                        && update.readings.iter().any(|reading| {
+                            reading.status == crate::stocks::StockStatus::Ok
+                                && !reading.closes.is_empty()
+                        })
+                })
+            });
+            if ready {
+                self.capture_file(ctx, egui::ViewportId::ROOT, path, false, false);
+                self.stocks_capture = None;
+                println!("STOCKS_SMOKE_OK fixture-fed AAPL and DJIA drawn, capture queued");
+                return;
+            }
         }
         let sequence = snapshot.sequence;
         let graph_generations = snapshot.graph_generations;
@@ -557,7 +585,10 @@ impl Harness {
                     if self.stage == 1 || self.graph_reset_expected == Some(graph_generations) =>
                 {
                     if self.stage == 9 {
-                        println!("GRAPH_RESET_SMOKE_OK all 13 worker histories acknowledged");
+                        println!(
+                            "GRAPH_RESET_SMOKE_OK all {} worker histories acknowledged",
+                            Module::ALL.len()
+                        );
                     }
                     println!(
                         "EGUI_SMOKE_OK samples={sequence} draws={} mode={} renderer=glow",

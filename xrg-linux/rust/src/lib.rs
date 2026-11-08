@@ -29,9 +29,11 @@ pub mod hardware;
 #[cfg(not(target_os = "linux"))]
 #[path = "hardware_stub.rs"]
 pub mod hardware;
+pub mod https;
 pub mod legacy;
 pub mod platform;
 pub mod shared;
+pub mod stocks;
 pub mod temperature;
 pub mod weather;
 

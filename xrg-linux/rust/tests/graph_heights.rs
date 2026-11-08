@@ -135,7 +135,7 @@ fn version_nine_preserves_existing_layout_and_palette_until_explicit_save() {
     wire["modules"]
         .as_array_mut()
         .unwrap()
-        .retain(|m| m["id"] != "weather");
+        .retain(|m| m["id"] != "weather" && m["id"] != "stocks");
     let original = serde_json::to_vec(&wire).unwrap();
     fs::write(f.path(), &original).unwrap();
     let (mut store, mut loaded, error) = open(&f.0);
