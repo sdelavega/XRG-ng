@@ -64,37 +64,53 @@ pub fn dark(ctx: &egui::Context) -> bool {
 /// appearance — the macOS counterpart reads
 /// `accessibilityDisplayShouldReduceMotion`), then the GTK desktop's
 /// own animation preference, read once per process. Absent tools and
-/// failed reads mean "not requested".
+/// failed reads mean "not requested". An absent or unrecognised pin is
+/// the desktop-query path (`reduced_motion(None, …)`).
 pub fn reduced_motion_requested() -> bool {
-    match std::env::var("XRG_SETTINGS_REDUCED_MOTION").as_deref() {
-        Ok("1" | "true" | "yes" | "on") => return true,
-        Ok("0" | "false" | "no" | "off") => return false,
-        _ => (),
+    let pin = std::env::var("XRG_SETTINGS_REDUCED_MOTION").ok();
+    if let Some(answer) = reduced_motion_pin(pin.as_deref()) {
+        return answer;
     }
-    !desktop_animations_enabled()
+    reduced_motion(None, desktop_animations_enabled())
 }
 
-/// The desktop's animation preference, read once: a GNOME/GTK session
-/// honours `gtk-enable-animations`, so a desktop that turned animations
-/// off asks for reduced motion. The query is bounded and cached; a
-/// missing `gsettings` (headless CI, other desktops) is "not requested".
+/// The reduced-motion decision for one pin. `None` — the override is
+/// absent — follows the desktop query: animations disabled means reduced
+/// motion was requested. A recognised pin wins and the desktop is not asked.
+pub fn reduced_motion(pin: Option<&str>, animations_enabled: bool) -> bool {
+    reduced_motion_pin(pin).unwrap_or(!animations_enabled)
+}
+
+fn reduced_motion_pin(pin: Option<&str>) -> Option<bool> {
+    match pin {
+        Some("1" | "true" | "yes" | "on") => Some(true),
+        Some("0" | "false" | "no" | "off") => Some(false),
+        _ => None,
+    }
+}
+
+/// The desktop's animation preference, read once: a GNOME session stores
+/// it as `enable-animations` under `org.gnome.desktop.interface` (not
+/// `gtk-enable-animations`). The query is bounded and cached; a missing
+/// `gsettings` (headless CI, other desktops) is "not requested".
 fn desktop_animations_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        crate::command::BoundedCommand::default()
-            .output(
-                std::path::Path::new("gsettings"),
-                &[
-                    "get",
-                    "org.gnome.desktop.interface",
-                    "gtk-enable-animations",
-                ],
-                std::time::Duration::from_secs(2),
-                32,
-            )
-            .map(|answer| String::from_utf8_lossy(&answer).trim() != "false")
-            .unwrap_or(true)
-    })
+    *ENABLED.get_or_init(|| query_enable_animations(std::path::Path::new("gsettings")))
+}
+
+/// Run the desktop animation query. `false` from the tool means animations
+/// are off; a missing tool or a failed read means they are on. The key is
+/// GNOME's `enable-animations`.
+pub fn query_enable_animations(program: &std::path::Path) -> bool {
+    crate::command::BoundedCommand::default()
+        .output(
+            program,
+            &["get", "org.gnome.desktop.interface", "enable-animations"],
+            std::time::Duration::from_secs(2),
+            32,
+        )
+        .map(|answer| String::from_utf8_lossy(&answer).trim() != "false")
+        .unwrap_or(true)
 }
 
 /// The CSS-clamped pill radius (W1): `border-radius` clamps to half the
@@ -276,6 +292,21 @@ pub fn rim_stroke(dark: bool, danger: bool, focused: bool) -> Stroke {
 /// window's sliders draw at, set through the style's spacing so both the
 /// row sliders and the colour editor's channel sliders share it.
 pub const SLIDER_WIDTH: f32 = 150.;
+
+/// The slider rail's thickness, set in the slider's own style scope so the
+/// track has visible geometry (fix L6). egui paints the rail from
+/// `slider_rail_height` with no outline.
+pub const SLIDER_RAIL_HEIGHT: f32 = 6.;
+
+/// The slider rail's fill. egui paints the rail with
+/// `widgets.inactive.bg_fill` and no outline; the inactive fill is otherwise
+/// the card colour, so a rail that used it would vanish into the card
+/// (fix L6). `border_strong` is the 3:1 rim token — it contrasts with the
+/// card in both appearances, and it is applied only inside the slider's
+/// own style scope so other widgets keep the card fill.
+pub fn slider_rail(dark: bool) -> Color32 {
+    aether7b::border_strong(dark)
+}
 
 /// The mockup's aurora wash: concentric circles of the orb token at the
 /// enumerated `WASH_STOPS`, anchored above-left of the canvas — one soft

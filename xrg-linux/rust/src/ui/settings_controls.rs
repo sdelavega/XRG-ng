@@ -60,6 +60,10 @@ pub struct Fields {
     bytes: BTreeMap<String, i64>,
     units: BTreeMap<String, usize>,
     colors_open: BTreeSet<String>,
+    /// Explicit focus inside an open colour editor: the entry and the
+    /// channel to focus. egui's geometric Tab search never enters a
+    /// non-menu popup, so the editor moves focus itself (lesson d).
+    color_focus: Option<(String, usize)>,
     generations: BTreeMap<String, u32>,
     order_focus: Option<(String, bool)>,
 }
@@ -990,6 +994,23 @@ fn presented_text(entry: &CatalogEntry, value: &Value, fields: &mut Fields) -> S
     }
 }
 
+/// Paint one slider in a style scope whose rail contrasts with the card.
+/// egui paints the rail from `widgets.inactive.bg_fill` with no outline;
+/// that fill is the card colour everywhere else, so the scope is the only
+/// place the contrasting token is applied (fix L6).
+fn with_slider_rail(
+    ui: &mut egui::Ui,
+    dark: bool,
+    add: impl FnOnce(&mut egui::Ui) -> Response,
+) -> Response {
+    ui.scope(|ui| {
+        ui.style_mut().visuals.widgets.inactive.bg_fill = settings_style::slider_rail(dark);
+        ui.style_mut().spacing.slider_rail_height = settings_style::SLIDER_RAIL_HEIGHT;
+        add(ui)
+    })
+    .inner
+}
+
 /// A number or duration field with its unit and range shown, a bytes/s unit
 /// selector where the entry is stored in bytes/s, and a slider when the
 /// catalog gives a step — ONE composite row: field, unit, range, slider
@@ -999,7 +1020,8 @@ fn presented_text(entry: &CatalogEntry, value: &Value, fields: &mut Fields) -> S
 /// text is refused before submission — the store is never offered a
 /// phantom default, and the field keeps what the user typed (lesson a).
 /// The bytes/s value is held exactly, independently of the displayed text,
-/// and every conversion is checked (lesson g).
+/// and every conversion is checked (lesson g). The unit combo cycles with
+/// the arrow keys while focused and paints the 2 px halo (lesson d).
 #[allow(clippy::too_many_arguments)]
 fn number(
     ui: &mut egui::Ui,
@@ -1020,6 +1042,7 @@ fn number(
     let presented = presented_text(entry, value, fields);
     let mut synchronized: Option<Value> = None;
     let mut edit_response = None;
+    let mut unit_changed = false;
     // The slider first: in the right-to-left row it lands rightmost.
     if let (Some(range), Some(step)) = (
         range.filter(|_| bounded),
@@ -1031,11 +1054,13 @@ fn number(
             .clamp(range.min, range.max);
         let slider = ui
             .add_enabled_ui(enabled, |ui| {
-                ui.add(
-                    egui::Slider::new(&mut slider_value, range.min..=range.max)
-                        .step_by(step)
-                        .show_value(false),
-                )
+                with_slider_rail(ui, dark, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut slider_value, range.min..=range.max)
+                            .step_by(step)
+                            .show_value(false),
+                    )
+                })
             })
             .inner;
         slider.widget_info(|| {
@@ -1078,7 +1103,15 @@ fn number(
         );
     }
     if stored_in_bytes {
-        let index = *fields.units.entry(entry.id.clone()).or_insert(0);
+        // The same index `presented_text` just seeded. `or_insert(0)` would
+        // ignore that seed when the key was still vacant and then stick,
+        // so an arrow would leave the auto-selected unit instead of changing it.
+        let index = fields
+            .units
+            .get(&entry.id)
+            .copied()
+            .unwrap_or_else(|| scale_unit(value.as_i64().unwrap_or_default()));
+        fields.units.insert(entry.id.clone(), index);
         let selected = SCALE_UNITS
             .get(index)
             .map(|(label, _)| *label)
@@ -1094,20 +1127,61 @@ fn number(
                                 fields.units.insert(entry.id.clone(), unit_index);
                                 // The exact bytes never move; only the
                                 // display changes, and nothing is
-                                // submitted (lesson g).
-                                fields.bump(&entry.id);
+                                // submitted (lesson g). The field is
+                                // refreshed after it is built.
+                                unit_changed = true;
                             }
                         }
                     })
             })
             .inner;
+        let unit_name = format!("{} unit", entry.label);
         combo.response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::accesskit::Role::ComboBox,
-                enabled,
-                format!("{} unit", entry.label),
-            )
+            egui::WidgetInfo::labeled(egui::accesskit::Role::ComboBox, enabled, &unit_name)
         });
+        let shown = selected.to_owned();
+        ui.ctx().accesskit_node_builder(combo.response.id, |node| {
+            node.set_value(shown);
+        });
+        if combo.response.has_focus() && enabled {
+            settings_style::paint_focus_halo(
+                ui.painter(),
+                combo.response.rect,
+                aether7b::RADIUS_MD as u8,
+            );
+            // Arrow keys change the unit without opening the popup. The
+            // stored bytes never move; only the presentation does, and
+            // nothing is submitted (lesson g). `key_pressed` is used
+            // because a modifier-exact consume misses the event egui has
+            // already classified as a focus direction; the press is still
+            // consumed so the geometric search does not leave the combo.
+            let right = ui.input(|input| {
+                input.key_pressed(egui::Key::ArrowRight) || input.key_pressed(egui::Key::ArrowDown)
+            });
+            let left = ui.input(|input| {
+                input.key_pressed(egui::Key::ArrowLeft) || input.key_pressed(egui::Key::ArrowUp)
+            });
+            ui.input_mut(|input| {
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+            });
+            let next = if right {
+                Some((index + 1) % SCALE_UNITS.len())
+            } else if left {
+                Some((index + SCALE_UNITS.len() - 1) % SCALE_UNITS.len())
+            } else {
+                None
+            };
+            if let Some(next) = next {
+                fields.units.insert(entry.id.clone(), next);
+                // The field is built after this combo and would otherwise
+                // re-seed the old presentation. Clear it once the field has
+                // been added so the next frame shows the new unit.
+                unit_changed = true;
+            }
+        }
     } else if let Some(unit) = range
         .and_then(|range| range.unit.clone())
         .filter(|unit| !unit.is_empty())
@@ -1159,6 +1233,9 @@ fn number(
             }
         });
     });
+    if unit_changed {
+        fields.bump(&entry.id);
+    }
     let edit_response = edit_response.expect("the number field always reports");
     if edit_response.has_focus() && enabled {
         settings_style::paint_focus_halo(
@@ -1312,6 +1389,7 @@ fn color(
             settings_style::ghost_button(ui, (&entry.id, "inherit"), "Inherit", enabled, dark);
         if inherit.clicked() {
             fields.colors_open.remove(&entry.id);
+            fields.color_focus = None;
             let _ = apply(set, fields, entry, Value::Null);
         }
         inherit.widget_info(|| {
@@ -1343,9 +1421,22 @@ fn color(
             danger,
             response.has_focus() && enabled,
         );
-        if response.clicked() {
-            response.request_focus();
+        // Space or Enter opens the editor and moves focus into it. A
+        // pointer click still opens it and keeps focus on the well; Tab
+        // from the focused well, or the explicit channel request, enters
+        // the editor. egui will not Tab into a non-menu popup on its own.
+        let keyboard_open = enabled
+            && response.has_focus()
+            && (ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
+                || ui
+                    .input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)));
+        if response.clicked() || keyboard_open {
             fields.colors_open.insert(entry.id.clone());
+            if keyboard_open {
+                fields.color_focus = Some((entry.id.clone(), 0));
+            } else {
+                response.request_focus();
+            }
         }
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::accesskit::Role::ColorWell, enabled, &entry.label)
@@ -1355,6 +1446,19 @@ fn color(
         });
         let was_open = fields.colors_open.contains(&entry.id);
         let mut open = was_open && enabled;
+        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        // The popup fades in, so a halo painted inside it is multiplied by
+        // the fade and is not the token colour. The rect is recorded and
+        // the halo is painted on the parent layer, which does not fade.
+        let mut focused_channel: Option<Rect> = None;
+        // Tab from the focused well enters the editor instead of egui's
+        // geometric search, which always prefers a nearer underlying widget.
+        if open
+            && response.has_focus()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+        {
+            fields.color_focus = Some((entry.id.clone(), 0));
+        }
         egui::Popup::from_response(&response)
             .open_bool(&mut open)
             .show(|ui| {
@@ -1365,39 +1469,89 @@ fn color(
                         .font(settings_style::mono(aether7b::TYPE_XS.0))
                         .color(aether7b::text_muted(dark)),
                 );
+                let mut channels = Vec::with_capacity(4);
+                let mut move_focus: Option<Option<usize>> = None;
                 for (index, name) in ["Red", "Green", "Blue", "Opacity"].into_iter().enumerate() {
                     let mut component = rgba[index] * 255.;
-                    let slider = ui.add(
-                        egui::Slider::new(&mut component, 0.0..=255.0)
-                            .step_by(1.)
-                            .show_value(true)
-                            .text(name),
-                    );
+                    let slider = ui
+                        .push_id((&entry.id, "channel", index), |ui| {
+                            with_slider_rail(ui, dark, |ui| {
+                                ui.add(
+                                    egui::Slider::new(&mut component, 0.0..=255.0)
+                                        .step_by(1.)
+                                        .show_value(true)
+                                        .text(name),
+                                )
+                            })
+                        })
+                        .inner;
                     // The channel is the slider's accessible name: egui's
                     // own slider info carries no label (review issue 3).
                     slider.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::accesskit::Role::Slider, true, name)
                     });
-                    if slider.has_focus() {
-                        // The channel sliders carry the same 2 px halo as
-                        // every other focusable control (review issue 3).
-                        settings_style::paint_focus_halo(
-                            ui.painter(),
-                            slider.rect,
-                            aether7b::RADIUS_MD as u8,
-                        );
+                    let requested = fields
+                        .color_focus
+                        .as_ref()
+                        .is_some_and(|(id, channel)| id == &entry.id && *channel == index);
+                    if requested {
+                        // request_focus takes effect for later readers of
+                        // this frame's tree, but has_focus() is still the
+                        // previous widget until the next pass. Paint the
+                        // halo for the channel we just moved to.
+                        slider.request_focus();
+                    }
+                    if slider.has_focus() || requested {
+                        focused_channel = Some(slider.rect);
+                        // Explicit focus movement: Tab stays inside the
+                        // editor, Shift-Tab on the first channel returns
+                        // to the well. The key is consumed so egui's
+                        // geometric search cannot leave the popup.
+                        if ui.input_mut(|input| {
+                            input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+                        }) {
+                            move_focus = Some(Some((index + 1) % 4));
+                        } else if ui.input_mut(|input| {
+                            input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab)
+                        }) {
+                            move_focus = Some(if index == 0 { None } else { Some(index - 1) });
+                        }
                     }
                     if slider.changed() {
                         rgba[index] = component / 255.;
                         let _ = apply(set, fields, entry, json!(rgba));
                     }
+                    channels.push(slider);
+                }
+                match move_focus {
+                    Some(Some(index)) => channels[index].request_focus(),
+                    Some(None) => response.request_focus(),
+                    None => (),
+                }
+                if fields
+                    .color_focus
+                    .as_ref()
+                    .is_some_and(|(id, _)| id == &entry.id)
+                {
+                    fields.color_focus = None;
                 }
             });
+        if let Some(rect) = focused_channel {
+            settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_MD as u8);
+        }
+        if was_open && !open && escape {
+            // Escape closed the editor: focus returns to the well.
+            fields.color_focus = None;
+            response.request_focus();
+        }
         if open != was_open {
             if open {
                 fields.colors_open.insert(entry.id.clone());
             } else {
                 fields.colors_open.remove(&entry.id);
+                if !escape {
+                    fields.color_focus = None;
+                }
             }
         }
         response

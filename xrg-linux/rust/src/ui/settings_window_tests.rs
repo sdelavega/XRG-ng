@@ -249,12 +249,25 @@ fn all_labelled(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
 
 /// The focused widget's exact accessible name, from the frame's tree.
 fn focused_label(output: &egui::FullOutput, focused: Option<egui::Id>) -> Option<String> {
+    focused_identity(output, focused).map(|(_, _, label)| label)
+}
+
+/// The focused widget's accesskit id, role and exact name. Coverage tracks
+/// this identity, never the name alone: a composite row's field and slider
+/// share a catalog label and must still count as two controls.
+fn focused_identity(
+    output: &egui::FullOutput,
+    focused: Option<egui::Id>,
+) -> Option<(egui::accesskit::NodeId, egui::accesskit::Role, String)> {
     let tree = output.platform_output.accesskit_update.as_ref()?;
     let id = focused?.accesskit_id();
     tree.nodes
         .iter()
         .find(|(node_id, _)| *node_id == id)
-        .and_then(|(_, node)| node.label().map(str::to_owned))
+        .and_then(|(node_id, node)| {
+            node.label()
+                .map(|label| (*node_id, node.role(), label.to_owned()))
+        })
 }
 
 /// Every node of one frame's tree with the given role and exact label.
@@ -305,6 +318,20 @@ fn field_value(output: &egui::FullOutput, label: &str) -> Option<String> {
         .iter()
         .find(|(_, node)| {
             node.role() == egui::accesskit::Role::TextInput && node.label() == Some(label)
+        })
+        .and_then(|(_, node)| node.value())
+        .map(|value| value.to_string())
+}
+
+/// The accesskit value of the combo named `label`. A composite row can
+/// also announce that label on another node; the unit the selector shows
+/// is this role's value.
+fn combo_value(output: &egui::FullOutput, label: &str) -> Option<String> {
+    let tree = output.platform_output.accesskit_update.as_ref()?;
+    tree.nodes
+        .iter()
+        .find(|(_, node)| {
+            node.role() == egui::accesskit::Role::ComboBox && node.label() == Some(label)
         })
         .and_then(|(_, node)| node.value())
         .map(|value| value.to_string())
@@ -767,6 +794,113 @@ fn expected_names(
     expected
 }
 
+/// The same coverage as `expected_names`, keyed by role so a shared label
+/// cannot collapse a field and its slider into one control. A stepped entry
+/// contributes both widgets; a bytes/s entry contributes its unit combo.
+fn expected_controls(
+    catalog: &Catalog,
+    values: &serde_json::Map<String, Value>,
+    section: &str,
+) -> Vec<(egui::accesskit::Role, String)> {
+    let mut expected = Vec::new();
+    for entry in linux_entries(catalog, section) {
+        if !super::settings_controls::depends_holds(values, &catalog.entries, entry) {
+            continue;
+        }
+        let label = entry.label.as_str();
+        let role = egui::accesskit::Role::Button;
+        match entry.control.as_str() {
+            "toggle" => expected.push((egui::accesskit::Role::CheckBox, label.to_owned())),
+            "choice" | "source" => {
+                expected.push((egui::accesskit::Role::ComboBox, label.to_owned()));
+            }
+            "integer" | "decimal" | "duration" | "text" => {
+                expected.push((egui::accesskit::Role::TextInput, label.to_owned()));
+                if entry.range.as_ref().is_some_and(|range| {
+                    range.max < super::settings_controls::UNBOUNDED_MAXIMUM
+                        && range.step.is_some_and(|step| step > 0.)
+                }) {
+                    expected.push((egui::accesskit::Role::Slider, label.to_owned()));
+                }
+                if entry
+                    .range
+                    .as_ref()
+                    .is_some_and(|range| range.unit.as_deref() == Some("bytes/s"))
+                {
+                    expected.push((egui::accesskit::Role::ComboBox, format!("{label} unit")));
+                }
+            }
+            "action" => expected.push((role, label.to_owned())),
+            "color" => {
+                expected.push((egui::accesskit::Role::ColorWell, label.to_owned()));
+                expected.push((role, format!("Inherit the default {label}")));
+            }
+            "path" => {
+                expected.push((egui::accesskit::Role::TextInput, label.to_owned()));
+                expected.push((role, format!("Choose {label}")));
+            }
+            "segmented" => {
+                for option in entry.options.iter().flatten() {
+                    expected.push((role, format!("{label}: {}", option.label)));
+                }
+            }
+            "order" => {
+                let ids: Vec<&str> = entry
+                    .default
+                    .as_str()
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                for (index, id) in ids.iter().enumerate() {
+                    let name = super::settings_controls::graph_name(id);
+                    if index > 0 {
+                        expected.push((role, format!("Move {name} up")));
+                    }
+                    if index + 1 < ids.len() {
+                        expected.push((role, format!("Move {name} down")));
+                    }
+                }
+            }
+            other => panic!("unknown control {other}"),
+        }
+    }
+    expected
+}
+
+/// Tab until the focused node is this role and exact label. Returns the
+/// widget id and the frame that focused it.
+fn focus_role(
+    harness: &mut Harness,
+    role: egui::accesskit::Role,
+    label: &str,
+) -> (egui::Id, egui::FullOutput) {
+    let mut frame = harness.quiet();
+    for _ in 0..600 {
+        let focused = harness.ctx.memory(|memory| memory.focused());
+        if let Some((_, focused_role, focused_label)) = focused_identity(&frame, focused)
+            && focused_role == role
+            && focused_label == label
+        {
+            return (focused.expect("just matched"), frame);
+        }
+        frame = harness.frame(vec![key(egui::Key::Tab)]);
+    }
+    panic!(
+        "Tab never focused {label} ({role:?}); the tree holds {:?}",
+        all_labels(&frame)
+    );
+}
+
+fn halo_around(frame: &egui::FullOutput, rect: Rect) -> bool {
+    let halo = super::super::settings_style::focus_halo();
+    frame.shapes.iter().any(|clipped| {
+        matches!(&clipped.shape, egui::Shape::Rect(shape)
+            if shape.stroke.width == 2. && shape.stroke.color == halo
+                && shape.rect.expand(1.).intersects(rect))
+    })
+}
+
 #[test]
 fn keyboard_navigation_reaches_every_control() {
     let mut harness = Harness::new();
@@ -792,33 +926,70 @@ fn keyboard_navigation_reaches_every_control() {
         "the Tab walk did not visit the sidebar first, in order"
     );
     let sidebar_names: Vec<&str> = SECTION_TITLES.iter().map(|(_, t)| *t).collect();
-    let mut identities: std::collections::HashMap<egui::Id, String> =
+    // One widget id always announces the same role and name. Coverage is
+    // the set of those ids, not the set of names: a field and its slider
+    // share a label and must both be visited (lesson d).
+    let mut identities: std::collections::HashMap<egui::Id, (egui::accesskit::Role, String)> =
         std::collections::HashMap::new();
     for section in harness.catalog.sections.clone() {
         harness.window.select_section(&section);
         let _ = harness.quiet();
-        let mut expected = expected_names(&harness.catalog, &harness.values(), &section);
+        let mut expected_labels = expected_names(&harness.catalog, &harness.values(), &section);
+        let mut expected = expected_controls(&harness.catalog, &harness.values(), &section);
         if section == "themes" {
             // The Linux-specific legacy import block, inside the Themes
             // section's "Import and export" card, is window chrome the
             // walk must cover with the rest.
-            expected.insert("Legacy Linux settings path".into());
-            expected.insert("Browse legacy settings…".into());
-            expected.insert("Review pasted path…".into());
+            expected_labels.insert("Legacy Linux settings path".into());
+            expected_labels.insert("Browse legacy settings…".into());
+            expected_labels.insert("Review pasted path…".into());
+            expected.push((
+                egui::accesskit::Role::TextInput,
+                "Legacy Linux settings path".into(),
+            ));
+            expected.push((
+                egui::accesskit::Role::Button,
+                "Browse legacy settings…".into(),
+            ));
+            expected.push((egui::accesskit::Role::Button, "Review pasted path…".into()));
         }
-        let mut covered = std::collections::BTreeSet::new();
-        // One full Tab cycle: the sidebar, every focusable control of the
-        // section (composites included), the close button, then back to
-        // the sidebar — egui's Tab order is geometric (the nearest widget
-        // below), so a tall section wraps through off-screen rows and
-        // needs a generous budget.
-        let mut budget = expected.len() * 8 + 64;
-        while covered.len() < expected.len() {
+        let mut required: std::collections::BTreeMap<(String, String), usize> =
+            std::collections::BTreeMap::new();
+        for (role, label) in &expected {
+            *required
+                .entry((format!("{role:?}"), label.clone()))
+                .or_default() += 1;
+        }
+        let mut covered: std::collections::HashMap<
+            (String, String),
+            std::collections::HashSet<egui::Id>,
+        > = std::collections::HashMap::new();
+        // Geometric Tab order is acceptable. The walk still has to reach
+        // every control, identified by widget id and role, and each focused
+        // control paints later under its own test. A tall section wraps
+        // through off-screen rows, so the budget is generous.
+        let mut budget = expected.len() * 12 + 96;
+        let done = |covered: &std::collections::HashMap<
+            (String, String),
+            std::collections::HashSet<egui::Id>,
+        >| {
+            required
+                .iter()
+                .all(|(key, count)| covered.get(key).is_some_and(|ids| ids.len() >= *count))
+        };
+        while !done(&covered) {
             if budget == 0 {
-                panic!(
-                    "{section}: the Tab walk never covered {:?}",
-                    expected.difference(&covered).collect::<Vec<_>>()
-                );
+                let missing: Vec<_> = required
+                    .iter()
+                    .filter(|(key, count)| covered.get(key).is_none_or(|ids| ids.len() < **count))
+                    .map(|(key, count)| {
+                        format!(
+                            "{key:?} want {count} got {}",
+                            covered.get(key).map(|ids| ids.len()).unwrap_or(0)
+                        )
+                    })
+                    .collect();
+                panic!("{section}: the Tab walk never covered {missing:?}");
             }
             budget -= 1;
             let frame = harness.frame(vec![key(egui::Key::Tab)]);
@@ -826,25 +997,26 @@ fn keyboard_navigation_reaches_every_control() {
             let Some(focused) = focused else {
                 continue;
             };
-            let Some(label) = focused_label(&frame, Some(focused)) else {
+            let Some((_, role, label)) = focused_identity(&frame, Some(focused)) else {
                 panic!("{section}: the walk focused a node with no name");
             };
-            // Identity: the same widget always announces the same name.
-            if let Some(previous) = identities.insert(focused, label.clone()) {
+            if let Some(previous) = identities.insert(focused, (role, label.clone())) {
                 assert_eq!(
-                    previous, label,
-                    "{section}: one focusable widget announced two names"
+                    previous,
+                    (role, label.clone()),
+                    "{section}: one focusable widget announced two identities"
                 );
             }
-            let known = expected.contains(&label)
+            let known = expected_labels.contains(&label)
                 || sidebar_names.contains(&label.as_str())
                 || label == "Close settings";
             assert!(
                 known,
-                "{section}: the walk focused an unexpected name {label:?} (expected {expected:?})"
+                "{section}: the walk focused an unexpected name {label:?} (expected {expected_labels:?})"
             );
-            if expected.contains(&label) {
-                covered.insert(label);
+            let key = (format!("{role:?}"), label);
+            if required.contains_key(&key) {
+                covered.entry(key).or_default().insert(focused);
             }
         }
     }
@@ -1278,6 +1450,154 @@ fn network_scale_round_trips_through_every_unit_and_the_boundary() {
             .is_some_and(|reason| reason.contains("too large")),
         "an unrepresentable byte count was not refused"
     );
+}
+
+#[test]
+fn network_units_switch_and_round_trip_fractional_boundaries() {
+    // Real unit changes, not auto-presentation: the focused combo cycles
+    // with the arrow keys, paints the halo, and a fractional presentation
+    // in that unit stores the exact bytes. Each unit also accepts its
+    // boundary and an unchanged resubmission.
+    let mut harness = Harness::new();
+    let id = "graphs.network.minimum_scale";
+    harness.window.select_section("graphs");
+    harness.store.set(id, json!(1_536)).expect("valid bytes");
+    let _ = harness.quiet();
+    let (combo, _) = focus_role(
+        &mut harness,
+        egui::accesskit::Role::ComboBox,
+        "Minimum scale unit",
+    );
+    let frame = harness.quiet();
+    assert_eq!(
+        harness.ctx.memory(|memory| memory.focused()),
+        Some(combo),
+        "the unit combo did not keep focus"
+    );
+    let combo_rect = nodes_with_role(
+        &frame,
+        egui::accesskit::Role::ComboBox,
+        "Minimum scale unit",
+    )
+    .pop()
+    .expect("the focused unit combo");
+    assert!(
+        halo_around(&frame, combo_rect),
+        "the focused unit combo paints no 2 px halo"
+    );
+    // One arrow is a real unit switch: the presentation changes and the
+    // stored bytes do not. The seeded unit is whatever the field chose.
+    let seeded = combo_value(&frame, "Minimum scale unit").expect("the seeded unit");
+    let seeded_field = field_value(&frame, "Minimum scale").expect("the seeded field");
+    let _ = harness.frame(vec![key(egui::Key::ArrowRight)]);
+    let frame = harness.quiet();
+    let switched = combo_value(&frame, "Minimum scale unit").expect("the switched unit");
+    let switched_field = field_value(&frame, "Minimum scale").expect("the switched field");
+    assert_ne!(
+        (seeded.as_str(), seeded_field.as_str()),
+        (switched.as_str(), switched_field.as_str()),
+        "the focused combo did not switch units ({seeded} {seeded_field} stayed)"
+    );
+    assert_eq!(harness.values()[id], json!(1_536));
+    let presented = field_value(&frame, "Minimum scale").expect("the switched presentation");
+    if switched != "bytes/s" {
+        assert!(
+            presented.contains('.'),
+            "{switched} did not present 1536 as a fraction ({presented})"
+        );
+    }
+    let document = harness.document();
+    let before = fs::read(&document).unwrap();
+    harness.type_into(id, &presented);
+    assert_eq!(
+        harness.values()[id],
+        json!(1_536),
+        "the fractional presentation did not round-trip"
+    );
+    assert_eq!(
+        fs::read(&document).unwrap(),
+        before,
+        "the unchanged fractional submission rewrote the document"
+    );
+    // A typed fraction in each unit, reached by switching, not by seeding.
+    for (unit, text, bytes) in [
+        ("KB/s", "1.5", 1_536i64),
+        ("MB/s", "1.5", 1_572_864),
+        ("GB/s", "1.5", 1_610_612_736),
+        ("bytes/s", "2048", 2_048),
+    ] {
+        select_scale_unit(&mut harness, unit);
+        harness.type_into(id, text);
+        assert_eq!(
+            harness.values()[id],
+            json!(bytes),
+            "{text} {unit} did not store {bytes} bytes"
+        );
+        assert!(
+            harness.window.error(id).is_none(),
+            "{text} {unit} was refused: {:?}",
+            harness.window.error(id)
+        );
+    }
+    // Boundaries in each unit: 0, and the catalog maximum expressed in
+    // that unit. Retyping either leaves the document byte-identical.
+    let max = 9_007_199_254_740_991.0f64;
+    for (unit, multiplier) in super::settings_controls::SCALE_UNITS {
+        select_scale_unit(&mut harness, unit);
+        harness.type_into(id, "0");
+        assert!(
+            harness
+                .values()
+                .get(id)
+                .is_none_or(|value| value == &json!(0)),
+            "0 {unit} did not store the lower boundary"
+        );
+        let before = fs::read(&document).unwrap();
+        harness.type_into(id, "0");
+        assert_eq!(
+            fs::read(&document).unwrap(),
+            before,
+            "the unchanged 0 {unit} submission rewrote the document"
+        );
+        let text = format!("{}", max / multiplier as f64);
+        let parsed: f64 = text.parse().expect("the boundary presentation parses");
+        assert_eq!(
+            parsed * multiplier as f64,
+            max,
+            "{unit} boundary text does not round-trip"
+        );
+        harness.type_into(id, &text);
+        assert_eq!(
+            harness.values()[id],
+            json!(9_007_199_254_740_991u64),
+            "the {unit} upper boundary was refused"
+        );
+        let before = fs::read(&document).unwrap();
+        harness.type_into(id, &text);
+        assert_eq!(
+            fs::read(&document).unwrap(),
+            before,
+            "the unchanged {unit} boundary submission rewrote the document"
+        );
+    }
+}
+
+/// Arrow-cycle the minimum-scale combo until it shows `unit`.
+fn select_scale_unit(harness: &mut Harness, unit: &str) {
+    for _ in 0..5 {
+        let _ = focus_role(
+            harness,
+            egui::accesskit::Role::ComboBox,
+            "Minimum scale unit",
+        );
+        let frame = harness.quiet();
+        if combo_value(&frame, "Minimum scale unit").as_deref() == Some(unit) {
+            return;
+        }
+        let _ = harness.frame(vec![key(egui::Key::ArrowRight)]);
+        let _ = harness.quiet();
+    }
+    panic!("the unit combo never switched to {unit}");
 }
 
 #[test]
@@ -1723,9 +2043,9 @@ fn colour_popup_sliders_are_named_and_apply_on_click() {
     let _ = harness.quiet();
     // Review issue 3: the colour editor's component sliders are named
     // by their channel, and a click on the track applies through the
-    // window's instant-apply path. (Their focus halo paints through the
-    // same helper the row slider's halo test exercises; egui's
-    // geometric Tab order cannot be driven into a non-menu popup.)
+    // window's instant-apply path. Keyboard operation is the sibling
+    // test — egui will not Tab into the popup, so the editor moves
+    // focus itself.
     let well = harness
         .window
         .rendered()
@@ -1775,6 +2095,97 @@ fn colour_popup_sliders_are_named_and_apply_on_click() {
         nodes_with_role(&frame, egui::accesskit::Role::Slider, "Red").is_empty(),
         "Escape did not close the colour editor"
     );
+}
+
+#[test]
+fn colour_editor_is_keyboard_operable_and_returns_focus() {
+    // Explicit focus management (lesson d): Space opens the editor and
+    // focuses the first channel, arrows adjust it, the 2 px halo paints,
+    // Tab moves to the next channel by widget identity, and Escape returns
+    // focus to the well. Channels are tracked by id and role, not by name.
+    let mut harness = Harness::new();
+    harness.window.select_section("appearance");
+    let (well, _) = focus_role(
+        &mut harness,
+        egui::accesskit::Role::ColorWell,
+        "Window background color",
+    );
+    let frame = harness.frame(vec![key(egui::Key::Space)]);
+    let mut frame = frame;
+    let mut focused = harness.ctx.memory(|memory| memory.focused());
+    if focused_identity(&frame, focused)
+        .is_none_or(|(_, role, _)| role != egui::accesskit::Role::Slider)
+    {
+        frame = harness.quiet();
+        focused = harness.ctx.memory(|memory| memory.focused());
+    }
+    let (red_node, role, label) =
+        focused_identity(&frame, focused).expect("Space did not move focus into the editor");
+    assert_eq!(role, egui::accesskit::Role::Slider);
+    assert_eq!(
+        label, "Red",
+        "keyboard activation did not focus the first channel"
+    );
+    let red_widget = focused.expect("the channel is focused");
+    let red_rect = nodes_with_role(&frame, egui::accesskit::Role::Slider, "Red")
+        .pop()
+        .expect("the focused Red slider");
+    assert!(
+        halo_around(&frame, red_rect),
+        "the focused colour channel paints no 2 px halo"
+    );
+    let before = harness.values().get("appearance.window.color").cloned();
+    let before_red = before
+        .as_ref()
+        .and_then(Value::as_array)
+        .and_then(|rgba| rgba.first())
+        .and_then(Value::as_f64)
+        .unwrap_or(0.2);
+    let _ = harness.frame(vec![key(egui::Key::ArrowRight)]);
+    let after = harness.values()["appearance.window.color"].clone();
+    let after_red = after
+        .as_array()
+        .and_then(|rgba| rgba.first())
+        .and_then(Value::as_f64)
+        .expect("the stored colour");
+    assert!(
+        after_red > before_red,
+        "ArrowRight did not raise the Red channel ({before_red} → {after_red})"
+    );
+    let frame = harness.quiet();
+    let focused = harness.ctx.memory(|memory| memory.focused());
+    let (still, still_role, _) =
+        focused_identity(&frame, focused).expect("the channel lost focus after the adjustment");
+    assert_eq!(focused, Some(red_widget));
+    assert_eq!(still, red_node);
+    assert_eq!(still_role, egui::accesskit::Role::Slider);
+    // Tab stays in the editor and lands on a different slider identity.
+    let frame = harness.frame(vec![key(egui::Key::Tab)]);
+    let focused = harness.ctx.memory(|memory| memory.focused());
+    let (green_node, green_role, green_label) =
+        focused_identity(&frame, focused).expect("Tab left the editor without a focus");
+    assert_eq!(green_role, egui::accesskit::Role::Slider);
+    assert_eq!(green_label, "Green");
+    assert_ne!(
+        green_node, red_node,
+        "Tab did not move to a different channel identity"
+    );
+    let _ = harness.frame(vec![key(egui::Key::Escape)]);
+    let frame = harness.quiet();
+    assert!(
+        nodes_with_role(&frame, egui::accesskit::Role::Slider, "Red").is_empty(),
+        "Escape did not close the colour editor"
+    );
+    let focused = harness.ctx.memory(|memory| memory.focused());
+    assert_eq!(
+        focused,
+        Some(well),
+        "Escape did not return focus to the colour well"
+    );
+    let (_, role, label) =
+        focused_identity(&frame, focused).expect("the well has no accessible identity");
+    assert_eq!(role, egui::accesskit::Role::ColorWell);
+    assert_eq!(label, "Window background color");
 }
 
 #[test]
@@ -1905,6 +2316,277 @@ fn reduced_motion_makes_egui_animation_instant() {
     unsafe {
         std::env::remove_var("XRG_SETTINGS_REDUCED_MOTION");
     }
+}
+
+#[test]
+fn desktop_reduced_motion_queries_enable_animations_without_the_override() {
+    // The override is absent: the decision follows the desktop query, and
+    // that query asks GNOME for `enable-animations`, not
+    // `gtk-enable-animations`.
+    unsafe {
+        std::env::remove_var("XRG_SETTINGS_REDUCED_MOTION");
+    }
+    assert!(
+        std::env::var("XRG_SETTINGS_REDUCED_MOTION").is_err(),
+        "the override was present"
+    );
+    let root = std::env::temp_dir().join(format!(
+        "xrg-gsettings-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let log = root.join("args");
+    let program = root.join("gsettings");
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho false\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let animations = super::super::settings_style::query_enable_animations(&program);
+    let args = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        args.lines().any(|line| line == "enable-animations"),
+        "the desktop query did not ask for enable-animations: {args:?}"
+    );
+    assert!(
+        !args.contains("gtk-enable-animations"),
+        "the desktop query still uses gtk-enable-animations: {args:?}"
+    );
+    assert!(
+        args.lines()
+            .any(|line| line == "org.gnome.desktop.interface"),
+        "the desktop query did not use the GNOME interface schema: {args:?}"
+    );
+    assert!(!animations, "enable-animations=false was read as enabled");
+    assert!(
+        super::super::settings_style::reduced_motion(None, animations),
+        "an absent override did not follow the desktop query"
+    );
+    // A missing tool is "not requested".
+    assert!(super::super::settings_style::query_enable_animations(
+        std::path::Path::new("gsettings-not-installed")
+    ));
+    assert!(!super::super::settings_style::reduced_motion(None, true));
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn slider_rails_contrast_with_the_card_in_both_appearances() {
+    // Fix L6: the rail is a filled rect in the slider's own style, using a
+    // token that stays visible against the card. Containment cannot see this.
+    for theme in ["light", "dark"] {
+        unsafe {
+            std::env::set_var("XRG_SETTINGS_THEME", theme);
+        }
+        let dark = theme == "dark";
+        let mut harness = Harness::new();
+        harness.window.select_section("general");
+        let frame = harness.quiet();
+        let slider = nodes_with_role(&frame, egui::accesskit::Role::Slider, "Window opacity")
+            .pop()
+            .expect("the opacity slider");
+        let rail = settings_style_rail(dark);
+        let card = super::super::aether7b::surface_card(dark);
+        let track = frame
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(shape)
+                    if shape.fill == rail
+                        && shape.rect.width() >= 100.
+                        && shape.rect.height() >= 4.
+                        && shape.rect.intersects(slider) =>
+                {
+                    Some(shape.rect)
+                }
+                _ => None,
+            });
+        let track =
+            track.unwrap_or_else(|| panic!("no contrasting slider rail in the {theme} appearance"));
+        assert!(
+            track.width() >= 100. && track.height() >= 4.,
+            "the {theme} rail has no visible geometry ({track:?})"
+        );
+        let contrast = contrast_over(rail, card);
+        assert!(
+            contrast >= 3.0,
+            "the {theme} rail contrast against the card is {contrast:.2}, below 3:1"
+        );
+    }
+    unsafe {
+        std::env::remove_var("XRG_SETTINGS_THEME");
+    }
+}
+
+fn settings_style_rail(dark: bool) -> egui::Color32 {
+    super::super::settings_style::slider_rail(dark)
+}
+
+/// WCAG contrast of `fg` composited over an opaque `bg`.
+fn contrast_over(fg: egui::Color32, bg: egui::Color32) -> f32 {
+    let [fr, fg_g, fb, fa] = fg.to_array();
+    let [br, bg_g, bb, _] = bg.to_array();
+    let inv = u16::from(255 - fa);
+    let mix = |front: u8, back: u8| {
+        (u16::from(front) + (u16::from(back) * inv + 127) / 255).min(255) as u8
+    };
+    let painted = [mix(fr, br), mix(fg_g, bg_g), mix(fb, bb)];
+    let card = [br, bg_g, bb];
+    let l1 = relative_luminance(painted);
+    let l2 = relative_luminance(card);
+    let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+fn relative_luminance(rgb: [u8; 3]) -> f32 {
+    let channel = |c: u8| {
+        let c = f32::from(c) / 255.;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2])
+}
+
+#[test]
+fn retained_failures_clear_on_repair_retry_and_reset() {
+    // A persistence failure after replacement retains the edit and keeps
+    // showing it. A later successful edit must not stay shadowed by that
+    // retained value; retry saves it; reset discards it.
+    let (root, mut harness) = blocked_harness();
+    retain_failed_width(&mut harness);
+    let frame = harness.quiet();
+    assert!(
+        labelled(&frame, "Retry saving changes that did not persist"),
+        "a retained failure has no retry path"
+    );
+    // The injection is spent. A successful 400 must display and persist,
+    // and must not snap back to the retained 300.
+    harness.type_into("general.window.graph_width", "400");
+    let frame = harness.quiet();
+    assert_eq!(harness.values()["general.window.graph_width"], json!(400));
+    assert_eq!(
+        node_value(&frame, "Graph width").as_deref(),
+        Some("400"),
+        "the retained 300 shadowed the successful 400"
+    );
+    let _ = harness.quiet();
+    assert_eq!(
+        Store::open(&root).values()["general.window.graph_width"],
+        json!(400),
+        "a later frame resubmitted the retained failure"
+    );
+    assert!(
+        !labelled(
+            &harness.quiet(),
+            "Retry saving changes that did not persist"
+        ),
+        "the successful edit left the retained failure in place"
+    );
+    fs::remove_dir_all(&root).unwrap();
+
+    // Retry saves the retained value and then stops showing it.
+    let (root, mut harness) = blocked_harness();
+    retain_failed_width(&mut harness);
+    harness.click_labelled("Retry saving changes that did not persist");
+    assert_eq!(
+        Store::open(&root).values()["general.window.graph_width"],
+        json!(300),
+        "retry did not persist the retained edit"
+    );
+    let frame = harness.quiet();
+    assert_eq!(node_value(&frame, "Graph width").as_deref(), Some("300"));
+    assert!(
+        !labelled(&frame, "Retry saving changes that did not persist"),
+        "retry left the retained failure in place"
+    );
+    assert!(
+        harness.window.error("general.window.graph_width").is_none(),
+        "retry kept the failure reason"
+    );
+    fs::remove_dir_all(&root).unwrap();
+
+    // Reset discards the retained edit instead of overlaying the default.
+    let (root, mut harness) = blocked_harness();
+    retain_failed_width(&mut harness);
+    harness.click("general.reset");
+    let _ = harness.quiet();
+    harness.click_labelled("Reset");
+    let frame = harness.quiet();
+    assert_eq!(
+        node_value(&frame, "Graph width").as_deref(),
+        Some("140"),
+        "reset left the retained width on screen"
+    );
+    assert!(
+        Store::open(&root)
+            .values()
+            .get("general.window.graph_width")
+            .is_none(),
+        "reset wrote the retained width"
+    );
+    assert!(
+        !labelled(&frame, "Retry saving changes that did not persist"),
+        "reset left the retained failure in place"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+fn blocked_harness() -> (PathBuf, Harness) {
+    let root = std::env::temp_dir().join(format!(
+        "xrg-settings-retain-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(root.join("xrg-ng")).unwrap();
+    fs::write(root.join("xrg-ng/settings.json"), b"certainly not json").unwrap();
+    let catalog = document::catalog().expect("the shared core provides the catalog");
+    let mut harness = Harness {
+        ctx: egui::Context::default(),
+        window: SettingsWindow::new(catalog),
+        store: Store::open(&root),
+        root: root.clone(),
+        catalog: document::catalog().expect("the catalog"),
+    };
+    harness.ctx.enable_accesskit();
+    let _ = harness.quiet();
+    assert!(harness.store.blocked(), "the fixture is not blocked");
+    (root, harness)
+}
+
+fn retain_failed_width(harness: &mut Harness) {
+    harness.type_into("general.window.graph_width", "300");
+    harness.store.fail_next_commits(1);
+    harness.click_labelled("Replace the file with the current settings");
+    assert!(
+        !harness.store.blocked(),
+        "replacement did not repair the document"
+    );
+    assert!(
+        harness
+            .store
+            .values()
+            .get("general.window.graph_width")
+            .is_none(),
+        "the failed write still landed in the document"
+    );
+    let frame = harness.quiet();
+    assert_eq!(
+        node_value(&frame, "Graph width").as_deref(),
+        Some("300"),
+        "the failed edit was not retained on screen"
+    );
 }
 
 #[test]

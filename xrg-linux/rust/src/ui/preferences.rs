@@ -411,6 +411,38 @@ impl SettingsWindow {
         });
     }
 
+    /// Save edits a repair could not persist. Successes leave the held map;
+    /// a failure stays held, still shown, with its reason — the same
+    /// retention the repair uses, so the user can retry again.
+    fn retry_unpersisted(&mut self, store: &mut Store) {
+        let pending = std::mem::take(&mut self.held);
+        let mut failures: Vec<(String, Value, SetError)> = Vec::new();
+        for (id, value) in pending {
+            match store.set(&id, value.clone()) {
+                Ok(()) => {
+                    self.dirty = true;
+                    self.fields.bump(&id);
+                }
+                Err(error) => failures.push((id, value, error)),
+            }
+        }
+        for (id, value, error) in failures {
+            let reason = self
+                .catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .map(|entry| settings_controls::refusal_reason(&error, entry))
+                .unwrap_or_else(|| "The value could not be saved.".into());
+            self.fields.refuse(&id, reason.clone());
+            self.message = Some(reason);
+            self.held.insert(id, value);
+        }
+        if self.held.is_empty() {
+            self.message = Some("The changes that could not be saved were saved.".into());
+        }
+    }
+
     /// The window's one frame.
     fn frame(
         &mut self,
@@ -515,6 +547,10 @@ impl SettingsWindow {
             // other fields.
             let catalog = self.catalog.clone();
             let mut held = std::mem::take(&mut self.held);
+            // Captured before the apply closure borrows `held`: a retained
+            // failure from a previous frame offers Retry. This frame's own
+            // saves only remove entries, so the flag cannot go stale.
+            let show_retry = !blocked && !held.is_empty();
             let mut set = |id: &str, value: Value| -> Result<(), SetError> {
                 if store.blocked() {
                     // The document cannot take the change, so the window
@@ -533,6 +569,11 @@ impl SettingsWindow {
                 }
                 let result = store.set(id, value.clone());
                 if result.is_ok() {
+                    // A successful save clears any retained failure for this
+                    // entry. Otherwise a width held from a failed repair
+                    // keeps overlaying the value that just saved (review
+                    // round 2, retained failures).
+                    held.remove(id);
                     dirty = true;
                     if id == "themes.preset"
                         && value.as_str().is_some_and(|name| {
@@ -616,6 +657,29 @@ impl SettingsWindow {
                                 .font(settings_style::sans(aether7b::TYPE_XS.0))
                                 .color(aether7b::status_warning(dark)),
                         );
+                        ui.add_space(aether7b::SPACE_S2);
+                    }
+                    // A persistence failure after the document was repaired
+                    // leaves the edit held and shown. Retry is the defined
+                    // path that saves it without the user retyping; reset
+                    // (below) discards it. Neither is offered while the
+                    // document is still blocked — Replace is that path.
+                    if show_retry {
+                        ui.label(
+                            egui::RichText::new("Changes that could not be saved are still shown.")
+                                .font(settings_style::sans(aether7b::TYPE_XS.0))
+                                .color(aether7b::status_warning(dark)),
+                        );
+                        let retry = settings_style::ghost_button(
+                            ui,
+                            "retry-unpersisted",
+                            "Retry saving changes that did not persist",
+                            true,
+                            dark,
+                        );
+                        if retry.clicked() {
+                            actions.retry_held = true;
+                        }
                         ui.add_space(aether7b::SPACE_S2);
                     }
                     let entries: Vec<_> = self
@@ -749,6 +813,9 @@ impl SettingsWindow {
         if actions.cancel_import {
             self.import = None;
         }
+        if actions.retry_held {
+            self.retry_unpersisted(store);
+        }
         if actions.replace_requested {
             match store.replace_unreadable() {
                 Ok(()) => {
@@ -803,6 +870,10 @@ impl SettingsWindow {
                             .iter()
                             .filter(|entry| entry.section == section)
                         {
+                            // A successful reset discards retained failures
+                            // for the section, so they cannot keep overlaying
+                            // the restored defaults.
+                            self.held.remove(&entry.id);
                             self.fields.bump(&entry.id);
                         }
                     }
@@ -887,6 +958,7 @@ fn snapshot_walk() -> bool {
 #[derive(Default)]
 struct Actions {
     replace_requested: bool,
+    retry_held: bool,
     confirm_reset: Option<String>,
     reset_confirmed: bool,
     cancelled: bool,

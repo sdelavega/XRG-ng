@@ -966,6 +966,10 @@ pub struct Store {
     expected: Option<Vec<u8>>,
     blocked: bool,
     problem: Option<String>,
+    /// Test injection: the next this many commits fail before writing, so a
+    /// window test can interrupt the replacement's held-edit sequence.
+    #[cfg(test)]
+    fail_commits: u32,
 }
 impl Store {
     /// Open the settings under one configuration root. An existing
@@ -983,6 +987,8 @@ impl Store {
             expected: None,
             blocked: false,
             problem: None,
+            #[cfg(test)]
+            fail_commits: 0,
         };
         match read_optional(&store.path, DOCUMENT_LIMIT) {
             // The document exists but cannot be read (permissions, size,
@@ -1206,9 +1212,21 @@ impl Store {
         }
         Ok(document)
     }
+    /// Fail the next `count` commits without writing. Tests inject a
+    /// persistence error into the replacement's held-edit sequence; production
+    /// builds have no such hook.
+    #[cfg(test)]
+    pub fn fail_next_commits(&mut self, count: u32) {
+        self.fail_commits = count;
+    }
     /// Write one core-produced document: rendered, guarded against external
     /// edits, written atomically with mode 0600, and only then adopted.
     fn commit(&mut self, document: Vec<u8>) -> Result<(), String> {
+        #[cfg(test)]
+        if self.fail_commits > 0 {
+            self.fail_commits -= 1;
+            return Err("injected persistence failure".into());
+        }
         let settings = document::linux_view(&document)?;
         if read_optional(&self.path, DOCUMENT_LIMIT)? != self.expected {
             return Err("Settings changed on disk; reopen the app before saving".into());
