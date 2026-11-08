@@ -1,101 +1,284 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
-//! Draft-only preferences. Apply validates before changing workers or storage.
+//! The Linux Aether7b settings window (0.2.3 spec §5): the shared settings
+//! catalog drives an egui window with a 40 px headerbar, 12 px corners, the
+//! opaque `surface_chrome_fallback` sidebar, one flat card per catalog group
+//! with `//` eyebrows, instant apply through the store (the shared core is
+//! the only validator), the danger rim on refused values, per-section resets
+//! with confirmation, the unreadable-file banner with its Replace action,
+//! theme import/export and the GTK legacy import — matching the macOS
+//! window section for section.
 use super::{
-    App,
+    App, aether7b,
     file_picker::{Action, Choice, Decision, PathField, Picker},
+    settings_controls::{self, Fields, Outcome, Rendered},
+    settings_style,
 };
 use crate::{
+    legacy,
     metrics::{Inventory, SourceOption},
-    settings::{self, GraphStyle, Layout, Settings, ThemeChoice, ThemeDocument},
+    settings::{
+        Store, ThemeDocument,
+        document::{Catalog, SetError},
+    },
 };
-use eframe::egui::{self, Color32};
+use eframe::egui;
+use serde_json::{Value, json};
 use std::{path::PathBuf, sync::mpsc};
 
+#[cfg(test)]
+#[path = "settings_window_tests.rs"]
+mod tests;
+
+/// Supplies the runtime options of `source` controls: sensors, network
+/// interfaces, disks, GPUs — the platform's live enumeration (spec §1).
+pub trait SourceProvider {
+    /// The options of one source kind, in display order: `id` is the
+    /// persisted choice, `label` what the user sees.
+    fn options(&self, kind: &str) -> Vec<SourceOption>;
+}
+
+/// The sidebar's section titles, in catalog order (decision D7) — the same
+/// eight, including Stocks, the macOS window shows.
+pub const SECTION_TITLES: [(&str, &str); 8] = [
+    ("general", "General"),
+    ("appearance", "Appearance"),
+    ("graphs", "Graphs"),
+    ("sources", "Sources"),
+    ("ai", "AI"),
+    ("weather", "Weather"),
+    ("stocks", "Stocks"),
+    ("themes", "Themes & import"),
+];
+
+/// One completed asynchronous file operation: a loaded theme, a saved theme,
+/// a reviewed legacy import.
 enum Loaded {
     Theme(Box<ThemeDocument>),
-    Legacy(Box<crate::legacy::Import>),
+    Legacy(Box<legacy::Import>),
     Saved,
 }
-pub(super) struct Editor {
-    pub draft: Settings,
-    pub(super) tab: usize,
-    theme_path: PathField,
-    legacy_path: PathField,
-    pub(super) picker: Option<Picker>,
+
+/// The settings window: sidebar sections in catalog order, instant apply,
+/// danger validation, resets with confirmation, unreadable-file recovery,
+/// theme import/export and the legacy GTK import — all Aether7b.
+pub struct SettingsWindow {
+    catalog: Catalog,
+    section: String,
+    fields: Fields,
+    rendered: Vec<Rendered>,
     message: Option<String>,
-    import: Option<crate::legacy::Import>,
+    confirm_reset: Option<String>,
+    /// The file chooser (theme import/export, path choices, legacy review).
+    pub(super) picker: Option<Picker>,
     pending: Option<mpsc::Receiver<Result<Loaded, String>>>,
-    replace_theme: bool,
+    import: Option<legacy::Import>,
+    legacy_path: PathField,
+    /// The path entry a chooser is picking for.
+    path_target: Option<String>,
+    /// The changes made while the settings document was unreadable: kept
+    /// in memory (the banner's promise), applied once the file is replaced.
+    held: std::collections::BTreeMap<String, Value>,
+    /// The current section's full content height, measured while rendering:
+    /// the snapshot walker sizes its capture viewport from it.
+    content_height: f32,
+    open: bool,
+    dirty: bool,
 }
-impl Editor {
-    pub fn new(draft: Settings) -> Self {
+
+impl SettingsWindow {
+    pub fn new(catalog: Catalog) -> Self {
+        let section = catalog
+            .sections
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "general".into());
         Self {
-            draft,
-            tab: 0,
-            theme_path: PathField::default(),
+            catalog,
+            section,
+            fields: Fields::default(),
+            rendered: Vec::new(),
+            message: None,
+            confirm_reset: None,
             picker: None,
+            pending: None,
+            import: None,
             legacy_path: PathField::new(
-                crate::legacy::path_from(
+                legacy::path_from(
                     std::env::var_os("XDG_CONFIG_HOME").as_deref(),
                     std::env::var_os("HOME").as_deref(),
                 )
                 .unwrap_or_default(),
             ),
-            message: None,
-            import: None,
-            pending: None,
-            replace_theme: false,
+            path_target: None,
+            held: std::collections::BTreeMap::new(),
+            content_height: 0.,
+            open: true,
+            dirty: false,
         }
     }
-    pub(super) fn restore_defaults(&mut self) {
-        self.draft = Settings {
-            ai: self.draft.ai.clone(),
-            weather: self.draft.weather.clone(),
-            ..Default::default()
+
+    /// The section the window shows.
+    pub fn section(&self) -> &str {
+        &self.section
+    }
+
+    /// Open one section; catalog names only, so the sidebar, the tests and
+    /// the smoke harness all agree with the catalog.
+    pub fn select_section(&mut self, section: &str) -> bool {
+        if self.catalog.sections.iter().any(|name| name == section) {
+            self.section = section.to_owned();
+            self.fields = Fields::default();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Every control the last frame rendered, in order — the tests' walk.
+    pub fn rendered(&self) -> &[Rendered] {
+        &self.rendered
+    }
+
+    /// Whether the user closed the window (the ✕, Escape or the system).
+    pub fn closed(&self) -> bool {
+        !self.open
+    }
+
+    /// Whether the window changed the stored settings since the last ask;
+    /// the App adopts the store's view when it did (lesson h).
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// The window's one-line status message, if any.
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
+    /// Whether a file operation is still running.
+    pub fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Whether a reviewed legacy import is waiting for its accept.
+    pub fn import_ready(&self) -> bool {
+        self.import.is_some()
+    }
+
+    /// The danger reason one entry currently shows, if any.
+    pub fn error(&self, id: &str) -> Option<&str> {
+        self.fields.error(id)
+    }
+
+    /// Accept the reviewed legacy import: the imported view is saved whole,
+    /// exactly the document the old draft-then-Apply flow produced, and it
+    /// applies immediately (decision D9 — no draft).
+    pub fn accept_import(&mut self, store: &mut Store) -> Result<(), String> {
+        let Some(import) = self.import.take() else {
+            return Ok(());
         };
-        // Ignore any old asynchronous import completion after this new choice.
-        self.pending = None;
-        self.picker = None;
-        self.import = None;
-        self.message = None;
-    }
-    fn content(&mut self, ui: &mut egui::Ui, inventory: &Inventory) {
-        let was_busy = self.busy();
-        self.poll();
-        if was_busy && !self.busy() {
-            ui.ctx().request_repaint();
+        store.save(&import.settings)?;
+        self.dirty = true;
+        for entry in &self.catalog.entries {
+            self.fields.bump(&entry.id);
         }
-        ui.add_enabled_ui(!self.busy(), |ui| self.form(ui, inventory));
+        Ok(())
     }
-    fn form(&mut self, ui: &mut egui::Ui, inventory: &Inventory) {
-        ui.horizontal_wrapped(|ui| {
-            for (i, label) in [
-                "General",
-                "Graphs",
-                "Sources",
-                "AI",
-                "Weather",
-                "Themes / import",
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                ui.selectable_value(&mut self.tab, i, label);
-            }
-        });
-        ui.separator();
-        egui::ScrollArea::vertical()
-            .id_salt("preferences-body")
-            .show(ui, |ui| match self.tab {
-                0 => general(ui, &mut self.draft),
-                1 => graphs(ui, &mut self.draft),
-                2 => sources(ui, &mut self.draft, inventory),
-                3 => ai(ui, &mut self.draft),
-                4 => weather(ui, &mut self.draft),
-                _ => self.themes(ui),
-            });
+
+    /// Select a built-in theme preset, the Themes picker's action: the
+    /// preset's palette and name follow through the store (lesson f).
+    pub fn choose_preset(&mut self, name: &str, store: &mut Store) -> Result<(), String> {
+        apply_preset(store, name)
+            .map_err(|error| settings_controls::refusal_reason(&error, self.preset_entry()))?;
+        self.dirty = true;
+        self.fields.bump("themes.name");
+        Ok(())
     }
+
+    fn preset_entry(&self) -> &crate::settings::document::CatalogEntry {
+        self.catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == "themes.preset")
+            .expect("the shared catalog defines the theme preset")
+    }
+
+    /// Open the file chooser on one action, seeded at a path — the smoke
+    /// harness's way in, and the path fields' "Browse…" buttons.
+    pub(super) fn choose_at(&mut self, action: Action, path: PathBuf, ctx: &egui::Context) {
+        self.select_section("themes");
+        self.picker = Some(Picker::new(action, path, ctx));
+    }
+
+    /// Render the window into its viewport for one frame. The 40 px
+    /// headerbar, the 12 px corners and the opaque sidebar are drawn here
+    /// (egui has no backdrop blur); the sections and their controls come
+    /// from the catalog.
+    pub fn show(&mut self, ctx: &egui::Context, store: &mut Store, sources: &dyn SourceProvider) {
+        let builder = egui::ViewportBuilder::default()
+            .with_title("XRG-ng Settings")
+            .with_inner_size(self.viewport_size(store, sources))
+            .with_decorations(false)
+            .with_transparent(true);
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("preferences"),
+            builder,
+            |ui, _| self.render(ui, store, sources),
+        );
+    }
+
+    /// The viewport's inner size. The production window is a fixed 760×620
+    /// with a scrolling pane; the snapshot walker (which sets
+    /// XRG_SMOKE_SETTINGS_SNAPSHOT_DIR) instead captures one PNG per
+    /// section, and a section taller than the pane would be cut at the
+    /// scroll fold — so its viewport first measures the section with a
+    /// headless pass through the very renderer the tests use, then grows
+    /// to fit the whole section. The production size is untouched.
+    fn viewport_size(&mut self, store: &mut Store, sources: &dyn SourceProvider) -> egui::Vec2 {
+        const PRODUCTION: egui::Vec2 = egui::Vec2::new(760., 620.);
+        if !snapshot_walk() {
+            return PRODUCTION;
+        }
+        let headless = egui::Context::default();
+        let mut measured = headless.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PRODUCTION)),
+                ..Default::default()
+            },
+            |ui| self.render(ui, store, sources),
+        );
+        measured.textures_delta.clear();
+        let headerbar = 40.;
+        egui::Vec2::new(
+            PRODUCTION.x,
+            (headerbar + self.content_height).clamp(PRODUCTION.y, 8000.),
+        )
+    }
+
+    /// Render the window's whole frame into one ui — the same layout the
+    /// real viewport shows, with the Aether7b style applied for the pass.
+    /// `show` drives this inside the window's viewport; the tests drive it
+    /// directly into a full-size ui (the embedded fallback headless contexts
+    /// use auto-sizes the floating window, which would clip the frame).
+    pub fn render(&mut self, ui: &mut egui::Ui, store: &mut Store, sources: &dyn SourceProvider) {
+        let dark = settings_style::dark(ui.ctx());
+        let theme = ui.ctx().theme();
+        let previous = ui.ctx().global_style();
+        let style = settings_style::style(dark);
+        ui.ctx().set_style_of(theme, style.clone());
+        // The host ui's style snapshot was taken when the ui was created,
+        // before this call: every widget the frame builds reads that
+        // snapshot — including egui's own chrome — so it must carry the
+        // token style too, or egui's defaults would bleed through.
+        ui.set_style(style);
+        self.frame(ui, dark, store, sources);
+        ui.ctx().set_style_of(theme, previous);
+    }
+
+    /// Run one file operation on its own thread, reporting through the
+    /// channel the next frame polls — the production pattern the old
+    /// preferences used and the smoke gate drives.
     fn start(
         &mut self,
         ctx: &egui::Context,
@@ -110,71 +293,83 @@ impl Editor {
             ctx.request_repaint();
         });
     }
-    fn poll(&mut self) {
-        let result = self.pending.as_ref().map(|receiver| receiver.try_recv());
-        match result {
-            Some(Ok(result)) => {
+
+    fn poll(&mut self, store: &mut Store) {
+        let Some(receiver) = &self.pending else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(loaded)) => {
                 self.pending = None;
-                match result {
-                    Ok(Loaded::Theme(theme)) => {
-                        self.draft.theme = ThemeChoice::Custom { theme };
-                        self.message = Some("Theme loaded into draft. Apply to use it.".into());
-                    }
-                    Ok(Loaded::Legacy(import)) => {
+                match loaded {
+                    Loaded::Theme(theme) => self.store_theme(store, *theme),
+                    Loaded::Legacy(import) => {
                         self.import = Some(*import);
                         self.message = None;
                     }
-                    Ok(Loaded::Saved) => self.message = Some("Theme saved.".into()),
-                    Err(e) => self.message = Some(e),
+                    Loaded::Saved => self.message = Some("Theme saved.".into()),
                 }
             }
-            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+            Ok(Err(error)) => {
+                self.pending = None;
+                self.message = Some(error);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
                 self.pending = None;
                 self.message = Some("File operation stopped before returning a result.".into());
             }
-            _ => (),
+            Err(mpsc::TryRecvError::Empty) => (),
         }
     }
-    pub(super) fn choose(&mut self, action: Action, ctx: &egui::Context) {
-        if self.pending.is_some() {
-            return;
+
+    /// A loaded theme file becomes the current theme: its palette and name
+    /// are written through the store, and the preset is marked Custom when
+    /// the palette no longer matches the selected built-in (lesson f).
+    fn store_theme(&mut self, store: &mut Store, theme: ThemeDocument) {
+        for (index, id) in settings_controls::PALETTE_IDS.iter().enumerate() {
+            if let Err(error) = store.set(id, json!(theme.colors[index])) {
+                let reason = settings_controls::refusal_reason(&error, self.palette_entry(id));
+                self.message = Some(reason);
+                return;
+            }
         }
-        let path = if action == Action::ImportLegacy {
-            self.legacy_path.path()
-        } else {
-            self.theme_path.path()
-        };
-        self.choose_at(action, path, ctx);
-    }
-    pub(super) fn choose_at(&mut self, action: Action, path: PathBuf, ctx: &egui::Context) {
-        self.tab = 5;
-        self.picker = Some(Picker::new(action, path, ctx));
-    }
-    pub(super) fn busy(&self) -> bool {
-        self.pending.is_some()
-    }
-    pub(super) fn import_ready(&self) -> bool {
-        self.import.is_some()
-    }
-    pub(super) fn message(&self) -> Option<&str> {
-        self.message.as_deref()
-    }
-    pub(super) fn accept_import(&mut self) {
-        if let Some(import) = self.import.take() {
-            self.draft = import.settings;
-            self.message = Some("Imported into draft. Review before Apply.".into());
+        let _ = store.set("themes.name", json!(theme.name));
+        mark_custom_preset(store, &self.catalog);
+        self.dirty = true;
+        for id in settings_controls::PALETTE_IDS {
+            self.fields.bump(id);
         }
+        self.fields.bump("themes.name");
+        self.fields.bump("themes.preset");
+        self.message = Some("Theme imported.".into());
     }
-    fn load_theme(&mut self, ctx: &egui::Context, path: PathBuf) {
+
+    fn palette_entry(&self, id: &str) -> &crate::settings::document::CatalogEntry {
+        self.catalog
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .expect("the shared catalog defines every palette colour")
+    }
+
+    fn load_theme(&mut self, path: PathBuf, ctx: &egui::Context) {
         self.start(ctx, move || {
-            ThemeDocument::load(&path).map(|t| Loaded::Theme(Box::new(t)))
+            Ok(Loaded::Theme(Box::new(ThemeDocument::load(&path)?)))
         });
     }
-    fn save_theme(&mut self, ctx: &egui::Context, path: PathBuf, replace: bool) {
-        let document = self.draft.theme.palette().map(|p| ThemeDocument::new(&p));
+
+    fn save_theme(&mut self, path: PathBuf, replace: bool, store: &mut Store, ctx: &egui::Context) {
+        let document = match store.settings().theme.palette() {
+            Ok(palette) => ThemeDocument::new(&palette),
+            Err(error) => {
+                self.message = Some(error);
+                return;
+            }
+        };
+        let preferences = crate::settings::preferences_path();
         self.start(ctx, move || {
-            if let Some(preferences) = settings::preferences_path()
-                && (path == preferences
+            if let Some(preferences) = &preferences
+                && (path == *preferences
                     || path
                         .canonicalize()
                         .ok()
@@ -183,7 +378,6 @@ impl Editor {
             {
                 return Err("Export a theme separately from application preferences.".into());
             }
-            let document = document?;
             if replace {
                 document.save(&path)?;
             } else {
@@ -192,1044 +386,833 @@ impl Editor {
             Ok(Loaded::Saved)
         });
     }
-    fn review_legacy(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let base = self.draft.clone();
+
+    fn review_legacy(&mut self, path: PathBuf, store: &mut Store, ctx: &egui::Context) {
+        let base = store.settings().clone();
         self.start(ctx, move || {
-            crate::legacy::load(&path, &base).map(|i| Loaded::Legacy(Box::new(i)))
+            Ok(Loaded::Legacy(Box::new(legacy::load(&path, &base)?)))
         });
     }
-    fn chosen(&mut self, choice: Choice, ctx: &egui::Context) {
+
+    /// The window's one frame.
+    fn frame(
+        &mut self,
+        ui: &mut egui::Ui,
+        dark: bool,
+        store: &mut Store,
+        sources: &dyn SourceProvider,
+    ) {
+        self.poll(store);
+        self.rendered.clear();
+        // Close affordances: Escape belongs to the modal, the chooser and
+        // the colour pickers first; each of them consumes it before the
+        // window sees it.
+        if ui.input(|input| input.viewport().close_requested())
+            || (self.picker.is_none()
+                && self.confirm_reset.is_none()
+                && self.fields.color_popups_open() == 0
+                && ui
+                    .input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)))
+        {
+            self.open = false;
+        }
+        // The canvas: 12 px rounded corners on the token canvas, the aurora
+        // wash above-left, the corners left transparent for the desktop.
+        let canvas = ui.max_rect();
+        ui.painter().rect_filled(
+            canvas,
+            egui::CornerRadius::same(aether7b::RADIUS_LG as u8),
+            aether7b::bg_canvas(dark),
+        );
+        settings_style::aurora_wash(ui.painter(), canvas, dark);
+        let header =
+            egui::Rect::from_min_max(canvas.min, egui::pos2(canvas.max.x, canvas.min.y + 40.));
+        ui.painter().rect_filled(
+            header,
+            egui::CornerRadius {
+                nw: aether7b::RADIUS_LG as u8,
+                ne: aether7b::RADIUS_LG as u8,
+                sw: 0,
+                se: 0,
+            },
+            aether7b::surface_chrome_fallback(dark),
+        );
+        ui.painter().hline(
+            header.left()..=header.right(),
+            header.bottom(),
+            egui::Stroke::new(1., aether7b::border(dark)),
+        );
+        let title = ui.painter().layout_no_wrap(
+            "Settings".to_owned(),
+            settings_style::sans(aether7b::TYPE_SM.0),
+            aether7b::text_main(dark),
+        );
+        ui.painter().add(egui::epaint::TextShape::new(
+            egui::pos2(
+                header.center().x - title.size().x / 2.,
+                header.center().y - title.size().y / 2.,
+            ),
+            title,
+            aether7b::text_main(dark),
+        ));
+        let body = egui::Rect::from_min_max(egui::pos2(canvas.min.x, header.max.y), canvas.max);
+        let sidebar = egui::Rect::from_min_max(body.min, egui::pos2(body.min.x + 190., body.max.y));
+        // The sidebar reaches the window's bottom-left corner, so it
+        // rounds that one like the canvas: the 12 px corner the desktop
+        // shows through stays transparent.
+        ui.painter().rect_filled(
+            sidebar,
+            egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: aether7b::RADIUS_LG as u8,
+                se: 0,
+            },
+            aether7b::surface_chrome_fallback(dark),
+        );
+        ui.painter().vline(
+            sidebar.right(),
+            sidebar.top()..=sidebar.bottom(),
+            egui::Stroke::new(1., aether7b::border(dark)),
+        );
+
+        // Everything the frame collects while rendering, resolved once the
+        // entries' exclusive store borrow ends.
+        let mut actions = Actions::default();
+        let section = self.section.clone();
+        let mut values = store.values();
+        // The held changes while the document was unreadable show in their
+        // controls and land in the file once the user replaces it.
+        for (id, value) in &self.held {
+            values.insert(id.clone(), value.clone());
+        }
+        let problem = store.load_problem().map(str::to_owned);
+        let blocked = store.blocked();
+        {
+            let mut dirty = false;
+            let mut side_effect = None;
+            // The catalog is cloned, and the held changes taken out of
+            // `self`, so the apply closure owns its own state and never
+            // borrows `self` — the scroll body below needs the window's
+            // other fields.
+            let catalog = self.catalog.clone();
+            let mut held = std::mem::take(&mut self.held);
+            let mut set = |id: &str, value: Value| -> Result<(), SetError> {
+                let result = store.set(id, value.clone());
+                if result.is_err() && store.blocked() {
+                    // The document cannot take the change, so the window
+                    // holds it in memory: the banner's promise, kept until
+                    // the user replaces the file.
+                    held.insert(id.to_owned(), value);
+                    return Ok(());
+                }
+                if result.is_ok() {
+                    dirty = true;
+                    if id == "themes.preset"
+                        && value.as_str().is_some_and(|name| {
+                            crate::shared::themes()
+                                .into_iter()
+                                .any(|theme| theme.name == name)
+                        })
+                    {
+                        let name = value.as_str().expect("just checked").to_owned();
+                        if let Err(error) = apply_preset(store, &name)
+                            && let Some(preset) = catalog
+                                .entries
+                                .iter()
+                                .find(|entry| entry.id == "themes.preset")
+                        {
+                            side_effect = Some(settings_controls::refusal_reason(&error, preset));
+                        }
+                    } else if id.starts_with("appearance.") && id.ends_with(".color") {
+                        mark_custom_preset(store, &catalog);
+                    }
+                }
+                result
+            };
+            let mut sidebar_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("settings-sidebar")
+                    .max_rect(sidebar.shrink2(egui::vec2(aether7b::SPACE_S2, aether7b::SPACE_S2)))
+                    .layout(egui::Layout::top_down(egui::Align::LEFT)),
+            );
+            for (name, label) in SECTION_TITLES {
+                let selected = name == section;
+                let response = nav_button(&mut sidebar_ui, name, label, selected, dark);
+                if response.clicked() {
+                    self.section = name.to_owned();
+                    self.fields = Fields::default();
+                }
+            }
+            let content = egui::Rect::from_min_max(egui::pos2(sidebar.max.x, body.min.y), body.max);
+            let mut content_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("settings-content")
+                    .max_rect(content),
+            );
+            // The full height of the section's cards, measured for the
+            // snapshot walker's auto-sized capture viewport.
+            let mut content_height = 0.;
+            // The content pane scrolls in the production window. The
+            // snapshot walker's auto-fitted viewport has nothing to
+            // scroll, and a reserved scroll bar would make the measuring
+            // pass and the capture disagree about the content's layout.
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt(self.section.clone())
+                .auto_shrink([false, false]);
+            if snapshot_walk() {
+                area = area.scroll_bar_visibility(
+                    egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                );
+            }
+            area.show(&mut content_ui, |ui| {
+                ui.add_space(aether7b::SPACE_S12);
+                settings_style::eyebrow(ui, &self.section, dark);
+                ui.label(
+                    egui::RichText::new(section_title(&section))
+                        .font(settings_style::sans(aether7b::TYPE_XL.0))
+                        .color(aether7b::text_main(dark))
+                        .strong(),
+                );
+                ui.add_space(aether7b::SPACE_S2);
+                if let Some(problem) = &problem {
+                    banner(ui, dark, problem, blocked, &mut actions);
+                }
+                if let Some(message) = &self.message {
+                    ui.label(
+                        egui::RichText::new(message)
+                            .font(settings_style::sans(aether7b::TYPE_XS.0))
+                            .color(aether7b::status_warning(dark)),
+                    );
+                    ui.add_space(aether7b::SPACE_S2);
+                }
+                let entries: Vec<_> = self
+                    .catalog
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.section == section
+                            && entry.platforms.iter().any(|platform| platform == "linux")
+                            && entry.shown
+                    })
+                    .collect();
+                let mut groups: Vec<(&str, Vec<&crate::settings::document::CatalogEntry>)> =
+                    Vec::new();
+                for entry in entries {
+                    match groups.last_mut() {
+                        Some((group, list)) if *group == entry.group => list.push(entry),
+                        _ => groups.push((entry.group.as_str(), vec![entry])),
+                    }
+                }
+                for (group, entries) in groups {
+                    settings_style::card(dark)
+                        .outer_margin(egui::Margin {
+                            left: aether7b::SPACE_S6 as i8,
+                            right: aether7b::SPACE_S6 as i8,
+                            top: 0,
+                            bottom: aether7b::SPACE_S3 as i8,
+                        })
+                        .show(ui, |ui| {
+                            settings_style::eyebrow(ui, group, dark);
+                            ui.add_space(aether7b::SPACE_S2);
+                            for entry in entries {
+                                let value = settings_controls::entry_value(&values, entry);
+                                let enabled = settings_controls::depends_holds(
+                                    &values,
+                                    &self.catalog.entries,
+                                    entry,
+                                );
+                                let (rendered, outcome) = settings_controls::entry_row(
+                                    ui,
+                                    dark,
+                                    entry,
+                                    &value,
+                                    enabled,
+                                    &mut self.fields,
+                                    sources,
+                                    &mut set,
+                                );
+                                self.rendered.push(rendered);
+                                match outcome {
+                                    Outcome::None => (),
+                                    Outcome::Reset(section) => {
+                                        actions.confirm_reset = Some(section);
+                                    }
+                                    Outcome::ImportTheme => actions.import_theme = true,
+                                    Outcome::ExportTheme => actions.export_theme = true,
+                                    Outcome::ChoosePath(id) => {
+                                        actions.choose_path = Some(id);
+                                    }
+                                }
+                            }
+                            if section == "themes" && group == "Import and export" {
+                                legacy_block(
+                                    ui,
+                                    dark,
+                                    &mut self.legacy_path,
+                                    self.import.as_ref(),
+                                    &mut actions,
+                                );
+                            }
+                        });
+                }
+                ui.add_space(aether7b::SPACE_S8);
+                content_height = ui.min_rect().height() + aether7b::SPACE_S8;
+            });
+            self.content_height = content_height;
+            drop(set);
+            if dirty {
+                self.dirty = true;
+            }
+            if let Some(reason) = side_effect.take() {
+                self.message = Some(reason);
+            }
+            // The preset follows the palette every frame, so a change the
+            // window did not apply itself — a store write, a theme import —
+            // still marks the theme Custom (the catalog's documented rule).
+            if mark_custom_preset(store, &catalog) {
+                self.dirty = true;
+            }
+            self.held = held;
+        }
+        if let Some(section) = actions.confirm_reset.take() {
+            self.confirm_reset = Some(section);
+        }
+        if actions.import_theme {
+            self.picker = Some(Picker::new(Action::LoadTheme, PathBuf::new(), ui.ctx()));
+        }
+        if actions.export_theme {
+            self.picker = Some(Picker::new(Action::SaveTheme, PathBuf::new(), ui.ctx()));
+        }
+        if let Some(id) = actions.choose_path.take() {
+            let seed = values
+                .get(&id)
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            self.path_target = Some(id);
+            self.picker = Some(Picker::new(Action::ChoosePath, seed, ui.ctx()));
+        }
+        if let Some(path) = actions.review_pasted.take() {
+            self.review_legacy(path, store, ui.ctx());
+        }
+        if actions.browse_legacy {
+            self.picker = Some(Picker::new(
+                Action::ImportLegacy,
+                self.legacy_path.path(),
+                ui.ctx(),
+            ));
+        }
+        if actions.accept_import
+            && let Err(error) = self.accept_import(store)
+        {
+            self.message = Some(error);
+        }
+        if actions.cancel_import {
+            self.import = None;
+        }
+        if actions.replace_requested {
+            match store.replace_unreadable() {
+                Ok(()) => {
+                    self.dirty = true;
+                    self.message = Some("The settings document was replaced.".into());
+                    // The held changes — the banner's in-memory promise —
+                    // land in the fresh document.
+                    for (id, value) in std::mem::take(&mut self.held) {
+                        let _ = store.set(&id, value);
+                    }
+                    for entry in &self.catalog.entries {
+                        self.fields.bump(&entry.id);
+                    }
+                }
+                Err(error) => self.message = Some(error),
+            }
+        }
+        if let Some(section) = self.confirm_reset.clone() {
+            let mut modal = Actions::default();
+            let should_close = reset_modal(ui, dark, &section, &mut modal);
+            if modal.reset_confirmed {
+                self.confirm_reset = None;
+                match store.reset_section(&section) {
+                    Ok(()) => {
+                        self.dirty = true;
+                        for entry in self
+                            .catalog
+                            .entries
+                            .iter()
+                            .filter(|entry| entry.section == section)
+                        {
+                            self.fields.bump(&entry.id);
+                        }
+                    }
+                    Err(error) => self.message = Some(error),
+                }
+            }
+            if modal.cancelled || should_close {
+                self.confirm_reset = None;
+            }
+        }
+        if let Some(mut picker) = self.picker.take() {
+            match picker.show(ui) {
+                Some(Decision::Chosen(choice)) => self.chosen(choice, store, ui.ctx()),
+                Some(Decision::Cancelled) => {
+                    self.message = None;
+                    self.path_target = None;
+                }
+                None => self.picker = Some(picker),
+            }
+        }
+        // The close button renders last so the focus walk starts with the
+        // sidebar, then the section's controls (lesson d).
+        let close = close_button(ui, dark, header);
+        if close.clicked() {
+            self.open = false;
+        }
+        // Dragging the headerbar moves the window, like any headerbar.
+        let grip =
+            egui::Rect::from_min_max(header.min, egui::pos2(header.max.x - 40., header.max.y));
+        let grip = ui.interact(
+            grip,
+            ui.scope_id().with("headerbar-grip"),
+            egui::Sense::drag(),
+        );
+        if grip.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        super::smoke::paint_capture(ui);
+    }
+
+    fn chosen(&mut self, choice: Choice, store: &mut Store, ctx: &egui::Context) {
         match choice.action {
-            Action::LoadTheme => {
-                self.theme_path.set(choice.path.clone());
-                self.load_theme(ctx, choice.path);
-            }
-            Action::SaveTheme => {
-                self.theme_path.set(choice.path.clone());
-                self.save_theme(ctx, choice.path, choice.replace);
-            }
+            Action::LoadTheme => self.load_theme(choice.path, ctx),
+            Action::SaveTheme => self.save_theme(choice.path, choice.replace, store, ctx),
             Action::ImportLegacy => {
                 self.legacy_path.set(choice.path.clone());
-                self.review_legacy(ctx, choice.path);
+                self.review_legacy(choice.path, store, ctx);
             }
-        }
-    }
-    fn show_picker(&mut self, ui: &mut egui::Ui) {
-        let Some(decision) = self.picker.as_mut().and_then(|p| p.show(ui)) else {
-            return;
-        };
-        self.picker = None;
-        if let Decision::Chosen(choice) = decision {
-            self.chosen(choice, ui.ctx());
-        }
-    }
-    fn themes(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Theme");
-        theme_picker(ui, &mut self.draft.theme);
-        if let ThemeChoice::Custom { theme } = &mut self.draft.theme {
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut theme.name);
-            });
-            for (index, label) in [
-                "Window",
-                "Graph background",
-                "Series 1",
-                "Series 2",
-                "Series 3",
-                "Border",
-                "Text",
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                ui.horizontal(|ui| {
-                    rgba(ui, &mut theme.colors[index]);
-                    ui.label(label);
-                });
-            }
-        }
-        if ui.button("Edit current palette as custom").clicked()
-            && let Ok(palette) = self.draft.theme.palette()
-        {
-            self.draft.theme = ThemeChoice::Custom {
-                theme: Box::new(ThemeDocument::new(&palette)),
-            };
-        }
-        ui.separator();
-        ui.label("Theme file path (.json or original XRG .xtf)");
-        self.theme_path.edit(ui);
-        ui.checkbox(
-            &mut self.replace_theme,
-            "Allow replacing an existing theme file when saving the pasted path",
-        );
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(self.pending.is_none(), egui::Button::new("Browse to load…"))
-                .clicked()
-            {
-                self.choose(Action::LoadTheme, ui.ctx());
-            }
-            if ui
-                .add_enabled(self.pending.is_none(), egui::Button::new("Browse to save…"))
-                .clicked()
-            {
-                self.choose(Action::SaveTheme, ui.ctx());
-            }
-            if ui
-                .add_enabled(self.pending.is_none(), egui::Button::new("Load path"))
-                .clicked()
-            {
-                self.load_theme(ui.ctx(), self.theme_path.path());
-            }
-            if ui
-                .add_enabled(self.pending.is_none(), egui::Button::new("Save path"))
-                .clicked()
-            {
-                self.save_theme(ui.ctx(), self.theme_path.path(), self.replace_theme);
-            }
-        });
-        ui.label("Browse folders or paste a path. Theme files contain only the color palette.");
-        ui.separator();
-        ui.heading("Import legacy Linux settings");
-        self.legacy_path.edit(ui);
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    self.pending.is_none(),
-                    egui::Button::new("Browse legacy settings…"),
-                )
-                .clicked()
-            {
-                self.choose(Action::ImportLegacy, ui.ctx());
-            }
-            if ui
-                .add_enabled(
-                    self.pending.is_none(),
-                    egui::Button::new("Review pasted path…"),
-                )
-                .clicked()
-            {
-                self.review_legacy(ui.ctx(), self.legacy_path.path());
-            }
-        });
-        if let Some(import) = &self.import {
-            ui.label(import.summary());
-            let mut accept = false;
-            let mut cancel = false;
-            ui.horizontal(|ui| {
-                accept = ui.button("Import into draft").clicked();
-                cancel = ui.button("Cancel import").clicked();
-            });
-            if accept {
-                self.accept_import();
-            }
-            if cancel {
-                self.import = None;
-            }
-        }
-    }
-}
-pub(super) fn show(app: &mut App, ctx: &egui::Context) {
-    let Some(mut editor) = app.preferences.take() else {
-        return;
-    };
-    let mut open = true;
-    let mut apply = false;
-    let inventory = app
-        .snapshot
-        .as_ref()
-        .map(|s| s.inventory.clone())
-        .unwrap_or_default();
-    ctx.show_viewport_immediate(
-        egui::ViewportId::from_hash_of("preferences"),
-        egui::ViewportBuilder::default()
-            .with_title("XRG-ng Preferences")
-            .with_inner_size([680., 720.]),
-        |ui, _| {
-            if ui.ctx().input(|i| i.viewport().close_requested())
-                || (editor.picker.is_none()
-                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)))
-            {
-                open = false;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                ui.add_enabled_ui(editor.picker.is_none(), |ui| {
-                    egui::Panel::bottom("preferences-actions").show(ui, |ui| {
-                        if let Some(message) = &editor.message {
-                            ui.colored_label(Color32::LIGHT_YELLOW, message);
-                        }
-                        ui.horizontal(|ui| {
-                            if ui.button("Defaults").clicked() {
-                                editor.restore_defaults();
-                            }
-                            if ui.button("Cancel").clicked() {
-                                open = false;
-                            }
-                            if ui
-                                .add_enabled(editor.pending.is_none(), egui::Button::new("Apply"))
-                                .clicked()
-                            {
-                                apply = true;
-                            }
-                            ui.label("Edits take effect only on Apply.");
-                        });
-                    });
-                    editor.content(ui, &inventory);
-                });
-            });
-            editor.show_picker(ui);
-            super::smoke::paint_capture(ui);
-        },
-    );
-    if apply {
-        editor.draft.weather.station = editor.draft.weather.station.trim().to_ascii_uppercase();
-        match app.apply(editor.draft.clone(), ctx) {
-            Ok(()) => editor.message = Some("Preferences applied.".into()),
-            Err(e) => editor.message = Some(e),
-        }
-    }
-    if open {
-        app.preferences = Some(editor);
-    }
-}
-fn general(ui: &mut egui::Ui, s: &mut Settings) {
-    ui.heading("Dashboard");
-    egui::Grid::new("general")
-        .num_columns(2)
-        .spacing([14., 10.])
-        .show(ui, |ui| {
-            ui.label("Layout");
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.layout, Layout::Vertical, "Vertical");
-                ui.selectable_value(&mut s.layout, Layout::Horizontal, "Horizontal");
-            });
-            ui.end_row();
-            let label = ui.label("Graph width");
-            ui.add(
-                egui::DragValue::new(&mut s.graph_width)
-                    .range(100..=1200)
-                    .suffix(" px"),
-            )
-            .labelled_by(label.id);
-            ui.end_row();
-            let label = ui.label("Default graph height");
-            ui.add(
-                egui::DragValue::new(&mut s.graph_height)
-                    .range(64..=240)
-                    .suffix(" px"),
-            )
-            .labelled_by(label.id);
-            ui.end_row();
-            let label = ui.label("System sampling target");
-            ui.add(
-                egui::DragValue::new(&mut s.sampling_interval_ms)
-                    .range(crate::sampling::MIN_MS..=crate::sampling::MAX_MS)
-                    .speed(50.)
-                    .suffix(" ms"),
-            )
-            .labelled_by(label.id);
-            ui.end_row();
-            ui.label("Temperature");
-            ui.horizontal(|ui| {
-                ui.selectable_value(
-                    &mut s.temperature_units,
-                    crate::temperature::Units::Celsius,
-                    "°C",
-                );
-                ui.selectable_value(
-                    &mut s.temperature_units,
-                    crate::temperature::Units::Fahrenheit,
-                    "°F",
-                );
-            });
-            ui.end_row();
-            let label = ui.label("Window opacity");
-            ui.add(egui::Slider::new(&mut s.window_opacity, 0.1..=1.).show_value(true))
-                .labelled_by(label.id);
-            ui.end_row();
-            ui.label("Collapsed window");
-            ui.checkbox(
-                &mut s.window_collapse.collapsed,
-                "Collapse to the hostname strip",
-            ).on_hover_text("Ctrl+M or double-click the hostname toggles collapse. The + button expands the strip. Collection continues while collapsed.");
-            ui.end_row();
-            ui.label("Hover expansion");
-            ui.checkbox(
-                &mut s.window_collapse.expand_on_hover,
-                "Temporarily expand on hover",
-            ).on_hover_text("Leave the collapsed strip, then hover to open it temporarily. Explicit expansion keeps it open. Expanded window dimensions are preserved.");
-            ui.end_row();
-            let label = ui.label("Collapse anchor");
-            egui::ComboBox::from_id_salt("collapse-anchor")
-                .selected_text(match s.window_collapse.anchor {
-                    settings::CollapseAnchor::Start => "Top / left",
-                    settings::CollapseAnchor::End => "Bottom / right",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut s.window_collapse.anchor,
-                        settings::CollapseAnchor::Start,
-                        "Top / left",
-                    );
-                    ui.selectable_value(
-                        &mut s.window_collapse.anchor,
-                        settings::CollapseAnchor::End,
-                        "Bottom / right",
-                    );
-                })
-                .response
-                .labelled_by(label.id)
-                .on_hover_text("Keep this edge fixed where the desktop exposes window coordinates. Wayland compositors control placement.");
-            ui.end_row();
-            let label = ui.label("Remember window size");
-            let mut remember = s.window_size.is_some();
-            if ui
-                .checkbox(&mut remember, "")
-                .labelled_by(label.id)
-                .changed()
-            {
-                let size = super::window_size(s);
-                s.window_size = remember.then_some(settings::WindowSize {
-                    width: size.x.round() as u32,
-                    height: size.y.round() as u32,
-                });
-            }
-            ui.end_row();
-            if let Some(size) = &mut s.window_size {
-                let label = ui.label("Window width");
-                ui.add(
-                    egui::DragValue::new(&mut size.width)
-                        .range(100..=8192)
-                        .suffix(" px"),
-                )
-                .labelled_by(label.id);
-                ui.end_row();
-                let label = ui.label("Window height");
-                ui.add(
-                    egui::DragValue::new(&mut size.height)
-                        .range(100..=8192)
-                        .suffix(" px"),
-                )
-                .labelled_by(label.id);
-                ui.end_row();
-            }
-            let label = ui.label("Network minimum scale");
-            ui.add(
-                egui::DragValue::new(&mut s.network_min_scale)
-                    .range(0..=settings::network_scale::MAX)
-                    .suffix(" B/s"),
-            )
-            .labelled_by(label.id);
-            ui.end_row();
-        });
-    ui.label("A zero network floor uses automatic scaling. Rates and history are unchanged.");
-    ui.label("Opacity requires a compositing desktop. Placement and always-on-top remain desktop dependent.");
-    ui.separator();
-    ui.heading("Current-value bars");
-    ui.checkbox(
-        &mut s.activity_bars.visible,
-        "Show current-value / CPU core bars",
-    );
-    style_picker(ui, "bar-style", &mut s.activity_bars.style);
-    ui.checkbox(
-        &mut s.activity_bars.use_series_colors,
-        "Use graph series colors",
-    );
-    ui.horizontal(|ui| {
-        rgba(ui, &mut s.activity_bars.color);
-        ui.label("Bar color");
-    });
-}
-fn graphs(ui: &mut egui::Ui, s: &mut Settings) {
-    ui.label("Graph order, visibility, style, height and colors. Overrides inherit the selected theme when unchecked.");
-    let mut movement = None;
-    let count = s.modules.len();
-    for (i, m) in s.modules.iter_mut().enumerate() {
-        ui.push_id(m.id.index(), |ui| {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut m.visible, m.id.title());
-                if ui.add_enabled(i > 0, egui::Button::new("↑")).clicked() {
-                    movement = Some((i, i - 1));
-                }
-                if ui
-                    .add_enabled(i + 1 < count, egui::Button::new("↓"))
-                    .clicked()
-                {
-                    movement = Some((i, i + 1));
-                }
-            });
-            ui.indent("appearance", |ui| {
-                if m.id == settings::Module::Battery {
-                    ui.horizontal(|ui| {
-                        let label = ui.label("Battery history");
-                        egui::ComboBox::from_id_salt("battery-mode")
-                            .selected_text(match s.metrics.battery_mode {
-                                crate::battery::Mode::Charge => "Charge (%)",
-                                crate::battery::Mode::Power => "Charging/discharging power (W)",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut s.metrics.battery_mode,
-                                    crate::battery::Mode::Charge,
-                                    "Charge (%)",
-                                );
-                                ui.selectable_value(
-                                    &mut s.metrics.battery_mode,
-                                    crate::battery::Mode::Power,
-                                    "Charging/discharging power (W)",
-                                );
-                            })
-                            .response
-                            .labelled_by(label.id);
-                    });
-                }
-                style_picker(ui, "style", &mut m.style);
-                ui.horizontal(|ui| {
-                    let mut custom = m.height.is_some();
-                    if ui.checkbox(&mut custom, "Custom height").changed() {
-                        m.height = custom.then_some(s.graph_height);
-                    }
-                    if let Some(height) = &mut m.height {
-                        ui.add(egui::DragValue::new(height).range(64..=240).suffix(" px"));
-                    }
-                });
-                ui.collapsing("Colors", |ui| {
-                    for (i, label) in ["Background", "Series 1", "Series 2", "Series 3"]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        let mut value = m.colors.components()[i];
-                        ui.horizontal(|ui| {
-                            let mut custom = value.is_some();
-                            if ui.checkbox(&mut custom, label).changed() {
-                                value = custom.then_some([0.2, 0.6, 1., 1.]);
-                            }
-                            if let Some(rgba_value) = &mut value {
-                                rgba(ui, rgba_value);
-                            }
-                        });
-                        let _ = m.colors.set(i, value);
-                    }
-                });
-            });
-            ui.separator();
-        });
-    }
-    if let Some((a, b)) = movement {
-        s.modules.swap(a, b);
-    }
-}
-fn source(
-    ui: &mut egui::Ui,
-    id: &str,
-    label: &str,
-    value: &mut Option<String>,
-    options: &[SourceOption],
-    default: &str,
-) {
-    ui.horizontal(|ui| {
-        let label = ui.label(label);
-        let selected = value
-            .as_ref()
-            .map(|id| {
-                options
-                    .iter()
-                    .find(|o| o.id == *id)
-                    .map(|o| o.label.clone())
-                    .unwrap_or_else(|| format!("Unavailable: {id}"))
-            })
-            .unwrap_or_else(|| default.into());
-        let current = selected.clone();
-        let selector = egui::ComboBox::from_id_salt(id)
-            .selected_text(selected)
-            .width(360.)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(value, None, default);
-                for option in options {
-                    ui.selectable_value(value, Some(option.id.clone()), &option.label);
-                }
-            })
-            .response
-            .labelled_by(label.id);
-        ui.ctx()
-            .accesskit_node_builder(selector.id, |node| node.set_value(current));
-    });
-}
-fn sources(ui: &mut egui::Ui, s: &mut Settings, inventory: &Inventory) {
-    ui.heading("Metric sources");
-    let options = inventory
-        .cpus
-        .iter()
-        .map(|id| SourceOption {
-            id: id.to_string(),
-            label: format!("CPU {id}"),
-        })
-        .collect::<Vec<_>>();
-    let mut cpu = s.metrics.cpu.map(|v| v.to_string());
-    source(ui, "cpu", "CPU", &mut cpu, &options, "All logical CPUs");
-    s.metrics.cpu = cpu.and_then(|s| s.parse().ok());
-    ui.horizontal(|ui| {
-        let label = ui.label("CPU time window (minutes; 0 uses samples)");
-        ui.add(
-            egui::DragValue::new(&mut s.metrics.cpu_history_minutes)
-                .range(0..=crate::shared::timed_projection_settings()[0]),
-        )
-        .labelled_by(label.id);
-    });
-    ui.small("Time windows end at the latest completed normal CPU observation. Bins follow the sampling target; unobserved intervals stay gaps. Current readings and rate baselines are independent. Changing source starts a fresh time history.");
-    ui.add_enabled_ui(s.metrics.cpu_history_minutes == 0, |ui| {
-        ui.horizontal(|ui| {
-            let label = ui.label("Retained CPU samples");
-            ui.add(
-                egui::DragValue::new(&mut s.metrics.cpu_history_samples)
-                    .range(0..=crate::shared::sampling_settings()[3]),
-            )
-            .labelled_by(label.id);
-        });
-    });
-    let capacity = if s.metrics.cpu_history_samples == 0 {
-        120
-    } else {
-        s.metrics.cpu_history_samples
-    };
-    if s.metrics.cpu_history_minutes == 0 {
-        ui.small(format!("0 keeps the 120-sample default. Capacity: {capacity} samples, nominal span {:.3} s at the current target. Delays and cadence changes affect the actual span. Resizing preserves newest observations and collector baselines.", f64::from(capacity.saturating_sub(1)) * f64::from(s.sampling_interval_ms) / 1000.));
-    }
-    for (module, title) in [
-        (settings::Module::Memory, "Memory"),
-        (settings::Module::Network, "Network"),
-        (settings::Module::Disk, "Disk"),
-        (settings::Module::Gpu, "GPU"),
-        (settings::Module::Tpu, "NPU"),
-        (settings::Module::GpuMemory, "VRAM"),
-        (settings::Module::Temperature, "Temperature"),
-        (settings::Module::Fans, "Fans"),
-        (settings::Module::Battery, "Battery"),
-    ] {
-        let mut minutes = s.metrics.retained_minutes(module);
-        if matches!(
-            module,
-            settings::Module::Memory
-                | settings::Module::Network
-                | settings::Module::Disk
-                | settings::Module::Gpu
-                | settings::Module::Tpu
-                | settings::Module::GpuMemory
-                | settings::Module::Fans
-                | settings::Module::Temperature
-                | settings::Module::Battery
-        ) {
-            ui.horizontal(|ui| {
-                let label = ui.label(format!("{title} time window (minutes; 0 uses samples)"));
-                ui.add(
-                    egui::DragValue::new(&mut minutes)
-                        .range(0..=crate::shared::timed_projection_settings()[0]),
-                )
-                .labelled_by(label.id);
-            });
-            if minutes == 0 {
-                s.metrics.history_minutes.remove(&module);
-            } else {
-                s.metrics.history_minutes.insert(module, minutes);
-            }
-        }
-        let mut count = s.metrics.retained_samples(module);
-        ui.add_enabled_ui(minutes == 0, |ui| {
-            ui.horizontal(|ui| {
-                let label = ui.label(format!("Retained {title} samples"));
-                ui.add(
-                    egui::DragValue::new(&mut count)
-                        .range(0..=crate::shared::sampling_settings()[3]),
-                )
-                .labelled_by(label.id);
-            });
-        });
-        if count == 0 {
-            s.metrics.history_samples.remove(&module);
-        } else {
-            s.metrics.history_samples.insert(module, count);
-        }
-    }
-    ui.small("Battery windows retain charge percentage and signed watts independently by battery name; changing display mode does not relabel history. Missing direction/power remains unavailable.");
-    ui.small("Temperature windows retain Celsius by physical sensor, or the automatic maximum with membership boundaries. Units affect display; polling and session statistics remain independent.");
-    ui.small("Fans windows retain RPM by physical input. Source replacement/failure boundaries and session statistics remain independent; zero RPM stays a stopped fan.");
-    ui.small("VRAM windows retain driver-reported pool percentages. Pool capacity, driver, replacement and unavailable-source boundaries retain their existing resets; readable-client allocations do not become VRAM capacity.");
-    ui.small("NPU windows keep activity and unscoped producer rates separate; existing quantity and source boundaries remain. Mac power and traffic markers have separate native quantities.");
-    ui.small("GPU windows retain each device’s activity quantity independently. Device, driver and activity-source boundaries keep their existing resets; unavailable activity stays unavailable.");
-    ui.small("Memory windows retain independent RAM/cache/swap percentages; RAM and swap capacity changes begin fresh histories for their respective curves. Paging intervals remain independent.");
-    ui.small("Network/Disk windows end at the latest completed normal observation; bins follow the sampling target. Unobserved time bins remain gaps. Source/replacement/counter-restart boundaries begin fresh time histories. Transfer totals and rate baselines are independent.");
-    ui.small("System histories: 0 keeps 120 samples. Capacity changes preserve newest observations and collector baselines; source/failure resets keep their existing behavior. Sensor statistics stay independent. Battery charge and signed power retain separate axes. Collector cadence and delays affect the actual time span.");
-    for (label, value, options) in [
-        ("Network", &mut s.metrics.network, &inventory.networks),
-        ("Disk", &mut s.metrics.disk, &inventory.disks),
-    ] {
-        let options = options
-            .iter()
-            .map(|id| SourceOption {
-                id: id.clone(),
-                label: id.clone(),
-            })
-            .collect::<Vec<_>>();
-        source(ui, label, label, value, &options, "Aggregate");
-    }
-    source(
-        ui,
-        "gpu",
-        "GPU / VRAM",
-        &mut s.metrics.gpu,
-        &inventory.gpus,
-        "Automatic GPU",
-    );
-    ui.separator();
-    ui.strong("Intel Xe PMU power policy");
-    ui.checkbox(
-        &mut s.metrics.xe_pmu,
-        "Enable Intel Xe PMU activity for all Xe adapters",
-    );
-    ui.label("Opt-in engine counters can keep GPUs awake and increase power use. Disabled uses readable client counters. Applying a change wakes the sampler; disabling closes PMU sessions at its next control boundary.");
-    ui.separator();
-    source(
-        ui,
-        "temperature",
-        "Temperature",
-        &mut s.metrics.temperature,
-        &inventory.temperatures,
-        "Automatic temperature",
-    );
-    for i in 0..2 {
-        source(
-            ui,
-            &format!("temperature-{i}"),
-            &format!("Temperature curve {}", i + 2),
-            &mut s.metrics.temperature_extra[i],
-            &inventory.temperatures,
-            "Hidden",
-        );
-    }
-    source(
-        ui,
-        "fan",
-        "Fan",
-        &mut s.metrics.fan,
-        &inventory.fans,
-        "Automatic fan",
-    );
-    for i in 0..2 {
-        source(
-            ui,
-            &format!("fan-{i}"),
-            &format!("Fan curve {}", i + 2),
-            &mut s.metrics.fan_extra[i],
-            &inventory.fans,
-            "Hidden",
-        );
-    }
-    ui.label("Missing saved sources stay selected and unavailable. Choose a primary sensor before adding distinct extra curves.");
-}
-fn ai(ui: &mut egui::Ui, s: &mut Settings) {
-    ui.heading("AI monitoring");
-    ui.horizontal(|ui| {
-        let label = ui.label("AI time window (minutes; 0 uses samples)");
-        ui.add(
-            egui::DragValue::new(&mut s.ai.history_minutes)
-                .range(0..=crate::shared::timed_history_settings()[0]),
-        )
-        .labelled_by(label.id);
-    });
-    ui.small("Time windows end at the latest completed observation. Latest value per five-second bin; unobserved time bins stay gaps. Paused collection freezes the window. Changing the window does not collect again or change counters.");
-    ui.add_enabled_ui(s.ai.history_minutes == 0, |ui| {
-        ui.horizontal(|ui| {
-            let label = ui.label("Retained AI samples");
-            ui.add(
-                egui::DragValue::new(&mut s.ai.history_samples)
-                    .range(0..=crate::shared::sampling_settings()[3]),
-            )
-            .labelled_by(label.id);
-        });
-    });
-    let capacity = s.ai.history_capacity();
-    let span = (capacity - 1) as f64 * crate::shared::ai_sampling_milliseconds() as f64 / 1000.;
-    if s.ai.history_minutes == 0 {
-        ui.small(format!("0 keeps 120 samples. Capacity: {capacity}; nominal span {span:.0} seconds at 5 s cadence. Delays affect actual time coverage. Resizing preserves newest samples, rate baselines and session/daily counters. Changing retention does not add a collection or delay the next sample."));
-    }
-    ui.checkbox(
-        &mut s.ai.accounting.enabled,
-        "Track observed session/daily usage",
-    );
-    ui.checkbox(
-        &mut s.ai.accounting.auto_reset,
-        "Reset daily counters at local midnight",
-    );
-    ui.horizontal(|ui| {
-        let label = ui.label("Daily token budget (0 disables)");
-        ui.add(egui::DragValue::new(&mut s.ai.accounting.daily_budget).range(0..=u64::MAX))
-            .labelled_by(label.id);
-    });
-    ui.horizontal(|ui| {
-        let label = ui.label("Budget alert threshold (%)");
-        ui.add(egui::DragValue::new(&mut s.ai.accounting.notify_percent).range(1..=100))
-            .labelled_by(label.id);
-    });
-    ui.checkbox(
-        &mut s.ai.accounting.notifications,
-        "Send desktop budget alerts",
-    );
-    ui.checkbox(
-        &mut s.ai.accounting.by_model,
-        "Aggregate daily usage by model",
-    );
-    ui.checkbox(
-        &mut s.ai.accounting.by_provider,
-        "Aggregate daily usage by provider",
-    );
-    ui.label("Counters exclude initial history; gaps/edits can undercount. Collection continues while the graph is hidden. Desktop alerts require a notification service and follow desktop settings.");
-    ui.separator();
-    for (i, name) in ["Claude", "Codex", "Gemini", "Hermes"]
-        .into_iter()
-        .enumerate()
-    {
-        ui.checkbox(&mut s.ai.enabled[i], name);
-    }
-    ui.checkbox(&mut s.ai.ollama, "Read local Ollama model inventory");
-    ui.checkbox(&mut s.ai_show_model_breakdown, "Show model breakdown");
-    egui::ComboBox::from_label("Claude source")
-        .selected_text(format!("{:?}", s.ai.claude_source))
-        .show_ui(ui, |ui| {
-            use crate::ai::ClaudeSource::*;
-            for (value, label) in [
-                (Auto, "Automatic"),
-                (Logs, "Logs"),
-                (Database, "Database"),
-                (Metrics, "Local metrics"),
-            ] {
-                ui.selectable_value(&mut s.ai.claude_source, value, label);
-            }
-        });
-    for (label, value) in [
-        ("Claude logs", &mut s.ai.claude_logs),
-        ("Claude database", &mut s.ai.claude_database),
-        ("Codex logs", &mut s.ai.codex_logs),
-        ("Gemini logs", &mut s.ai.gemini_logs),
-        ("Hermes database", &mut s.ai.hermes_database),
-    ] {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            let mut text = value
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            if ui.text_edit_singleline(&mut text).changed() {
-                *value = if text.is_empty() {
-                    None
-                } else {
-                    Some(PathBuf::from(text))
+            Action::ChoosePath => {
+                let Some(target) = self.path_target.take() else {
+                    return;
                 };
+                if let Err(error) = store.set(&target, json!(choice.path.display().to_string())) {
+                    let reason = self
+                        .catalog
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == target)
+                        .map(|entry| settings_controls::refusal_reason(&error, entry))
+                        .unwrap_or_else(|| "The value could not be saved.".into());
+                    self.message = Some(reason);
+                } else {
+                    self.dirty = true;
+                    self.fields.bump(&target);
+                }
             }
-        });
-    }
-    ui.label("Leave paths empty for defaults. Local endpoints must use loopback HTTP.");
-    ui.horizontal(|ui| {
-        ui.label("Metrics URL");
-        ui.text_edit_singleline(&mut s.ai.metrics_url);
-    });
-    ui.horizontal(|ui| {
-        ui.label("Ollama URL");
-        ui.text_edit_singleline(&mut s.ai.ollama_url);
-    });
-}
-fn weather(ui: &mut egui::Ui, s: &mut Settings) {
-    ui.heading("Weather observations");
-    ui.checkbox(
-        &mut s.weather.enabled,
-        "Enable station weather (network access)",
-    );
-    ui.horizontal(|ui| {
-        ui.label("ICAO station");
-        ui.text_edit_singleline(&mut s.weather.station);
-    });
-    ui.horizontal(|ui| {
-        ui.label("Default unit system");
-        ui.selectable_value(
-            &mut s.weather.units,
-            crate::weather::Units::Metric,
-            "Metric",
-        );
-        ui.selectable_value(&mut s.weather.units, crate::weather::Units::Us, "US");
-    });
-    for (id, label, value, metric, us) in [
-        (
-            "weather-temperature",
-            "Temperature",
-            &mut s.weather.temperature_units,
-            "°C",
-            "°F",
-        ),
-        (
-            "weather-distance",
-            "Visibility",
-            &mut s.weather.distance_units,
-            "Kilometers",
-            "Miles",
-        ),
-        (
-            "weather-pressure",
-            "Pressure",
-            &mut s.weather.pressure_units,
-            "hPa",
-            "inHg",
-        ),
-    ] {
-        ui.horizontal(|ui| {
-            let label = ui.label(label);
-            egui::ComboBox::from_id_salt(id)
-                .selected_text(match value {
-                    None => "Default",
-                    Some(crate::weather::Units::Metric) => metric,
-                    Some(crate::weather::Units::Us) => us,
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(value, None, "Default");
-                    ui.selectable_value(value, Some(crate::weather::Units::Metric), metric);
-                    ui.selectable_value(value, Some(crate::weather::Units::Us), us);
-                })
-                .response
-                .labelled_by(label.id);
-        });
-    }
-    ui.horizontal(|ui| {
-        use crate::weather::WindUnits::*;
-        let label = ui.label("Wind / gusts");
-        egui::ComboBox::from_id_salt("weather-wind")
-            .selected_text(match s.weather.wind_units {
-                None => "From visibility units",
-                Some(Knots) => "Knots",
-                Some(Kmh) => "km/h",
-                Some(Mph) => "mph",
-            })
-            .show_ui(ui, |ui| {
-                for (value, label) in [
-                    (None, "From visibility units"),
-                    (Some(Knots), "Knots"),
-                    (Some(Kmh), "km/h"),
-                    (Some(Mph), "mph"),
-                ] {
-                    ui.selectable_value(&mut s.weather.wind_units, value, label);
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.horizontal(|ui| {
-        let label = ui.label("History window");
-        egui::ComboBox::from_id_salt("weather-history")
-            .selected_text(
-                s.weather
-                    .history_hours
-                    .map_or("Session (legacy)".into(), |h| format!("Last {h} hours")),
-            )
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut s.weather.history_hours, None, "Session (legacy)");
-                for hours in [6, 12, 24] {
-                    ui.selectable_value(
-                        &mut s.weather.history_hours,
-                        Some(hours),
-                        format!("Last {hours} hours"),
-                    );
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.horizontal(|ui| {
-        use crate::weather::Secondary::*;
-        let label = ui.label("Secondary curve");
-        egui::ComboBox::from_id_salt("weather-secondary")
-            .selected_text(format!("{:?}", s.weather.secondary))
-            .show_ui(ui, |ui| {
-                for (value, name) in [
-                    (None, "None"),
-                    (Wind, "Wind"),
-                    (Humidity, "Humidity"),
-                    (Visibility, "Visibility (exact reports)"),
-                    (Dewpoint, "Dewpoint"),
-                    (Pressure, "Pressure"),
-                ] {
-                    ui.selectable_value(&mut s.weather.secondary, value, name);
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.label("Time windows use received observations at their actual timestamps; gaps are not filled. Secondary curves have their own vertical scale.");
-    ui.horizontal(|ui| {
-        ui.label("Refresh");
-        ui.add(
-            egui::DragValue::new(&mut s.weather.refresh_minutes)
-                .range(5..=60)
-                .suffix(" min"),
-        );
-    });
-    ui.label("The Weather graph is independently enabled in Graphs. Missing and stale observations remain explicit.");
-}
-fn rgba(ui: &mut egui::Ui, value: &mut [f64; 4]) {
-    let mut rgba = value.map(|v| v as f32);
-    if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
-        *value = rgba.map(f64::from);
+        }
     }
 }
-fn style_picker(ui: &mut egui::Ui, id: &str, style: &mut GraphStyle) {
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(style.name())
-        .show_ui(ui, |ui| {
-            for value in GraphStyle::ALL {
-                ui.selectable_value(style, value, value.name());
-            }
-        });
+
+/// Whether this run is the snapshot walker's (Tools/settings-snapshots-linux.sh).
+fn snapshot_walk() -> bool {
+    static SNAPSHOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SNAPSHOT.get_or_init(|| std::env::var_os("XRG_SMOKE_SETTINGS_SNAPSHOT_DIR").is_some())
 }
-fn theme_picker(ui: &mut egui::Ui, choice: &mut ThemeChoice) {
-    let label = match choice {
-        ThemeChoice::Builtin { name } => name.clone(),
-        ThemeChoice::Custom { theme } => format!("Custom · {}", theme.name),
+
+/// What the frame collected while rendering, resolved after the entries'
+/// exclusive store borrow ends.
+#[derive(Default)]
+struct Actions {
+    replace_requested: bool,
+    confirm_reset: Option<String>,
+    reset_confirmed: bool,
+    cancelled: bool,
+    import_theme: bool,
+    export_theme: bool,
+    choose_path: Option<String>,
+    review_pasted: Option<PathBuf>,
+    browse_legacy: bool,
+    accept_import: bool,
+    cancel_import: bool,
+}
+
+fn section_title(section: &str) -> &str {
+    SECTION_TITLES
+        .iter()
+        .find(|(name, _)| *name == section)
+        .map(|(_, title)| *title)
+        .unwrap_or(section)
+}
+
+/// One sidebar section button: the selected one on the accent tint with
+/// accent text, the rest muted — the mockup's `.nav`.
+fn nav_button(
+    ui: &mut egui::Ui,
+    section: &str,
+    label: &str,
+    selected: bool,
+    dark: bool,
+) -> egui::Response {
+    let _ = section;
+    let width = ui.available_width() - aether7b::SPACE_S1;
+    let font = settings_style::sans(aether7b::TYPE_SM.0);
+    let text = if selected {
+        aether7b::accent_active(dark)
+    } else {
+        aether7b::text_muted(dark)
     };
-    egui::ComboBox::from_id_salt("theme")
-        .selected_text(label)
-        .show_ui(ui, |ui| {
-            for theme in crate::shared::themes() {
-                ui.selectable_value(
-                    choice,
-                    ThemeChoice::Builtin {
-                        name: theme.name.clone(),
-                    },
-                    theme.name,
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, text);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 26.), egui::Sense::click());
+    let corner = egui::CornerRadius::same(aether7b::RADIUS_SM as u8);
+    if selected || response.hovered() {
+        ui.painter()
+            .rect_filled(rect, corner, aether7b::accent_tint(dark));
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            corner,
+            settings_style::rim_stroke(dark, false, true),
+            egui::StrokeKind::Middle,
+        );
+        settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_SM as u8);
+    }
+    ui.painter().add(egui::epaint::TextShape::new(
+        egui::pos2(
+            rect.min.x + aether7b::SPACE_S3,
+            rect.center().y - galley.size().y / 2.,
+        ),
+        galley,
+        text,
+    ));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, label));
+    response
+}
+
+/// The headerbar's close button.
+fn close_button(ui: &mut egui::Ui, dark: bool, header: egui::Rect) -> egui::Response {
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(header.max.x - 12. - 18., header.center().y - 9.),
+        egui::vec2(18., 18.),
+    );
+    let response = ui.allocate_rect(rect, egui::Sense::click());
+    let rect = response.rect;
+    let galley = ui.painter().layout_no_wrap(
+        "✕".to_owned(),
+        settings_style::sans(aether7b::TYPE_SM.0),
+        aether7b::text_muted(dark),
+    );
+    ui.painter().add(egui::epaint::TextShape::new(
+        egui::pos2(
+            rect.center().x - galley.size().x / 2.,
+            rect.center().y - galley.size().y / 2.,
+        ),
+        galley,
+        aether7b::text_muted(dark),
+    ));
+    if response.has_focus() {
+        settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_SM as u8);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, "Close settings")
+    });
+    response
+}
+
+/// The unreadable-file banner (spec §2): the file is never overwritten
+/// until the user confirms replacing it, and only a blocking document
+/// offers the replacement.
+fn banner(ui: &mut egui::Ui, dark: bool, problem: &str, blocked: bool, actions: &mut Actions) {
+    egui::Frame::new()
+        .fill(aether7b::surface_card(dark))
+        .stroke(egui::Stroke::new(1., aether7b::status_warning(dark)))
+        .corner_radius(aether7b::RADIUS_LG)
+        .outer_margin(egui::Margin {
+            left: aether7b::SPACE_S6 as i8,
+            right: aether7b::SPACE_S6 as i8,
+            top: 0,
+            bottom: aether7b::SPACE_S3 as i8,
+        })
+        .inner_margin(egui::Margin::same(aether7b::SPACE_S3 as i8))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("The settings document needs attention: {problem}."))
+                    .font(settings_style::sans(aether7b::TYPE_SM.0))
+                    .color(aether7b::text_main(dark)),
+            );
+            if blocked {
+                ui.label(
+                    egui::RichText::new(
+                        "Changes are kept in memory and the file is left untouched.",
+                    )
+                    .font(settings_style::sans(aether7b::TYPE_XS.0))
+                    .color(aether7b::text_muted(dark)),
                 );
+                let replace = settings_style::ghost_button(
+                    ui,
+                    "Replace the file with the current settings",
+                    true,
+                    dark,
+                );
+                if replace.clicked() {
+                    actions.replace_requested = true;
+                }
             }
         });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn restoring_presentation_defaults_keeps_provider_and_weather_sources_private() {
-        let mut settings = Settings {
-            graph_width: 300,
-            window_opacity: 0.4,
-            ..Default::default()
-        };
-        settings.ai.enabled = [false; 4];
-        settings.ai.ollama = false;
-        settings.ai.metrics_url = "http://127.0.0.1:18889/metrics".into();
-        settings.ai.claude_logs = Some(PathBuf::from("/private-provider-logs"));
-        settings.weather.enabled = true;
-        settings.weather.station = "KJFK".into();
-        settings.weather.refresh_minutes = 10;
-        let expected_ai = settings.ai.clone();
-        let expected_weather = settings.weather.clone();
-        let mut editor = Editor::new(settings);
-        editor.restore_defaults();
-        assert_eq!(editor.draft.ai, expected_ai);
-        assert_eq!(editor.draft.weather, expected_weather);
-        assert_eq!(editor.draft.graph_width, Settings::default().graph_width);
-        assert_eq!(editor.draft.window_opacity, 1.);
-        assert!(editor.draft.validate().is_ok());
-    }
-    #[test]
-    fn accessible_source_selector_preserves_the_current_unavailable_selection() {
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
-        let mut selected = Some("missing-gpu".into());
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            source(ui, "gpu-test", "GPU", &mut selected, &[], "Automatic")
-        });
-        let tree = output.platform_output.accesskit_update.as_ref().unwrap();
-        let (_, node) = tree
-            .nodes
-            .iter()
-            .find(|(_, node)| node.role() == egui::accesskit::Role::ComboBox)
-            .unwrap();
-        assert_eq!(node.value(), Some("Unavailable: missing-gpu"));
-        assert!(!node.labelled_by().is_empty());
-        assert_eq!(selected.as_deref(), Some("missing-gpu"));
-        output.textures_delta.clear();
-    }
-    #[test]
-    fn general_controls_have_associated_accessible_labels() {
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
-        let mut settings = Settings {
-            window_size: Some(settings::WindowSize {
-                width: 300,
-                height: 660,
-            }),
-            ..Default::default()
-        };
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| general(ui, &mut settings));
-        let tree = output.platform_output.accesskit_update.as_ref().unwrap();
-        for name in [
-            "Graph width",
-            "Default graph height",
-            "System sampling target",
-            "Window opacity",
-            "Remember window size",
-            "Window width",
-            "Window height",
-            "Network minimum scale",
-        ] {
-            fn text(tree: &egui::accesskit::TreeUpdate, id: egui::accesskit::NodeId) -> String {
-                let Some((_, node)) = tree.nodes.iter().find(|(node_id, _)| *node_id == id) else {
-                    return String::new();
-                };
-                let mut value = node
-                    .label()
-                    .or_else(|| node.value())
-                    .unwrap_or_default()
-                    .to_owned();
-                for child in node.children() {
-                    value.push_str(&text(tree, *child));
-                }
-                value
-            }
-            assert!(
-                tree.nodes.iter().any(|(_, node)| node
-                    .labelled_by()
-                    .iter()
-                    .any(|id| text(tree, *id).contains(name))),
-                "No control labelled by {name}"
-            );
+/// The reset confirmation (spec §5): each section's Reset asks first.
+fn reset_modal(ui: &mut egui::Ui, dark: bool, section: &str, actions: &mut Actions) -> bool {
+    let modal = egui::Modal::new(egui::Id::unique("reset-confirmation")).show(ui.ctx(), |ui| {
+        egui::Frame::new()
+            .fill(aether7b::surface_card(dark))
+            .stroke(egui::Stroke::new(1., aether7b::border(dark)))
+            .corner_radius(aether7b::RADIUS_LG)
+            .inner_margin(egui::Margin::same(aether7b::SPACE_S4 as i8))
+            .show(ui, |ui| {
+                ui.set_width(340.);
+                ui.label(
+                    egui::RichText::new(format!("Reset {} to defaults?", section_title(section)))
+                        .font(settings_style::sans(aether7b::TYPE_MD.0))
+                        .color(aether7b::text_main(dark))
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Every {} setting returns to its default. This cannot be undone.",
+                        section_title(section)
+                    ))
+                    .font(settings_style::sans(aether7b::TYPE_SM.0))
+                    .color(aether7b::text_muted(dark)),
+                );
+                ui.add_space(aether7b::SPACE_S2);
+                ui.horizontal(|ui| {
+                    let reset = settings_style::ghost_button(ui, "Reset", true, dark);
+                    if reset.clicked() {
+                        actions.reset_confirmed = true;
+                    }
+                    let cancel = settings_style::ghost_button(ui, "Cancel", true, dark);
+                    if cancel.clicked() {
+                        actions.cancelled = true;
+                    }
+                });
+            });
+    });
+    modal.should_close()
+}
+
+/// The Linux-specific legacy import block, inside the Themes section's
+/// "Import and export" card: the review holds the import in memory until
+/// the user accepts it; accepting saves the imported view whole (the same
+/// document the old draft-then-Apply flow produced).
+fn legacy_block(
+    ui: &mut egui::Ui,
+    dark: bool,
+    path: &mut PathField,
+    import: Option<&legacy::Import>,
+    actions: &mut Actions,
+) {
+    ui.add_space(aether7b::SPACE_S2);
+    ui.painter().hline(
+        ui.available_rect_before_wrap().x_range(),
+        ui.cursor().min.y,
+        egui::Stroke::new(1., aether7b::border(dark)),
+    );
+    ui.add_space(aether7b::SPACE_S2);
+    ui.label(
+        egui::RichText::new("Legacy Linux settings")
+            .font(settings_style::sans(aether7b::TYPE_SM.0))
+            .color(aether7b::text_main(dark)),
+    );
+    ui.label(
+        egui::RichText::new(
+            "Import the original C application's GLib key-file settings. The source file is never changed.",
+        )
+        .font(settings_style::sans(aether7b::TYPE_XS.0))
+        .color(aether7b::text_muted(dark)),
+    );
+    path.edit(ui);
+    ui.horizontal(|ui| {
+        let browse = settings_style::ghost_button(ui, "Browse legacy settings…", true, dark);
+        if browse.clicked() {
+            actions.browse_legacy = true;
         }
-        output.textures_delta.clear();
+        let review = settings_style::ghost_button(ui, "Review pasted path…", true, dark);
+        if review.clicked() {
+            actions.review_pasted = Some(path.path());
+        }
+    });
+    if let Some(import) = import {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} entries ready to import; {} entries not transferred.",
+                import.imported.len(),
+                import.skipped.len()
+            ))
+            .font(settings_style::mono(aether7b::TYPE_XS.0))
+            .color(aether7b::text_main(dark)),
+        );
+        egui::ScrollArea::vertical()
+            .id_salt("legacy-summary")
+            .max_height(120.)
+            .show(ui, |ui| {
+                for line in import.imported.iter().chain(&import.skipped) {
+                    ui.label(
+                        egui::RichText::new(line)
+                            .font(settings_style::mono(aether7b::TYPE_XS.0))
+                            .color(aether7b::text_muted(dark)),
+                    );
+                }
+            });
+        ui.horizontal(|ui| {
+            let accept = settings_style::ghost_button(ui, "Import into settings", true, dark);
+            if accept.clicked() {
+                actions.accept_import = true;
+            }
+            let cancel = settings_style::ghost_button(ui, "Cancel import", true, dark);
+            if cancel.clicked() {
+                actions.cancel_import = true;
+            }
+        });
     }
-    #[test]
-    fn rendering_all_tabs_keeps_the_entire_draft_unchanged() {
-        let mut settings = Settings {
-            graph_width: 237,
-            ..Default::default()
-        };
-        settings.metrics.cpu = Some(791);
-        settings.metrics.gpu = Some("missing-saved-gpu".into());
-        settings.network_min_scale = settings::network_scale::MAX;
-        settings.modules[0].colors.background = Some([0.123456, 0.654321, 0.314159, 0.765432]);
-        let mut editor = Editor::new(settings.clone());
-        let ctx = egui::Context::default();
-        for tab in 0..6 {
-            editor.tab = tab;
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(680., 720.),
-                    )),
-                    ..Default::default()
-                },
-                |ui| editor.content(ui, &Inventory::default()),
-            );
-            output.textures_delta.clear();
-            assert!(!ctx.tessellate(output.shapes, 1.).is_empty());
-            assert_eq!(
-                editor.draft, settings,
-                "Merely displaying tab {tab} changed settings"
-            );
+}
+
+/// Selecting a built-in preset applies its palette, its name and the
+/// preset selection itself through the shared settings model (lesson f).
+fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError> {
+    let Some(theme) = crate::shared::themes()
+        .into_iter()
+        .find(|theme| theme.name == name)
+    else {
+        return Err(SetError::NotAnOption);
+    };
+    for (index, id) in settings_controls::PALETTE_IDS.iter().enumerate() {
+        store.set(id, json!(theme.colors[index]))?;
+    }
+    store.set("themes.name", json!(name))?;
+    store.set("themes.preset", json!(name))?;
+    Ok(())
+}
+
+/// The catalog's documented rule: a palette that no longer matches the
+/// selected built-in preset marks the theme Custom. An unset colour
+/// inherits its catalog default, so the comparison reads the effective
+/// colour either way. Returns whether the theme was marked.
+fn mark_custom_preset(store: &mut Store, catalog: &Catalog) -> bool {
+    let values = store.values();
+    let preset = values
+        .get("themes.preset")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == "themes.preset")
+                .and_then(|entry| entry.default.as_str())
+                .map(str::to_owned)
+        });
+    let Some(preset) = preset else {
+        return false;
+    };
+    let Some(theme) = crate::shared::themes()
+        .into_iter()
+        .find(|theme| theme.name == preset)
+    else {
+        return false;
+    };
+    let differs = settings_controls::PALETTE_IDS
+        .iter()
+        .enumerate()
+        .any(|(index, id)| {
+            let effective = values
+                .get(*id)
+                .cloned()
+                .or_else(|| {
+                    catalog
+                        .entries
+                        .iter()
+                        .find(|entry| &entry.id == id)
+                        .map(|entry| entry.default.clone())
+                })
+                .and_then(|value| {
+                    value.as_array().map(|rgba| {
+                        rgba.iter()
+                            .filter_map(|part| part.as_f64())
+                            .collect::<Vec<f64>>()
+                    })
+                });
+            effective != Some(theme.colors[index].to_vec())
+        });
+    if differs {
+        return store.set("themes.preset", json!("Custom")).is_ok();
+    }
+    false
+}
+
+/// The App-facing host: renders the window's viewport for one frame, keeps
+/// it while it is open, and adopts the stored view whenever the window
+/// changed it, so the live dashboard follows instantly (lesson h).
+pub(super) fn show(app: &mut App, ctx: &egui::Context) {
+    let Some(mut window) = app.settings_window.take() else {
+        return;
+    };
+    let inventory = app
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.inventory.clone())
+        .unwrap_or_default();
+    let provider = InventoryProvider(&inventory);
+    window.show(ctx, &mut app.store, &provider);
+    let changed = window.take_dirty();
+    let closed = window.closed();
+    if !closed {
+        app.settings_window = Some(window);
+    }
+    if changed {
+        let settings = app.store.settings().clone();
+        if let Err(error) = app.adopt(settings, ctx) {
+            app.error = Some(error);
+        }
+    }
+}
+
+/// The production source provider: the live inventory the workers
+/// published — the same enumeration the old preferences used.
+pub(super) struct InventoryProvider<'a>(&'a Inventory);
+impl SourceProvider for InventoryProvider<'_> {
+    fn options(&self, kind: &str) -> Vec<SourceOption> {
+        match kind {
+            "cpu" => self
+                .0
+                .cpus
+                .iter()
+                .map(|core| SourceOption {
+                    id: core.to_string(),
+                    label: format!("Logical CPU {}", core + 1),
+                })
+                .collect(),
+            "network" => self
+                .0
+                .networks
+                .iter()
+                .map(|name| SourceOption {
+                    id: name.clone(),
+                    label: name.clone(),
+                })
+                .collect(),
+            "disk" => self
+                .0
+                .disks
+                .iter()
+                .map(|name| SourceOption {
+                    id: name.clone(),
+                    label: name.clone(),
+                })
+                .collect(),
+            "gpu" | "gpu_memory" => self.0.gpus.clone(),
+            "temperature" => self.0.temperatures.clone(),
+            "fans" => self.0.fans.clone(),
+            _ => Vec::new(),
         }
     }
 }

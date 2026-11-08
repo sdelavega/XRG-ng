@@ -110,7 +110,7 @@ pub enum Loaded {
 
 /// The settings catalog for Linux: the sections in sidebar order and, in
 /// display order, the entries the platform renders.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Catalog {
     pub sections: Vec<String>,
     pub entries: Vec<CatalogEntry>,
@@ -118,7 +118,7 @@ pub struct Catalog {
 
 /// One catalog entry; `default` carries the typed default value and `shown`
 /// is false only for persisted state the settings windows never render.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CatalogEntry {
     pub id: String,
     pub section: String,
@@ -142,7 +142,7 @@ fn shown_by_default() -> bool {
 }
 
 /// Bounds for number and duration controls.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CatalogRange {
     pub min: f64,
     pub max: f64,
@@ -151,14 +151,14 @@ pub struct CatalogRange {
 }
 
 /// One selectable value of a choice or segmented control.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CatalogOption {
     pub value: serde_json::Value,
     pub label: String,
 }
 
 /// Another entry, and the value it must hold, for this control to be enabled.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CatalogDependency {
     pub id: String,
     pub equals: serde_json::Value,

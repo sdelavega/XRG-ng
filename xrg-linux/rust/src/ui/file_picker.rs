@@ -21,6 +21,8 @@ pub(super) enum Action {
     LoadTheme,
     SaveTheme,
     ImportLegacy,
+    /// One path entry's `Choose…`: any file, no theme filter.
+    ChoosePath,
 }
 impl Action {
     fn title(self) -> &'static str {
@@ -28,13 +30,15 @@ impl Action {
             Self::LoadTheme => "Load theme",
             Self::SaveTheme => "Save JSON theme",
             Self::ImportLegacy => "Import legacy Linux settings",
+            Self::ChoosePath => "Choose a file",
         }
     }
     fn button(self) -> &'static str {
         match self {
-            Self::LoadTheme => "Load into draft",
+            Self::LoadTheme => "Load theme",
             Self::SaveTheme => "Save theme",
             Self::ImportLegacy => "Review import",
+            Self::ChoosePath => "Choose",
         }
     }
 }
@@ -407,7 +411,7 @@ impl Picker {
             selected: None,
             query: String::new(),
             hidden: false,
-            all_files: action == Action::ImportLegacy,
+            all_files: matches!(action, Action::ImportLegacy | Action::ChoosePath),
             loading: true,
             partial: false,
             unreadable: 0,
@@ -592,7 +596,7 @@ impl Picker {
                     self.browse(self.directory.clone());
                 }
                 ui.checkbox(&mut self.hidden, "Hidden files");
-                if self.action != Action::ImportLegacy {
+                if !matches!(self.action, Action::ImportLegacy | Action::ChoosePath) {
                     ui.checkbox(&mut self.all_files, "All files");
                 }
             });
@@ -835,6 +839,8 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"keep original");
         p.replace = None;
         assert!(p.ready.is_none());
+        // Back must leave the existing file byte-identical.
+        assert_eq!(fs::read(&path).unwrap(), b"keep original");
         p.accept();
         wait(&mut p);
         p.confirm_replace();

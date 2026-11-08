@@ -302,13 +302,13 @@ class Desktop:
         self.key("ctrl+comma")
         time.sleep(.4)
         if self.backend == "x11":
-            preferences = wait_for(lambda: window(process.pid, self.env, "^XRG-ng Preferences$"), "Preferences window missing")
+            preferences = wait_for(lambda: window(process.pid, self.env, "^XRG-ng Settings$"), "Settings window missing")
             self.focus(preferences)
         self.screenshot(identifier, "desktop-preferences")
         self.key("Escape")
         time.sleep(.3)
         if self.backend == "x11":
-            wait_for(lambda: window(process.pid, self.env, "^XRG-ng Preferences$") is None, "Escape did not cancel Preferences")
+            wait_for(lambda: window(process.pid, self.env, "^XRG-ng Settings$") is None, "Escape did not cancel Settings")
         self.focus(identifier)
         for _ in range(14):
             self.key("Tab")

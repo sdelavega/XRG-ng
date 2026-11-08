@@ -1052,6 +1052,25 @@ impl Store {
     pub fn load_problem(&self) -> Option<&str> {
         self.problem.as_deref()
     }
+    /// Whether an existing settings document that does not load is blocking
+    /// saves: only the user's explicit `replace_unreadable` clears it.
+    pub fn blocked(&self) -> bool {
+        self.blocked
+    }
+    /// Every value the document holds, parsed once: the bytes the core last
+    /// returned, with no local validation — every stored value in a
+    /// loadable document is core-valid. Absent keys carry their catalog
+    /// default.
+    pub fn values(&self) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::from_slice::<serde_json::Value>(&self.document)
+            .ok()
+            .and_then(|document| {
+                document
+                    .get("settings")
+                    .and_then(|settings| settings.as_object().cloned())
+            })
+            .unwrap_or_default()
+    }
     /// Store one value, validating it through the core, and write the
     /// resulting document atomically with mode 0600. Refused values leave
     /// the file and the in-memory settings untouched; a blocked file (it

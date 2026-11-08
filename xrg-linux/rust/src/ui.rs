@@ -14,11 +14,13 @@ mod diagnostics;
 mod file_picker;
 mod file_picker_smoke;
 mod inspectors;
-mod preferences;
+pub mod preferences;
+mod settings_controls;
+mod settings_style;
 mod smoke;
 use crate::{
     engine::{Panel, Snapshot, Worker},
-    settings::{self, Layout, Module, Settings, Store, Writer},
+    settings::{self, Layout, Module, Settings, Store},
     shared::Theme,
 };
 use eframe::egui::{self, Color32, ViewportCommand, ViewportId, vec2};
@@ -32,18 +34,21 @@ use std::{
 
 struct App {
     settings: Settings,
+    /// The unified settings document the app stores: the settings window's
+    /// instant applies and the dashboard's whole-view saves all go through
+    /// it, and the shared core remains the only validator.
+    store: Store,
     collapse: collapse::State,
     theme: Theme,
     hostname: String,
     snapshot: Option<Snapshot>,
     worker: Worker,
-    writer: Writer,
     diagnostics: diagnostics::Diagnostics,
     compositor: Arc<std::sync::Mutex<compositor::Compositor>>,
     revision: u64,
     saved_revision: u64,
     error: Option<String>,
-    preferences: Option<preferences::Editor>,
+    settings_window: Option<preferences::SettingsWindow>,
     details: BTreeSet<Module>,
     processes: inspectors::Processes,
     show_processes: bool,
@@ -53,49 +58,76 @@ struct App {
     show_about: bool,
     smoke: Option<smoke::Harness>,
 }
+/// The live dashboard's half of an instant settings change (lesson h): push
+/// the changed view to the workers and re-derive the painted theme. The
+/// store is never touched — the window already saved. Returns whether the
+/// window layout needs a relayout.
+pub(super) fn adopt_live(
+    live: &mut Settings,
+    live_theme: &mut Theme,
+    worker: &Worker,
+    from: Settings,
+) -> Result<bool, String> {
+    let theme = from.theme.palette()?;
+    if live.metrics != from.metrics {
+        worker.selection_control().set(from.metrics.clone())?;
+    }
+    if live.sampling_interval_ms != from.sampling_interval_ms {
+        worker.sampling_control().set(from.sampling_interval_ms)?;
+    }
+    if live.ai != from.ai {
+        worker.ai_control().set(from.ai.clone())?;
+    }
+    if live.weather != from.weather {
+        worker.weather_control().set(from.weather.clone())?;
+    }
+    let resize = live.layout != from.layout
+        || live.graph_width != from.graph_width
+        || live.graph_height != from.graph_height
+        || live.window_size != from.window_size
+        || live
+            .modules
+            .iter()
+            .zip(&from.modules)
+            .any(|(a, b)| a.id != b.id || a.visible != b.visible || a.height != b.height);
+    *live = from;
+    *live_theme = theme;
+    Ok(resize)
+}
+
 impl App {
+    /// Save a whole settings view synchronously through the store, then
+    /// adopt it: the dashboard-side path (context menus, collapse, window
+    /// size). The core validates before anything is written; a refused
+    /// view changes nothing.
     fn apply(&mut self, settings: Settings, ctx: &egui::Context) -> Result<(), String> {
-        settings.validate()?;
-        let theme = settings.theme.palette()?;
-        if self.settings.metrics != settings.metrics {
-            self.worker
-                .selection_control()
-                .set(settings.metrics.clone())?;
-        }
-        if self.settings.sampling_interval_ms != settings.sampling_interval_ms {
-            self.worker
-                .sampling_control()
-                .set(settings.sampling_interval_ms)?;
-        }
-        if self.settings.ai != settings.ai {
-            self.worker.ai_control().set(settings.ai.clone())?;
-        }
-        if self.settings.weather != settings.weather {
-            self.worker
-                .weather_control()
-                .set(settings.weather.clone())?;
-        }
-        let resize = self.settings.layout != settings.layout
-            || self.settings.graph_width != settings.graph_width
-            || self.settings.graph_height != settings.graph_height
-            || self.settings.window_size != settings.window_size
-            || self
-                .settings
-                .modules
-                .iter()
-                .zip(&settings.modules)
-                .any(|(a, b)| a.id != b.id || a.visible != b.visible || a.height != b.height);
-        self.settings = settings;
-        self.theme = theme;
+        self.persist(&settings)?;
+        self.adopt(settings, ctx)
+    }
+    /// Adopt a settings view the store already holds: push it to the
+    /// workers, re-derive the painted theme, relayout — the live dashboard
+    /// follows an instant apply at once (lesson h). Nothing is written.
+    fn adopt(&mut self, settings: Settings, ctx: &egui::Context) -> Result<(), String> {
+        let resize = adopt_live(&mut self.settings, &mut self.theme, &self.worker, settings)?;
         self.sync_collapse(ctx, resize);
-        self.persist();
         ctx.request_repaint();
         Ok(())
     }
-    fn persist(&mut self) {
+    /// Persist one whole view through the store's whole-view save: only the
+    /// entries whose value changed travel through the core, and a refusal
+    /// reaches the caller (and the user) instead of being written.
+    fn persist(&mut self, settings: &Settings) -> Result<(), String> {
         self.revision += 1;
-        self.writer.queue(self.revision, self.settings.clone());
-        self.error = None;
+        let result = self.store.save(settings);
+        match result {
+            Ok(()) => {
+                self.saved_revision = self.revision;
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "Changes apply for this session; preferences could not be saved: {error}"
+            )),
+        }
     }
     fn panel(&self, module: Module) -> Option<&Panel> {
         self.snapshot
@@ -110,8 +142,15 @@ impl App {
             .and_then(|s| s.panels.get(module.index()))
     }
     fn preferences(&mut self) {
-        if self.preferences.is_none() {
-            self.preferences = Some(preferences::Editor::new(self.settings.clone()));
+        if self.settings_window.is_none() {
+            match settings::document::catalog() {
+                Ok(catalog) => {
+                    self.settings_window = Some(preferences::SettingsWindow::new(catalog));
+                }
+                Err(error) => {
+                    self.error = Some(format!("The settings window is unavailable: {error}"));
+                }
+            }
         }
     }
     fn capture_size(&mut self, ctx: &egui::Context) {
@@ -124,7 +163,8 @@ impl App {
             && self.settings.window_size != Some(size)
         {
             self.settings.window_size = Some(size);
-            self.persist();
+            let view = self.settings.clone();
+            let _ = self.persist(&view);
         }
     }
     fn sync_collapse(&mut self, ctx: &egui::Context, resize: bool) {
@@ -145,7 +185,7 @@ impl App {
                 .is_some_and(|p| i.viewport_rect().contains(p)),
             blocked: i.pointer.any_down()
                 || popup_open
-                || self.preferences.is_some()
+                || self.settings_window.is_some()
                 || !self.details.is_empty()
                 || self.show_processes
                 || self.show_sensors
@@ -473,18 +513,6 @@ impl eframe::App for App {
             self.diagnostics.sample(snapshot.valid);
             self.snapshot = Some(snapshot);
         }
-        let saved = self.writer.latest.lock().unwrap().take();
-        if let Some((revision, result)) = saved {
-            match result {
-                Ok(()) => self.saved_revision = revision,
-                Err(e) if revision == self.revision => {
-                    self.error = Some(format!(
-                        "Changes apply for this session; preferences could not be saved: {e}"
-                    ))
-                }
-                Err(_) => (),
-            }
-        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Q)) {
             self.capture_size(&ctx);
             ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -529,7 +557,7 @@ impl eframe::App for App {
             frame,
             ui,
             self.settings.sampling_interval_ms,
-            self.preferences.is_some(),
+            self.settings_window.is_some(),
             self.details.len(),
             (
                 self.collapse.closed(),
@@ -668,29 +696,26 @@ pub fn run(smoke_mode: bool) -> bool {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             diagnostics::configure(&cc.egui_ctx);
             let worker = Worker::start_with_settings(!smoke_mode, &settings);
-            let writer = Writer::start(store);
             let ctx = cc.egui_ctx.clone();
             worker.on_publish(move || ctx.request_repaint_of(ViewportId::ROOT));
-            let ctx = cc.egui_ctx.clone();
-            writer.on_publish(move || ctx.request_repaint_of(ViewportId::ROOT));
             let smoke = harness.map(|mut h| {
                 h.success = result;
                 h
             });
             Ok(Box::new(App {
                 settings,
+                store,
                 collapse: collapse::State::default(),
                 theme,
                 hostname: hostname(),
                 snapshot: None,
                 worker,
-                writer,
                 diagnostics: diagnostics::Diagnostics::new(cc),
                 compositor: Arc::new(std::sync::Mutex::new(compositor::Compositor::default())),
                 revision: 0,
                 saved_revision: 0,
                 error,
-                preferences: None,
+                settings_window: None,
                 details: BTreeSet::new(),
                 processes: inspectors::Processes::default(),
                 show_processes: false,

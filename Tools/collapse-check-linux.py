@@ -123,7 +123,7 @@ def exercise(d, binary, fixture, layout, anchor):
     time.sleep(.7)
     require(not latest(log)["closed"], "Hover expansion closed with Preferences active")
     if d.backend == "x11":
-        child = wait_for(lambda: desktop_check.window(process.pid, d.env, "^XRG-ng Preferences$"), "Native preferences missing")
+        child = wait_for(lambda: desktop_check.window(process.pid, d.env, "^XRG-ng Settings$"), "Native settings window missing")
         d.focus(child)
     d.key("Escape")
     wait_for(lambda: not latest(log)["preferences"], "Preferences did not cancel")

@@ -255,7 +255,8 @@ pub(super) fn show(app: &mut App, ctx: &egui::Context) {
             processes.table(ui, app)
         });
         if app.settings.processes != before {
-            app.persist();
+            let view = app.settings.clone();
+            let _ = app.persist(&view);
         }
         if !app.show_processes {
             processes.pending = None;

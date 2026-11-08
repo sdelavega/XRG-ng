@@ -29,6 +29,12 @@ pub(super) struct Harness {
     picker: Option<file_picker_smoke::Harness>,
     clipboard_expected: Option<String>,
     graph_reset_expected: Option<[u64; 13]>,
+    /// The section-walk isolation check: how many sections rendered, and
+    /// the settings and file bytes the walk started from.
+    sections: usize,
+    baseline: Option<(crate::settings::Settings, Option<Vec<u8>>)>,
+    /// The settings snapshot mode's position in the section list.
+    snapshot_index: usize,
 }
 impl Harness {
     pub fn new() -> Result<Self, String> {
@@ -70,6 +76,9 @@ impl Harness {
                 .map(|_| file_picker_smoke::Harness::default()),
             clipboard_expected: None,
             graph_reset_expected: None,
+            sections: 0,
+            baseline: None,
+            snapshot_index: 0,
         })
     }
     /// The configuration root the smoke app's settings document lives under.
@@ -81,6 +90,21 @@ impl Harness {
         let Some(path) = std::env::var_os(variable).map(PathBuf::from) else {
             return;
         };
+        let check_opacity = variable == "XRG_SMOKE_LAYOUT_IMAGE";
+        self.capture_file(ctx, viewport, path, check_opacity, false);
+    }
+    /// Capture one viewport to a named file — the settings snapshot mode's
+    /// per-section writer. `deferred` waits one extra frame, so a viewport
+    /// that is resizing (the snapshot walker's auto-fitted settings window)
+    /// paints the screenshot at its new size, not the size it is leaving.
+    fn capture_file(
+        &mut self,
+        ctx: &egui::Context,
+        viewport: egui::ViewportId,
+        path: PathBuf,
+        check_opacity: bool,
+        deferred: bool,
+    ) {
         self.waiting = true;
         if viewport != egui::ViewportId::ROOT {
             ctx.data_mut(|data| {
@@ -89,6 +113,7 @@ impl Harness {
                     Some(Capture {
                         path,
                         sender: self.sender.clone(),
+                        deferred,
                     }),
                 )
             });
@@ -96,7 +121,6 @@ impl Harness {
             return;
         }
         let sender = self.sender.clone();
-        let check_opacity = variable == "XRG_SMOKE_LAYOUT_IMAGE";
         let repaint = ctx.clone();
         ctx.send_viewport_cmd_to(
             viewport,
@@ -214,61 +238,50 @@ impl Harness {
                 1 if std::env::var_os("XRG_SMOKE_STYLE").is_none() => {
                     app.preferences();
                     if std::env::var_os("XRG_SMOKE_AI_PREFS").is_some()
-                        && let Some(editor) = &mut app.preferences
+                        && let Some(window) = &mut app.settings_window
                     {
-                        editor.tab = 3;
+                        window.select_section("ai");
                     }
-                    if let Some(editor) = &mut app.preferences {
+                    if let Some(window) = &mut app.settings_window {
                         match std::env::var("XRG_SMOKE_PREFS_TAB").as_deref() {
                             Ok("weather") => {
-                                editor.tab = 4;
-                                editor.draft.weather.temperature_units =
-                                    Some(crate::weather::Units::Us);
-                                editor.draft.weather.distance_units =
-                                    Some(crate::weather::Units::Metric);
-                                editor.draft.weather.pressure_units =
-                                    Some(crate::weather::Units::Metric);
-                                editor.draft.weather.wind_units =
-                                    Some(crate::weather::WindUnits::Knots);
+                                window.select_section("weather");
+                                // The variant's mixed units render through the
+                                // instant-apply window, so they go through the
+                                // same store path a control edit takes.
+                                let mut next = app.settings.clone();
+                                next.weather.temperature_units = Some(crate::weather::Units::Us);
+                                next.weather.distance_units = Some(crate::weather::Units::Metric);
+                                next.weather.pressure_units = Some(crate::weather::Units::Metric);
+                                next.weather.wind_units = Some(crate::weather::WindUnits::Knots);
+                                app.apply(next, ctx)?;
                             }
-                            Ok("graphs") => editor.tab = 1,
-                            Ok("sources") => editor.tab = 2,
+                            Ok("graphs") => {
+                                window.select_section("graphs");
+                            }
+                            Ok("sources") => {
+                                window.select_section("sources");
+                            }
                             Ok("sources-time") => {
-                                editor.tab = 2;
-                                editor.draft.metrics.cpu_history_minutes = 1;
-                                editor
-                                    .draft
-                                    .metrics
-                                    .history_minutes
-                                    .insert(Module::Memory, 4);
-                                editor
-                                    .draft
-                                    .metrics
-                                    .history_minutes
-                                    .insert(Module::Network, 2);
-                                editor.draft.metrics.history_minutes.insert(Module::Disk, 3);
-                                editor.draft.metrics.history_minutes.insert(Module::Gpu, 5);
-                                editor.draft.metrics.history_minutes.insert(Module::Tpu, 6);
-                                editor
-                                    .draft
-                                    .metrics
-                                    .history_minutes
-                                    .insert(Module::GpuMemory, 7);
-                                editor.draft.metrics.history_minutes.insert(Module::Fans, 8);
-                                editor
-                                    .draft
-                                    .metrics
-                                    .history_minutes
-                                    .insert(Module::Temperature, 9);
-                                editor
-                                    .draft
-                                    .metrics
-                                    .history_minutes
-                                    .insert(Module::Battery, 10);
+                                window.select_section("sources");
+                                let mut next = app.settings.clone();
+                                next.metrics.cpu_history_minutes = 1;
+                                next.metrics.history_minutes.insert(Module::Memory, 4);
+                                next.metrics.history_minutes.insert(Module::Network, 2);
+                                next.metrics.history_minutes.insert(Module::Disk, 3);
+                                next.metrics.history_minutes.insert(Module::Gpu, 5);
+                                next.metrics.history_minutes.insert(Module::Tpu, 6);
+                                next.metrics.history_minutes.insert(Module::GpuMemory, 7);
+                                next.metrics.history_minutes.insert(Module::Fans, 8);
+                                next.metrics.history_minutes.insert(Module::Temperature, 9);
+                                next.metrics.history_minutes.insert(Module::Battery, 10);
+                                app.apply(next, ctx)?;
                             }
                             Ok("ai-time") => {
-                                editor.tab = 3;
-                                editor.draft.ai.history_minutes = 10;
+                                window.select_section("ai");
+                                let mut next = app.settings.clone();
+                                next.ai.history_minutes = 10;
+                                app.apply(next, ctx)?;
                             }
                             _ => (),
                         }
@@ -281,6 +294,35 @@ impl Harness {
                     self.stage = 2;
                 }
                 2 => {
+                    // The settings snapshot mode (Tools/settings-snapshots-linux.sh):
+                    // one PNG per section, light and dark, through the same
+                    // capture machinery the gate proves under Xvfb.
+                    if let Some(directory) = std::env::var_os("XRG_SMOKE_SETTINGS_SNAPSHOT_DIR")
+                        && self.snapshot_index < preferences::SECTION_TITLES.len()
+                    {
+                        let (section, _) = preferences::SECTION_TITLES[self.snapshot_index];
+                        let theme = std::env::var("XRG_SETTINGS_THEME")
+                            .map(|value| value.to_ascii_lowercase())
+                            .unwrap_or_else(|_| "dark".into());
+                        if let Some(window) = &mut app.settings_window {
+                            window.select_section(section);
+                        }
+                        let path = PathBuf::from(directory).join(format!("{section}-{theme}.png"));
+                        self.capture_file(
+                            ctx,
+                            egui::ViewportId::from_hash_of("preferences"),
+                            path,
+                            false,
+                            // One frame for the auto-fitted viewport to
+                            // reach this section's size before the shot.
+                            true,
+                        );
+                        self.snapshot_index += 1;
+                        if self.snapshot_index == preferences::SECTION_TITLES.len() {
+                            self.stage = 8;
+                        }
+                        return Ok(());
+                    }
                     self.capture(
                         ctx,
                         egui::ViewportId::from_hash_of("preferences"),
@@ -332,13 +374,32 @@ impl Harness {
                         });
                         return Ok(());
                     }
-                    // Cancel preserves the complete saved model. Defaults are draft-only.
-                    let before = app.settings.clone();
-                    let mut draft = preferences::Editor::new(before.clone());
-                    draft.restore_defaults();
-                    drop(draft);
+                    // Opening and rendering the window changes nothing: with
+                    // instant apply there is no draft, so walking the window
+                    // through every section must leave the settings and the
+                    // file exactly as they were (the old gate's
+                    // cancelled-draft check, section by section).
+                    if self.sections == 0 {
+                        self.baseline = Some((
+                            app.settings.clone(),
+                            fs::read(self.directory.join("xrg-ng/settings.json")).ok(),
+                        ));
+                    }
+                    if let Some(window) = &mut app.settings_window {
+                        window.select_section(preferences::SECTION_TITLES[self.sections].0);
+                    }
+                    self.sections += 1;
+                    if self.sections < preferences::SECTION_TITLES.len() {
+                        return Ok(());
+                    }
+                    let (before, baseline_file) = self.baseline.take().expect("the walk baselined");
                     if app.settings != before {
-                        return Err("Cancelled draft changed active settings".into());
+                        return Err("Rendering the settings window changed active settings".into());
+                    }
+                    if fs::read(self.directory.join("xrg-ng/settings.json")).ok() != baseline_file {
+                        return Err(
+                            "Rendering the settings window changed the settings file".into()
+                        );
                     }
                     let mut next = app.settings.clone();
                     next.sampling_interval_ms = 10_000;
@@ -389,7 +450,7 @@ impl Harness {
                     next.modules[0].colors.background = Some([0.02, 0.03, 0.1, 0.25]);
                     app.apply(next, ctx)?;
                     self.wake = Some((sequence, Instant::now()));
-                    app.preferences = None;
+                    app.settings_window = None;
                     self.stage = 5;
                 }
                 5 if app.saved_revision == app.revision
@@ -530,18 +591,29 @@ impl Drop for Harness {
 struct Capture {
     path: PathBuf,
     sender: mpsc::Sender<Result<(), String>>,
+    /// Wait one frame before shooting, so a resizing viewport is captured
+    /// at the size it was asked for.
+    deferred: bool,
 }
 /// eframe's Glow immediate-viewport path doesn't drain Screenshot commands.
 /// Capture its actual framebuffer after the final child-window paint instead.
 pub(super) fn paint_capture(ui: &mut egui::Ui) {
     let viewport = ui.ctx().viewport_id();
     let key = egui::Id::unique(("xrg-smoke-capture", viewport));
-    let Some(capture) = ui
+    let Some(mut capture) = ui
         .ctx()
         .data_mut(|data| data.remove_temp::<Option<Capture>>(key).flatten())
     else {
         return;
     };
+    if capture.deferred {
+        capture.deferred = false;
+        let repaint = ui.ctx().clone();
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(key, Some(capture)));
+        repaint.request_repaint_of(egui::ViewportId::ROOT);
+        return;
+    }
     let done = AtomicBool::new(false);
     let ctx = ui.ctx().clone();
     let callback = eframe::egui_glow::CallbackFn::new(move |info, painter| {
