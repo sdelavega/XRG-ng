@@ -421,7 +421,10 @@ impl SettingsWindow {
             match store.set(&id, value.clone()) {
                 Ok(()) => {
                     self.dirty = true;
-                    self.fields.bump(&id);
+                    // Reconcile with the entry's edit buffer before
+                    // clearing it: a newer, unsaved edit survives the
+                    // retry (fix round 3, review rr2 finding 1).
+                    self.fields.retry_saved(&id, &value);
                 }
                 Err(error) => failures.push((id, value, error)),
             }
@@ -594,6 +597,13 @@ impl SettingsWindow {
                     } else if id.starts_with("appearance.") && id.ends_with(".color") {
                         mark_custom_preset(store, &catalog);
                     }
+                } else if matches!(result, Err(SetError::Transport)) {
+                    // The core accepted the value and only the write
+                    // failed: retain the latest failed value for Retry,
+                    // replacing any older retained one — a retry must
+                    // never save a value older than the newest edit
+                    // (fix round 3, review rr2 finding 1).
+                    held.insert(id.to_owned(), value);
                 }
                 result
             };
@@ -899,6 +909,31 @@ impl SettingsWindow {
         let close = close_button(ui, dark, header);
         if close.clicked() {
             self.open = false;
+        }
+        // Forward Tab out of a colour editor asked for the next control
+        // after its well (fix round 3). The section's rows are built now,
+        // so the walk's next stop is known: the next enabled entry's
+        // leading widget — its Inherit button on a colour row — or, past
+        // the section's last one, the close button, where the walk ends
+        // anyway.
+        if let Some(exit_id) = self.fields.take_color_exit() {
+            let next = self
+                .rendered
+                .iter()
+                .skip_while(|rendered| rendered.id != exit_id)
+                .skip(1)
+                .find(|rendered| rendered.enabled)
+                .map(|rendered| {
+                    rendered
+                        .alternate_focus
+                        .clone()
+                        .unwrap_or_else(|| rendered.response.clone())
+                });
+            if let Some(next) = next {
+                next.request_focus();
+            } else {
+                close.request_focus();
+            }
         }
         // Dragging the headerbar moves the window, like any headerbar.
         let grip =

@@ -47,6 +47,10 @@ pub const SCALE_UNITS: [(&str, i64); 4] = [
     ("GB/s", 1_073_741_824),
 ];
 
+/// The colour editor's channels, in tab order (fix round 3: the walk must
+/// be able to leave the editor at both boundaries).
+const COLOUR_CHANNELS: [&str; 4] = ["Red", "Green", "Blue", "Opacity"];
+
 /// Per-entry state the controls carry between frames: the text the user
 /// is typing, the danger reasons refused values show, the exact bytes/s a
 /// unit selector presents (held independently of the displayed text), the
@@ -64,6 +68,11 @@ pub struct Fields {
     /// channel to focus. egui's geometric Tab search never enters a
     /// non-menu popup, so the editor moves focus itself (lesson d).
     color_focus: Option<(String, usize)>,
+    /// The colour editor whose last channel asked to leave forward (Tab
+    /// past Opacity): the window moves focus to the next control after
+    /// the well once the section's rows are built, which alone know the
+    /// walk's next stop (fix round 3).
+    color_exit: Option<String>,
     generations: BTreeMap<String, u32>,
     order_focus: Option<(String, bool)>,
 }
@@ -74,6 +83,29 @@ impl Fields {
         *self.generations.entry(id.to_owned()).or_default() += 1;
         self.edits.remove(id);
         self.errors.remove(id);
+    }
+    /// Retry saved one entry's retained value: clear its failure reason
+    /// and re-present the stored value — but keep a newer, unsaved edit:
+    /// Retry must not erase what the user has typed since the failure
+    /// (fix round 3).
+    pub fn retry_saved(&mut self, id: &str, saved: &Value) {
+        self.errors.remove(id);
+        let saved_text = value_text(saved);
+        match self.edits.get(id) {
+            Some(text) if text.trim() != saved_text => {
+                // A newer unsaved edit keeps its buffer and generation, so
+                // the field goes on showing exactly what the user typed.
+            }
+            _ => {
+                *self.generations.entry(id.to_owned()).or_default() += 1;
+                self.edits.remove(id);
+            }
+        }
+    }
+    /// The colour editor that asked to leave forward, if any, taking the
+    /// request.
+    pub fn take_color_exit(&mut self) -> Option<String> {
+        self.color_exit.take()
     }
     fn generation(&self, id: &str) -> u32 {
         self.generations.get(id).copied().unwrap_or_default()
@@ -108,6 +140,11 @@ pub struct Rendered {
     pub control_rect: Rect,
     /// The card the entry rendered in — patched by the window's frame.
     pub card_rect: Rect,
+    /// The row's leading focusable widget when it is not the group's own
+    /// response — a colour row's Inherit button precedes its well. A
+    /// forward exit from one entry's editor continues the walk here
+    /// (fix round 3).
+    pub alternate_focus: Option<Response>,
 }
 
 /// What an action control asked the window to do.
@@ -284,6 +321,7 @@ fn rendered(entry: &CatalogEntry, control: &str, enabled: bool, response: Respon
         control_rect: response.rect,
         label_rect: None,
         card_rect: Rect::ZERO,
+        alternate_focus: None,
         response,
     }
 }
@@ -1384,7 +1422,7 @@ fn color(
     });
     // Right-to-left row: the Inherit button lands rightmost, the well
     // beside it — reading left to right, well then Inherit.
-    let well = {
+    let (well, inherit) = {
         let inherit =
             settings_style::ghost_button(ui, (&entry.id, "inherit"), "Inherit", enabled, dark);
         if inherit.clicked() {
@@ -1459,6 +1497,13 @@ fn color(
         {
             fields.color_focus = Some((entry.id.clone(), 0));
         }
+        // Forward Tab past the last channel leaves the editor: it closes
+        // and focus moves onward to the next control after the well — the
+        // window resolves that stop once the section's rows are built
+        // (fix round 3). Shift-Tab before the first channel closes the
+        // editor and returns focus to the well.
+        let mut leave_forward = false;
+        let mut leave_reverse = false;
         egui::Popup::from_response(&response)
             .open_bool(&mut open)
             .show(|ui| {
@@ -1469,9 +1514,9 @@ fn color(
                         .font(settings_style::mono(aether7b::TYPE_XS.0))
                         .color(aether7b::text_muted(dark)),
                 );
-                let mut channels = Vec::with_capacity(4);
+                let mut channels = Vec::with_capacity(COLOUR_CHANNELS.len());
                 let mut move_focus: Option<Option<usize>> = None;
-                for (index, name) in ["Red", "Green", "Blue", "Opacity"].into_iter().enumerate() {
+                for (index, name) in COLOUR_CHANNELS.into_iter().enumerate() {
                     let mut component = rgba[index] * 255.;
                     let slider = ui
                         .push_id((&entry.id, "channel", index), |ui| {
@@ -1504,18 +1549,41 @@ fn color(
                     if slider.has_focus() || requested {
                         focused_channel = Some(slider.rect);
                         // Explicit focus movement: Tab stays inside the
-                        // editor, Shift-Tab on the first channel returns
-                        // to the well. The key is consumed so egui's
-                        // geometric search cannot leave the popup.
+                        // editor until the last channel, Shift-Tab on the
+                        // first channel returns to the well. Shift-Tab is
+                        // matched first: a bare Tab matches leniently in
+                        // egui and would consume the shifted press.
                         if ui.input_mut(|input| {
-                            input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
-                        }) {
-                            move_focus = Some(Some((index + 1) % 4));
-                        } else if ui.input_mut(|input| {
                             input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab)
                         }) {
-                            move_focus = Some(if index == 0 { None } else { Some(index - 1) });
+                            if index == 0 {
+                                leave_reverse = true;
+                                move_focus = Some(None);
+                            } else {
+                                move_focus = Some(Some(index - 1));
+                            }
+                        } else if ui.input_mut(|input| {
+                            input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+                        }) {
+                            if index + 1 == COLOUR_CHANNELS.len() {
+                                // Forward Tab past Opacity does not wrap:
+                                // the editor closes and the window moves
+                                // focus onward (fix round 3).
+                                leave_forward = true;
+                                fields.color_exit = Some(entry.id.clone());
+                            } else {
+                                move_focus = Some(Some(index + 1));
+                            }
                         }
+                    } else if index + 1 == COLOUR_CHANNELS.len()
+                        && slider.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Tab))
+                        && !ui.input(|input| input.modifiers.shift)
+                    {
+                        // The traversal itself moved focus out of the last
+                        // channel: leave the editor without wrapping.
+                        leave_forward = true;
+                        fields.color_exit = Some(entry.id.clone());
                     }
                     if slider.changed() {
                         rgba[index] = component / 255.;
@@ -1536,6 +1604,11 @@ fn color(
                     fields.color_focus = None;
                 }
             });
+        if leave_forward || leave_reverse {
+            // A boundary traversal asked out of the editor: it closes, and
+            // the `open != was_open` bookkeeping below drops its state.
+            open = false;
+        }
         if let Some(rect) = focused_channel {
             settings_style::paint_focus_halo(ui.painter(), rect, aether7b::RADIUS_MD as u8);
         }
@@ -1554,9 +1627,13 @@ fn color(
                 }
             }
         }
-        response
+        (response, inherit)
     };
-    rendered(entry, "color", enabled, well)
+    let rendered = rendered(entry, "color", enabled, well);
+    Rendered {
+        alternate_focus: Some(inherit),
+        ..rendered
+    }
 }
 
 // MARK: Path and text

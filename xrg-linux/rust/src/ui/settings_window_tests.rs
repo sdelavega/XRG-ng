@@ -2262,10 +2262,24 @@ fn blocked_documents_validate_held_edits_through_the_core() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+/// The theme and reduced-motion pins are process-wide environment
+/// variables that the appearance tests set and remove. Tests run on
+/// parallel threads, so every test that touches a pin holds this lock for
+/// its whole body — a mid-frame flip made the token audit see another
+/// test's light pin during its dark pass (fix round 3).
+static APPEARANCE_PINS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Hold the appearance pins for the calling test's body; a poisoned lock
+/// (a panicked holder) is adopted rather than failing every later test.
+fn appearance_pins() -> std::sync::MutexGuard<'static, ()> {
+    std::sync::Mutex::lock(&APPEARANCE_PINS).unwrap_or_else(|error| error.into_inner())
+}
+
 #[test]
 fn reduced_motion_makes_egui_animation_instant() {
     // The window's animation time comes from the motion tokens, and a
     // reduced-motion request makes every egui transition instant.
+    let _pins = appearance_pins();
     for (pin, requested) in [("0", false), ("1", true)] {
         unsafe {
             std::env::set_var("XRG_SETTINGS_REDUCED_MOTION", pin);
@@ -2323,6 +2337,7 @@ fn desktop_reduced_motion_queries_enable_animations_without_the_override() {
     // The override is absent: the decision follows the desktop query, and
     // that query asks GNOME for `enable-animations`, not
     // `gtk-enable-animations`.
+    let _pins = appearance_pins();
     unsafe {
         std::env::remove_var("XRG_SETTINGS_REDUCED_MOTION");
     }
@@ -2383,6 +2398,7 @@ fn desktop_reduced_motion_queries_enable_animations_without_the_override() {
 fn slider_rails_contrast_with_the_card_in_both_appearances() {
     // Fix L6: the rail is a filled rect in the slider's own style, using a
     // token that stays visible against the card. Containment cannot see this.
+    let _pins = appearance_pins();
     for theme in ["light", "dark"] {
         unsafe {
             std::env::set_var("XRG_SETTINGS_THEME", theme);
@@ -2678,6 +2694,7 @@ fn cancelling_the_replacement_dialog_through_its_buttons_writes_nothing() {
 
 #[test]
 fn only_aether7b_colours() {
+    let _pins = appearance_pins();
     for theme in ["light", "dark"] {
         unsafe {
             std::env::set_var("XRG_SETTINGS_THEME", theme);
@@ -2968,4 +2985,201 @@ fn audit(harness: &Harness, frame: &egui::FullOutput, dark: bool) {
         "{} painted too little: {painted}",
         harness.window.section()
     );
+}
+
+#[test]
+fn retry_keeps_a_newer_failed_edit_and_never_saves_the_older_one() {
+    // Fix round 3 (review rr2, finding 1): replacement retains width 300;
+    // the user submits 400 while persistence still fails; focus leaves;
+    // storage recovers; Retry from another section must persist 400 —
+    // never the older 300 — and 400 must survive in the field.
+    let (root, mut harness) = blocked_harness();
+    retain_failed_width(&mut harness);
+    // Persistence keeps failing for the newer edit: the submission fails,
+    // and so does its one follow-up submission — the field resubmits on
+    // the next frame while egui's two-frame lost-focus window still
+    // reports the loss (the section switch then removes the field, so no
+    // further submissions fire and Retry is the only path left).
+    harness.store.fail_next_commits(2);
+    harness.type_into("general.window.graph_width", "400");
+    assert_eq!(
+        harness.window.error("general.window.graph_width"),
+        Some("The value could not be saved."),
+        "the newer failed edit did not report its refusal"
+    );
+    let frame = harness.quiet();
+    assert_eq!(
+        node_value(&frame, "Graph width").as_deref(),
+        Some("400"),
+        "the newer failed edit did not stay presented in its field"
+    );
+    // Focus leaves, storage recovers, and Retry is offered from another
+    // section — the edit buffer does not survive the section switch, so
+    // only what the window retained can be retried.
+    harness.window.select_section("appearance");
+    let _ = harness.quiet();
+    harness.click_labelled("Retry saving changes that did not persist");
+    let persisted = Store::open(&root).values()["general.window.graph_width"]
+        .as_i64()
+        .expect("the persisted width");
+    assert_ne!(
+        persisted, 300,
+        "retry saved the older retained 300 over the newer 400"
+    );
+    assert_eq!(
+        persisted, 400,
+        "retry persisted {persisted}, not the newest failed edit"
+    );
+    harness.window.select_section("general");
+    let frame = harness.quiet();
+    assert_eq!(
+        node_value(&frame, "Graph width").as_deref(),
+        Some("400"),
+        "the newest failed edit did not survive the retry in its field"
+    );
+    assert!(
+        !labelled(&frame, "Retry saving changes that did not persist"),
+        "the retry left its banner up"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn colour_editor_tab_exits_at_both_boundaries_and_continues() {
+    // Fix round 3 (review rr2, finding 2): forward Tab past the last
+    // channel (Opacity) closes the editor and moves focus onward to the
+    // next control after the well; Shift-Tab before the first channel
+    // closes it and returns focus to the well; Escape still returns; and
+    // Tab continues normally after the exit. All four channels are walked.
+    let mut harness = Harness::new();
+    harness.window.select_section("appearance");
+    let _well = focus_role(
+        &mut harness,
+        egui::accesskit::Role::ColorWell,
+        "Window background color",
+    );
+    // Space opens the editor on the first channel.
+    let frame = harness.frame(vec![key(egui::Key::Space)]);
+    let mut frame = frame;
+    let mut focused = harness.ctx.memory(|memory| memory.focused());
+    if focused_identity(&frame, focused)
+        .is_none_or(|(_, role, _)| role != egui::accesskit::Role::Slider)
+    {
+        frame = harness.quiet();
+        focused = harness.ctx.memory(|memory| memory.focused());
+    }
+    let (mut node, role, label) =
+        focused_identity(&frame, focused).expect("Space did not move focus into the editor");
+    assert_eq!(role, egui::accesskit::Role::Slider);
+    assert_eq!(
+        label, "Red",
+        "keyboard opening did not focus the first channel"
+    );
+    // Forward through all four channels.
+    for expected in ["Green", "Blue", "Opacity"] {
+        let frame = harness.frame(vec![key(egui::Key::Tab)]);
+        focused = harness.ctx.memory(|memory| memory.focused());
+        let (next, role, label) =
+            focused_identity(&frame, focused).expect("Tab left the editor without a focus");
+        assert_eq!(role, egui::accesskit::Role::Slider);
+        assert_eq!(label, expected);
+        assert_ne!(next, node, "Tab did not move to a different channel");
+        node = next;
+    }
+    // Forward Tab past the last channel: the editor closes and focus
+    // moves onward, to the next control after the well.
+    let frame = harness.frame(vec![key(egui::Key::Tab)]);
+    focused = harness.ctx.memory(|memory| memory.focused());
+    let (_, exit_role, exit_label) = focused_identity(&frame, focused)
+        .expect("forward Tab past the last channel left nothing focused");
+    assert_eq!(exit_role, egui::accesskit::Role::Button);
+    assert_eq!(
+        exit_label, "Inherit the default Graph background color",
+        "forward Tab past Opacity did not move focus to the next control after the well"
+    );
+    let exit_focused = focused.expect("the exit left focus somewhere");
+    // The editor closes: the frame that renders the exit still carries
+    // the popup's widgets, the ones after it do not.
+    let frame = harness.quiet();
+    for name in ["Red", "Green", "Blue", "Opacity"] {
+        assert!(
+            nodes_with_role(&frame, egui::accesskit::Role::Slider, name).is_empty(),
+            "the colour editor stayed open after the forward exit ({name})"
+        );
+    }
+    focused = harness.ctx.memory(|memory| memory.focused());
+    assert_eq!(
+        focused,
+        Some(exit_focused),
+        "focus did not stay on the next control after the editor closed"
+    );
+    // The walk continues normally from there.
+    let frame = harness.frame(vec![key(egui::Key::Tab)]);
+    focused = harness.ctx.memory(|memory| memory.focused());
+    let (_, role, label) =
+        focused_identity(&frame, focused).expect("Tab did not continue after leaving the editor");
+    assert_eq!(role, egui::accesskit::Role::ColorWell);
+    assert_eq!(label, "Graph background color");
+    // Reverse boundary: Space reopens on the first channel; Shift-Tab
+    // before it closes the editor and returns focus to the well.
+    let frame = harness.frame(vec![key(egui::Key::Space)]);
+    let mut frame = frame;
+    focused = harness.ctx.memory(|memory| memory.focused());
+    if focused_identity(&frame, focused)
+        .is_none_or(|(_, role, _)| role != egui::accesskit::Role::Slider)
+    {
+        frame = harness.quiet();
+        focused = harness.ctx.memory(|memory| memory.focused());
+    }
+    let (_, role, label) = focused_identity(&frame, focused)
+        .expect("Space did not reopen the editor on the first channel");
+    assert_eq!(role, egui::accesskit::Role::Slider);
+    assert_eq!(label, "Red");
+    let shift_tab = egui::Event::Key {
+        key: egui::Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::SHIFT,
+    };
+    let frame = harness.frame(vec![shift_tab]);
+    focused = harness.ctx.memory(|memory| memory.focused());
+    let (_, role, label) = focused_identity(&frame, focused)
+        .expect("Shift-Tab before the first channel left nothing focused");
+    assert_eq!(role, egui::accesskit::Role::ColorWell);
+    // The walk moved on to the second palette row, so its well receives
+    // the return — the row the editor was opened from.
+    assert_eq!(label, "Graph background color");
+    let reverse_well = focused.expect("Shift-Tab did not focus the well");
+    let frame = harness.quiet();
+    for name in ["Red", "Green", "Blue", "Opacity"] {
+        assert!(
+            nodes_with_role(&frame, egui::accesskit::Role::Slider, name).is_empty(),
+            "the colour editor stayed open after the reverse boundary ({name})"
+        );
+    }
+    focused = harness.ctx.memory(|memory| memory.focused());
+    assert_eq!(
+        focused,
+        Some(reverse_well),
+        "the well lost focus after the reverse exit"
+    );
+    // Escape return still closes the editor and refocuses the well.
+    let _ = harness.frame(vec![key(egui::Key::Space)]);
+    let _ = harness.quiet();
+    let _ = harness.frame(vec![key(egui::Key::Escape)]);
+    let frame = harness.quiet();
+    for name in ["Red", "Green", "Blue", "Opacity"] {
+        assert!(
+            nodes_with_role(&frame, egui::accesskit::Role::Slider, name).is_empty(),
+            "Escape did not close the colour editor ({name})"
+        );
+    }
+    focused = harness.ctx.memory(|memory| memory.focused());
+    assert_eq!(
+        focused,
+        Some(reverse_well),
+        "Escape did not return focus to the well"
+    );
+    fs::remove_dir_all(&harness.root).unwrap();
 }
