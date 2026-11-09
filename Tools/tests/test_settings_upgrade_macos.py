@@ -37,6 +37,20 @@ assert spec.loader is not None
 spec.loader.exec_module(upgrade)
 
 
+def app_document_with_all_sizes(base_document, overrides=None, drop=()):
+    """A LAUNCHED-APP-style document: the pure-migration oracle's settings PLUS
+    ALL 26 explicit layout size keys (valid, geometry-consistent values). Since
+    fix round 3, load_app_document REQUIRES all 26 to be present and valid."""
+    obj = json.loads(base_document)
+    for key in upgrade.LAYOUT_SIZE_KEYS:
+        obj["settings"].setdefault(key, 100.0 if key.endswith("width") else 90.0)
+    for key in drop:
+        obj["settings"].pop(key, None)
+    if overrides:
+        obj["settings"].update(overrides)
+    return json.dumps(obj)
+
+
 class SafetyTests(unittest.TestCase):
     def test_generated_domain_is_private_namespaced_uuid(self):
         token = upgrade.make_token()
@@ -153,7 +167,11 @@ class CompareTests(unittest.TestCase):
 
 class AppDocumentTests(unittest.TestCase):
     def setUp(self):
-        self.diagnostics, self.document = upgrade.parse_expected(EXPECTED)
+        diagnostics, raw_document = upgrade.parse_expected(EXPECTED)
+        self.diagnostics = diagnostics
+        # load_app_document now validates ALL 26 explicit layout size keys, so
+        # these tests use an app-style document that carries all of them.
+        self.document = app_document_with_all_sizes(raw_document)
         self.tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-appdoc-"))
 
     def tearDown(self):
@@ -618,6 +636,226 @@ class InputSafetyTests(unittest.TestCase):
 
     def test_accepts_the_default_fixtures(self):
         self.assertIsNone(self.safe(upgrade.default_seed_path(), upgrade.default_expected_path()))
+
+
+# --------------------------------------------------------------------------
+# Fix round 3, finding 2: the downgrade reference is captured BEFORE 0.2.3 and
+# a value changed by the 0.2.3 step MUST fail the compare (phase order).
+# --------------------------------------------------------------------------
+
+class DowngradeComparisonTests(unittest.TestCase):
+    def _domain_bytes(self, changes=None):
+        domain = plistlib.loads(SEED.read_bytes())
+        if changes:
+            domain.update(changes)
+        return plistlib.dumps(domain, fmt=plistlib.FMT_XML)
+
+    def test_reference_is_captured_before_the_upgrade_in_phase_order(self):
+        phases = upgrade.DOWNGRADE_PHASES
+        self.assertLess(phases.index("0.2.2-normalise"), phases.index("capture-reference"))
+        self.assertLess(phases.index("capture-reference"), phases.index("0.2.3-upgrade"),
+                        "the downgrade reference MUST be captured before 0.2.3 ever runs")
+        self.assertLess(phases.index("0.2.3-upgrade"), phases.index("0.2.2-downgrade"))
+        self.assertLess(phases.index("0.2.2-downgrade"), phases.index("compare-to-reference"))
+
+    def test_value_changed_by_the_upgrade_step_fails_the_compare(self):
+        # Reference captured BEFORE 0.2.3 (clean); 0.2.3 changes a persistent
+        # mapped preference that 0.2.2 preserves, so it shows up in the final
+        # 0.2.2 defaults. The compare MUST fail (the old order would pass).
+        reference = self._domain_bytes()
+        final = self._domain_bytes({"showCPUGraph": False})
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_defaults_unchanged(reference, final)
+        self.assertIn("round trip", str(caught.exception).lower())
+
+    def test_a_changed_graph_size_also_fails_the_compare(self):
+        reference = self._domain_bytes()
+        final = self._domain_bytes({"XRGModule_CPU_width": 999.0})
+        with self.assertRaises(RuntimeError):
+            upgrade.assert_defaults_unchanged(reference, final)
+
+    def test_unchanged_defaults_pass_the_compare(self):
+        reference = self._domain_bytes()
+        self.assertIsNone(upgrade.assert_defaults_unchanged(reference, reference))
+
+    def test_only_volatile_appkit_state_is_ignored(self):
+        reference = self._domain_bytes()
+        final = self._domain_bytes({"NSWindow Frame XRG2": "1 2 3 4",
+                                    "unminimizedFrame": "{{1,2},{3,4}}"})
+        self.assertIsNone(upgrade.assert_defaults_unchanged(reference, final))
+
+    def test_old_post_upgrade_reference_would_hide_the_damage(self):
+        # WHY the reorder matters: if the reference is ALSO captured after 0.2.3
+        # (both snapshots carry the damage), the compare passes and misses it.
+        damaged = self._domain_bytes({"showCPUGraph": False})
+        self.assertIsNone(upgrade.assert_defaults_unchanged(damaged, damaged))
+
+
+# --------------------------------------------------------------------------
+# Fix round 3, finding 2: the EXPLICIT 26 size keys must be present and valid,
+# consistent with the controlled geometry; missing/corrupted entries fail.
+# --------------------------------------------------------------------------
+
+class LayoutSizeTests(unittest.TestCase):
+    def _document(self, overrides=None, drop=()):
+        _, base = upgrade.parse_expected(EXPECTED)
+        return app_document_with_all_sizes(base, overrides=overrides, drop=drop)
+
+    def test_explicit_list_is_exactly_26_keys(self):
+        self.assertEqual(len(upgrade.LAYOUT_SIZE_KEYS), 26)
+        self.assertIsInstance(upgrade.LAYOUT_SIZE_KEYS, frozenset)
+        for gid in upgrade.GRAPH_IDS:
+            self.assertIn(f"graphs.{gid}.size_width", upgrade.LAYOUT_SIZE_KEYS)
+            self.assertIn(f"graphs.{gid}.size_height", upgrade.LAYOUT_SIZE_KEYS)
+        self.assertNotIn("graphs.something.size_width", upgrade.LAYOUT_SIZE_KEYS)
+
+    def test_all_26_present_and_valid_passes(self):
+        self.assertEqual(len(upgrade.assert_layout_sizes(self._document())), 26)
+
+    def test_missing_size_key_fails(self):
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document(drop=("graphs.cpu.size_width",)))
+        self.assertIn("missing", str(caught.exception).lower())
+
+    def test_corrupted_size_values_fail(self):
+        for bad in (None, "oops", True, -1.0, -50, float("nan"), float("inf"), 999999.0):
+            with self.subTest(bad=bad):
+                with self.assertRaises(RuntimeError) as caught:
+                    upgrade.assert_layout_sizes(self._document(
+                        overrides={"graphs.cpu.size_width": bad}))
+                self.assertIn("corrupted", str(caught.exception).lower())
+
+    def test_value_exceeding_controlled_geometry_fails(self):
+        bound = upgrade.SIZE_UPPER_BOUND
+        with self.assertRaises(RuntimeError):
+            upgrade.assert_layout_sizes(self._document(
+                overrides={"graphs.memory.size_height": float(bound) + 1}))
+
+    def test_projection_keeps_a_non_listed_size_like_key(self):
+        # The old regex dropped ANY graphs.*.size_* key; the explicit list must
+        # NOT silently drop a key outside the 26.
+        _, base = upgrade.parse_expected(EXPECTED)
+        obj = json.loads(base)
+        obj["settings"]["graphs.not_a_real_graph.size_width"] = 123.0
+        self.assertNotEqual(upgrade.project_layout_sizes(json.dumps(obj)),
+                            upgrade.project_layout_sizes(base))
+
+    def test_load_app_document_requires_all_26_size_keys(self):
+        # A document byte-exact to the oracle but lacking the 26 size keys must
+        # now FAIL (the old projection alone would have accepted it).
+        _, base = upgrade.parse_expected(EXPECTED)
+        tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-sizes-"))
+        try:
+            path = tmp / "settings.json"
+            path.write_text(base)  # only the 3 seeded size keys
+            with self.assertRaises(RuntimeError) as caught:
+                upgrade.load_app_document(path, [], [], base)
+            self.assertIn("missing", str(caught.exception).lower())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# Fix round 3, finding 3: caller-level proof that storage deletion is GATED on
+# confirmed process-group termination (cleanup NOT invoked when reaping fails).
+# --------------------------------------------------------------------------
+
+class ReapGatingTests(unittest.TestCase):
+    def test_cleanup_is_not_invoked_when_reaping_fails(self):
+        calls = {"cleanup": 0, "unregister": 0}
+        reported = []
+        domain = upgrade.domain_for(upgrade.make_token())
+        home = Path(tempfile.mkdtemp(prefix="xrg-upgrade-reap-"))
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+
+        def failing_reap(pending):
+            raise RuntimeError("process group 123 could not be confirmed gone")
+
+        def forbidden_cleanup(d, h):
+            calls["cleanup"] += 1
+            return []
+
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.reap_and_cleanup(
+                [object()], domain, home, (Path("/tmp/XRG-ng.app"),),
+                reap=failing_reap, cleanup_fn=forbidden_cleanup,
+                unregister=lambda app: calls.__setitem__(
+                    "unregister", calls["unregister"] + 1),
+                report=lambda retained, d: reported.extend(retained))
+        self.assertEqual(calls["cleanup"], 0,
+                         "storage MUST NOT be deleted when reaping fails")
+        self.assertEqual(calls["unregister"], 0)
+        self.assertIn("NOT deleted", str(caught.exception))
+        self.assertIn("could not confirm", str(caught.exception))
+        self.assertTrue(reported, "retained disposable paths must be printed")
+
+    def test_cleanup_runs_only_after_confirmed_reaping(self):
+        domain = upgrade.domain_for(upgrade.make_token())
+        cleaned = []
+        unregistered = []
+        result = upgrade.reap_and_cleanup(
+            [], domain, Path("/tmp"), (Path("/tmp/XRG-ng.app"),),
+            reap=lambda pending: None,
+            cleanup_fn=lambda d, h: cleaned.append((d, h)) or [],
+            unregister=lambda app: unregistered.append(app),
+            report=lambda retained, d: None)
+        self.assertEqual(result, [])
+        self.assertTrue(cleaned, "cleanup must run after confirmed termination")
+        self.assertTrue(unregistered)
+
+    def test_reap_failure_fails_loudly_with_no_success_marker(self):
+        # The caller raises (non-zero exit); ok_after_cleanup is never reached,
+        # so no SETTINGS_UPGRADE_MACOS_OK line is ever printed.
+        domain = upgrade.domain_for(upgrade.make_token())
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.reap_and_cleanup(
+                [object()], domain, Path("/tmp"), (),
+                reap=lambda p: (_ for _ in ()).throw(RuntimeError("survivor")),
+                cleanup_fn=lambda d, h: [],
+                unregister=lambda app: None,
+                report=lambda retained, d: None)
+        self.assertNotIn(upgrade.OK_LINE, str(caught.exception))
+
+
+# --------------------------------------------------------------------------
+# Fix round 3, R26: the document rewrite measurement is observational only and
+# NEVER gates success (never raises on a difference).
+# --------------------------------------------------------------------------
+
+class R26MeasurementTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-r26-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _write(self, settings):
+        path = self.tmp / "settings.json"
+        path.write_text(json.dumps({"format": "xrg-ng-settings", "version": 1,
+                                    "settings": settings}))
+        return path
+
+    def test_identical_document_reports_not_rewritten(self):
+        path = self._write({"graphs.cpu.size_width": 100})
+        before = path.read_bytes()
+        result = upgrade.measure_document_rewrite(path, before)
+        self.assertTrue(result["byteIdentical"])
+        self.assertFalse(result["documentRewritten"])
+        self.assertEqual(result["changedKeys"], [])
+
+    def test_changed_document_reports_which_keys(self):
+        path = self._write({"graphs.cpu.size_width": 100, "general.x": 1})
+        before = path.read_bytes()
+        self._write({"graphs.cpu.size_width": 200, "general.x": 1})
+        result = upgrade.measure_document_rewrite(path, before)
+        self.assertTrue(result["documentRewritten"])
+        self.assertEqual(result["changedKeys"], ["graphs.cpu.size_width"])
+
+    def test_measurement_never_raises_on_a_difference_or_removal(self):
+        path = self._write({"a": 1})
+        before = path.read_bytes()
+        path.unlink()  # document removed entirely
+        result = upgrade.measure_document_rewrite(path, before)
+        self.assertFalse(result["documentPresentAfterRelaunch"])
+        self.assertTrue(result["documentRewritten"])
 
 
 if __name__ == "__main__":

@@ -20,18 +20,39 @@ framework -- no this-checkout fallback). A negative control (--withhold-upgrade-
 or startup migration disabled) writes NO document and fails while the store
 symbols remain.
 
-ORDER: seed (no document) -> launch 0.2.3 (env var) -> validate its document ->
-normalise (run 0.2.2 baseline ONCE) -> capture the downgrade reference ->
-relaunch 0.2.2 (downgrade) -> compare its defaults byte-for-byte. The baseline
-run settles the mapped keys 0.2.2 rewrites on every launch (the 26 graph
-width/height keys, docs/settings-inventory.md §339-364), so they are INCLUDED
-in the comparison rather than excluded. A probe-only/--skip-launch run NEVER
+ORDER (fix round 3, finding 2): seed -> NORMALISE 0.2.2 until its settings
+snapshot is STABLE (a bounded launch loop, BEFORE 0.2.3) -> CAPTURE THE
+REFERENCE DEFAULTS (before 0.2.3 EVER runs) -> launch 0.2.3 (migration, env
+var) -> quit -> validate the document the app wrote -> [R26 measurement:
+relaunch 0.2.3 with the SAME geometry, byte-compare the document] -> relaunch
+0.2.2 (downgrade) -> quit -> COMPARE to the reference. Capturing the reference
+BEFORE 0.2.3 is the whole point: any persistent value 0.2.3 changes (and 0.2.2
+preserves) is then absent from the reference but present in the final snapshot,
+so the compare FAILS. The migration oracle is DERIVED CONSISTENTLY FROM THE
+NORMALISED SEED (the exact domain the 0.2.3 app migrated), not from a separate
+raw fixture. The 0.2.3 app expands the window geometry, so 0.2.2's first
+(cold) launch writes different layout-feedback sizes than warm launches;
+normalising until the settings snapshot settles (empirically 2-3 launches)
+keeps ALL 26 mapped XRGModule_* size keys IN the comparison (fix round 2,
+finding 2) rather than excluding them. A probe-only/--skip-launch run NEVER
 prints SETTINGS_UPGRADE_MACOS_OK and NEVER claims a relaunch.
 
-POST-DOWNGRADE EXCLUSIONS (finding 2) are ONLY genuinely volatile AppKit window
-geometry, each listed by exact key / one prefix whose every key is volatile:
-``NSWindow Frame `` (AppKit-autosaved window frames) and ``unminimizedFrame``
-(the graph-window restore rectangle). No mapped setting is excluded.
+SIZE KEYS (fix round 3, finding 2): the launched app's document MUST contain
+ALL 26 EXPLICIT graphs.<id>.size_width/height keys (LAYOUT_SIZE_KEYS, not a
+regex), each a valid value consistent with the CONTROLLED GEOMETRY the check
+launches with (CONTROLLED_GEOMETRY: the seed's 280x684 pt window, horizontal
+orientation). Missing or corrupted entries FAIL. The 26 keys are still projected
+out ONLY of the app-vs-oracle DOCUMENT comparison (runtime layout feedback);
+they are validated here and included in the post-downgrade DOMAIN comparison.
+
+POST-DOWNGRADE EXCLUSIONS are ONLY genuinely volatile AppKit window geometry:
+``NSWindow Frame `` (autosaved frames) and ``unminimizedFrame`` (restore rect).
+No mapped setting is excluded.
+
+R26 MEASUREMENT is observational ONLY: after the migration launch the app is
+launched a second time with the same geometry and its document is byte-compared
+before/after. The result (rewritten or not, which keys) is written to the
+summary and the report's concerns; the check NEVER gates success on it.
 
 SAFETY (absolute): the real production defaults domain ``com.sdelavega.xrg``,
 its ~/Library/Preferences plist, and the real ~/Library/Application
@@ -43,18 +64,20 @@ generated UUID in a private namespace. Cleanup attempts every step, checks
 return codes, verifies the disposable domain/plist/private folder are gone and
 reports accumulated failures; the OK line is printed only after cleanup
 succeeded (non-zero exit otherwise). Catchable termination signals run all
-``finally`` blocks; launched process groups are terminated, reaped and CONFIRMED
-gone in a finally BEFORE their storage is deleted (finding 3).
+``finally`` blocks. Storage deletion is GATED on confirmed process-group
+termination (finding 3): if terminate_and_reap cannot confirm a group is gone,
+cleanup is NOT invoked, the retained disposable paths are printed, and the run
+fails with a non-zero exit and NO OK line.
 
 Prints SETTINGS_UPGRADE_MACOS_OK on full success.
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import platform
 import plistlib
-import re
 import shutil
 import signal
 import subprocess
@@ -96,13 +119,57 @@ SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 VOLATILE_PREFIXES = ("NSWindow Frame ",)
 VOLATILE_KEYS = frozenset({"unminimizedFrame"})
 
-# The 26 graphs.*.size_width/height settings the launched 0.2.3 app recomputes
-# on layout and writes into settings.json on every launch (XRGModule resize
-# feedback, docs/settings-inventory.md §339-364). They are runtime window
-# geometry, not the seeded 0.2.2 values, so they are projected out ONLY when
-# comparing the APP's document with the pure-migration oracle. They ARE compared
-# (included, after normalisation) in the post-downgrade domain comparison.
-LAYOUT_SIZE_KEY = re.compile(r"^graphs\..*\.size_(width|height)$")
+# The EXACT 26 graphs.<id>.size_width/height settings (13 graphs x 2). Fix
+# round 3 replaces the old permissive regex (r"^graphs\..*\.size_(width|height)$")
+# with this explicit list: docs/settings-inventory.md §339-364 maps exactly these
+# legacy XRGModule_* keys. A key NOT in this list is a real setting and is NEVER
+# silently projected out. These are the runtime layout-feedback values the
+# launched 0.2.3 app writes into settings.json; they are projected out ONLY of
+# the app-vs-oracle DOCUMENT comparison, but MUST be present and valid
+# (assert_layout_sizes) and are included in the post-downgrade DOMAIN comparison.
+GRAPH_IDS = ("cpu", "gpu", "npu", "vram", "memory", "battery",
+             "temperature", "network", "disk", "ai", "fans", "weather", "stock")
+LAYOUT_SIZE_KEYS = frozenset(
+    f"graphs.{gid}.size_{dim}" for gid in GRAPH_IDS for dim in ("width", "height"))
+
+# The CONTROLLED GEOMETRY the check launches with (stated in the report). The
+# seed fixture Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist fixes
+# the graph window at 280 x 684 points ("NSWindow Frame XRG" = "{{216, 136},
+# {280, 684}}", windowWidth=280, windowHeight=684), horizontal graph
+# orientation (graphOrientationVertical=False), a fixed 13-graph order and
+# specific XRGModule_* / graphPresentationV1 overrides. On its first launch the
+# app expands the window horizontally to fit the graph row (the display is
+# 1920 x 1205), but each graph's width is a SHARE of that row (<= 280) and each
+# height is <= 684; observed 0.2.3-document sizes are width 157.45 or 0
+# (non-displayed graphs), height 672/140 (overrides) or 0. So every per-graph
+# dimension stays within the seeded 280x684 geometry; the sum of its sides is a
+# safe upper bound for a valid, geometry-consistent value.
+CONTROLLED_GEOMETRY = {
+    "windowWidth": 280,
+    "windowHeight": 684,
+    "windowFrame": "{{216, 136}, {280, 684}}",
+    "orientation": "horizontal",
+    "source": "Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist",
+    "observedDisplay": "1920x1205",
+}
+# A finite, non-negative graph dimension larger than windowWidth+windowHeight
+# is inconsistent with launching inside the controlled 280x684 geometry
+# (a corrupted/absurd value fails).
+SIZE_UPPER_BOUND = CONTROLLED_GEOMETRY["windowWidth"] + CONTROLLED_GEOMETRY["windowHeight"]
+
+# The ordered phases of a FULL run (finding 2). The DOWNGRADE REFERENCE is
+# captured after normalisation and BEFORE 0.2.3 is ever launched; main() follows
+# this order and the unit tests assert the invariant directly.
+DOWNGRADE_PHASES = (
+    "seed",
+    "0.2.2-normalise",
+    "capture-reference",
+    "0.2.3-upgrade",
+    "validate-app-document",
+    "0.2.3-relaunch-r26",
+    "0.2.2-downgrade",
+    "compare-to-reference",
+)
 
 
 class DocumentMismatch(RuntimeError):
@@ -253,24 +320,68 @@ def _normalise_diagnostics(diagnostics):
 
 
 def project_layout_sizes(document_text):
-    """Canonical document bytes with the 26 runtime layout size settings removed.
+    """Canonical document bytes with the EXACT 26 layout size settings removed.
 
-    The LAUNCHED 0.2.3 app recomputes graph geometry on layout and writes the
-    ``graphs.*.size_width/height`` settings into settings.json on EVERY launch
-    (XRGModule resize feedback, docs/settings-inventory.md §339-364). Those are
-    live window geometry, not the seeded 0.2.2 values, so a byte-exact equality
-    with the pure-migration oracle is impossible. They are projected out ONLY
-    here so every OTHER (migrated) setting can be validated byte-for-byte; the
-    26 size keys are still compared, included, after normalisation in the
-    post-downgrade domain comparison (finding 2).
+    Only the explicit LAYOUT_SIZE_KEYS are dropped -- no regex. The LAUNCHED
+    0.2.3 app recomputes graph geometry on layout and writes those settings into
+    settings.json on EVERY launch (XRGModule resize feedback, docs/settings-
+    inventory.md §339-364). They are live window geometry, not the seeded 0.2.2
+    values, so byte-exact equality with the pure-migration oracle is impossible.
+    They are projected out ONLY here so every OTHER (migrated) setting is
+    validated byte-for-byte; the 26 keys are additionally REQUIRED present and
+    valid by assert_layout_sizes, and are included in the post-downgrade domain
+    comparison (finding 2).
     """
     obj = json.loads(document_text)
     if not isinstance(obj, dict) or not isinstance(obj.get("settings"), dict):
         raise RuntimeError("SETTINGS_UPGRADE_MACOS: the app document is not a settings document")
     canonical = dict(obj)
     canonical["settings"] = {k: v for k, v in obj["settings"].items()
-                             if not LAYOUT_SIZE_KEY.match(k)}
+                             if k not in LAYOUT_SIZE_KEYS}
     return json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+
+
+def _valid_layout_size(value, bound):
+    """A single graph dimension is valid iff it is a finite JSON number in
+    [0, bound] -- consistent with the controlled geometry. Rejects missing
+    (handled by caller), null/string/bool, negative, NaN/inf and huge values."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        return False
+    return math.isfinite(number) and 0 <= number <= bound
+
+
+def assert_layout_sizes(document_text, geometry=None):
+    """Fix round 3 / finding 2: the app's document MUST contain ALL 26 explicit
+    ``graphs.<id>.size_width/height`` settings, each a valid value consistent
+    with the CONTROLLED GEOMETRY the check launches with. A MISSING or CORRUPTED
+    entry FAILS (the old regex projection silently accepted both). Returns the
+    {key: value} dict of the 26 validated sizes on success.
+    """
+    geometry = geometry or CONTROLLED_GEOMETRY
+    obj = json.loads(document_text)
+    if not isinstance(obj, dict) or not isinstance(obj.get("settings"), dict):
+        raise RuntimeError("SETTINGS_UPGRADE_MACOS: the app document is not a settings document")
+    settings = obj["settings"]
+    bound = geometry["windowWidth"] + geometry["windowHeight"]
+    values = {}
+    for key in sorted(LAYOUT_SIZE_KEYS):
+        if key not in settings:
+            raise RuntimeError(
+                f"SETTINGS_UPGRADE_MACOS: the app document is MISSING required "
+                f"layout size setting {key}")
+        value = settings[key]
+        if not _valid_layout_size(value, bound):
+            raise RuntimeError(
+                f"SETTINGS_UPGRADE_MACOS: the app document has a CORRUPTED layout "
+                f"size setting {key}={value!r}; expected a finite number in "
+                f"[0, {bound}] consistent with the controlled "
+                f"{geometry['windowWidth']}x{geometry['windowHeight']} window")
+        values[key] = value
+    return values
 
 
 def compare_documents(expected_diagnostics, expected_document, actual_diagnostics, actual_document):
@@ -324,6 +435,10 @@ def load_app_document(document_path, actual_diagnostics, expected_diagnostics, e
             f"settings document at {document_path}; startup migration did not run -- "
             f"an app that does not migrate must fail")
     document = document_path.read_bytes().decode("utf-8")
+    # Finding 2 (rr2): do NOT silently project the 26 size keys away. The app's
+    # document must actually CONTAIN all 26, with valid geometry-consistent
+    # values; a missing or corrupted entry fails here before the comparison.
+    assert_layout_sizes(document)
     compare_app_document(expected_diagnostics, expected_document, actual_diagnostics, document)
     return document
 
@@ -341,6 +456,53 @@ def defaults_snapshot(exported_bytes):
     stable = {key: value for key, value in domain.items()
               if key not in VOLATILE_KEYS and not key.startswith(VOLATILE_PREFIXES)}
     return plistlib.dumps(stable, fmt=plistlib.FMT_BINARY, sort_keys=True)
+
+
+def assert_defaults_unchanged(reference_raw, final_raw):
+    """Finding 2 downgrade gate: the final 0.2.2 defaults must equal the
+    reference captured BEFORE 0.2.3 ever ran. If 0.2.3 changed a persistent
+    preference that 0.2.2 preserves, that value is ABSENT from the reference
+    but PRESENT in the final snapshot, so this compare FAILS -- which the old
+    (post-upgrade) reference capture could not detect. Pure + unit tested.
+    """
+    if defaults_snapshot(final_raw) != defaults_snapshot(reference_raw):
+        raise RuntimeError(
+            "SETTINGS_UPGRADE_MACOS: 0.2.2 defaults changed after the "
+            "0.2.3 -> 0.2.2 round trip (settings were corrupted or migrated in place)")
+
+
+def measure_document_rewrite(document_path, before_bytes):
+    """R26 MEASUREMENT (observational ONLY). Byte-compare the app's document
+    before and after a second 0.2.3 launch with the SAME geometry. NEVER raises
+    on a difference: the check does not gate success on this answer; the
+    coordinator takes it to the final review. Returns a dict describing whether
+    the document was rewritten and, if so, which keys changed.
+    """
+    path = Path(document_path)
+    try:
+        after_bytes = path.read_bytes()
+        after_present = True
+    except OSError:
+        after_bytes = None
+        after_present = False
+    identical = after_present and after_bytes == before_bytes
+    changed_keys = []
+    if after_present and not identical:
+        try:
+            before = json.loads(before_bytes.decode("utf-8")).get("settings", {})
+            after = json.loads(after_bytes.decode("utf-8")).get("settings", {})
+            changed_keys = sorted(key for key in set(before) | set(after)
+                                  if before.get(key) != after.get(key))
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            changed_keys = ["<unparseable document>"]
+    return {
+        "documentRewritten": not identical,
+        "byteIdentical": identical,
+        "documentPresentAfterRelaunch": after_present,
+        "changedKeys": changed_keys,
+        "beforeBytes": len(before_bytes),
+        "afterBytes": len(after_bytes) if after_present else None,
+    }
 
 
 def success_marker(launched):
@@ -362,7 +524,11 @@ def ok_after_cleanup(cleanup_failures, launched):
 def summary_fields(domain, seed, expected, document_path, diagnostics,
                    launched, launches, defaults_byte_identical,
                    supplementary_probe_matches, supplementary_driver_matches=False,
-                   downgrade_normalised=False, layout_size_settings_normalised=False):
+                   downgrade_normalised=False, layout_size_settings_normalised=False,
+                   oracle_derived_from_normalised_seed=False,
+                   reference_captured_before_upgrade=False,
+                   layout_size_keys_validated=False, r26=None,
+                   derived_oracle_matches_pinned=False):
     """Only a full (launched) run may claim a 0.2.2 relaunch (finding 2)."""
     return {
         "domain": domain, "seed": str(seed), "expected": str(expected),
@@ -370,10 +536,15 @@ def summary_fields(domain, seed, expected, document_path, diagnostics,
         "documentPath": str(document_path),
         "documentMatchesExpected": True, "diagnostics": diagnostics,
         "layoutSizeSettingsNormalised": layout_size_settings_normalised,
+        "layoutSizeKeysValidated": layout_size_keys_validated,
+        "migrationOracleDerivedFromNormalisedSeed": oracle_derived_from_normalised_seed,
+        "derivedOracleMatchesPinnedProjected": derived_oracle_matches_pinned,
+        "referenceCapturedBeforeUpgrade": reference_captured_before_upgrade,
         "defaultsByteIdentical": defaults_byte_identical,
         "downgradeBaselineNormalised": downgrade_normalised,
         "supplementaryDriverMatches": supplementary_driver_matches,
         "supplementaryProbeMatches": supplementary_probe_matches,
+        "r26DocumentRewriteMeasurement": r26,
         "launched": launched,
         "baselineRelaunched": launched,
         "launches": launches,
@@ -505,6 +676,42 @@ def cleanup(domain, home, run=None):
     except (OSError, subprocess.SubprocessError) as error:
         failures.append(f"could not verify domain removal: {error}")
     return failures
+
+
+def report_retained_paths(retained, domain):
+    """Finding 3: print the retained disposable paths when reaping FAILS, so a
+    human/coordinator can remove them by hand. Storage is deliberately NOT
+    deleted in this case (a surviving process could recreate/access it)."""
+    print(f"SETTINGS_UPGRADE_MACOS: retained disposable domain {domain}", file=sys.stderr)
+    for path in retained:
+        print(f"SETTINGS_UPGRADE_MACOS: retained disposable path: {path}", file=sys.stderr)
+
+
+def reap_and_cleanup(pending, domain, home, unregisters, *, reap, cleanup_fn,
+                     unregister, report):
+    """Finding 3: GATE ALL storage deletion on CONFIRMED process-group
+    termination.
+
+    ``reap(pending)`` (terminate_and_reap) returns ONLY after every launched
+    group is confirmed gone, or RAISES. If it raises, storage is NOT deleted:
+    the retained disposable paths are printed and a RuntimeError propagates
+    (non-zero exit, NO OK line). Unregister + deletion happen ONLY after
+    termination is confirmed. Returns cleanup()'s failure list on success.
+
+    Fully injectable so the caller-level guarantee is unit tested.
+    """
+    try:
+        reap(pending)
+    except Exception as error:  # ANY failure to confirm termination = do not delete
+        retained = [str(path) for path in private_paths(home, domain)]
+        report(retained, domain)
+        raise RuntimeError(
+            "SETTINGS_UPGRADE_MACOS: could not confirm process-group termination "
+            f"({error}); disposable storage NOT deleted; retained disposable "
+            "paths printed above") from error
+    for app in unregisters:
+        unregister(app)
+    return cleanup_fn(domain, home)
 
 
 # --------------------------------------------------------------------------
@@ -797,6 +1004,60 @@ def run_supplementary(app, results, seed, products, expected_diagnostics, expect
     return driver_document, probe_diagnostics
 
 
+def derive_oracle_from_normalised_seed(results, normalised_seed, products, expected_document):
+    """Finding 2: DERIVE THE MIGRATION ORACLE CONSISTENTLY FROM THE NORMALISED
+    SEED (stated as the chosen option in the report).
+
+    The 0.2.2 normalisation run settles the 26 layout-size keys BEFORE 0.2.3
+    ever runs; the 0.2.3 app then migrates THAT exact domain. So the expected
+    0.2.3 document is the pure migration of the NORMALISED seed (the captured
+    reference plist), NOT of the raw Task-4 fixture -- this is consistent with
+    the launched app BY CONSTRUCTION (both migrate the same normalised domain).
+
+    R21 (a legitimate catalog/migration divergence) is still enforced SEPARATELY
+    and byte-exactly over the RAW Task-4 fixture by run_supplementary. Here we
+    only RECORD whether the derived oracle's layout-projected form also equals
+    the pinned Task-4 oracle projected; a difference (if any) is attributable to
+    0.2.2's deterministic normalisation of a mapped non-layout setting, already
+    captured in the reference, and must NOT be mistaken for upgrade damage.
+    Returns (derived_oracle_text, matches_pinned_projected).
+    """
+    probe_products = build_probe_products(REPO, results, products)
+    probe = compile_probe(probe_products, results)
+    doc_path = results / "oracle-normalised-document.json"
+    diag_path = results / "oracle-normalised-diagnostics.json"
+    run_probe(probe, probe_products, normalised_seed, doc_path, diag_path)
+    derived = doc_path.read_bytes().decode("utf-8")
+    matches_pinned_projected = (
+        project_layout_sizes(derived) == project_layout_sizes(expected_document))
+    return derived, matches_pinned_projected
+
+
+def r26_relaunch(app, domain, results, timeout, processes, reaped, extra_env,
+                 document_path, before_bytes):
+    """R26 MEASUREMENT (observational ONLY): relaunch 0.2.3 with the SAME env
+    var + geometry and byte-compare its document before/after. The check NEVER
+    gates on the measurement result (coordinator takes it to final review): a
+    non-zero exit on this relaunch is RECORDED, not fatal. Reaping failures
+    still propagate (finding 3). Returns (record, measurement).
+    """
+    try:
+        record = launch_one(app, domain, results, timeout, processes, extra_env,
+                            "0.2.3-relaunch-r26")
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        # A measurement-only relaunch that exits is recorded, NOT fatal.
+        record = {"phase": "0.2.3-relaunch-r26", "resident": False,
+                  "outcome": f"exited: {error}"}
+    # Confirm the launched group is gone (safety); do not gate on residency.
+    pending_new = [process for process in processes if process.pid not in reaped]
+    if pending_new:
+        terminate_and_reap(pending_new)  # may raise (no success) -- finding 3
+        for process in pending_new:
+            reaped.add(process.pid)
+    measurement = measure_document_rewrite(document_path, before_bytes)
+    return record, measurement
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True, help="Freshly built 0.2.3 XRG-ng.app")
@@ -870,6 +1131,12 @@ def main(argv=None):
     supplementary_probe_matches = False
     downgrade_normalised = False
     layout_size_settings_normalised = False
+    layout_size_keys_validated = False
+    oracle_derived_from_normalised_seed = False
+    oracle_matches_pinned = False
+    reference_captured_before_upgrade = False
+    r26 = None
+    oracle_document = expected_document
     try:
         # Finding 1: "starts with no document".
         if document_path.exists():
@@ -877,12 +1144,12 @@ def main(argv=None):
                 f"SETTINGS_UPGRADE_MACOS: a document already exists at the app's "
                 f"R11 private store {document_path}; the app must start with none")
 
-        # 1. Seed the disposable domain.
+        # ---- DOWNGRADE_PHASES[0]: seed ----------------------------------------
         seed_domain(domain, seed)
         (results / "seed-defaults.plist").write_bytes(export_domain(domain))
 
-        # 2. Supplementary PURE migrations (driver over the supplied app's
-        #    framework, probe over the shared core). Both must equal the oracle.
+        # R21 PURE-migration oracle over the RAW Task-4 fixture (byte-exact),
+        # shared by full and probe-only runs. A tampered --expected fails here.
         _, probe_diagnostics = run_supplementary(
             app, results, seed, args.products, expected_diagnostics, expected_document)
         driver_diagnostics = probe_diagnostics
@@ -897,64 +1164,104 @@ def main(argv=None):
             make_renamed_copy(baseline_app, domain, old_copy)
             env_for_upgrade = upgrade_check_env(domain, enabled=not args.withhold_upgrade_env)
 
-            # 3. Launch the 0.2.3 app WITH the env var -> it migrates the seeded
-            #    domain into its OWN R11 document. (Negative control withholds
-            #    the env var: no document -> the check fails below.)
+            # ---- [1] 0.2.2-normalise (BEFORE 0.2.3 ever runs) ---------------
+            # Finding 2: NORMALISE with 0.2.2 so the mapped keys it rewrites on
+            # every launch are settled, not excluded (fix round 2, finding 2 --
+            # ALL 26 XRGModule_* size keys stay IN the byte comparison). The 26
+            # sizes are layout feedback: the FIRST launch from the seeded
+            # (minimised 280x684) frame expands the window, so that cold launch
+            # writes different sizes than every warm launch (measured: 21.18 ->
+            # 157.45). Launch 0.2.2 until its settings snapshot is STABLE, then
+            # capture the reference from that warm, settled state -- all before
+            # 0.2.3. This is why the downgrade compare can still detect ANY
+            # persistent value 0.2.3 changes.
+            prev_snapshot = None
+            reference_raw = None
+            for _attempt in range(3):  # bounded; empirically settles in 2-3
+                launches.append(launch_phase(
+                    old_copy, domain, results, args.launch_timeout,
+                    processes, reaped, None, "0.2.2-normalise"))
+                settle(args.settle_timeout)
+                reference_raw = export_domain(domain)
+                snapshot = defaults_snapshot(reference_raw)
+                if prev_snapshot is not None and snapshot == prev_snapshot:
+                    break
+                prev_snapshot = snapshot
+
+            # ---- [2] capture-reference (BEFORE 0.2.3 EVER runs) --------------
+            (results / "reference-defaults.plist").write_bytes(reference_raw)
+            downgrade_normalised = True
+            reference_captured_before_upgrade = True
+
+            # Derive the migration oracle CONSISTENTLY FROM THE NORMALISED SEED
+            # (the exact domain the 0.2.3 app is about to migrate) -- the chosen
+            # option (vs. an independent baseline-control domain). Its projected
+            # form must equal the pure Task-4 oracle (R21). See report.
+            oracle_document, oracle_matches_pinned = derive_oracle_from_normalised_seed(
+                results, results / "reference-defaults.plist", args.products,
+                expected_document)
+            oracle_derived_from_normalised_seed = True
+
+            # ---- [3] 0.2.3-upgrade (migration) --------------------------------
             launches.append(launch_phase(new_copy, domain, results, args.launch_timeout,
                                          processes, reaped, env_for_upgrade, "0.2.3-upgrade"))
             settle(args.settle_timeout)
 
-            # 4. Validate the document THE APP wrote (negative-control gate).
+            # ---- [4] validate-app-document (negative-control gate) ------------
+            # load_app_document now ALSO requires ALL 26 explicit size keys to be
+            # present and valid (assert_layout_sizes); missing/corrupt -> fail.
             document = load_app_document(document_path, driver_diagnostics,
-                                         expected_diagnostics, expected_document)
+                                         expected_diagnostics, oracle_document)
             (results / "0.2.3-document.json").write_text(document)
+            before_bytes = document_path.read_bytes()
+            (results / "layout-sizes.json").write_text(json.dumps(
+                assert_layout_sizes(document), indent=2, sort_keys=True) + "\n")
             layout_size_settings_normalised = True
+            layout_size_keys_validated = True
 
-            # 5. Finding 2 NORMALISATION: run the 0.2.2 baseline ONCE before
-            #    capturing the reference, so keys 0.2.2 rewrites on every launch
-            #    (the 26 mapped XRGModule_* sizes) are settled, not excluded.
-            launches.append(launch_phase(old_copy, domain, results, args.launch_timeout,
-                                         processes, reaped, None, "0.2.2-baseline"))
-            settle(args.settle_timeout)
-            reference_raw = export_domain(domain)
-            (results / "reference-defaults.plist").write_bytes(reference_raw)
-            reference = defaults_snapshot(reference_raw)
-            downgrade_normalised = True
+            # ---- [5] 0.2.3-relaunch-r26 (R26 MEASUREMENT, observational) -----
+            r26_record, r26 = r26_relaunch(
+                new_copy, domain, results, args.launch_timeout, processes, reaped,
+                env_for_upgrade, document_path, before_bytes)
+            r26["relaunch"] = r26_record
+            (results / "r26-measurement.json").write_text(json.dumps(r26, indent=2) + "\n")
 
-            # 6. Downgrade: relaunch 0.2.2, quit, settle, compare byte-for-byte.
+            # ---- [6] 0.2.2-downgrade ------------------------------------------
             launches.append(launch_phase(old_copy, domain, results, args.launch_timeout,
                                          processes, reaped, None, "0.2.2-downgrade"))
             settle(args.settle_timeout)
             final_raw = export_domain(domain)
             (results / "downgraded-defaults.plist").write_bytes(final_raw)
-            if defaults_snapshot(final_raw) != reference:
-                raise RuntimeError(
-                    "SETTINGS_UPGRADE_MACOS: 0.2.2 defaults changed after the "
-                    "0.2.3 -> 0.2.2 round trip (settings were corrupted or migrated in place)")
+
+            # ---- [7] compare-to-reference -------------------------------------
+            # Reference was captured BEFORE 0.2.3: any 0.2.3 damage is now in the
+            # final snapshot but NOT the reference, so this compare CATCHES it.
+            assert_defaults_unchanged(reference_raw, final_raw)
             defaults_byte_identical = True
 
+            # Only the three GATE launches must be resident; the R26 relaunch is
+            # a measurement whose residency never gates success (R26).
             assert_all_resident(launches)
 
         (results / "summary.json").write_text(json.dumps(summary_fields(
             domain, seed, expected_path, document_path, driver_diagnostics,
             not args.skip_launch, launches, defaults_byte_identical,
             supplementary_probe_matches, supplementary_driver_matches,
-            downgrade_normalised, layout_size_settings_normalised), indent=2) + "\n")
+            downgrade_normalised, layout_size_settings_normalised,
+            oracle_derived_from_normalised_seed, reference_captured_before_upgrade,
+            layout_size_keys_validated, r26, oracle_matches_pinned), indent=2) + "\n")
     finally:
-        # Finding 3: reap ALL launched process groups and CONFIRM they are gone
-        # BEFORE any storage is deleted. A failure here raises (no success) but
-        # the nested finally still unregisters and cleans up every artifact.
+        # Finding 3: GATE storage deletion on CONFIRMED process-group termination.
+        # reap_and_cleanup reaps every launched group and CONFIRMS they are gone
+        # BEFORE calling cleanup. On a reap failure it does NOT delete storage,
+        # prints the retained disposable paths and raises (no OK line, non-zero).
         pending = [process for process in processes if process.pid not in reaped]
-        try:
-            terminate_and_reap(pending)
-        finally:
-            try:
-                _unregister(new_copy)
-                _unregister(old_copy)
-            finally:
-                cleanup_failures = cleanup(domain, home)
-            for failure in cleanup_failures:
-                print(f"cleanup failure: {failure}", file=sys.stderr)
+        cleanup_failures = reap_and_cleanup(
+            pending, domain, home, (new_copy, old_copy),
+            reap=terminate_and_reap, cleanup_fn=cleanup, unregister=_unregister,
+            report=report_retained_paths)
+        for failure in cleanup_failures:
+            print(f"cleanup failure: {failure}", file=sys.stderr)
 
     # The OK line is printed ONLY after reaping + cleanup succeeded.
     print(ok_after_cleanup(cleanup_failures, not args.skip_launch), flush=True)
