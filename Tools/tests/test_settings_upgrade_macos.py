@@ -39,11 +39,14 @@ spec.loader.exec_module(upgrade)
 
 def app_document_with_all_sizes(base_document, overrides=None, drop=()):
     """A LAUNCHED-APP-style document: the pure-migration oracle's settings PLUS
-    ALL 26 explicit layout size keys (valid, geometry-consistent values). Since
-    fix round 3, load_app_document REQUIRES all 26 to be present and valid."""
+    ALL 26 explicit layout size keys set to their EXPECTED values DERIVED from
+    the app's own layout rules + controlled geometry + seed (fix round 4).
+    Since fix round 3 load_app_document REQUIRES all 26 present and valid, and
+    fix round 4 additionally requires CORRECT (derived) values, not just any
+    in-range number."""
     obj = json.loads(base_document)
-    for key in upgrade.LAYOUT_SIZE_KEYS:
-        obj["settings"].setdefault(key, 100.0 if key.endswith("width") else 90.0)
+    for key, (expected, _tol) in upgrade.expected_layout_sizes().items():
+        obj["settings"][key] = expected
     for key in drop:
         obj["settings"].pop(key, None)
     if overrides:
@@ -856,6 +859,235 @@ class R26MeasurementTests(unittest.TestCase):
         result = upgrade.measure_document_rewrite(path, before)
         self.assertFalse(result["documentPresentAfterRelaunch"])
         self.assertTrue(result["documentRewritten"])
+
+
+# --------------------------------------------------------------------------
+# Fix round 4, finding 2a: 0.2.2 baseline normalisation MUST CONVERGE (two
+# consecutive identical settings snapshots) within the bounded attempts. An
+# exhausted A->B->C baseline must FAIL -- never claim a normalised downgrade
+# reference, never set downgrade_normalised, never print the OK line.
+# --------------------------------------------------------------------------
+
+class NormalisationConvergenceTests(unittest.TestCase):
+    def _capture_from(self, sequence):
+        it = iter(sequence)
+        calls = []
+
+        def capture():
+            raw = next(it)
+            calls.append(raw)
+            return raw
+
+        return capture, calls
+
+    def test_convergence_on_first_two_identical_returns_settled_reference(self):
+        capture, calls = self._capture_from([b"A", b"A", b"C"])
+        result = upgrade.normalise_until_converged(capture, 3, snapshot=lambda r: r)
+        self.assertEqual(result, b"A")
+        self.assertEqual(calls, [b"A", b"A"],
+                         "must stop as soon as two consecutive snapshots match")
+
+    def test_convergence_after_a_cold_then_warm_launch(self):
+        # The real 0.2.2 sequence (measured): A = cold 21.18, B = warm
+        # 157.4545..., B again. Two consecutive identical snapshots appear on
+        # attempts 2 and 3, so the reference is captured from the settled state.
+        capture, calls = self._capture_from([b"A", b"B", b"B"])
+        result = upgrade.normalise_until_converged(capture, 3, snapshot=lambda r: r)
+        self.assertEqual(result, b"B")
+        self.assertEqual(len(calls), 3)
+
+    def test_exhaustion_a_b_c_fails(self):
+        # A->B->C NEVER produces two consecutive identical snapshots: the
+        # bounded loop must FAIL loudly rather than claim convergence.
+        capture, calls = self._capture_from([b"A", b"B", b"C"])
+        with self.assertRaises(upgrade.NormalisationDidNotConverge) as caught:
+            upgrade.normalise_until_converged(capture, 3, snapshot=lambda r: r)
+        self.assertIn("did not converge", str(caught.exception).lower())
+        self.assertIn("two consecutive", str(caught.exception).lower())
+        self.assertEqual(len(calls), 3, "all bounded attempts were consumed")
+
+    def test_normalisation_did_not_converge_is_a_runtime_error(self):
+        # main() catches RuntimeError -> non-zero exit, no OK line.
+        self.assertTrue(issubclass(upgrade.NormalisationDidNotConverge, RuntimeError))
+
+    def test_exhaustion_never_captures_reference_nor_claims_normalised(self):
+        # Mirror main()'s [1]+[2] gate exactly: the reference is written and
+        # downgrade_normalised is set ONLY after normalise_until_converged
+        # RETURNS. On exhaustion the exception propagates, so neither happens.
+        written = []
+        downgrade_normalised = False
+        reference_raw = None
+        capture, _ = self._capture_from([b"A", b"B", b"C"])
+        try:
+            reference_raw = upgrade.normalise_until_converged(
+                capture, 3, snapshot=lambda r: r)
+            written.append(reference_raw)     # [2] capture-reference
+            downgrade_normalised = True        # ONLY on demonstrated convergence
+        except upgrade.NormalisationDidNotConverge:
+            pass
+        self.assertIsNone(reference_raw)
+        self.assertEqual(written, [], "no downgrade reference on exhaustion")
+        self.assertFalse(downgrade_normalised,
+                         "never claim a normalised baseline on exhaustion")
+
+    def test_default_attempt_bound_is_three(self):
+        self.assertEqual(upgrade.MAX_NORMALISE_ATTEMPTS, 3)
+        # A single attempt can never show two consecutive snapshots -> fails.
+        with self.assertRaises(upgrade.NormalisationDidNotConverge):
+            upgrade.normalise_until_converged(lambda: b"A", 1, snapshot=lambda r: r)
+
+    def test_uses_the_injected_snapshot_function(self):
+        # Two DIFFERENT raw exports that the injected snapshot canonicalises to
+        # the SAME bytes must converge: the loop compares SNAPSHOTS, not raw.
+        capture, _ = self._capture_from([b"raw-1", b"raw-2"])
+        result = upgrade.normalise_until_converged(capture, 3,
+                                                   snapshot=lambda r: b"stable")
+        self.assertEqual(result, b"raw-2")
+
+    def test_summary_reports_the_converged_flag(self):
+        domain = "com.sdelavega.xrg.upgradecheck." + str(uuid.uuid4())
+        full = upgrade.summary_fields(
+            domain, SEED, EXPECTED, Path("/tmp/settings.json"), [],
+            launched=True, launches=[], defaults_byte_identical=True,
+            supplementary_probe_matches=True, downgrade_normalised=True,
+            baseline_converged=True)
+        self.assertTrue(full["downgradeBaselineConverged"])
+        self.assertTrue(full["downgradeBaselineNormalised"])
+        probe_only = upgrade.summary_fields(
+            domain, SEED, EXPECTED, Path("/tmp/settings.json"), [],
+            launched=False, launches=[], defaults_byte_identical=None,
+            supplementary_probe_matches=True)
+        self.assertFalse(probe_only["downgradeBaselineConverged"])
+        self.assertFalse(probe_only["downgradeBaselineNormalised"])
+
+
+# --------------------------------------------------------------------------
+# Fix round 4, finding 2b: assert_layout_sizes must check CORRECTNESS (expected
+# values DERIVED from the app's own layout rules + seed), not just a valid range.
+# The old [0, SIZE_UPPER_BOUND] check accepted all-zero sizes, a CPU override
+# changed 140->900, and hidden graphs with nonzero sizes.
+# --------------------------------------------------------------------------
+
+class SizeCorrectnessTests(unittest.TestCase):
+    def _document(self, overrides=None, drop=()):
+        _, base = upgrade.parse_expected(EXPECTED)
+        return app_document_with_all_sizes(base, overrides=overrides, drop=drop)
+
+    def _observed_document(self):
+        # The REAL Release-run values (measured from the launched 0.2.3 app):
+        # width 157.45454545454547 (11 displayed), height 672 (10 displayed),
+        # 140 (cpu), and 0 (the 2 hidden graphs). Used ONLY as test INPUT that
+        # must be ACCEPTED -- the oracle is DERIVED, never copied from these.
+        _, base = upgrade.parse_expected(EXPECTED)
+        obj = json.loads(base)
+        hidden = {"gpu", "weather"}
+        for gid in upgrade.GRAPH_IDS:
+            for dim in ("width", "height"):
+                key = f"graphs.{gid}.size_{dim}"
+                if gid in hidden:
+                    obj["settings"][key] = 0
+                elif gid == "cpu" and dim == "height":
+                    obj["settings"][key] = 140
+                elif dim == "width":
+                    obj["settings"][key] = 157.45454545454547
+                else:
+                    obj["settings"][key] = 672
+        return json.dumps(obj)
+
+    def test_real_run_values_pass(self):
+        self.assertEqual(len(upgrade.assert_layout_sizes(self._observed_document())), 26)
+
+    def test_all_zero_sizes_fail(self):
+        # All 26 = 0 are finite in-range numbers: the OLD range check accepted
+        # them. The correctness check must FAIL (a WRONG, not CORRUPTED, value).
+        zeros = {k: 0 for k in upgrade.LAYOUT_SIZE_KEYS}
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document(overrides=zeros))
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_cpu_override_140_to_900_fails(self):
+        # 900 is BELOW SIZE_UPPER_BOUND (964), so the range check passes; only
+        # the CORRECTNESS check can reject a corrupted CPU height override.
+        self.assertLess(900, upgrade.SIZE_UPPER_BOUND)
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document(
+                overrides={"graphs.cpu.size_height": 900}))
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_hidden_graph_nonzero_size_fails(self):
+        # Hidden graphs are EXPECTED to be exactly 0 (windowChanged applies
+        # NSSize.zero; XRGModule.dimension/saveSize store 0). Even a small
+        # 0.4 pt nonzero hidden size must FAIL (tight tolerance).
+        for key in ("graphs.gpu.size_width", "graphs.gpu.size_height",
+                    "graphs.weather.size_width", "graphs.weather.size_height"):
+            for bad in (157.45454545454547, 672, 0.4):
+                with self.subTest(key=key, bad=bad):
+                    with self.assertRaises(RuntimeError) as caught:
+                        upgrade.assert_layout_sizes(self._document(
+                            overrides={key: bad}))
+                    self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_derivation_matches_the_app_layout_rules(self):
+        d = upgrade.layout_size_derivation()
+        self.assertEqual(d["displayedCount"], 11)
+        self.assertEqual(d["contentWidth"], 1767)
+        self.assertEqual(d["contentHeight"], 672)
+        self.assertAlmostEqual(d["unit"], 1732 / 11, places=9)
+        self.assertEqual(d["cpuHeight"], 140)
+        expected = upgrade.expected_layout_sizes()
+        self.assertEqual(set(expected), set(upgrade.LAYOUT_SIZE_KEYS))
+        self.assertAlmostEqual(expected["graphs.cpu.size_width"][0], 1732 / 11, places=9)
+        self.assertEqual(expected["graphs.cpu.size_height"][0], 140)
+        self.assertEqual(expected["graphs.memory.size_height"][0], 672)
+        self.assertEqual(expected["graphs.gpu.size_width"][0], 0.0)
+        self.assertEqual(expected["graphs.weather.size_height"][0], 0.0)
+
+    def test_expected_values_are_computed_not_hardcoded(self):
+        # A wider controlled launch window yields a larger shared width: the
+        # expectation is DERIVED from the geometry, not a fixed observed value.
+        wider = dict(upgrade.CONTROLLED_GEOMETRY)
+        wider["expandedWindowWidth"] += 110
+        self.assertGreater(upgrade.layout_size_derivation(wider)["unit"],
+                           upgrade.layout_size_derivation()["unit"])
+
+    def test_tolerances_are_positive_and_tight(self):
+        self.assertGreater(upgrade.SIZE_TOLERANCE, 0)
+        self.assertLessEqual(upgrade.SIZE_TOLERANCE, 1.0)
+        self.assertLess(upgrade.HIDDEN_SIZE_TOLERANCE, 1e-3)
+
+    def test_load_app_document_rejects_a_wrong_size(self):
+        # The full gate (load_app_document -> assert_layout_sizes) must reject a
+        # wrong-but-in-range value before any oracle comparison.
+        _, base = upgrade.parse_expected(EXPECTED)
+        tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-wrongsize-"))
+        try:
+            path = tmp / "settings.json"
+            path.write_text(self._document(
+                overrides={"graphs.cpu.size_height": 900}))
+            with self.assertRaises(RuntimeError) as caught:
+                upgrade.load_app_document(path, [], [], base)
+            self.assertIn("wrong", str(caught.exception).lower())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_geometry_constants_match_the_seed(self):
+        # Every seed-derived input of the derivation is pinned to the ACTUAL
+        # seed plist, so the oracle cannot drift from the controlled launch.
+        seed = plistlib.loads(SEED.read_bytes())
+        g = upgrade.CONTROLLED_GEOMETRY
+        self.assertEqual(g["windowWidth"], seed["windowWidth"])
+        self.assertEqual(g["windowHeight"], seed["windowHeight"])
+        self.assertEqual(g["borderWidth"], seed["borderWidth"])
+        self.assertEqual(g["orientation"], "horizontal")
+        self.assertIs(seed["graphOrientationVertical"], False)
+        self.assertIs(seed["showGPUGraph"], False)
+        self.assertIs(seed["showWeatherGraph"], False)
+        self.assertEqual(set(g["hiddenGraphs"]), {"gpu", "weather"})
+        pres = json.loads(seed["graphPresentationV1"])
+        self.assertEqual(g["heightOverrides"]["cpu"], pres["overrides"]["cpu"]["height"])
+        font = plistlib.loads(seed["graphFont"])
+        self.assertEqual(font["$objects"][1]["NSSize"], 11.0)
+        self.assertEqual(font["$objects"][2], "Menlo-Regular")
 
 
 if __name__ == "__main__":

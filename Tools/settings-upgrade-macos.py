@@ -32,18 +32,26 @@ so the compare FAILS. The migration oracle is DERIVED CONSISTENTLY FROM THE
 NORMALISED SEED (the exact domain the 0.2.3 app migrated), not from a separate
 raw fixture. The 0.2.3 app expands the window geometry, so 0.2.2's first
 (cold) launch writes different layout-feedback sizes than warm launches;
-normalising until the settings snapshot settles (empirically 2-3 launches)
-keeps ALL 26 mapped XRGModule_* size keys IN the comparison (fix round 2,
-finding 2) rather than excluding them. A probe-only/--skip-launch run NEVER
-prints SETTINGS_UPGRADE_MACOS_OK and NEVER claims a relaunch.
+normalising until TWO CONSECUTIVE settings snapshots are IDENTICAL keeps ALL
+26 mapped XRGModule_* size keys IN the comparison (fix round 2, finding 2)
+rather than excluding them. Fix round 4 (finding 2a): that CONVERGENCE is
+REQUIRED within MAX_NORMALISE_ATTEMPTS -- exhausting the bounded attempts
+without it FAILS the check (never sets downgrade_normalised, never OK). A
+probe-only/--skip-launch run NEVER prints SETTINGS_UPGRADE_MACOS_OK and NEVER
+claims a relaunch.
 
-SIZE KEYS (fix round 3, finding 2): the launched app's document MUST contain
-ALL 26 EXPLICIT graphs.<id>.size_width/height keys (LAYOUT_SIZE_KEYS, not a
-regex), each a valid value consistent with the CONTROLLED GEOMETRY the check
-launches with (CONTROLLED_GEOMETRY: the seed's 280x684 pt window, horizontal
-orientation). Missing or corrupted entries FAIL. The 26 keys are still projected
-out ONLY of the app-vs-oracle DOCUMENT comparison (runtime layout feedback);
-they are validated here and included in the post-downgrade DOMAIN comparison.
+SIZE KEYS (fix round 3 finding 2; fix round 4 finding 2): the launched app's
+document MUST contain ALL 26 EXPLICIT graphs.<id>.size_width/height keys
+(LAYOUT_SIZE_KEYS, not a regex). Fix round 4 requires CORRECTNESS, not just a
+valid range: assert_layout_sizes derives the EXPECTED width/height of every
+displayed/hidden graph and the seeded CPU height override (140) from the app's
+own layout rules (XRGModuleManager.windowChanged horizontal branch, plus
+XRGModule.dimension / minHeight) applied to the controlled launch geometry and
+the seed, and checks each value within a stated tolerance. All-zero sizes, a
+CPU override changed 140->900, or a hidden graph with a nonzero size all FAIL.
+The 26 keys are still projected out ONLY of the app-vs-oracle DOCUMENT
+comparison (runtime layout feedback); they are validated here and included in
+the post-downgrade DOMAIN comparison.
 
 POST-DOWNGRADE EXCLUSIONS are ONLY genuinely volatile AppKit window geometry:
 ``NSWindow Frame `` (autosaved frames) and ``unminimizedFrame`` (restore rect).
@@ -132,18 +140,56 @@ GRAPH_IDS = ("cpu", "gpu", "npu", "vram", "memory", "battery",
 LAYOUT_SIZE_KEYS = frozenset(
     f"graphs.{gid}.size_{dim}" for gid in GRAPH_IDS for dim in ("width", "height"))
 
-# The CONTROLLED GEOMETRY the check launches with (stated in the report). The
-# seed fixture Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist fixes
-# the graph window at 280 x 684 points ("NSWindow Frame XRG" = "{{216, 136},
-# {280, 684}}", windowWidth=280, windowHeight=684), horizontal graph
-# orientation (graphOrientationVertical=False), a fixed 13-graph order and
-# specific XRGModule_* / graphPresentationV1 overrides. On its first launch the
-# app expands the window horizontally to fit the graph row (the display is
-# 1920 x 1205), but each graph's width is a SHARE of that row (<= 280) and each
-# height is <= 684; observed 0.2.3-document sizes are width 157.45 or 0
-# (non-displayed graphs), height 672/140 (overrides) or 0. So every per-graph
-# dimension stays within the seeded 280x684 geometry; the sum of its sides is a
-# safe upper bound for a valid, geometry-consistent value.
+# Seed-derived inputs (fix round 4, finding 2b). Each comes from the SEED
+# fixture Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist:
+#   showGPUGraph=false, showWeatherGraph=false -> exactly gpu + weather hidden,
+#     the other 11 displayed; graphPresentationV1 cpu.height=140 (its
+#     gpu.height=72 is irrelevant because gpu is hidden);
+#   borderWidth=6, graphOrientationVertical=false (HORIZONTAL),
+#     graphFont=Menlo-Regular 11, windowWidth=280, windowHeight=684,
+#     "NSWindow Frame XRG"={{216,136},{280,684}}, unminimizedFrame=280x684.
+# App-source constants: moduleSeparatorWidth=2 and minHeight=30 are the
+# XRGModuleManager.swift / XRGModule.swift defaults; titleHeight=
+# XRGModule.dimension(textRectHeight)=13 = the Menlo-11 "A" line height the
+# app derives from the seeded font (XRGSettings.swift / XRGModuleManager.swift:75).
+# See the report's "Fix round 4 / size derivation" for the full derivation.
+HIDDEN_GRAPHS = frozenset({"gpu", "weather"})
+DISPLAYED_GRAPHS = tuple(gid for gid in GRAPH_IDS if gid not in HIDDEN_GRAPHS)
+HEIGHT_OVERRIDES = {"cpu": 140}
+
+# Fix round 4, finding 2b: the 26 EXPECTED sizes are DERIVED from the app's OWN
+# layout rules applied to the CONTROLLED launch geometry and the SEED -- they
+# are NOT copied from any observed settings.json. The only "observed output" is
+# the 26 graphs.*.size_* values the app writes; here every expected value is
+# COMPUTED by XRGModuleManager.windowChanged(to:)'s HORIZONTAL else-branch
+# (XRGModuleManager.swift:206-209), with XRGModule.dimension/minHeight
+# (XRGModule.swift:51,120-122) and the zero rule for hidden modules
+# (XRGModuleManager.swift:176-179).
+#
+# CONTROLLED LAUNCH GEOMETRY (the `size` INPUT to windowChanged): the seeded
+# window is 280x684 and collapsed. On launch the app's checkWindowSize()
+# (XRGGraphWindow.swift:498-504) expands it to manager.getMinSize()
+# (XRGModuleManager.swift:154-166) = titleHeight + (maxMinWidth + separator)
+# *count + 2*border, i.e. wide enough for the 11-graph horizontal row. On THIS
+# controlled host (Menlo-11 labels, 1920x1205 display) that frame is 1779x684
+# pt (AppKit rounds it to whole points); the domain's unminimizedFrame becomes
+# {{...,...},{1779,684}} after the launch. 1779 is therefore a CONTROLLED
+# launch INPUT, not one of the 26 document values being validated; a frame that
+# drifted from it would make the width assertion FAIL loudly, not pass.
+#
+# Applying windowChanged(to: 1779x684), HORIZONTAL branch:
+#   border=6; separator=2; titleHeight=13; minHeight=30; count=11;
+#   contentWidth  = 1779 - 2*6 = 1767;  contentHeight = 684 - 2*6 = 672;
+#   unit = max(0, 1767 - 13 - 2*11)/11 = 1732/11 = 157.45454545454547;
+#   displayed width = unit (the same for all 11 displayed graphs);
+#   displayed height = min(672, fixedHeight ?? 672):
+#     cpu fixedHeight = max(minHeight=30, 140) = 140 -> 140 (the override);
+#     the other 10 displayed graphs have no height override -> 672;
+#   hidden (gpu, weather): apply(.zero) clamps to 0, saveSize stores 0
+#     -> width=height=0.
+# So the width, both height classes, the CPU override and the zeros are all
+# DERIVED; a wrong-but-in-range value (0, 900, a nonzero hidden size) is now
+# rejected by assert_layout_sizes, which the old [0, 964] range check accepted.
 CONTROLLED_GEOMETRY = {
     "windowWidth": 280,
     "windowHeight": 684,
@@ -151,11 +197,36 @@ CONTROLLED_GEOMETRY = {
     "orientation": "horizontal",
     "source": "Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist",
     "observedDisplay": "1920x1205",
+    # Controlled launch geometry (the windowChanged `size` argument):
+    "expandedWindowWidth": 1779,
+    # Seed + XRGModuleManager / XRGModule layout-rule constants:
+    "borderWidth": 6,
+    "moduleSeparatorWidth": 2,
+    "minHeight": 30,
+    "textRectHeight": 13,
+    "hiddenGraphs": HIDDEN_GRAPHS,
+    "displayedGraphs": DISPLAYED_GRAPHS,
+    "heightOverrides": HEIGHT_OVERRIDES,
 }
 # A finite, non-negative graph dimension larger than windowWidth+windowHeight
-# is inconsistent with launching inside the controlled 280x684 geometry
-# (a corrupted/absurd value fails).
+# is inconsistent with launching inside the controlled geometry: a SECONDARY
+# sanity bound (the correctness check below is far tighter).
 SIZE_UPPER_BOUND = CONTROLLED_GEOMETRY["windowWidth"] + CONTROLLED_GEOMETRY["windowHeight"]
+# Tolerances (points). The layout inputs are integer points except the font-
+# derived titleHeight; a +/-1 pt tolerance covers sub-point font-metric/window-
+# frame rounding (the 11-way share moves <0.1 pt per graph for a 1 pt frame
+# change). It still rejects the corruptions finding 2b names (an all-zero
+# displayed size, a 900 CPU height, a nonzero hidden size) by >= 138 pt.
+# Hidden values are EXACTLY 0: windowChanged applies NSSize.zero to
+# non-displayed modules and XRGModule.dimension/saveSize store 0.0, so a tiny
+# 1e-6 tolerance (float representation only) rejects ANY meaningful nonzero
+# hidden size -- a +/-0.5 pt tolerance would wrongly accept e.g. 0.4.
+SIZE_TOLERANCE = 1.0
+HIDDEN_SIZE_TOLERANCE = 1e-6
+# Fix round 4, finding 2a: the 0.2.2 normalisation launch loop is BOUNDED (it
+# cannot run indefinitely) and MUST demonstrate convergence within this many
+# attempts, or the check fails.
+MAX_NORMALISE_ATTEMPTS = 3
 
 # The ordered phases of a FULL run (finding 2). The DOWNGRADE REFERENCE is
 # captured after normalisation and BEFORE 0.2.3 is ever launched; main() follows
@@ -354,19 +425,75 @@ def _valid_layout_size(value, bound):
     return math.isfinite(number) and 0 <= number <= bound
 
 
+def layout_size_derivation(geometry=None):
+    """Fix round 4, finding 2b: reproduce XRGModuleManager.windowChanged(to:)'s
+    HORIZONTAL else-branch purely from the controlled geometry + seed. Returns
+    the intermediate quantities of the derivation (diagnostics / unit tests):
+      contentWidth  = expandedWindowWidth - 2*border
+      contentHeight = windowHeight - 2*border
+      unit          = max(0, contentWidth - titleHeight - separator*count)/count
+      cpuHeight     = min(contentHeight, max(minHeight, cpuOverride))
+    """
+    geometry = geometry or CONTROLLED_GEOMETRY
+    border = float(geometry["borderWidth"])
+    separator = float(geometry["moduleSeparatorWidth"])
+    title_height = float(geometry["textRectHeight"])
+    min_height = float(geometry["minHeight"])
+    count = len(geometry["displayedGraphs"])
+    content_width = float(geometry["expandedWindowWidth"]) - 2 * border
+    content_height = float(geometry["windowHeight"]) - 2 * border
+    unit = max(0.0, content_width - title_height - separator * count) / count
+    cpu_height = min(content_height,
+                     max(min_height, float(geometry["heightOverrides"].get("cpu", min_height))))
+    return {
+        "border": border, "separator": separator, "titleHeight": title_height,
+        "minHeight": min_height, "displayedCount": count,
+        "contentWidth": content_width, "contentHeight": content_height,
+        "unit": unit, "cpuHeight": cpu_height,
+    }
+
+
+def expected_layout_sizes(geometry=None):
+    """The EXPECTED value + tolerance for all 26 size keys, DERIVED from the
+    controlled geometry + seed via windowChanged (horizontal branch). Pure and
+    unit tested. Hidden graphs expect exactly 0 (windowChanged applies .zero to
+    non-displayed modules; XRGModule.dimension clamps 0 and saves 0)."""
+    geometry = geometry or CONTROLLED_GEOMETRY
+    d = layout_size_derivation(geometry)
+    hidden = frozenset(geometry["hiddenGraphs"])
+    overrides = geometry["heightOverrides"]
+    expected = {}
+    for gid in GRAPH_IDS:
+        if gid in hidden:
+            expected[f"graphs.{gid}.size_width"] = (0.0, HIDDEN_SIZE_TOLERANCE)
+            expected[f"graphs.{gid}.size_height"] = (0.0, HIDDEN_SIZE_TOLERANCE)
+        else:
+            expected[f"graphs.{gid}.size_width"] = (d["unit"], SIZE_TOLERANCE)
+            height = d["contentHeight"]
+            if gid in overrides:
+                height = min(d["contentHeight"],
+                             max(d["minHeight"], float(overrides[gid])))
+            expected[f"graphs.{gid}.size_height"] = (height, SIZE_TOLERANCE)
+    return expected
+
+
 def assert_layout_sizes(document_text, geometry=None):
-    """Fix round 3 / finding 2: the app's document MUST contain ALL 26 explicit
-    ``graphs.<id>.size_width/height`` settings, each a valid value consistent
-    with the CONTROLLED GEOMETRY the check launches with. A MISSING or CORRUPTED
-    entry FAILS (the old regex projection silently accepted both). Returns the
-    {key: value} dict of the 26 validated sizes on success.
+    """Fix round 4 / finding 2: the app's document MUST contain ALL 26 explicit
+    ``graphs.<id>.size_width/height`` settings, each a finite number, AND each
+    value MUST MATCH the EXPECTED size DERIVED from the app's own layout rules
+    + controlled geometry + seed, within a stated tolerance. A MISSING or
+    CORRUPTED entry FAILS, and so does a WRONG-BUT-IN-RANGE entry (all-zero,
+    cpu 140->900, or a hidden graph with a nonzero size) -- the old fix-round-3
+    range check accepted those. Returns the {key: value} dict of the 26
+    validated sizes on success.
     """
     geometry = geometry or CONTROLLED_GEOMETRY
     obj = json.loads(document_text)
     if not isinstance(obj, dict) or not isinstance(obj.get("settings"), dict):
         raise RuntimeError("SETTINGS_UPGRADE_MACOS: the app document is not a settings document")
     settings = obj["settings"]
-    bound = geometry["windowWidth"] + geometry["windowHeight"]
+    derivation = layout_size_derivation(geometry)
+    expected = expected_layout_sizes(geometry)
     values = {}
     for key in sorted(LAYOUT_SIZE_KEYS):
         if key not in settings:
@@ -374,12 +501,24 @@ def assert_layout_sizes(document_text, geometry=None):
                 f"SETTINGS_UPGRADE_MACOS: the app document is MISSING required "
                 f"layout size setting {key}")
         value = settings[key]
-        if not _valid_layout_size(value, bound):
+        if not _valid_layout_size(value, SIZE_UPPER_BOUND):
             raise RuntimeError(
                 f"SETTINGS_UPGRADE_MACOS: the app document has a CORRUPTED layout "
                 f"size setting {key}={value!r}; expected a finite number in "
-                f"[0, {bound}] consistent with the controlled "
+                f"[0, {SIZE_UPPER_BOUND}] consistent with the controlled "
                 f"{geometry['windowWidth']}x{geometry['windowHeight']} window")
+        expected_value, tolerance = expected[key]
+        if abs(float(value) - expected_value) > tolerance:
+            raise RuntimeError(
+                f"SETTINGS_UPGRADE_MACOS: the app document has a WRONG layout "
+                f"size {key}={value!r}; the app's windowChanged layout for the "
+                f"controlled {geometry['expandedWindowWidth']}x"
+                f"{geometry['windowHeight']} window expects "
+                f"{expected_value!r} +/- {tolerance} (unit="
+                f"{derivation['unit']!r}, contentHeight="
+                f"{derivation['contentHeight']!r}, cpuOverride="
+                f"{derivation['cpuHeight']!r}, hidden="
+                f"{sorted(geometry['hiddenGraphs'])})")
         values[key] = value
     return values
 
@@ -435,9 +574,10 @@ def load_app_document(document_path, actual_diagnostics, expected_diagnostics, e
             f"settings document at {document_path}; startup migration did not run -- "
             f"an app that does not migrate must fail")
     document = document_path.read_bytes().decode("utf-8")
-    # Finding 2 (rr2): do NOT silently project the 26 size keys away. The app's
-    # document must actually CONTAIN all 26, with valid geometry-consistent
-    # values; a missing or corrupted entry fails here before the comparison.
+    # Finding 2 (rr2 / rr3 fix round 4): do NOT silently project the 26 size
+    # keys away. The app's document must actually CONTAIN all 26, with CORRECT
+    # values derived from the app's layout rules (not just a valid range);
+    # a missing, corrupted or wrong entry fails here before the comparison.
     assert_layout_sizes(document)
     compare_app_document(expected_diagnostics, expected_document, actual_diagnostics, document)
     return document
@@ -469,6 +609,41 @@ def assert_defaults_unchanged(reference_raw, final_raw):
         raise RuntimeError(
             "SETTINGS_UPGRADE_MACOS: 0.2.2 defaults changed after the "
             "0.2.3 -> 0.2.2 round trip (settings were corrupted or migrated in place)")
+
+
+class NormalisationDidNotConverge(RuntimeError):
+    """Fix round 4, finding 2a: the 0.2.2 baseline never produced TWO
+    CONSECUTIVE IDENTICAL settings snapshots within the bounded attempts. An
+    exhausted A->B->C baseline must FAIL the check -- never claim a normalised
+    downgrade reference, never set downgrade_normalised, never print OK.
+    """
+
+
+def normalise_until_converged(capture, max_attempts=MAX_NORMALISE_ATTEMPTS,
+                              snapshot=defaults_snapshot):
+    """Drive the 0.2.2 NORMALISE loop until its settings snapshot is STABLE:
+    TWO CONSECUTIVE IDENTICAL snapshots (fix round 4, finding 2a). CONVERGENCE
+    IS REQUIRED; if the bounded attempts run out without it, raise
+    NormalisationDidNotConverge -- the caller NEVER receives a reference and so
+    NEVER sets downgrade_normalised (the check fails with no OK line).
+
+    `capture()` (injectable) performs ONE normalise launch + settle + export and
+    returns that launch's RAW defaults export bytes; `snapshot` (injectable)
+    canonicalises it. Returns the settled raw export bytes (the downgrade
+    reference), captured BEFORE 0.2.3 ever runs. Pure w.r.t. injected side
+    effects, so convergence AND exhaustion (A->B->C fails) are unit tested.
+    """
+    previous = None
+    for _attempt in range(max_attempts):
+        raw = capture()
+        current = snapshot(raw)
+        if previous is not None and current == previous:
+            return raw
+        previous = current
+    raise NormalisationDidNotConverge(
+        "SETTINGS_UPGRADE_MACOS: 0.2.2 baseline normalisation did not converge "
+        f"within {max_attempts} attempts (no TWO CONSECUTIVE identical settings "
+        "snapshots); refusing to capture a downgrade reference (A->B->C fails)")
 
 
 def measure_document_rewrite(document_path, before_bytes):
@@ -528,7 +703,7 @@ def summary_fields(domain, seed, expected, document_path, diagnostics,
                    oracle_derived_from_normalised_seed=False,
                    reference_captured_before_upgrade=False,
                    layout_size_keys_validated=False, r26=None,
-                   derived_oracle_matches_pinned=False):
+                   derived_oracle_matches_pinned=False, baseline_converged=False):
     """Only a full (launched) run may claim a 0.2.2 relaunch (finding 2)."""
     return {
         "domain": domain, "seed": str(seed), "expected": str(expected),
@@ -542,6 +717,7 @@ def summary_fields(domain, seed, expected, document_path, diagnostics,
         "referenceCapturedBeforeUpgrade": reference_captured_before_upgrade,
         "defaultsByteIdentical": defaults_byte_identical,
         "downgradeBaselineNormalised": downgrade_normalised,
+        "downgradeBaselineConverged": baseline_converged,
         "supplementaryDriverMatches": supplementary_driver_matches,
         "supplementaryProbeMatches": supplementary_probe_matches,
         "r26DocumentRewriteMeasurement": r26,
@@ -1171,26 +1347,24 @@ def main(argv=None):
             # sizes are layout feedback: the FIRST launch from the seeded
             # (minimised 280x684) frame expands the window, so that cold launch
             # writes different sizes than every warm launch (measured: 21.18 ->
-            # 157.45). Launch 0.2.2 until its settings snapshot is STABLE, then
-            # capture the reference from that warm, settled state -- all before
-            # 0.2.3. This is why the downgrade compare can still detect ANY
-            # persistent value 0.2.3 changes.
-            prev_snapshot = None
-            reference_raw = None
-            for _attempt in range(3):  # bounded; empirically settles in 2-3
+            # 157.45). Fix round 4 (finding 2a): CONVERGENCE -- TWO CONSECUTIVE
+            # identical settings snapshots -- is REQUIRED within the bounded
+            # MAX_NORMALISE_ATTEMPTS. Exhausting them WITHOUT convergence RAISES
+            # (never sets downgrade_normalised, never reaches the OK line). The
+            # reference is captured from that settled state, all before 0.2.3.
+            def capture_normalise():
                 launches.append(launch_phase(
                     old_copy, domain, results, args.launch_timeout,
                     processes, reaped, None, "0.2.2-normalise"))
                 settle(args.settle_timeout)
-                reference_raw = export_domain(domain)
-                snapshot = defaults_snapshot(reference_raw)
-                if prev_snapshot is not None and snapshot == prev_snapshot:
-                    break
-                prev_snapshot = snapshot
+                return export_domain(domain)
+
+            reference_raw = normalise_until_converged(
+                capture_normalise, MAX_NORMALISE_ATTEMPTS)
 
             # ---- [2] capture-reference (BEFORE 0.2.3 EVER runs) --------------
             (results / "reference-defaults.plist").write_bytes(reference_raw)
-            downgrade_normalised = True
+            downgrade_normalised = True  # ONLY on demonstrated convergence
             reference_captured_before_upgrade = True
 
             # Derive the migration oracle CONSISTENTLY FROM THE NORMALISED SEED
@@ -1216,6 +1390,15 @@ def main(argv=None):
             before_bytes = document_path.read_bytes()
             (results / "layout-sizes.json").write_text(json.dumps(
                 assert_layout_sizes(document), indent=2, sort_keys=True) + "\n")
+            # Record the DERIVED expected sizes and tolerances (fix round 4),
+            # so the correctness oracle is auditable from the run artifacts.
+            (results / "layout-size-derivation.json").write_text(json.dumps(
+                {"derivation": layout_size_derivation(CONTROLLED_GEOMETRY),
+                 "expected": {k: {"expected": v, "tolerance": t}
+                              for k, (v, t) in expected_layout_sizes().items()},
+                 "sizeTolerance": SIZE_TOLERANCE,
+                 "hiddenSizeTolerance": HIDDEN_SIZE_TOLERANCE},
+                indent=2, sort_keys=True) + "\n")
             layout_size_settings_normalised = True
             layout_size_keys_validated = True
 
@@ -1249,7 +1432,8 @@ def main(argv=None):
             supplementary_probe_matches, supplementary_driver_matches,
             downgrade_normalised, layout_size_settings_normalised,
             oracle_derived_from_normalised_seed, reference_captured_before_upgrade,
-            layout_size_keys_validated, r26, oracle_matches_pinned), indent=2) + "\n")
+            layout_size_keys_validated, r26, oracle_matches_pinned,
+            baseline_converged=downgrade_normalised), indent=2) + "\n")
     finally:
         # Finding 3: GATE storage deletion on CONFIRMED process-group termination.
         # reap_and_cleanup reaps every launched group and CONFIRMS they are gone
