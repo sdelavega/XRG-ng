@@ -12,9 +12,13 @@ same technique Tools/packaged-smoke-macos.py uses for smoke-macos.py).
 import importlib.util
 import json
 import plistlib
+import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import uuid
 from pathlib import Path
 
@@ -25,6 +29,7 @@ REPO = TOOLS.parent
 SCRIPT = TOOLS / "settings-upgrade-macos.py"
 FIXTURES = REPO / "Shared/Tests/Fixtures/settings"
 EXPECTED = FIXTURES / "macos-0.2.2-expected.json"
+SEED = FIXTURES / "macos-0.2.2-defaults.plist"
 
 spec = importlib.util.spec_from_file_location("xrg_settings_upgrade_macos", SCRIPT)
 upgrade = importlib.util.module_from_spec(spec)
@@ -39,7 +44,6 @@ class SafetyTests(unittest.TestCase):
         domain = upgrade.domain_for(token)
         self.assertTrue(domain.startswith(upgrade.UPGRADE_PREFIX))
         self.assertNotEqual(domain, upgrade.PRODUCTION_ID)
-        # A valid, generated domain passes the safety gate.
         upgrade.assert_safe_ids([domain])
 
     def test_safety_refuses_production_id(self):
@@ -71,15 +75,23 @@ class SafetyTests(unittest.TestCase):
                 self.assertTrue(str(path).startswith(str(home)), path)
                 self.assertNotIn("XRG-ng/", str(path) + "/")  # never the production store
                 self.assertNotEqual(path.name, "com.sdelavega.xrg.plist")
-            # The R11 private settings folder is included for cleanup.
             self.assertTrue(any(str(p).endswith("XRG-ng-Private/" + domain) for p in paths))
         finally:
-            import shutil
             shutil.rmtree(home, ignore_errors=True)
 
     def test_private_paths_refuse_production(self):
         with self.assertRaises(RuntimeError):
             upgrade.private_paths(Path("/tmp"), upgrade.PRODUCTION_ID)
+
+    def test_app_document_path_is_the_r11_private_store(self):
+        domain = upgrade.domain_for(upgrade.make_token())
+        home = Path(tempfile.mkdtemp(prefix="xrg-upgrade-home-"))
+        try:
+            path = upgrade.app_document_path(home, domain)
+            self.assertEqual(path, home / "Library/Application Support/XRG-ng-Private" / domain / "settings.json")
+            self.assertIn(path.parent, upgrade.private_paths(home, domain))
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
 
 
 class FixtureTests(unittest.TestCase):
@@ -111,8 +123,6 @@ class CompareTests(unittest.TestCase):
         self.diagnostics, self.document = upgrade.parse_expected(EXPECTED)
 
     def test_green_exact_document_and_diagnostics(self):
-        # The migration probe emits the canonical bytes and an empty diagnostic
-        # list; this is what a correct 0.2.2 -> 0.2.3 migration looks like.
         self.assertIsNone(upgrade.compare_documents(
             self.diagnostics, self.document, [], self.document))
 
@@ -136,7 +146,199 @@ class CompareTests(unittest.TestCase):
             upgrade.compare_documents(self.diagnostics, self.document, [], "")
 
 
+# --------------------------------------------------------------------------
+# Finding 1: the document must come from the supplied app's own store, and an
+# app that does not migrate must fail the check.
+# --------------------------------------------------------------------------
+
+class AppDocumentTests(unittest.TestCase):
+    def setUp(self):
+        self.diagnostics, self.document = upgrade.parse_expected(EXPECTED)
+        self.tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-appdoc-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_non_migrating_app_fails(self):
+        # An app whose store wrote NO document -> the check must fail rather
+        # than fabricating one from a probe.
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.load_app_document(self.tmp / "settings.json", [],
+                                      self.diagnostics, self.document)
+        self.assertIn("does not migrate", str(caught.exception))
+
+    def test_wrong_app_document_fails(self):
+        path = self.tmp / "settings.json"
+        path.write_text(self.document.replace('"ai.tracking.enabled": true',
+                                             '"ai.tracking.enabled": false'))
+        with self.assertRaises(upgrade.DocumentMismatch):
+            upgrade.load_app_document(path, [], self.diagnostics, self.document)
+
+    def test_correct_app_document_passes(self):
+        path = self.tmp / "settings.json"
+        path.write_text(self.document)
+        self.assertEqual(upgrade.load_app_document(path, [], self.diagnostics, self.document),
+                         self.document)
+
+    def test_app_binary_symbol_gate_rejects_a_gutted_app(self):
+        # A supplied app with no document backend must not be able to pass.
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_app_document_backend("_main\n_OBJC_CLASS_$_XRGAppDelegate\n")
+        self.assertIn("never migrates", str(caught.exception))
+
+    def test_app_binary_symbol_gate_accepts_a_document_backed_app(self):
+        symbols = ("_$s7XRGCore16XRGSettingsStoreC\n"
+                   "_$s7XRGCore21XRGSettingsMigrationC\n"
+                   "_$s7XRGCore14XRGGraphWindowC\n")
+        self.assertIsNone(upgrade.assert_app_document_backend(symbols))
+
+
+# --------------------------------------------------------------------------
+# Finding 2: ordering, the byte comparison and the probe-only marker.
+# --------------------------------------------------------------------------
+
+class OrderingTests(unittest.TestCase):
+    def test_probe_only_never_emits_the_ok_line(self):
+        self.assertNotEqual(upgrade.success_marker(False), upgrade.OK_LINE)
+        self.assertEqual(upgrade.success_marker(True), upgrade.OK_LINE)
+        self.assertNotIn("OK", upgrade.success_marker(False))
+
+    def test_probe_only_never_claims_a_relaunch(self):
+        record = upgrade.summary_fields(
+            "com.sdelavega.xrg.upgradecheck." + str(uuid.uuid4()),
+            SEED, EXPECTED, Path("/tmp/settings.json"), [],
+            launched=False, launches=[], defaults_byte_identical=None,
+            supplementary_probe_matches=True)
+        self.assertFalse(record["launched"])
+        self.assertFalse(record["baselineRelaunched"])
+        self.assertIsNone(record["defaultsByteIdentical"])
+
+    def test_full_run_claims_only_its_real_relaunch(self):
+        launches = [{"app": "0.2.3", "resident": True}, {"app": "0.2.2", "resident": True}]
+        record = upgrade.summary_fields(
+            "com.sdelavega.xrg.upgradecheck." + str(uuid.uuid4()),
+            SEED, EXPECTED, Path("/tmp/settings.json"), [],
+            launched=True, launches=launches, defaults_byte_identical=True,
+            supplementary_probe_matches=True)
+        self.assertTrue(record["launched"])
+        self.assertTrue(record["baselineRelaunched"])
+        self.assertTrue(record["defaultsByteIdentical"])
+
+    def _domain_bytes(self, changes=None):
+        domain = plistlib.loads(SEED.read_bytes())
+        if changes:
+            domain.update(changes)
+        return plistlib.dumps(domain, fmt=plistlib.FMT_XML)
+
+    def test_snapshot_ignores_only_volatile_layout_state(self):
+        # AppKit rewrites window frames / graph-module sizes on every launch;
+        # those changes must not fail the downgrade comparison.
+        baseline = upgrade.defaults_snapshot(self._domain_bytes())
+        churned = upgrade.defaults_snapshot(self._domain_bytes({
+            "NSWindow Frame xrg_window": "999 0 25 684 0 0 1920 1205 ",
+            "XRGModule_CPU_width": 42.0,
+            "unminimizedFrame": "{{1, 2}, {3, 4}}",
+            "SUHasLaunchedBefore": True,
+        }))
+        self.assertEqual(baseline, churned)
+
+    def test_snapshot_catches_corruption_of_a_real_setting(self):
+        baseline = upgrade.defaults_snapshot(self._domain_bytes())
+        corrupted = upgrade.defaults_snapshot(self._domain_bytes({
+            "aiTokensDailyBudget": 1,  # a mapped setting, not excluded state
+        }))
+        self.assertNotEqual(baseline, corrupted)
+
+    def test_snapshot_is_deterministic(self):
+        first = upgrade.defaults_snapshot(self._domain_bytes())
+        second = upgrade.defaults_snapshot(self._domain_bytes())
+        self.assertEqual(first, second)
+
+
+# --------------------------------------------------------------------------
+# Finding 3: catchable signals and process-group termination/reaping.
+# --------------------------------------------------------------------------
+
+class SignalTests(unittest.TestCase):
+    def setUp(self):
+        self.originals = {sig: signal.getsignal(sig) for sig in upgrade.SIGNALS}
+
+    def tearDown(self):
+        for sig, handler in self.originals.items():
+            signal.signal(sig, handler)
+
+    def test_all_three_termination_signals_are_handled(self):
+        self.assertEqual(set(upgrade.SIGNALS),
+                         {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+        installed = upgrade.install_signal_handlers()
+        self.assertEqual(set(installed), set(upgrade.SIGNALS))
+        for sig in upgrade.SIGNALS:
+            self.assertIs(signal.getsignal(sig), upgrade._signal_handler)
+
+    def test_signal_handler_raises_interrupted(self):
+        with self.assertRaises(upgrade.Interrupted) as caught:
+            upgrade._signal_handler(signal.SIGTERM, None)
+        self.assertEqual(caught.exception.signum, signal.SIGTERM)
+
+    def test_terminate_and_reap_terminates_the_group_and_reaps(self):
+        killed = []
+
+        def fake_killpg(pid, sig):
+            killed.append((pid, sig))
+
+        class FakeProcess:
+            def __init__(self, pid):
+                self.pid = pid
+                self.waited = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                self.waited += 1
+                return 0
+
+        one, two = FakeProcess(111), FakeProcess(222)
+        upgrade.terminate_and_reap([one, two], killpg=fake_killpg)
+        self.assertIn((111, signal.SIGTERM), killed)
+        self.assertIn((222, signal.SIGTERM), killed)
+        self.assertEqual(one.waited, 1)
+        self.assertEqual(two.waited, 1)
+
+    def test_terminate_and_reap_escalates_to_sigkill_when_still_alive(self):
+        killed = []
+
+        def fake_killpg(pid, sig):
+            killed.append((pid, sig))
+
+        class Stubborn:
+            pid = 333
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                raise subprocess.TimeoutExpired("app", 5)
+
+        upgrade.terminate_and_reap([Stubborn()], killpg=fake_killpg)
+        self.assertIn((333, signal.SIGTERM), killed)
+        self.assertIn((333, signal.SIGKILL), killed)
+
+
+# --------------------------------------------------------------------------
+# Finding 4: cleanup attempts every step, checks return codes, verifies gone.
+# --------------------------------------------------------------------------
+
 class CleanupTests(unittest.TestCase):
+    def _recorded_run(self, delete_rc=0, read_rc=1, calls=None):
+        def run(argv, **kwargs):
+            if calls is not None:
+                calls.append(list(argv))
+            class Result:
+                returncode = delete_rc if "delete" in argv else read_rc
+            return Result()
+        return run
+
     def test_cleanup_refuses_production_before_any_subprocess(self):
         calls = []
 
@@ -148,7 +350,7 @@ class CleanupTests(unittest.TestCase):
             upgrade.cleanup(upgrade.PRODUCTION_ID, Path("/tmp"), run=forbidden_run)
         self.assertEqual(calls, [])
 
-    def test_cleanup_deletes_domain_and_removes_private_files(self):
+    def test_cleanup_success_returns_no_failures(self):
         domain = upgrade.domain_for(upgrade.make_token())
         home = Path(tempfile.mkdtemp(prefix="xrg-upgrade-home-"))
         prefs = home / "Library/Preferences" / (domain + ".plist")
@@ -158,21 +360,114 @@ class CleanupTests(unittest.TestCase):
         support.mkdir(parents=True, exist_ok=True)
         (support / "settings.json").write_text("{}")
         calls = []
-
-        def recorded_run(argv, **kwargs):
-            calls.append(list(argv))
-            class Result:
-                returncode = 0
-            return Result()
-
         try:
-            upgrade.cleanup(domain, home, run=recorded_run)
+            failures = upgrade.cleanup(domain, home, run=self._recorded_run(calls=calls))
+            self.assertEqual(failures, [])
             self.assertTrue(any("delete" in c and domain in c for c in calls), calls)
+            self.assertTrue(any("read" in c and domain in c for c in calls), calls)
             self.assertFalse(prefs.exists())
             self.assertFalse(support.exists())
         finally:
-            import shutil
             shutil.rmtree(home, ignore_errors=True)
+
+    def test_cleanup_reports_a_failing_defaults_delete(self):
+        domain = upgrade.domain_for(upgrade.make_token())
+        home = Path(tempfile.mkdtemp(prefix="xrg-upgrade-home-"))
+        try:
+            failures = upgrade.cleanup(domain, home, run=self._recorded_run(delete_rc=7))
+            self.assertTrue(any("defaults delete" in f and "7" in f for f in failures), failures)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_cleanup_reports_a_domain_still_registered(self):
+        domain = upgrade.domain_for(upgrade.make_token())
+        home = Path(tempfile.mkdtemp(prefix="xrg-upgrade-home-"))
+        try:
+            failures = upgrade.cleanup(domain, home, run=self._recorded_run(read_rc=0))
+            self.assertTrue(any("still registered" in f for f in failures), failures)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_cleanup_accumulates_filesystem_removal_and_verification_failures(self):
+        domain = upgrade.domain_for(upgrade.make_token())
+        home = Path(tempfile.mkdtemp(prefix="xrg-upgrade-home-"))
+        support = home / "Library/Application Support/XRG-ng-Private" / domain
+        support.mkdir(parents=True, exist_ok=True)
+        (support / "settings.json").write_text("{}")
+        try:
+            with mock.patch.object(upgrade.shutil, "rmtree", side_effect=OSError("denied")):
+                failures = upgrade.cleanup(domain, home, run=self._recorded_run())
+            self.assertTrue(any("could not remove" in f for f in failures), failures)
+            self.assertTrue(any("still present" in f for f in failures), failures)
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_ok_line_is_suppressed_when_cleanup_failed(self):
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.ok_after_cleanup(["defaults delete domain returned 7"], launched=True)
+        self.assertIn("cleanup failed", str(caught.exception))
+        self.assertNotIn(upgrade.OK_LINE, str(caught.exception))
+
+    def test_ok_line_returns_only_when_cleanup_succeeded(self):
+        self.assertEqual(upgrade.ok_after_cleanup([], launched=True), upgrade.OK_LINE)
+        self.assertEqual(upgrade.ok_after_cleanup([], launched=False), upgrade.PROBE_ONLY_LINE)
+
+
+# --------------------------------------------------------------------------
+# Finding 5: protected --seed/--expected inputs (including symlink aliases).
+# --------------------------------------------------------------------------
+
+class InputSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-inputs-"))
+        self.home = self.tmp / "home"
+        self.plist = self.home / "Library/Preferences/com.sdelavega.xrg.plist"
+        self.settings = self.home / "Library/Application Support/XRG-ng/settings.json"
+        self.plist.parent.mkdir(parents=True)
+        self.settings.parent.mkdir(parents=True)
+        self.plist.write_bytes(plistlib.dumps({"real": "never-read"}))
+        self.settings.write_text("{}")
+        self.scratch = self.tmp / "scratch"
+        self.scratch.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def safe(self, seed, expected):
+        # Does not read the file: only resolves symlinks/realpath.
+        upgrade.assert_safe_inputs(seed, expected, self.home)
+
+    def test_refuses_the_production_plist_as_seed(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.safe(self.plist, self.scratch / "expected.json")
+        self.assertIn("--seed", str(caught.exception))
+
+    def test_refuses_the_production_settings_file_as_expected(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.safe(self.scratch / "seed.plist", self.settings)
+        self.assertIn("--expected", str(caught.exception))
+
+    def test_refuses_a_symlink_alias_of_the_production_plist(self):
+        alias = self.scratch / "prefs-alias.plist"
+        alias.symlink_to(self.plist)
+        with self.assertRaises(RuntimeError):
+            self.safe(alias, self.scratch / "expected.json")
+
+    def test_refuses_a_symlink_alias_of_the_production_settings_file(self):
+        alias = self.scratch / "settings-alias.json"
+        alias.symlink_to(self.settings)
+        with self.assertRaises(RuntimeError):
+            self.safe(self.scratch / "seed.plist", alias)
+
+    def test_accepts_a_coordinator_export_copy_in_scratch(self):
+        export = self.scratch / "exported-prefs.plist"
+        export.write_bytes(plistlib.dumps({"exported": True}))
+        expected = self.scratch / "expected.json"
+        expected.write_text("{}")
+        self.assertIsNone(self.safe(export, expected))
+
+    def test_accepts_the_default_fixtures(self):
+        self.assertIsNone(self.safe(upgrade.default_seed_path(), upgrade.default_expected_path()))
 
 
 if __name__ == "__main__":

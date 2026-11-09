@@ -96,18 +96,31 @@ signed. Old data is deliberately left in place so a user can downgrade.
   optional `--seed`, `--expected`, `--products`, `--results`. It seeds a
   disposable preferences domain
   (`com.sdelavega.xrg.upgradecheck.<uuid>`) from
-  `Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist`, makes a
-  renamed-CFBundleIdentifier copy of each app (the packaged-smoke pattern), runs
-  the 0.2.3 shared-core migration over that domain and compares the document
-  with `Shared/Tests/Fixtures/settings/macos-0.2.2-expected.json`, then asserts
-  the 0.2.2 defaults are byte-identical (the downgrade). It prints
-  `SETTINGS_UPGRADE_MACOS_OK`. The 0.2.3 document is written to the R11 private
-  store `~/Library/Application Support/XRG-ng-Private/<id>/settings.json`; the
-  domain, its plist and that folder are removed at the end, even on failure.
+  `Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist`. The 0.2.3
+  document is produced by the **supplied app's own store**: a driver compiled
+  with `@testable import XRGCore` against the `XRGCore.framework` built
+  alongside `--app` runs `XRGSettingsStore`'s real first-launch migration into
+  the R11 private store
+  `~/Library/Application Support/XRG-ng-Private/<id>/settings.json`, and that
+  document (not a separately built shared-core probe) is compared with
+  `Shared/Tests/Fixtures/settings/macos-0.2.2-expected.json`. The source-built
+  `XRGSharedCore` probe is kept only as a supplementary core cross-check. In
+  order, the check captures the baseline defaults, produces/compares the
+  document, launches a renamed-CFBundleIdentifier 0.2.3 copy, quits, relaunches
+  the renamed 0.2.2 copy, quits, lets writes settle, and only then asserts the
+  0.2.2 defaults are byte-identical (the downgrade). A `--skip-launch`
+  probe-only run never prints `SETTINGS_UPGRADE_MACOS_OK` and never claims a
+  relaunch. It prints `SETTINGS_UPGRADE_MACOS_OK` only after every cleanup step
+  (domain, plist, private folder) has been attempted, checked and verified
+  gone; a failed cleanup exits non-zero. SIGTERM/SIGINT/SIGHUP run that cleanup
+  and terminate/reap each launched process group first. The domain, its plist
+  and that folder are removed at the end, even on failure.
   The real `com.sdelavega.xrg` domain, its plist and the real
   `~/Library/Application Support/XRG-ng/settings.json` are never read, written,
   exported, deleted or launched against — the script refuses if any target id
-  equals `com.sdelavega.xrg`. The seed plist is an argument so the check can be
+  equals `com.sdelavega.xrg`, and it refuses `--seed`/`--expected` inputs that
+  resolve (symlinks followed) to those production files before reading them.
+  The seed plist is an argument so the check can be
   run once against a real 0.2.2 preferences export (which is never committed);
   if the 0.2.3 document ever legitimately differs from the oracle (e.g. a
   catalog change), report it — do not edit the fixture to pass.
