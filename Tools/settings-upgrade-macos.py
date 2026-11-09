@@ -4,23 +4,34 @@
 """Prove settings survive 0.2.2 -> 0.2.3 -> 0.2.2 on macOS.
 
 The check seeds a *disposable* NSUserDefaults domain (a renamed bundle id,
-``com.sdelavega.xrg.upgradecheck.<uuid>``) from a 0.2.2 defaults export. The
-**0.2.3 document is produced by the supplied 0.2.3 app itself**: a driver
-compiled with ``@testable import XRGCore`` against the app's OWN
-``XRGCore.framework`` (the framework built alongside ``--app``) constructs the
-app's ``XRGSettingsStore`` document backend, runs its real first-launch
-migration over the seeded domain, and writes ``settings.json`` into the R11
-private namespace ``~/Library/Application Support/XRG-ng-Private/<id>/``.
-That document -- not a separately built shared-core probe -- is compared with
-the hand-derived oracle. The source-built ``XRGSharedCore`` probe is kept only
-as *supplementary* core validation (its document and diagnostics must agree
-with the app's).
+``com.sdelavega.xrg.upgradecheck.<uuid>``) from a 0.2.2 defaults export.
 
-ORDER (review fix 2): capture baseline defaults -> produce/compare the 0.2.3
-document -> launch the 0.2.3 renamed app copy -> quit -> relaunch the 0.2.2
-renamed app copy -> quit -> wait for writes to settle -> compare 0.2.2's
-defaults byte-for-byte. A probe-only/--skip-launch run NEVER prints
-SETTINGS_UPGRADE_MACOS_OK and NEVER claims a relaunch.
+THE 0.2.3 DOCUMENT IS WRITTEN BY THE LAUNCHED APP ITSELF (Task 13 fix round 2,
+finding 1 / ruling R25). The app has ONE narrowly gated startup path: only a
+non-production bundle whose process sets
+``XRG_UPGRADE_CHECK_SOURCE_DOMAIN=<disposable domain>`` runs the real
+document-backed first-launch migration, over that disposable domain, into the
+R11 private store ``~/Library/Application Support/XRG-ng-Private/<id>/``.
+So the script starts with no document, seeds the domain, launches the supplied
+0.2.3 app WITH that env var, quits it, and validates the document THE APP wrote
+against the expected oracle. The framework driver and the shared-core probe are
+now ONLY supplementary validation (the driver uses the supplied app's OWN
+framework -- no this-checkout fallback). A negative control (--withhold-upgrade-env,
+or startup migration disabled) writes NO document and fails while the store
+symbols remain.
+
+ORDER: seed (no document) -> launch 0.2.3 (env var) -> validate its document ->
+normalise (run 0.2.2 baseline ONCE) -> capture the downgrade reference ->
+relaunch 0.2.2 (downgrade) -> compare its defaults byte-for-byte. The baseline
+run settles the mapped keys 0.2.2 rewrites on every launch (the 26 graph
+width/height keys, docs/settings-inventory.md §339-364), so they are INCLUDED
+in the comparison rather than excluded. A probe-only/--skip-launch run NEVER
+prints SETTINGS_UPGRADE_MACOS_OK and NEVER claims a relaunch.
+
+POST-DOWNGRADE EXCLUSIONS (finding 2) are ONLY genuinely volatile AppKit window
+geometry, each listed by exact key / one prefix whose every key is volatile:
+``NSWindow Frame `` (AppKit-autosaved window frames) and ``unminimizedFrame``
+(the graph-window restore rectangle). No mapped setting is excluded.
 
 SAFETY (absolute): the real production defaults domain ``com.sdelavega.xrg``,
 its ~/Library/Preferences plist, and the real ~/Library/Application
@@ -31,9 +42,9 @@ coordinator-created export copy in scratch is accepted. Every target id is a
 generated UUID in a private namespace. Cleanup attempts every step, checks
 return codes, verifies the disposable domain/plist/private folder are gone and
 reports accumulated failures; the OK line is printed only after cleanup
-succeeds (non-zero exit otherwise). Catchable termination signals run all
-``finally`` blocks, and launched process groups are terminated and reaped in a
-launch-level finally before their storage is deleted.
+succeeded (non-zero exit otherwise). Catchable termination signals run all
+``finally`` blocks; launched process groups are terminated, reaped and CONFIRMED
+gone in a finally BEFORE their storage is deleted (finding 3).
 
 Prints SETTINGS_UPGRADE_MACOS_OK on full success.
 """
@@ -43,6 +54,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shutil
 import signal
 import subprocess
@@ -55,6 +67,9 @@ sys.dont_write_bytecode = True
 
 PRODUCTION_ID = "com.sdelavega.xrg"
 UPGRADE_PREFIX = "com.sdelavega.xrg.upgradecheck."
+# The app's gated startup path reads exactly this variable (R25); its value is
+# the disposable source domain. Withholding it is the negative control.
+UPGRADE_ENV_KEY = "XRG_UPGRADE_CHECK_SOURCE_DOMAIN"
 OK_LINE = "SETTINGS_UPGRADE_MACOS_OK"
 PROBE_ONLY_LINE = "SETTINGS_UPGRADE_MACOS_PROBE_ONLY"
 TOOLS = Path(__file__).resolve().parent
@@ -66,24 +81,28 @@ LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
 # a launch-level process-group reap + verified cleanup) before the process dies.
 SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
-# Keys AppKit / XRG legitimately rewrite on every launch -- window restore
-# frames, graph-module layout feedback, Sparkle state and recorded AI usage
-# (docs/settings-inventory.md, XRGSettingsStore.excludedLegacyKeys). They are
-# *not* stable across launches, so the downgrade byte comparison projects them
-# out; every other (settings) key is compared byte-for-byte. The graph-module
-# size keys are still verified through the 0.2.3 document comparison.
-VOLATILE_PREFIXES = ("SU", "NSWindow Frame ", "XRGModule_")
-VOLATILE_KEYS = frozenset({
-    "unminimizedFrame", "tempLocationsAutoconfigured",
-    "aiTokensDailyUnclassifiedTokens", "aiTokensDailyPromptTokens",
-    "aiTokensDailyCompletionTokens",
-    "aiTokensDailyModelUnclassifiedTokens", "aiTokensDailyModelPromptTokens",
-    "aiTokensDailyModelCompletionTokens",
-    "aiTokensDailyProviderUnclassifiedTokens", "aiTokensDailyProviderPromptTokens",
-    "aiTokensDailyProviderCompletionTokens",
-    "aiTokensDailyDate", "aiTokensLastNotifyDate",
-    "packagedSmokeMarker",
-})
+# --------------------------------------------------------------------------
+# Post-downgrade exclusions (finding 2): ONLY genuinely volatile AppKit window
+# geometry. Every mapped setting (including the 26 XRGModule_* graph width/height
+# keys, docs/settings-inventory.md §339-364) is COMPARED. These are not settings:
+#   - "NSWindow Frame " prefix: EVERY key under this prefix is an AppKit-
+#     autosaved window frame, rewritten with live window geometry each launch
+#     (dynamic autosave name) -- genuinely volatile AppKit state, not a setting.
+#   - "unminimizedFrame": the graph window's AppKit minimize/restore rectangle,
+#     rewritten on every launch -- genuinely volatile AppKit state, not a setting.
+# No other prefix or key is excluded. Mapped keys that a launch rewrites are
+# NORMALISED by running the 0.2.2 baseline once before capturing the reference.
+# --------------------------------------------------------------------------
+VOLATILE_PREFIXES = ("NSWindow Frame ",)
+VOLATILE_KEYS = frozenset({"unminimizedFrame"})
+
+# The 26 graphs.*.size_width/height settings the launched 0.2.3 app recomputes
+# on layout and writes into settings.json on every launch (XRGModule resize
+# feedback, docs/settings-inventory.md §339-364). They are runtime window
+# geometry, not the seeded 0.2.2 values, so they are projected out ONLY when
+# comparing the APP's document with the pure-migration oracle. They ARE compared
+# (included, after normalisation) in the post-downgrade domain comparison.
+LAYOUT_SIZE_KEY = re.compile(r"^graphs\..*\.size_(width|height)$")
 
 
 class DocumentMismatch(RuntimeError):
@@ -184,15 +203,27 @@ def app_document_path(home, domain):
 
 
 def assert_app_document_backend(symbols):
-    """Tie the check to the supplied app binary (review fix 1).
+    """Tie the check to the supplied app binary (finding 1, negative control).
 
     A supplied app whose main executable does not contain the document store
-    must not be able to pass: its own framework could not produce the document.
+    must not be able to pass. The negative control keeps these symbols but
+    disables startup migration, so it fails later for lack of a document.
     """
     if "XRGSettingsStore" not in symbols or "XRGSettingsMigration" not in symbols:
         raise RuntimeError(
             "SETTINGS_UPGRADE_MACOS: the supplied 0.2.3 app has no XRGSettingsStore "
             "document backend / XRGSettingsMigration; an app that never migrates must fail")
+
+
+def upgrade_check_env(domain, enabled=True):
+    """The env var gating the app's startup migration (R25).
+
+    Withholding it (negative control) leaves a renamed bundle on the legacy
+    path: it writes NO document, so the check fails while the app still HAS the
+    store symbols (the nm gate still passes).
+    """
+    assert_safe_ids([domain])
+    return {UPGRADE_ENV_KEY: domain} if enabled else {}
 
 
 def default_seed_path(root=REPO):
@@ -221,8 +252,34 @@ def _normalise_diagnostics(diagnostics):
     return sorted(result)
 
 
+def project_layout_sizes(document_text):
+    """Canonical document bytes with the 26 runtime layout size settings removed.
+
+    The LAUNCHED 0.2.3 app recomputes graph geometry on layout and writes the
+    ``graphs.*.size_width/height`` settings into settings.json on EVERY launch
+    (XRGModule resize feedback, docs/settings-inventory.md §339-364). Those are
+    live window geometry, not the seeded 0.2.2 values, so a byte-exact equality
+    with the pure-migration oracle is impossible. They are projected out ONLY
+    here so every OTHER (migrated) setting can be validated byte-for-byte; the
+    26 size keys are still compared, included, after normalisation in the
+    post-downgrade domain comparison (finding 2).
+    """
+    obj = json.loads(document_text)
+    if not isinstance(obj, dict) or not isinstance(obj.get("settings"), dict):
+        raise RuntimeError("SETTINGS_UPGRADE_MACOS: the app document is not a settings document")
+    canonical = dict(obj)
+    canonical["settings"] = {k: v for k, v in obj["settings"].items()
+                             if not LAYOUT_SIZE_KEY.match(k)}
+    return json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+
+
 def compare_documents(expected_diagnostics, expected_document, actual_diagnostics, actual_document):
-    """Compare the produced 0.2.3 document with the pinned Task 4 oracle."""
+    """Byte-exact comparison of a PURE migration with the Task 4 oracle.
+
+    Used for the supplementary framework driver / shared-core probe, which
+    reproduce the pure migration (no layout). The LAUNCHED APP's document uses
+    ``compare_app_document`` (layout-size projection) instead.
+    """
     if _normalise_diagnostics(actual_diagnostics) != _normalise_diagnostics(expected_diagnostics):
         raise DocumentMismatch(
             "SETTINGS_UPGRADE_MACOS_MISMATCH: migration diagnostics differ from the "
@@ -235,30 +292,50 @@ def compare_documents(expected_diagnostics, expected_document, actual_diagnostic
             "STOP and report it rather than editing the fixture to pass")
 
 
-def load_app_document(document_path, actual_diagnostics, expected_diagnostics, expected_document):
-    """Read the document the SUPPLIED APP produced and compare it.
+def compare_app_document(expected_diagnostics, expected_document, actual_diagnostics, app_document):
+    """Compare the document the LAUNCHED APP wrote with the pinned oracle.
 
-    If the app did not migrate (no document at its R11 store), this fails --
-    the check never fabricates the document itself (review fix 1).
+    All migrated (non-layout) settings must match byte-for-byte; the 26 runtime
+    layout size settings are normalised out (see project_layout_sizes).
+    """
+    if _normalise_diagnostics(actual_diagnostics) != _normalise_diagnostics(expected_diagnostics):
+        raise DocumentMismatch(
+            "SETTINGS_UPGRADE_MACOS_MISMATCH: migration diagnostics differ from the "
+            "expected fixture; report this instead of editing the fixture")
+    if project_layout_sizes(app_document) != project_layout_sizes(expected_document):
+        raise DocumentMismatch(
+            "SETTINGS_UPGRADE_MACOS_MISMATCH: the 0.2.3 document the app wrote "
+            "differs from macos-0.2.2-expected.json. A catalog/migration change "
+            "since Task 4 (e.g. Stocks mapped in the shared core, ruling R21) may "
+            "be legitimate: STOP and report it rather than editing the fixture to pass")
+
+
+def load_app_document(document_path, actual_diagnostics, expected_diagnostics, expected_document):
+    """Read the document the LAUNCHED APP produced and compare it.
+
+    If the app did not migrate -- no document at its R11 store, as when the env
+    var is withheld -- this FAILS. The check never fabricates the document
+    itself; this is the negative-control gate (finding 1).
     """
     document_path = Path(document_path)
     if not document_path.is_file():
         raise RuntimeError(
-            f"SETTINGS_UPGRADE_MACOS: the supplied 0.2.3 app produced no migrated "
-            f"settings document at {document_path}; an app that does not migrate must fail")
+            f"SETTINGS_UPGRADE_MACOS: the launched 0.2.3 app produced no migrated "
+            f"settings document at {document_path}; startup migration did not run -- "
+            f"an app that does not migrate must fail")
     document = document_path.read_bytes().decode("utf-8")
-    compare_documents(expected_diagnostics, expected_document, actual_diagnostics, document)
+    compare_app_document(expected_diagnostics, expected_document, actual_diagnostics, document)
     return document
 
 
 def defaults_snapshot(exported_bytes):
     """Canonical bytes of a defaults domain's SETTINGS keys.
 
-    AppKit rewrites window frames, graph-module layout feedback, Sparkle state
-    and recorded AI usage on every launch (docs/settings-inventory.md). Those
-    keys are projected out so the downgrade comparison is stable; every other
-    key -- all real settings -- is compared byte-for-byte, so a settings value
-    corrupted by either launch still fails the assertion.
+    ONLY the genuinely volatile AppKit window geometry in VOLATILE_KEYS /
+    VOLATILE_PREFIXES is projected out (each documented with a reason above).
+    Every other key -- all real settings, including the 26 XRGModule_* graph
+    width/height keys -- is compared byte-for-byte. Mapped keys a launch
+    rewrites are handled by the 0.2.2 baseline normalisation run, NOT exclusion.
     """
     domain = plistlib.loads(exported_bytes)
     stable = {key: value for key, value in domain.items()
@@ -267,14 +344,15 @@ def defaults_snapshot(exported_bytes):
 
 
 def success_marker(launched):
-    """A probe-only run must never emit the OK line (review fix 2)."""
+    """A probe-only run must never emit the OK line (finding 2)."""
     return OK_LINE if launched else PROBE_ONLY_LINE
 
 
 def ok_after_cleanup(cleanup_failures, launched):
-    """Emit success only after cleanup succeeded (review fix 4).
+    """Emit success only after cleanup succeeded (finding 3 / fix-1 finding 4).
 
-    A failed cleanup raises (non-zero exit) and NEVER returns the OK line.
+    A failed cleanup or an unreaped process group raises (non-zero exit) and
+    NEVER returns the OK line.
     """
     if cleanup_failures:
         raise RuntimeError("SETTINGS_UPGRADE_MACOS: cleanup failed; " + "; ".join(cleanup_failures))
@@ -283,14 +361,18 @@ def ok_after_cleanup(cleanup_failures, launched):
 
 def summary_fields(domain, seed, expected, document_path, diagnostics,
                    launched, launches, defaults_byte_identical,
-                   supplementary_probe_matches):
-    """Only a full (launched) run may claim a 0.2.2 relaunch (review fix 2)."""
+                   supplementary_probe_matches, supplementary_driver_matches=False,
+                   downgrade_normalised=False, layout_size_settings_normalised=False):
+    """Only a full (launched) run may claim a 0.2.2 relaunch (finding 2)."""
     return {
         "domain": domain, "seed": str(seed), "expected": str(expected),
-        "documentSource": "supplied 0.2.3 app XRGSettingsStore (R11 private store)",
+        "documentSource": "launched 0.2.3 app startup migration (R25 gated path, R11 private store)",
         "documentPath": str(document_path),
         "documentMatchesExpected": True, "diagnostics": diagnostics,
+        "layoutSizeSettingsNormalised": layout_size_settings_normalised,
         "defaultsByteIdentical": defaults_byte_identical,
+        "downgradeBaselineNormalised": downgrade_normalised,
+        "supplementaryDriverMatches": supplementary_driver_matches,
         "supplementaryProbeMatches": supplementary_probe_matches,
         "launched": launched,
         "baselineRelaunched": launched,
@@ -299,7 +381,7 @@ def summary_fields(domain, seed, expected, document_path, diagnostics,
 
 
 # --------------------------------------------------------------------------
-# Signals and process groups (review fix 3).
+# Signals and process groups (fix-1 finding 3, fix-round-2 finding 3).
 # --------------------------------------------------------------------------
 
 def _signal_handler(signum, frame):
@@ -318,32 +400,77 @@ def install_signal_handlers(signals=SIGNALS):
     return installed
 
 
-def terminate_and_reap(processes, killpg=None):
-    """Terminate (process group) and reap every launched app that is still alive."""
+def _default_group_alive(pgid):
+    """Whether any member of the given process group still exists."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # group exists; we simply cannot signal it
+
+
+def terminate_and_reap(processes, killpg=None, group_alive=None, sleep=None):
+    """Terminate (whole process group) and reap every launched app.
+
+    Fix-round-2 finding 3:
+      * signal the WHOLE group for EVERY process, even when the leader has
+        already exited (a stubborn child can keep the group alive);
+      * escalate to SIGKILL for a leader that will not exit;
+      * ACCOUNT FOR SURVIVING GROUP MEMBERS: after the leaders are reaped,
+        verify each group is CONFIRMED gone before storage is deleted;
+      * FAIL LOUDLY (raise, no success) if any group cannot be confirmed gone or
+        any signal/wait fails -- never swallow kill errors or a wait timeout.
+    All side-effecting operations are injectable for unit tests.
+    """
     killpg = killpg or os.killpg
-    for process in processes:
-        if process.poll() is not None:
-            continue
+    group_alive = group_alive or _default_group_alive
+    sleep = sleep or time.sleep
+    failures = []
+
+    def signal_group(pgid, sig):
         try:
-            killpg(process.pid, signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            pass
+            killpg(pgid, sig)
+        except ProcessLookupError:
+            pass  # group already gone: nothing to signal
+        except OSError as error:
+            failures.append(f"could not signal process group {pgid} with signal {sig}: {error}")
+
+    # 1. Signal the whole group for EVERY process. poll() is deliberately NOT
+    #    consulted: a leader may have exited while children survive.
+    for process in processes:
+        signal_group(process.pid, signal.SIGTERM)
+
+    # 2. Reap the leaders; escalate to SIGKILL for one that will not exit.
     for process in processes:
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            try:
-                killpg(process.pid, signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
+            signal_group(process.pid, signal.SIGKILL)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                pass
+                failures.append(f"leader {process.pid} did not exit after SIGKILL")
+
+    # 3. Account for surviving group members (children that outlived the
+    #    leader) BEFORE storage is deleted. Escalate and re-check.
+    for process in processes:
+        if group_alive(process.pid):
+            signal_group(process.pid, signal.SIGKILL)
+            for _ in range(5):
+                if not group_alive(process.pid):
+                    break
+                sleep(0.1)
+            if group_alive(process.pid):
+                failures.append(f"process group {process.pid} could not be confirmed gone")
+
+    if failures:
+        raise RuntimeError("SETTINGS_UPGRADE_MACOS: " + "; ".join(failures))
 
 
 # --------------------------------------------------------------------------
-# Cleanup (review fix 4): attempt every step, check return codes, verify gone.
+# Cleanup (fix-1 finding 4): attempt every step, check return codes, verify gone.
 # Returns a list of accumulated failure strings (empty on success).
 # --------------------------------------------------------------------------
 
@@ -381,9 +508,7 @@ def cleanup(domain, home, run=None):
 
 
 # --------------------------------------------------------------------------
-# Supplementary shared-core probe (review fix 1: demoted to a cross-check).
-# Built from the XRGSharedCore Swift package: independent core validation that
-# its fromMacDefaults agrees with the supplied app's own document.
+# Supplementary shared-core probe (independent pure migration over the seed).
 # --------------------------------------------------------------------------
 
 PROBE_SWIFT = r'''import Foundation
@@ -456,15 +581,13 @@ def run_probe(executable, products, seed, document_path, diagnostics_path):
 
 
 # --------------------------------------------------------------------------
-# The supplied 0.2.3 app's OWN document store (review fix 1, primary).
-# A driver compiled with @testable import XRGCore against the app's framework
-# runs XRGSettingsStore's real first-launch migration into the R11 namespace.
+# Supplementary framework driver: the SUPPLIED APP's OWN XRGCore.framework
+# reproduces the pure migration over the seed. NO this-checkout fallback.
 # --------------------------------------------------------------------------
 
 APP_DRIVER_SWIFT = r'''// SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Stephen de la Vega.
 import Foundation
-import AppKit
 @testable import XRGCore
 
 func fail(_ message: String) -> Never {
@@ -476,37 +599,25 @@ func fail(_ message: String) -> Never {
 enum AppDocumentDriver {
     @MainActor static func main() {
         let args = CommandLine.arguments
-        guard args.count == 4 else { fail("usage: DRIVER seed.plist <bundle-id> diagnostics.json") }
+        guard args.count == 3 else { fail("usage: DRIVER seed.plist <output-document.json>") }
         let seedURL = URL(fileURLWithPath: args[1])
-        let identifier = args[2]
-        let diagnosticsURL = URL(fileURLWithPath: args[3])
+        let documentURL = URL(fileURLWithPath: args[2])
         guard let data = try? Data(contentsOf: seedURL),
               let object = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
               let seed = object as? [String: Any] else { fail("cannot read seed defaults plist") }
-        guard identifier.contains("com.sdelavega.xrg.upgradecheck.") else {
-            fail("refusing a non-private bundle identifier")
-        }
         guard let catalog = try? XRGSettingsCatalog.load() else { fail("settings catalog is missing") }
-        // The supplied app's OWN document store at its OWN R11 private path.
-        let fileURL = XRGSettingsStore.sharedDocumentURL(bundleIdentifier: identifier)
-        guard fileURL.path.contains("/XRG-ng-Private/" + identifier + "/settings.json") else {
-            fail("store path is not the R11 private namespace: \(fileURL.path)")
+        guard let defaults = UserDefaults(suiteName: "com.sdelavega.xrg.upgradecheck.driver") else {
+            fail("no defaults suite")
         }
-        guard let defaults = UserDefaults(suiteName: identifier) else { fail("no defaults suite") }
-        // First launch of 0.2.3: migrate the 0.2.2 domain ONCE into the document.
-        let store = XRGSettingsStore(fileURL: fileURL, defaults: defaults,
+        // The supplied app's OWN document store, over a disposable suite,
+        // writing the PURE migration of the seed into a scratch document.
+        let store = XRGSettingsStore(fileURL: documentURL, defaults: defaults,
                                      catalog: catalog, legacyDomain: seed)
         if let problem = store.loadProblem { fail("store load problem: \(problem.problem)") }
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        guard FileManager.default.fileExists(atPath: documentURL.path) else {
             fail("app store wrote no settings.json")
         }
-        // Diagnostics from the app's own core, for the comparison.
-        let (_, diagnostics) = XRGSettingsMigration.fromMacDefaults(seed, catalog: catalog)
-        let report: [[String: String]] = diagnostics.map { ["id": $0.id ?? "document", "problem": $0.problem] }
-        do {
-            try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]).write(to: diagnosticsURL)
-        } catch { fail("cannot write diagnostics: \(error)") }
-        print("APP_DOCUMENT_OK " + fileURL.path)
+        print("APP_DOCUMENT_OK " + documentURL.path)
     }
 }
 '''
@@ -516,26 +627,19 @@ def _framework_is_testable(framework):
     return framework.is_dir() and any(framework.rglob("*.private.swiftinterface"))
 
 
-def resolve_driver_framework(app, results):
-    """Prefer the XRGCore.framework built ALONGSIDE the supplied --app.
+def resolve_driver_framework(app):
+    """The supplied 0.2.3 app's OWN XRGCore.framework (built alongside it).
 
-    If that framework is not testable, build a testable one from the app's own
-    XRG-ng.xcodeproj (the XRGCore scheme) into scratch. Either way the driver
-    links the app's OWN compiled store, not a rebuilt shared-core package.
+    Finding 1: NO this-checkout framework fallback. If the supplied app's
+    framework cannot be used, the check FAILS.
     """
     products = app.resolve().parent
-    sibling = products / "XRGCore.framework"
-    if _framework_is_testable(sibling):
-        return products
-    scratch = results / "xrgcore"
-    subprocess.run(["xcodebuild", "-project", str(REPO / "XRG-ng.xcodeproj"),
-                    "-scheme", "XRGCore", "-configuration", "Release",
-                    "-destination", "platform=macOS", "-derivedDataPath", str(scratch),
-                    "CODE_SIGNING_ALLOWED=NO", "ONLY_ACTIVE_ARCH=YES",
-                    "ENABLE_TESTABILITY=YES", "build"], check=True, stdout=subprocess.DEVNULL)
-    products = scratch / "Build/Products/Release"
-    if not _framework_is_testable(products / "XRGCore.framework"):
-        raise RuntimeError("SETTINGS_UPGRADE_MACOS: could not obtain a testable XRGCore.framework")
+    framework = products / "XRGCore.framework"
+    if not _framework_is_testable(framework):
+        raise RuntimeError(
+            "SETTINGS_UPGRADE_MACOS: the supplied 0.2.3 app has no testable "
+            "XRGCore.framework alongside it; refusing any fallback (the supplied "
+            "app's framework cannot be used)")
     return products
 
 
@@ -550,11 +654,11 @@ def compile_app_driver(products, results):
     return executable
 
 
-def run_app_driver(executable, products, seed, identifier, diagnostics_path):
+def run_app_driver(executable, products, seed, document_path):
     env = os.environ.copy()
     existing = env.get("DYLD_FRAMEWORK_PATH")
     env["DYLD_FRAMEWORK_PATH"] = str(products) + (os.pathsep + existing if existing else "")
-    result = subprocess.run([str(executable), str(seed), identifier, str(diagnostics_path)],
+    result = subprocess.run([str(executable), str(seed), str(document_path)],
                             check=True, capture_output=True, text=True, env=env)
     line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
     if not line.startswith("APP_DOCUMENT_OK "):
@@ -584,51 +688,55 @@ def make_renamed_copy(source, domain, destination):
     return destination
 
 
-def launch_one(app, domain, results, timeout, processes):
+def launch_one(app, domain, results, timeout, processes, extra_env=None, phase="app"):
     """Bounded proof of life; a resident app still running at timeout is a pass.
 
-    The process is left running here and terminated/reaped by the launch-level
-    finally (``run_launches``), so an interruption can never leave it behind.
+    The process is left running here and terminated/reaped by launch-level
+    finally (``launch_phase`` / ``main``), so an interruption cannot leave it.
+    ``extra_env`` carries the gating variable for the 0.2.3 upgrade launch.
     """
     assert_safe_ids([domain])
     binary = app / "Contents/MacOS/XRG-ng"
-    log = results / f"launch-{app.parent.name}.log"
+    log = results / f"launch-{phase}.log"
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
     with log.open("wb") as stream:
         process = subprocess.Popen([str(binary)], stdout=stream, stderr=subprocess.STDOUT,
-                                   start_new_session=True, cwd=str(app.parent),
-                                   env=os.environ.copy())
+                                   start_new_session=True, cwd=str(app.parent), env=env)
         processes.append(process)
         try:
             status = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            return {"app": app.parent.name, "log": log.name, "resident": True, "outcome": "resident"}
+            return {"phase": phase, "app": app.parent.name, "log": log.name,
+                    "resident": True, "outcome": "resident"}
         if status != 0:
-            raise RuntimeError(f"SETTINGS_UPGRADE_MACOS: renamed app exited {status}; see {log}")
-        return {"app": app.parent.name, "log": log.name, "resident": False, "outcome": "exited-clean"}
+            raise RuntimeError(f"SETTINGS_UPGRADE_MACOS: {phase} renamed app exited {status}; see {log}")
+        return {"phase": phase, "app": app.parent.name, "log": log.name,
+                "resident": False, "outcome": "exited-clean"}
 
 
-def run_launches(apps, domain, results, timeout):
-    """Launch 0.2.3 -> quit -> relaunch 0.2.2 -> quit; reap everything in a finally."""
-    processes = []
-    launches = []
-    try:
-        for app in apps:
-            launches.append(launch_one(app, domain, results, timeout, processes))
-            # "-> quit": terminate and reap this app before the next launch. The
-            # finally re-reaps anything still alive (e.g. after an interruption).
-            terminate_and_reap(processes[-1:])
-        if not all(launch["resident"] for launch in launches):
-            raise RuntimeError(
-                "SETTINGS_UPGRADE_MACOS: a renamed app did not stay resident (no genuine AppKit launch)")
-        return launches
-    finally:
-        # Launch-level finally: ALWAYS terminate/reap the whole process group
-        # before any storage (domain/plist/private folder) is deleted.
-        terminate_and_reap(processes)
+def launch_phase(app, domain, results, timeout, processes, reaped, extra_env=None, phase="app"):
+    """Launch one renamed app, prove residency, then quit/reap its whole group.
+
+    On success the pid is marked reaped so the top-level finally does not
+    re-signal a freed pid; on a reap failure it stays pending and is retried.
+    """
+    record = launch_one(app, domain, results, timeout, processes, extra_env, phase)
+    process = processes[-1]
+    terminate_and_reap([process])  # finding 3: may raise (no success)
+    reaped.add(process.pid)
+    return record
+
+
+def assert_all_resident(launches):
+    if not all(launch["resident"] for launch in launches):
+        raise RuntimeError(
+            "SETTINGS_UPGRADE_MACOS: a renamed app did not stay resident (no genuine AppKit launch)")
 
 
 def settle(seconds):
-    """Let cfprefsd flush app writes before the downgrade comparison."""
+    """Let cfprefsd flush app writes before captures/comparisons."""
     time.sleep(seconds)
 
 
@@ -657,6 +765,38 @@ def export_domain(domain):
                           capture_output=True).stdout
 
 
+# --------------------------------------------------------------------------
+# Supplementary validation shared by full and probe-only runs.
+# --------------------------------------------------------------------------
+
+def run_supplementary(app, results, seed, products, expected_diagnostics, expected_document):
+    """Framework driver + shared-core probe: independent PURE migrations.
+
+    Both must reproduce the oracle byte-exact (R21). The driver uses ONLY the
+    supplied app's framework (no fallback). Returns (driver_document,
+    probe_diagnostics).
+    """
+    framework = resolve_driver_framework(app)
+    driver = compile_app_driver(framework, results)
+    driver_doc_path = results / "driver-document.json"
+    written = run_app_driver(driver, framework, seed, driver_doc_path)
+    driver_document = written.read_bytes().decode("utf-8")
+    if driver_document != expected_document:
+        raise RuntimeError(
+            "SETTINGS_UPGRADE_MACOS: the supplied app's framework driver does not "
+            "reproduce macos-0.2.2-expected.json (STOP and report, do not edit the fixture)")
+
+    probe_products = build_probe_products(REPO, results, products)
+    probe = compile_probe(probe_products, results)
+    probe_doc_path = results / "probe-document.json"
+    probe_diag_path = results / "probe-diagnostics.json"
+    run_probe(probe, probe_products, seed, probe_doc_path, probe_diag_path)
+    probe_document = probe_doc_path.read_bytes().decode("utf-8")
+    probe_diagnostics = json.loads(probe_diag_path.read_text())
+    compare_documents(expected_diagnostics, expected_document, probe_diagnostics, probe_document)
+    return driver_document, probe_diagnostics
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, required=True, help="Freshly built 0.2.3 XRG-ng.app")
@@ -673,7 +813,9 @@ def main(argv=None):
     parser.add_argument("--settle-timeout", type=float, default=1.5,
                         help="seconds to let app preference writes settle (default 1.5)")
     parser.add_argument("--skip-launch", action="store_true",
-                        help="probe-only core validation: NO app launches, NO relaunch claim, NO OK line")
+                        help="supplementary-only validation: NO app launches, NO relaunch claim, NO OK line")
+    parser.add_argument("--withhold-upgrade-env", action="store_true",
+                        help="NEGATIVE CONTROL: do not pass the startup-migration env var; the check MUST fail")
     args = parser.parse_args(argv)
     if args.settle_timeout < 0 or args.launch_timeout <= 0:
         parser.error("timeouts must be positive")
@@ -688,12 +830,13 @@ def main(argv=None):
     home = Path.home().resolve()
     seed = (args.seed or default_seed_path()).resolve()
     expected_path = (args.expected or default_expected_path()).resolve()
-    # Review fix 5: refuse protected inputs BEFORE reading anything.
+    # Fix-1 finding 5: refuse protected inputs BEFORE reading anything.
     assert_safe_inputs(seed, expected_path, home)
 
     app = args.app.resolve()
     baseline_app = args.baseline.resolve()
-    # Review fix 1: tie the check to the supplied app's own document backend.
+    # Finding 1: the supplied app must still HAVE the store symbols (the
+    # negative control keeps them but writes no document).
     assert_app_document_backend(_nm_symbols(app))
 
     if not seed.is_file():
@@ -718,77 +861,102 @@ def main(argv=None):
     old_copy = results / "0.2.2" / "XRG-ng.app"
     document_path = app_document_path(home, domain)
     cleanup_failures = []
+    processes = []
+    reaped = set()
+    launches = []
+    defaults_byte_identical = None
+    driver_diagnostics = []
+    supplementary_driver_matches = False
+    supplementary_probe_matches = False
+    downgrade_normalised = False
+    layout_size_settings_normalised = False
     try:
-        # 1. Seed the disposable domain and CAPTURE THE BASELINE (review fix 2).
-        seed_domain(domain, seed)
-        baseline_raw = export_domain(domain)
-        (results / "baseline-defaults.plist").write_bytes(baseline_raw)
-        baseline = defaults_snapshot(baseline_raw)
-
-        # 2. The 0.2.3 document comes from the SUPPLIED APP's own store, written
-        #    into the R11 private namespace for the renamed bundle id.
-        framework = resolve_driver_framework(app, results)
-        driver = compile_app_driver(framework, results)
-        diagnostics_path = results / "app-diagnostics.json"
-        written = run_app_driver(driver, framework, seed, domain, diagnostics_path)
-        if written.resolve() != document_path:
-            raise RuntimeError(f"SETTINGS_UPGRADE_MACOS: app wrote its document outside the R11 store: {written}")
-        driver_diagnostics = json.loads(diagnostics_path.read_text())
-        document = load_app_document(document_path, driver_diagnostics,
-                                     expected_diagnostics, expected_document)
-        (results / "0.2.3-document.json").write_text(document)
-
-        # 3. Supplementary shared-core probe: independent core validation only.
-        #    It must AGREE with the app's document; it is never the source of truth.
-        probe_products = build_probe_products(REPO, results, args.products)
-        probe = compile_probe(probe_products, results)
-        probe_document_path = results / "probe-document.json"
-        probe_diagnostics_path = results / "probe-diagnostics.json"
-        run_probe(probe, probe_products, seed, probe_document_path, probe_diagnostics_path)
-        probe_document = probe_document_path.read_text()
-        probe_diagnostics = json.loads(probe_diagnostics_path.read_text())
-        if probe_document != document:
+        # Finding 1: "starts with no document".
+        if document_path.exists():
             raise RuntimeError(
-                "SETTINGS_UPGRADE_MACOS: supplementary shared-core probe disagrees "
-                "with the supplied 0.2.3 app's document")
-        if _normalise_diagnostics(probe_diagnostics) != _normalise_diagnostics(driver_diagnostics):
-            raise RuntimeError("SETTINGS_UPGRADE_MACOS: supplementary probe diagnostics disagree with the app")
+                f"SETTINGS_UPGRADE_MACOS: a document already exists at the app's "
+                f"R11 private store {document_path}; the app must start with none")
+
+        # 1. Seed the disposable domain.
+        seed_domain(domain, seed)
+        (results / "seed-defaults.plist").write_bytes(export_domain(domain))
+
+        # 2. Supplementary PURE migrations (driver over the supplied app's
+        #    framework, probe over the shared core). Both must equal the oracle.
+        _, probe_diagnostics = run_supplementary(
+            app, results, seed, args.products, expected_diagnostics, expected_document)
+        driver_diagnostics = probe_diagnostics
+        supplementary_driver_matches = True
         supplementary_probe_matches = True
 
-        # 4. Launch 0.2.3 -> quit -> relaunch 0.2.2 -> quit (review fix 2).
-        #    A probe-only run does NONE of this and claims no relaunch.
-        launches = []
-        defaults_byte_identical = None
-        if not args.skip_launch:
+        if args.skip_launch:
+            # Probe-only: NO launches, NO app document, NO relaunch, NO OK line.
+            pass
+        else:
             make_renamed_copy(app, domain, new_copy)
             make_renamed_copy(baseline_app, domain, old_copy)
-            launches = run_launches([new_copy, old_copy], domain, results, args.launch_timeout)
-            # 5. Wait for writes to settle, then compare 0.2.2's defaults.
+            env_for_upgrade = upgrade_check_env(domain, enabled=not args.withhold_upgrade_env)
+
+            # 3. Launch the 0.2.3 app WITH the env var -> it migrates the seeded
+            #    domain into its OWN R11 document. (Negative control withholds
+            #    the env var: no document -> the check fails below.)
+            launches.append(launch_phase(new_copy, domain, results, args.launch_timeout,
+                                         processes, reaped, env_for_upgrade, "0.2.3-upgrade"))
+            settle(args.settle_timeout)
+
+            # 4. Validate the document THE APP wrote (negative-control gate).
+            document = load_app_document(document_path, driver_diagnostics,
+                                         expected_diagnostics, expected_document)
+            (results / "0.2.3-document.json").write_text(document)
+            layout_size_settings_normalised = True
+
+            # 5. Finding 2 NORMALISATION: run the 0.2.2 baseline ONCE before
+            #    capturing the reference, so keys 0.2.2 rewrites on every launch
+            #    (the 26 mapped XRGModule_* sizes) are settled, not excluded.
+            launches.append(launch_phase(old_copy, domain, results, args.launch_timeout,
+                                         processes, reaped, None, "0.2.2-baseline"))
+            settle(args.settle_timeout)
+            reference_raw = export_domain(domain)
+            (results / "reference-defaults.plist").write_bytes(reference_raw)
+            reference = defaults_snapshot(reference_raw)
+            downgrade_normalised = True
+
+            # 6. Downgrade: relaunch 0.2.2, quit, settle, compare byte-for-byte.
+            launches.append(launch_phase(old_copy, domain, results, args.launch_timeout,
+                                         processes, reaped, None, "0.2.2-downgrade"))
             settle(args.settle_timeout)
             final_raw = export_domain(domain)
             (results / "downgraded-defaults.plist").write_bytes(final_raw)
-            if defaults_snapshot(final_raw) != baseline:
+            if defaults_snapshot(final_raw) != reference:
                 raise RuntimeError(
                     "SETTINGS_UPGRADE_MACOS: 0.2.2 defaults changed after the "
                     "0.2.3 -> 0.2.2 round trip (settings were corrupted or migrated in place)")
             defaults_byte_identical = True
 
+            assert_all_resident(launches)
+
         (results / "summary.json").write_text(json.dumps(summary_fields(
             domain, seed, expected_path, document_path, driver_diagnostics,
             not args.skip_launch, launches, defaults_byte_identical,
-            supplementary_probe_matches), indent=2) + "\n")
+            supplementary_probe_matches, supplementary_driver_matches,
+            downgrade_normalised, layout_size_settings_normalised), indent=2) + "\n")
     finally:
-        # Unregister the copies; then attempt EVERY cleanup step, verify the
-        # disposable domain/plist/private folder are gone, and report failures.
+        # Finding 3: reap ALL launched process groups and CONFIRM they are gone
+        # BEFORE any storage is deleted. A failure here raises (no success) but
+        # the nested finally still unregisters and cleans up every artifact.
+        pending = [process for process in processes if process.pid not in reaped]
         try:
-            _unregister(new_copy)
-            _unregister(old_copy)
+            terminate_and_reap(pending)
         finally:
-            cleanup_failures = cleanup(domain, home)
-        for failure in cleanup_failures:
-            print(f"cleanup failure: {failure}", file=sys.stderr)
+            try:
+                _unregister(new_copy)
+                _unregister(old_copy)
+            finally:
+                cleanup_failures = cleanup(domain, home)
+            for failure in cleanup_failures:
+                print(f"cleanup failure: {failure}", file=sys.stderr)
 
-    # Review fix 4: the OK line is printed ONLY after cleanup succeeded.
+    # The OK line is printed ONLY after reaping + cleanup succeeded.
     print(ok_after_cleanup(cleanup_failures, not args.skip_launch), flush=True)
     return 0
 

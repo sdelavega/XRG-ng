@@ -156,6 +156,17 @@ public final class XRGGraphWindow: NSWindow, XRGModuleWindow, XRGGPUViewHost, XR
             // A test scene's document-backed store: the production path,
             // over a fixture document (never the real settings file).
             appSettings = XRGSettings(store: injectedStore)
+        } else if defaults === UserDefaults.standard,
+                  let upgradeStore = XRGSettingsStore.upgradeCheckStore(defaults: defaults) {
+            // Narrowly gated upgrade-check startup path (Task 13 fix round 2,
+            // finding 1): a renamed, non-production bundle whose process opts
+            // in with XRG_UPGRADE_CHECK_SOURCE_DOMAIN runs the REAL
+            // document-backed first-launch migration over the DISPOSABLE
+            // source domain into the R11 private path. The factory -- not
+            // XRGSettingsStore.shared -- is used, so this path never reads
+            // com.sdelavega.xrg. The production bundle ignores the variable,
+            // and every other renamed bundle keeps the legacy path below.
+            appSettings = XRGSettings(store: upgradeStore)
         } else if defaults === UserDefaults.standard, Self.applicationBundle {
             // The application's settings live in the shared document; the
             // 0.2.2 NSUserDefaults domain is read once, by the migration.

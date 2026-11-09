@@ -75,7 +75,66 @@ import Foundation
 
     /// The real XRG-ng application bundle's identifier: the only process
     /// whose shared store may use the production settings path.
-    private static let productionBundleIdentifier = "com.sdelavega.xrg"
+    private nonisolated static let productionBundleIdentifier = "com.sdelavega.xrg"
+
+    // MARK: The narrowly gated upgrade-check startup path (Task 13 fix round 2)
+
+    /// Environment variable that opts a renamed (non-production) bundle into
+    /// the upgrade-check startup migration. Its value MUST be a disposable
+    /// domain beginning with ``upgradeCheckDomainPrefix``. The production
+    /// bundle ignores it entirely (``upgradeCheckSourceDomain``).
+    public nonisolated static let upgradeCheckEnvironmentKey = "XRG_UPGRADE_CHECK_SOURCE_DOMAIN"
+
+    /// The exact prefix of the disposable domains the macOS upgrade check
+    /// generates (``Tools/settings-upgrade-macos.py`` ``UPGRADE_PREFIX``). Only
+    /// a source domain under this prefix is ever read by the upgrade-check
+    /// path, so the real ``com.sdelavega.xrg`` domain can never be selected.
+    public nonisolated static let upgradeCheckDomainPrefix = "com.sdelavega.xrg.upgradecheck."
+
+    /// Decide whether the narrowly gated upgrade-check startup path applies.
+    /// It holds ONLY for a non-production bundle whose environment names a
+    /// disposable domain under ``upgradeCheckDomainPrefix``. The production
+    /// bundle id ALWAYS ignores the variable; an absent, empty or wrong-prefix
+    /// value is ignored. Pure and injectable so XRGTests can exercise every
+    /// branch without touching any real defaults domain.
+    public nonisolated static func upgradeCheckSourceDomain(
+        bundleIdentifier: String?, environment: [String: String]) -> String? {
+        guard let bundleIdentifier, bundleIdentifier != productionBundleIdentifier else { return nil }
+        guard let domain = environment[upgradeCheckEnvironmentKey],
+              domain.hasPrefix(upgradeCheckDomainPrefix) else { return nil }
+        return domain
+    }
+
+    /// The store for the narrowly gated upgrade-check startup path. It reads
+    /// ONLY the named disposable domain (``persistentDomain(forName:)`` of the
+    /// gated source domain), NEVER the production ``com.sdelavega.xrg`` domain
+    /// that the ``shared`` convenience initializer reads, migrates it once, and
+    /// writes the document at the R11 private path for this bundle id
+    /// (``sharedDocumentURL(bundleIdentifier:)``). Returns nil whenever the
+    /// gate does not apply, so every other case keeps today's behaviour.
+    ///
+    /// ``defaults``/``documentURL``/``legacyDomainFor`` are injectable so
+    /// XRGTests can use a disposable suite and a scratch file and prove the
+    /// factory never names the production domain. Uses the internal init with
+    /// an injected ``legacyDomain`` -- never ``XRGSettingsStore.shared``.
+    @MainActor public static func upgradeCheckStore(
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        defaults: UserDefaults = .standard,
+        documentURL: URL? = nil,
+        legacyDomainFor: ((String) -> [String: Any]?)? = nil) -> XRGSettingsStore? {
+        guard let sourceDomain = upgradeCheckSourceDomain(
+            bundleIdentifier: bundleIdentifier, environment: environment) else { return nil }
+        let url = documentURL ?? sharedDocumentURL(bundleIdentifier: bundleIdentifier)
+        let legacyDomain: [String: Any]
+        if let legacyDomainFor {
+            legacyDomain = legacyDomainFor(sourceDomain) ?? [:]
+        } else {
+            legacyDomain = defaults.persistentDomain(forName: sourceDomain) ?? [:]
+        }
+        return XRGSettingsStore(fileURL: url, defaults: defaults,
+                                catalog: loadCatalog(), legacyDomain: legacyDomain)
+    }
 
     /// Where `shared` keeps the settings document. The real application
     /// bundle uses the spec's production path

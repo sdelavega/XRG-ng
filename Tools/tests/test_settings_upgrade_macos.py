@@ -194,6 +194,72 @@ class AppDocumentTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# Finding 1: the app's gated startup migration (R25) and the app-written doc.
+# --------------------------------------------------------------------------
+
+class UpgradeCheckStartupScriptTests(unittest.TestCase):
+    def test_upgrade_check_env_sets_the_r25_variable(self):
+        domain = upgrade.domain_for(upgrade.make_token())
+        self.assertEqual(upgrade.upgrade_check_env(domain),
+                         {upgrade.UPGRADE_ENV_KEY: domain})
+        self.assertEqual(upgrade.UPGRADE_ENV_KEY, "XRG_UPGRADE_CHECK_SOURCE_DOMAIN")
+
+    def test_upgrade_check_env_withheld_is_empty(self):
+        # Negative control: withholding the env var writes no document.
+        domain = upgrade.domain_for(upgrade.make_token())
+        self.assertEqual(upgrade.upgrade_check_env(domain, enabled=False), {})
+
+    def test_upgrade_check_env_refuses_unsafe_ids(self):
+        for bad in (upgrade.PRODUCTION_ID, "com.example.other", ""):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                upgrade.upgrade_check_env(bad)
+
+    def test_project_layout_sizes_removes_runtime_size_settings(self):
+        _, document = upgrade.parse_expected(EXPECTED)
+        obj = json.loads(document)
+        obj["settings"]["graphs.cpu.size_width"] = 999.0       # changed
+        obj["settings"]["graphs.fans.size_height"] = 123.0      # added
+        churned = json.dumps(obj)
+        self.assertEqual(upgrade.project_layout_sizes(churned),
+                         upgrade.project_layout_sizes(document))
+
+    def test_project_layout_sizes_keeps_non_layout_settings(self):
+        _, document = upgrade.parse_expected(EXPECTED)
+        obj = json.loads(document)
+        obj["settings"]["general.window.title"] = "CORRUPTED"
+        self.assertNotEqual(upgrade.project_layout_sizes(json.dumps(obj)),
+                            upgrade.project_layout_sizes(document))
+
+    def test_compare_app_document_normalises_layout_sizes(self):
+        diagnostics, document = upgrade.parse_expected(EXPECTED)
+        obj = json.loads(document)
+        obj["settings"]["graphs.cpu.size_width"] = 999.0
+        self.assertIsNone(upgrade.compare_app_document(
+            diagnostics, document, [], json.dumps(obj)))
+
+    def test_compare_app_document_detects_a_migrated_setting_change(self):
+        diagnostics, document = upgrade.parse_expected(EXPECTED)
+        obj = json.loads(document)
+        obj["settings"]["general.window.title"] = "CORRUPTED"
+        with self.assertRaises(upgrade.DocumentMismatch):
+            upgrade.compare_app_document(diagnostics, document, [], json.dumps(obj))
+
+    def test_resolve_driver_framework_fails_without_the_app_framework(self):
+        # Finding 1: NO this-checkout fallback -- a supplied app with no usable
+        # sibling XRGCore.framework must FAIL, not rebuild from this checkout.
+        tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-framework-"))
+        try:
+            fake_app = tmp / "XRG-ng.app"
+            (fake_app / "Contents/MacOS").mkdir(parents=True)
+            (fake_app / "Contents/MacOS/XRG-ng").write_text("")
+            with self.assertRaises(RuntimeError) as caught:
+                upgrade.resolve_driver_framework(fake_app)
+            self.assertIn("no testable XRGCore.framework", str(caught.exception))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
 # Finding 2: ordering, the byte comparison and the probe-only marker.
 # --------------------------------------------------------------------------
 
@@ -230,17 +296,47 @@ class OrderingTests(unittest.TestCase):
             domain.update(changes)
         return plistlib.dumps(domain, fmt=plistlib.FMT_XML)
 
-    def test_snapshot_ignores_only_volatile_layout_state(self):
-        # AppKit rewrites window frames / graph-module sizes on every launch;
-        # those changes must not fail the downgrade comparison.
+    def test_snapshot_catches_a_changed_cpu_width(self):
+        # Finding 2: XRGModule_CPU_width maps to graphs.cpu.size_width
+        # (docs/settings-inventory.md §339). It is a MAPPED SETTING, not
+        # volatile AppKit state: a changed CPU width MUST fail the comparison.
+        baseline = upgrade.defaults_snapshot(self._domain_bytes())
+        corrupted = upgrade.defaults_snapshot(self._domain_bytes({
+            "XRGModule_CPU_width": 42.0,
+        }))
+        self.assertNotEqual(baseline, corrupted)
+
+    def test_snapshot_catches_a_changed_graph_height(self):
+        # Every one of the 26 XRGModule_* width/height keys must be compared.
+        baseline = upgrade.defaults_snapshot(self._domain_bytes())
+        corrupted = upgrade.defaults_snapshot(self._domain_bytes({
+            "XRGModule_Memory_height": 999.0,
+        }))
+        self.assertNotEqual(baseline, corrupted)
+
+    def test_snapshot_ignores_only_volatile_appkit_window_state(self):
+        # ONLY genuinely volatile AppKit window geometry is projected out.
         baseline = upgrade.defaults_snapshot(self._domain_bytes())
         churned = upgrade.defaults_snapshot(self._domain_bytes({
             "NSWindow Frame xrg_window": "999 0 25 684 0 0 1920 1205 ",
-            "XRGModule_CPU_width": 42.0,
             "unminimizedFrame": "{{1, 2}, {3, 4}}",
-            "SUHasLaunchedBefore": True,
         }))
         self.assertEqual(baseline, churned)
+
+    def test_snapshot_catches_a_formerly_excluded_non_appkit_key(self):
+        # SU*/aiTokens*/tempLocationsAutoconfigured/packagedSmokeMarker are NOT
+        # AppKit state and are no longer excluded; a change must be detected.
+        baseline = upgrade.defaults_snapshot(self._domain_bytes())
+        for key in ("SUHasLaunchedBefore", "aiTokensDailyPromptTokens",
+                    "tempLocationsAutoconfigured", "packagedSmokeMarker"):
+            with self.subTest(key=key):
+                corrupted = upgrade.defaults_snapshot(self._domain_bytes({key: "changed"}))
+                self.assertNotEqual(baseline, corrupted)
+
+    def test_exclusion_list_is_narrow(self):
+        # No XRGModule_/SU/aiTokens prefix exclusions: only AppKit window state.
+        self.assertEqual(upgrade.VOLATILE_PREFIXES, ("NSWindow Frame ",))
+        self.assertEqual(upgrade.VOLATILE_KEYS, frozenset({"unminimizedFrame"}))
 
     def test_snapshot_catches_corruption_of_a_real_setting(self):
         baseline = upgrade.defaults_snapshot(self._domain_bytes())
@@ -299,13 +395,37 @@ class SignalTests(unittest.TestCase):
                 return 0
 
         one, two = FakeProcess(111), FakeProcess(222)
-        upgrade.terminate_and_reap([one, two], killpg=fake_killpg)
+        upgrade.terminate_and_reap([one, two], killpg=fake_killpg,
+                                   group_alive=lambda pgid: False)
         self.assertIn((111, signal.SIGTERM), killed)
         self.assertIn((222, signal.SIGTERM), killed)
         self.assertEqual(one.waited, 1)
         self.assertEqual(two.waited, 1)
 
-    def test_terminate_and_reap_escalates_to_sigkill_when_still_alive(self):
+    def test_terminate_and_reap_signals_the_whole_group_even_if_leader_exited(self):
+        # Finding 3: a leader that already exited (poll() != None) must STILL
+        # have its whole group signalled -- a child may have survived it.
+        killed = []
+
+        def fake_killpg(pid, sig):
+            killed.append((pid, sig))
+
+        class ExitedLeader:
+            pid = 444
+
+            def poll(self):
+                return 0  # already exited
+
+            def wait(self, timeout=None):
+                return 0
+
+        upgrade.terminate_and_reap([ExitedLeader()], killpg=fake_killpg,
+                                   group_alive=lambda pgid: False)
+        self.assertIn((444, signal.SIGTERM), killed)
+
+    def test_terminate_and_reap_escalates_to_sigkill_and_fails_loudly(self):
+        # A leader that will not exit: SIGKILL is attempted AND the function
+        # raises (no success) instead of returning normally.
         killed = []
 
         def fake_killpg(pid, sig):
@@ -320,9 +440,39 @@ class SignalTests(unittest.TestCase):
             def wait(self, timeout=None):
                 raise subprocess.TimeoutExpired("app", 5)
 
-        upgrade.terminate_and_reap([Stubborn()], killpg=fake_killpg)
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.terminate_and_reap([Stubborn()], killpg=fake_killpg,
+                                       group_alive=lambda pgid: False,
+                                       sleep=lambda _: None)
+        self.assertIn("did not exit after SIGKILL", str(caught.exception))
         self.assertIn((333, signal.SIGTERM), killed)
         self.assertIn((333, signal.SIGKILL), killed)
+
+    def test_stubborn_child_survives_the_leader_fails_loudly(self):
+        # Finding 3: the leader is reaped (poll/wait succeed) but a stubborn
+        # child keeps the process group alive. The function must signal the
+        # whole group anyway, escalate to SIGKILL, and FAIL (no success).
+        killed = []
+
+        def fake_killpg(pid, sig):
+            killed.append((pid, sig))
+
+        class LeaderWithSurvivingChild:
+            pid = 555
+
+            def poll(self):
+                return 0  # leader exited
+
+            def wait(self, timeout=None):
+                return 0  # leader reaped
+
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.terminate_and_reap(
+                [LeaderWithSurvivingChild()], killpg=fake_killpg,
+                group_alive=lambda pgid: True, sleep=lambda _: None)
+        self.assertIn("could not be confirmed gone", str(caught.exception))
+        self.assertIn((555, signal.SIGTERM), killed)
+        self.assertIn((555, signal.SIGKILL), killed)
 
 
 # --------------------------------------------------------------------------
