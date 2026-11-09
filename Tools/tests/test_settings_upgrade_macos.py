@@ -1279,8 +1279,16 @@ class OrientationFromDomainTests(unittest.TestCase):
         self.assertEqual(upgrade.orientation_from_domain(self._domain("NO")), "horizontal")
         self.assertEqual(upgrade.orientation_from_domain(self._domain("1")), "vertical")
         self.assertEqual(upgrade.orientation_from_domain(self._domain("0")), "horizontal")
-        # Absent flag defaults to the fixture's horizontal orientation.
-        self.assertEqual(upgrade.orientation_from_domain(plistlib.dumps({})), "horizontal")
+        # Absent key: registered default is YES / vertical
+        # (XRGWindowPreferences.swift:41), not horizontal.
+        self.assertEqual(upgrade.orientation_from_domain(plistlib.dumps({})), "vertical")
+        # Custom helper, not NSString boolValue and not Python float().
+        # "Yonder" is not a helper spelling, so it falls back to vertical.
+        # "0 1" is not a helper spelling either (float("0 1") would fail or
+        # a prefix parse would be false); the registered fallback is vertical.
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("Yonder")), "vertical")
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("0 1")), "vertical")
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("0.5junk")), "vertical")
 
     def test_orientation_is_independent_of_the_26_size_keys(self):
         dom = {k: 157.45454545454547 for k in upgrade.LAYOUT_SIZE_KEYS}
@@ -1388,6 +1396,42 @@ class VerticalLayoutTests(unittest.TestCase):
         v = upgrade.expected_layout_sizes(self.vert)
         self.assertNotEqual(h["graphs.ai.size_width"][0], v["graphs.ai.size_width"][0])
         self.assertNotEqual(h["graphs.ai.size_height"][0], v["graphs.ai.size_height"][0])
+
+    def test_preferred_heights_explain_a_139x849_vertical_gap(self):
+        """Coordinator case at 198bd44: 139x849 vertical, unit 127, content
+        height 837, only a CPU override of 140 and gpu+weather hidden, expects
+        graphs.ai.size_height 66.2. The app wrote 80.8. minHeight is the shared
+        line height, so the gap is other preferred heights and the displayed
+        set. A layout with several preferred heights (and one more hidden
+        graph) expects 80.8; a document still carrying the naive 66.2 fails.
+        """
+        naive = upgrade.measured_geometry(139.0, 849.0, 13.0, orientation="vertical")
+        naive_ai = upgrade.expected_layout_sizes(naive)["graphs.ai.size_height"][0]
+        self.assertAlmostEqual(naive_ai, 66.2, places=9)
+
+        displayed = tuple(gid for gid in upgrade.GRAPH_IDS
+                          if gid not in ("gpu", "weather", "stock"))
+        geom = dict(naive)
+        geom["displayedGraphs"] = displayed
+        geom["hiddenGraphs"] = ("gpu", "weather", "stock")
+        geom["heightOverrides"] = {
+            "cpu": 140, "memory": 64, "network": 64, "disk": 64, "battery": 68,
+        }
+        expected = upgrade.expected_layout_sizes(geom)
+        self.assertAlmostEqual(expected["graphs.ai.size_height"][0], 80.8, places=9)
+        self.assertAlmostEqual(expected["graphs.cpu.size_height"][0], 140.0, places=9)
+        self.assertEqual(expected["graphs.gpu.size_height"][0], 0.0)
+        self.assertEqual(expected["graphs.stock.size_width"][0], 0.0)
+        self.assertEqual(expected["graphs.ai.size_width"][0], 127.0)
+
+        # The naive 66.2 document is wrong once preferred heights are modeled.
+        naive_doc = self._document_for(naive)
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(naive_doc, geometry=geom)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+        good = self._document_for(geom)
+        self.assertEqual(len(upgrade.assert_layout_sizes(good, geometry=geom)), 26)
 
 
 if __name__ == "__main__":

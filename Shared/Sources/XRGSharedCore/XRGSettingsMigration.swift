@@ -35,10 +35,7 @@ public enum XRGSettingsMigration {
     /// backend never needs it, because migration already converted those
     /// values once, at the first launch of 0.2.3.
     public static func legacyValue(_ raw: Any, for entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
-            return transform(raw, entry).value
-        }
-        return macIdentity(raw, for: entry)
+        convert(decodedLegacy(raw, fallback: nil, for: entry), entry).value
     }
 
     /// Migrate a 0.2.2 `NSUserDefaults` persistent domain — the dictionary
@@ -68,58 +65,26 @@ public enum XRGSettingsMigration {
         for entry in catalog.entries.sorted(by: { XRGSettingsDocument.precedes($0.id, $1.id) }) {
             guard let key = macKey(of: entry) else { continue }
             if let raw = defaults[key] {
-                let outcome: TransformOutcome
-                if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
-                    outcome = transform(raw, entry)
-                } else {
-                    outcome = TransformOutcome(macIdentity(raw, for: entry))
-                }
+                // Decode with the reader 0.2.2 used, including that reader's
+                // registered fallback, then apply the document transform.
+                // A custom helper that rejects the stored text (for example
+                // graphRefresh "0.5junk") therefore keeps the value 0.2.2
+                // showed, not an NSString prefix and not a dropped default.
+                let outcome = convert(decodedLegacy(raw, fallback: registered[key], for: entry), entry)
                 store(outcome.value, unconvertibleColorSpace: outcome.unconvertibleColorSpace,
                       for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
             } else if let raw = registered[key] {
                 // The user never persisted this key: 0.2.2 served the
                 // registered default for it, so the upgrade must keep that
                 // effective value rather than the catalog's fresh-install one.
-                if let value = registeredValue(raw, for: entry) {
+                let outcome = convert(decodedLegacy(raw, fallback: nil, for: entry), entry)
+                if let value = outcome.value, XRGSettingsDocument.validate(value, for: entry) == nil {
                     store(value, unconvertibleColorSpace: nil,
                           for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
                 }
             }
         }
         return (document, diagnostics)
-    }
-
-    /// The document value of one 0.2.2 registered default. Registration
-    /// stored most values as the string forms 0.2.2's preferences reader
-    /// parsed (`"YES"`, `"1024"`, `"1.0"`); the effective value is what that
-    /// reader made of them — a boolean for the boolean spellings, then a
-    /// whole number, then a decimal, then the text itself
-    /// (`XRGWindowPreferences.apply`). Numbers and archives are already
-    /// typed and convert directly. The first candidate that converts through
-    /// the entry's own transform and validates wins; nil when none does
-    /// (the entry then simply keeps its catalog default).
-    private static func registeredValue(_ raw: Any, for entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        var candidates: [Any] = []
-        if let text = raw as? String {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            switch trimmed.uppercased() {
-            case "YES", "TRUE": candidates.append(true)
-            case "NO", "FALSE": candidates.append(false)
-            case "": candidates.append(false)
-            default: break
-            }
-            if let whole = Int(trimmed) { candidates.append(whole) }
-            if let decimal = Double(trimmed) { candidates.append(decimal) }
-            candidates.append(trimmed)
-        } else {
-            candidates.append(raw)
-        }
-        for candidate in candidates {
-            guard let value = legacyValue(candidate, for: entry),
-                  XRGSettingsDocument.validate(value, for: entry) == nil else { continue }
-            return value
-        }
-        return nil
     }
 
     /// Migrate a version-40 Linux settings file, already upgraded by Rust's
@@ -448,18 +413,33 @@ public enum XRGSettingsMigration {
         }
     }
 
-    /// A defaults value that already is the document value. For a legacy key
-    /// 0.2.2 read with a bool/integer/double accessor, accept exactly what that
-    /// accessor accepts: CFBoolean, integer/float NSNumbers (nonzero = true for
-    /// a bool) and strings parsed with NSString boolValue/integerValue/
-    /// doubleValue semantics. A value of any other type, or a string that is
-    /// neither a boolean spelling nor a number, is something the accessor
-    /// could not have shown and still fails conversion (invalid-value).
+    /// Run the entry's original 0.2.2 reader, then its document transform.
+    private static func convert(_ raw: Any, _ entry: XRGSettingsEntry) -> TransformOutcome {
+        if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
+            return transform(raw, entry)
+        }
+        return TransformOutcome(macIdentity(raw, for: entry))
+    }
+
+    /// The defaults key's original reader applied to `raw`. `fallback` is the
+    /// registered default a custom helper uses when the stored text does not
+    /// parse; UserDefaults accessors ignore it (they never fall back).
+    private static func decodedLegacy(_ raw: Any, fallback: Any?, for entry: XRGSettingsEntry) -> Any {
+        guard let key = macKey(of: entry) else { return raw }
+        return XRGLegacyMacOSReader.decode(raw, fallback: fallback, key: key)
+    }
+
+    /// A defaults value that already is the document value. Scalar keys have
+    /// already been decoded by their 0.2.2 reader (`decodedLegacy`); this wraps
+    /// that Bool/Int/Double. Strict text keys still require a string.
     private static func macIdentity(_ raw: Any, for entry: XRGSettingsEntry) -> XRGSettingsValue? {
         switch legacyScalarAccessor(for: entry) {
-        case .bool: return legacyBool(raw).map { .bool($0) }
-        case .integer: return legacyInteger(raw).map { .int($0) }
-        case .double: return legacyDouble(raw).map { .double($0) }
+        case .bool:
+            return decodedBool(raw).map { .bool($0) }
+        case .integer:
+            return decodedInt(raw).map { .int($0) }
+        case .double:
+            return decodedDouble(raw).map { .double($0) }
         case nil:
             // Strict identity path, unchanged: strings, plain numbers and
             // booleans need no transform (docs/settings-inventory.md);
@@ -472,57 +452,29 @@ public enum XRGSettingsMigration {
         }
     }
 
-    /// The three 0.2.2 `UserDefaults` scalar readers reproduced over a raw
-    /// plist value. Foundation's documented behaviour (verified with a Swift
-    /// probe, macOS 26 / Swift 6.4): `bool(forKey:)` is true for CFBoolean
-    /// true and for ANY nonzero CFNumber (integer/float), and uses
-    /// NSString.boolValue for strings; `integer(forKey:)`/`double(forKey:)`
-    /// use NSNumber.int64Value/doubleValue and NSString.integerValue/
-    /// doubleValue. NSString parses a leading numeric prefix, so a string
-    /// with no numeric prefix (junk) is not a value the reader produced and
-    /// is refused, producing invalid-value rather than a silent 0/false.
-    private static func hasNumericPrefix(_ text: String) -> Bool {
-        var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        if let first = rest.first, first == "+" || first == "-" { rest = rest.dropFirst() }
-        if rest.first == "." { rest = rest.dropFirst() }
-        guard let first = rest.first else { return false }
-        return "0123456789".contains(first)
+    /// A Bool the original reader already produced, or a CFBoolean still in
+    /// raw form. `as? Bool` is checked only for an actual Bool so a bridged
+    /// integer 0/1 is not mistaken for one when the reader returned an Int.
+    private static func decodedBool(_ raw: Any) -> Bool? {
+        if raw is Bool { return raw as? Bool }
+        if let flag = macBool(raw) { return flag }
+        if let number = raw as? NSNumber { return number.doubleValue != 0 }
+        return nil
     }
 
-    /// A string 0.2.2's bool reader could show as a boolean: a YES/NO/TRUE/
-    /// FALSE (and Y/N/T/F) spelling or a number. Junk that is neither is
-    /// rejected so it still diagnoses.
-    private static func isBoolSpelling(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
-        if ["YES", "NO", "TRUE", "FALSE", "Y", "N", "T", "F"].contains(trimmed.uppercased()) {
-            return true
-        }
-        return hasNumericPrefix(trimmed)
-    }
-
-    private static func legacyBool(_ raw: Any) -> Bool? {
-        // "nonzero = true" is computed from doubleValue rather than boolValue:
-        // on swift-corelibs-foundation NSNumber.boolValue is int-based, so a
-        // fractional 0.5 would wrongly read false on Linux. doubleValue != 0
-        // is true for CFBoolean true and every nonzero integer/float NSNumber
-        // on both platforms, matching UserDefaults.bool(forKey:).
-        if let number = raw as? NSNumber { return number.doubleValue != 0.0 }
-        guard let text = raw as? String, isBoolSpelling(text) else { return nil }
-        return (text.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).boolValue
-    }
-
-    private static func legacyInteger(_ raw: Any) -> Int64? {
+    private static func decodedInt(_ raw: Any) -> Int64? {
+        if let value = raw as? Int { return Int64(value) }
+        if let value = raw as? Int64 { return value }
+        if let value = macInt(raw) { return value }
         if let number = raw as? NSNumber { return number.int64Value }
-        guard let text = raw as? String, hasNumericPrefix(text) else { return nil }
-        return Int64((text as NSString).integerValue)
+        return nil
     }
 
-    private static func legacyDouble(_ raw: Any) -> Double? {
+    private static func decodedDouble(_ raw: Any) -> Double? {
+        if let value = raw as? Double { return value }
+        if let value = macDouble(raw) { return value }
         if let number = raw as? NSNumber { return number.doubleValue }
-        guard let text = raw as? String, hasNumericPrefix(text) else { return nil }
-        let value = (text as NSString).doubleValue
-        return value.isFinite ? value : nil
+        return nil
     }
 
     /// A property-list boolean. A plist integer 0 or 1 also bridges to `Bool`,
@@ -749,12 +701,12 @@ public enum XRGSettingsMigration {
     }
 
     private static func orientationFlag(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let flag = macBool(raw) else { return nil }
+        guard let flag = decodedBool(raw) else { return nil }
         return .string(flag ? "vertical" : "horizontal")
     }
 
     private static func windowLevelIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .string("normal")
         case 1: return .string("floating")
@@ -764,7 +716,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func collapseAnchorIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .string("start")
         case 1: return .string("end")
@@ -773,7 +725,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func fahrenheitCelsiusIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .string("fahrenheit")
         case 1: return .string("celsius")
@@ -782,7 +734,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func milesKilometersIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .string("miles")
         case 1: return .string("kilometers")
@@ -791,7 +743,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func inchesHectopascalsIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .string("inches")
         case 1: return .string("hectopascals")
@@ -800,7 +752,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func secondaryIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .string("none")
         case 1: return .string("wind")
@@ -813,7 +765,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func stockTimeframeIndex(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let index = macInt(raw) else { return nil }
+        guard let index = decodedInt(raw) else { return nil }
         switch index {
         case 0: return .int(1)
         case 1: return .int(3)
@@ -827,7 +779,7 @@ public enum XRGSettingsMigration {
         // The Color pane's Display Effect popup stores its index; the four
         // effects it offers are the graph options editor's effect names, in
         // the same order.
-        guard let index = macInt(raw), let effect = Int(exactly: index),
+        guard let index = decodedInt(raw), let effect = Int(exactly: index),
               effectNames.indices.contains(effect) else { return nil }
         return .string(effectNames[effect])
     }
@@ -842,7 +794,7 @@ public enum XRGSettingsMigration {
     }
 
     private static func zeroToNull(_ raw: Any, _ entry: XRGSettingsEntry) -> XRGSettingsValue? {
-        guard let number = macInt(raw) else { return nil }
+        guard let number = decodedInt(raw) else { return nil }
         return number == 0 ? .null : .int(number)
     }
 

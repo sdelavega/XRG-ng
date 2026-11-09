@@ -510,39 +510,236 @@ def parse_frame_rect(text):
     return (float(width), float(height))
 
 
-def _legacy_bool(value):
-    """Coerce a raw 0.2.2 defaults value the way UserDefaults.bool(forKey:)
-    (and 0.2.2's XRGWindowPreferences.apply bool() helper) does: a CFBoolean,
-    an integer/float NSNumber (nonzero = true), or a string parsed with NSString
-    boolValue semantics. Used ONLY to read graphOrientationVertical from the
-    seeded/normalised domain, never from the 26 size keys under validation."""
+def _is_hspace(ch):
+    """CharacterSet.whitespaces: Unicode space, not newlines. The macOS probe
+    skips space/tab/nbsp and does not skip ``\\n``/``\\r``."""
+    return ch.isspace() and ch not in "\n\r\v\f"
+
+
+def _skip_hspace(text, index):
+    while index < len(text) and _is_hspace(text[index]):
+        index += 1
+    return index
+
+
+def ns_integer_value(text, allow_gap_after_sign=True):
+    """macOS NSString.integerValue, including Int64 saturation. ``"1.9"`` is 1,
+    ``"+12"`` is 12, ``"+ 12"`` is 12. Not Python int() and not strtoll via a
+    platform library — the same rules as XRGLegacyMacOSReader."""
+    index = _skip_hspace(text, 0)
+    if index >= len(text):
+        return 0
+    negative = False
+    if text[index] in "+-":
+        negative = text[index] == "-"
+        index += 1
+        if allow_gap_after_sign:
+            index = _skip_hspace(text, index)
+    if index >= len(text) or not text[index].isdigit():
+        return 0
+    magnitude = 0
+    saturated = False
+    limit = 2 ** 63 - 1
+    while index < len(text) and text[index].isdigit():
+        digit = ord(text[index]) - 48
+        if not saturated:
+            if magnitude > limit // 10 or (magnitude == limit // 10 and digit > limit % 10):
+                saturated = True
+            else:
+                magnitude = magnitude * 10 + digit
+        index += 1
+    if saturated:
+        return -2 ** 63 if negative else limit
+    return -magnitude if negative else magnitude
+
+
+def ns_bool_value(text):
+    """macOS NSString.boolValue. Y/y/T/t prefix is true; ``"0 1"`` is false.
+    A sign must be glued to its digits (``"+ 12"`` is false, unlike integerValue)."""
+    index = _skip_hspace(text, 0)
+    if index >= len(text):
+        return False
+    if text[index] in "YyTt":
+        return True
+    return ns_integer_value(text[index:], allow_gap_after_sign=False) != 0
+
+
+def ns_bool_from_plist(value):
+    """UserDefaults.bool(forKey:) over a plist value: NSString.boolValue for
+    strings, nonzero for numbers, false for any other type."""
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
         return value != 0
     if isinstance(value, str):
-        text = value.strip()
-        upper = text.upper()
-        if upper in ("YES", "TRUE", "Y", "T"):
-            return True
-        if upper in ("NO", "FALSE", "N", "F", ""):
-            return False
-        # NSString boolValue: a nonzero numeric string is true.
-        try:
-            return float(text) != 0.0
-        except ValueError:
-            return False
+        return ns_bool_value(value)
     return False
 
 
+def _window_bool_spelling(value):
+    """XRGWindowPreferences.apply bool() spellings. ``"Yonder"`` is not a hit."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized in ("YES", "TRUE", "1"):
+            return True
+        if normalized in ("NO", "FALSE", "0", ""):
+            return False
+    return None
+
+
+def legacy_bool_value(value):
+    """v0.2.2 XRGStringUtilities.legacyBoolValue, fallback strings only."""
+    return value != "" and value != "0" and value.lower() != "no"
+
+
+def window_bool(value, fallback="YES"):
+    """apply's bool() helper: restricted spellings, then the registered
+    fallback. Not NSString.boolValue and not Python float()."""
+    parsed = _window_bool_spelling(value)
+    if parsed is not None:
+        return parsed
+    parsed = _window_bool_spelling(fallback)
+    if parsed is not None:
+        return parsed
+    if isinstance(fallback, str):
+        return legacy_bool_value(fallback)
+    return False
+
+
+def _window_integer_parsed(value):
+    """apply's integer() parse: whole-string Int, else a finite Double
+    truncated toward zero. ``"0.5junk"`` and overflow are None (fallback)."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or value < -2 ** 63 or value >= 2 ** 63:
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return int(text, 10)
+        except ValueError:
+            pass
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+        if not math.isfinite(number) or number < -2 ** 63 or number >= 2 ** 63:
+            return None
+        return int(number)
+    return None
+
+
+def window_integer(value, fallback, low, high):
+    parsed = _window_integer_parsed(value)
+    if parsed is not None and low <= parsed <= high:
+        return parsed
+    parsed = _window_integer_parsed(fallback)
+    return parsed if parsed is not None else 0
+
+
+def orientation_flag(domain):
+    """graphOrientationVertical via apply's bool() and its registered default
+    ``"YES"`` (vertical, XRGWindowPreferences.swift:41) when the key is absent
+    or the stored text is not a helper spelling."""
+    if "graphOrientationVertical" not in domain:
+        return True
+    return window_bool(domain.get("graphOrientationVertical"), fallback="YES")
+
+
 def orientation_from_domain(domain_bytes):
-    """Read general.window.orientation's legacy key graphOrientationVertical
-    from the SEEDED/NORMALISED domain (NOT one of the 26 size keys), coerced
-    with the same bool semantics 0.2.2 read it with. Independent of the sizes
-    under validation and of any host-specific geometry. Pure and unit tested.
+    """Read general.window.orientation's legacy key from the seeded domain
+    with 0.2.2's actual orientation reader. Independent of the 26 size keys.
+    An absent key is vertical, the registered default — not horizontal.
     """
     domain = plistlib.loads(domain_bytes)
-    return "vertical" if _legacy_bool(domain.get("graphOrientationVertical", False)) else "horizontal"
+    return "vertical" if orientation_flag(domain) else "horizontal"
+
+
+# Visibility keys the graph views read with defaults.bool(forKey:), and the
+# registered defaults from XRGWindowPreferences.defaultValues. NPU's registered
+# default is YES on Apple silicon; seeds used by the check set the key, so an
+# absent key only matters for a domain that never persisted it.
+VISIBILITY_KEYS = {
+    "cpu": "showCPUGraph", "gpu": "showGPUGraph", "npu": "showNPUGraph",
+    "vram": "showVRAMGraph", "memory": "showMemoryGraph", "battery": "showBatteryGraph",
+    "temperature": "showTemperatureGraph", "network": "showNetworkGraph",
+    "disk": "showDiskGraph", "ai": "showAITokenGraph", "fans": "showFansGraph",
+    "weather": "showWeatherGraph", "stock": "showStockGraph",
+}
+REGISTERED_VISIBLE = {
+    "cpu": True, "gpu": True, "npu": True, "vram": False, "memory": True,
+    "battery": True, "temperature": True, "network": True, "disk": True,
+    "ai": True, "fans": False, "weather": True, "stock": True,
+}
+
+
+def displayed_from_domain(domain):
+    """The module set windowChanged lays out, from the visibility keys — not
+    from the 26 size keys and not from the fixture's hardcoded hidden set."""
+    displayed = []
+    hidden = []
+    for gid in GRAPH_IDS:
+        key = VISIBILITY_KEYS[gid]
+        shown = (ns_bool_from_plist(domain[key]) if key in domain
+                 else REGISTERED_VISIBLE[gid])
+        (displayed if shown else hidden).append(gid)
+    return tuple(displayed), tuple(hidden)
+
+
+def preferred_heights_from_domain(domain):
+    """graphPresentationV1 height overrides (64...240), the preferred heights
+    windowChanged's fixedHeight path consumes. ``tpu`` is the catalog's npu.
+    Independent of the 26 size keys."""
+    blob = domain.get("graphPresentationV1")
+    if not isinstance(blob, (bytes, bytearray)):
+        return {}
+    try:
+        obj = json.loads(bytes(blob))
+    except ValueError:
+        return {}
+    overrides = obj.get("overrides") if isinstance(obj, dict) else None
+    if not isinstance(overrides, dict):
+        return {}
+    heights = {}
+    for name, fields in overrides.items():
+        if not isinstance(fields, dict):
+            continue
+        height = fields.get("height")
+        if isinstance(height, bool) or not isinstance(height, (int, float)):
+            continue
+        if not float(height).is_integer() or not (64 <= int(height) <= 240):
+            continue
+        gid = "npu" if name == "tpu" else name
+        if gid in GRAPH_IDS:
+            heights[gid] = int(height)
+    return heights
+
+
+def border_from_domain(domain):
+    """borderWidth via apply's integer() helper. Absent → registered ``"4"``."""
+    raw = domain["borderWidth"] if "borderWidth" in domain else "4"
+    return window_integer(raw, "4", 0, 2 ** 31 - 1)
+
+
+def layout_inputs_from_domain(domain):
+    """Every windowChanged input that lives in the seeded domain, none of
+    which is one of the 26 size keys."""
+    displayed, hidden = displayed_from_domain(domain)
+    return {
+        "orientation": "vertical" if orientation_flag(domain) else "horizontal",
+        "borderWidth": border_from_domain(domain),
+        "displayedGraphs": displayed,
+        "hiddenGraphs": hidden,
+        "heightOverrides": preferred_heights_from_domain(domain),
+    }
 
 
 def window_frame_from_domain(exported_bytes):
@@ -573,7 +770,7 @@ def window_frame_from_domain(exported_bytes):
     restore = [f for f in frames if f[2] == "unminimizedFrame"]
     if restore:
         return max(restore, key=lambda f: f[0] * f[1])
-    vertical = _legacy_bool(domain.get("graphOrientationVertical", False))
+    vertical = orientation_flag(domain)
     if vertical:
         # Expanded vertical windows are TALL: prefer the tallest frame.
         return max(frames, key=lambda f: (f[1], f[0]))
@@ -663,7 +860,10 @@ def layout_size_derivation(geometry=None):
     }
     if orientation == "vertical":
         available = max(0.0, content_height - title_height - separator * count)
-        fixed = {gid: max(min_height, float(h)) for gid, h in overrides.items()
+        # minHeight is XRGGraphLabels.lineHeight, the same measured font
+        # metric as titleHeight — not the module's pre-font 30 pt default.
+        floor = title_height
+        fixed = {gid: max(floor, float(h)) for gid, h in overrides.items()
                  if gid in displayed}
         automatic = [gid for gid in displayed if gid not in fixed]
         if len(automatic) == count:
@@ -696,9 +896,21 @@ def layout_size_derivation(geometry=None):
         })
     else:
         unit = max(0.0, content_width - title_height - separator * count) / count
-        cpu_height = min(content_height,
-                         max(min_height, float(overrides.get("cpu", min_height))))
-        result.update({"unit": unit, "cpuHeight": cpu_height})
+        # Horizontal else-branch: each displayed graph's height is
+        # min(contentHeight, fixedHeight ?? contentHeight). fixedHeight is
+        # max(lineHeight, preferred), not a CPU-only special case.
+        horizontal_heights = {}
+        for gid in displayed:
+            if gid in overrides:
+                horizontal_heights[gid] = min(
+                    content_height, max(title_height, float(overrides[gid])))
+            else:
+                horizontal_heights[gid] = content_height
+        result.update({
+            "unit": unit,
+            "cpuHeight": horizontal_heights.get("cpu", min_height),
+            "horizontalHeights": horizontal_heights,
+        })
     return result
 
 
@@ -723,10 +935,7 @@ def expected_layout_sizes(geometry=None):
             expected[f"graphs.{gid}.size_height"] = (d["verticalHeights"][gid], SIZE_TOLERANCE)
         else:
             expected[f"graphs.{gid}.size_width"] = (d["unit"], SIZE_TOLERANCE)
-            height = d["contentHeight"]
-            if gid in overrides:
-                height = min(d["contentHeight"],
-                             max(d["minHeight"], float(overrides[gid])))
+            height = d.get("horizontalHeights", {}).get(gid, d["contentHeight"])
             expected[f"graphs.{gid}.size_height"] = (height, SIZE_TOLERANCE)
     return expected
 
@@ -1589,16 +1798,31 @@ def collect_measured_geometry(domain, seed, results, live_frame=None,
     frame_w, frame_h, frame_key = frame
     font_name, font_size = font_descriptor_from_seed(seed)
     title_height = measure_font(font_name, font_size, results)
-    # R9-2: the orientation MUST come from the seeded/normalised domain, not a
-    # hardcoded "horizontal". XRGModuleManager defaults to vertical. Read it
-    # from the same domain export as the frame (never from the 26 size keys).
-    orientation = orientation_from_domain(exported)
+    # Layout inputs come from the seeded domain (the export), filled from the
+    # seed file when a key was not persisted. None of these readers consults
+    # the 26 size keys. Orientation uses apply's bool() and the registered
+    # vertical default when the key is absent from both.
+    seeded = dict(plistlib.loads(Path(seed).read_bytes()))
+    seeded.update(plistlib.loads(exported))
+    inputs = layout_inputs_from_domain(seeded)
+    orientation = inputs["orientation"]
     geometry = measured_geometry(frame_w, frame_h, title_height, orientation=orientation)
+    geometry["borderWidth"] = inputs["borderWidth"]
+    geometry["displayedGraphs"] = inputs["displayedGraphs"]
+    geometry["hiddenGraphs"] = inputs["hiddenGraphs"]
+    geometry["heightOverrides"] = inputs["heightOverrides"]
+    # Views set every module's minHeight to the font line height before layout.
+    geometry["minHeight"] = title_height
     provenance = {
         "orientation": orientation,
-        "orientationSource": ("graphOrientationVertical in the seeded/normalised "
-                              "domain, coerced with UserDefaults.bool(forKey:) "
-                              "semantics -- independent of the 26 validated size keys"),
+        "orientationSource": ("graphOrientationVertical in the seed, read with "
+                              "XRGWindowPreferences.apply bool() and the registered "
+                              "default vertical when absent -- independent of the "
+                              "26 validated size keys"),
+        "borderWidth": geometry.get("borderWidth"),
+        "displayedGraphs": list(geometry.get("displayedGraphs", ())),
+        "hiddenGraphs": list(geometry.get("hiddenGraphs", ())),
+        "heightOverrides": dict(geometry.get("heightOverrides", {})),
         "measurement": "independent of the 26 graphs.*.size_* keys under validation",
         "frameWidth": frame_w,
         "frameHeight": frame_h,

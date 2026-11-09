@@ -292,24 +292,129 @@ struct SettingsMigrationTests {
         #expect(boolIntDoc.values["graphs.network.minimum_scale"] == .int(1))
     }
 
-    /// Values the accessors would reject (a wrong type, or a string that is
-    /// neither a boolean spelling nor a number) still produce invalid-value.
+    /// A wrong type the reader cannot turn into a document value still
+    /// diagnoses. Custom-helper junk is not in that set: 0.2.2 falls back
+    /// (see `customHelperRejectsMalformedNumbers`), and UserDefaults accessors
+    /// always return a scalar (see `foundationStringScalarsMatchMacOSNSString`).
     @Test func junkLegacyScalarsStillDiagnose() throws {
         let catalog = try XRGSettingsCatalog.load()
-        let junk: [(String, Any, String)] = [
-            ("showCPUTemperature", "garbage", "graphs.cpu.show_temperature"),
-            ("showCPUTemperature", Data("junk".utf8), "graphs.cpu.show_temperature"),
-            ("netMinGraphScale", "not-a-number", "graphs.network.minimum_scale"),
-            ("netMinGraphScale", Data("junk".utf8), "graphs.network.minimum_scale"),
-            ("graphRefresh", ["bad"], "graphs.refresh"),
-        ]
-        for (key, raw, id) in junk {
-            let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
-                [key: raw], catalog: catalog)
-            #expect(diagnostics == [XRGSettingsDiagnostic(id: id, problem: "invalid-value")],
-                    "\(key)=\(raw) must still be diagnosed")
-            #expect(document.values[id] == nil, "\(key) junk must fall back to the default")
+        let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+            ["graphRefresh": ["bad"]], catalog: catalog)
+        #expect(diagnostics == [XRGSettingsDiagnostic(id: "graphs.refresh", problem: "invalid-value")])
+        #expect(document.values["graphs.refresh"] == nil)
+        // A colour archive is data. A string is not an archive.
+        let (colorDoc, colorDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["backgroundColor": "not-an-archive"], catalog: catalog)
+        #expect(colorDiag == [XRGSettingsDiagnostic(id: "appearance.window.color", problem: "invalid-value")])
+        #expect(colorDoc.values["appearance.window.color"] == nil)
+    }
+
+    /// macOS NSString boolValue/integerValue/doubleValue, reproduced without
+    /// calling those methods. Probe (this host): Y/y/T/t prefixes are true,
+    /// `"0 1"` is false, `"+12"` is 12, `"1.9"` is 1, overflow saturates.
+    @Test func foundationStringScalarsMatchMacOSNSString() {
+        for text in ["Yonder", "yellow", "Tomorrow", "tomato", "  YES", "\tYES"] {
+            #expect(XRGLegacyMacOSReader.nsBoolValue(text), "\(text) boolValue is true on macOS")
         }
+        #expect(XRGLegacyMacOSReader.nsBoolValue("0 1") == false)
+        #expect(XRGLegacyMacOSReader.nsBoolValue("  0 1") == false)
+        #expect(XRGLegacyMacOSReader.nsBoolValue("1 0"))
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("  +12") == 12)
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("+12") == 12)
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("1.9") == 1)
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("1.9abc") == 1)
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("9223372036854775808") == Int64.max)
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("-9223372036854775809") == Int64.min)
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("999999999999999999999999") == Int64.max)
+        #expect(XRGLegacyMacOSReader.nsDoubleValue("0.5junk") == 0.5)
+        #expect(XRGLegacyMacOSReader.nsDoubleValue("1e3") == 1000)
+        // Whitespace between the sign and the digits is an integer, not a double.
+        #expect(XRGLegacyMacOSReader.nsIntegerValue("+ 12") == 12)
+        #expect(XRGLegacyMacOSReader.nsDoubleValue("+ 12") == 0)
+        #expect(XRGLegacyMacOSReader.nsBoolValue("+ 12") == false)
+    }
+
+    /// UserDefaults-backed keys take the NSString reader, then the transform.
+    /// Custom-helper keys do not: `"Yonder"` is not a helper spelling.
+    @Test func userDefaultsStringScalarsMigrateLikeFoundation() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        // Default is false, so a parsed true must be stored.
+        for text in ["Yonder", "yellow", "Tomorrow", "tomato", "  YES"] {
+            let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                ["aiTokensTrackingEnabled": text], catalog: catalog)
+            #expect(diagnostics.isEmpty, "\(text) must not be invalid-value")
+            #expect(document.values["ai.tracking.enabled"] == .bool(true),
+                    "\(text) is true for UserDefaults.bool")
+        }
+        // Default is true, so a parsed false must be stored. `"0 1"` is false
+        // on macOS (the integer scan stops at the space) and must not become true.
+        let (zeroOne, zeroDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["showCPUGraph": "0 1"], catalog: catalog)
+        #expect(zeroDiag.isEmpty)
+        #expect(zeroOne.values["graphs.cpu.visible"] == .bool(false))
+
+        let (plus, plusDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["aiTokensDailyBudget": "  +12"], catalog: catalog)
+        #expect(plusDiag.isEmpty)
+        #expect(plus.values["ai.tracking.daily_budget"] == .int(12))
+
+        let (truncated, truncDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["aiTokensDailyBudget": "1.9"], catalog: catalog)
+        #expect(truncDiag.isEmpty)
+        #expect(truncated.values["ai.tracking.daily_budget"] == .int(1))
+
+        // graphStyle is defaults.integer, then graphStyleIndex. `"1"` is scanlines.
+        let (style, styleDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["graphStyle": "1"], catalog: catalog)
+        #expect(styleDiag.isEmpty)
+        #expect(style.value("appearance.display_effect", catalog: catalog) == .string("scanlines"))
+        #expect(style.values["appearance.display_effect"] == .string("scanlines"))
+    }
+
+    /// `XRGWindowPreferences` helpers reject what NSString would accept, and
+    /// fall back to the registered default instead of saturating or prefix-parsing.
+    @Test func customHelperRejectsMalformedNumbers() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let registered = ["graphRefresh": "1.0", "netMinGraphScale": "1024", "graphOrientationVertical": "YES"]
+
+        let (refresh, refreshDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["graphRefresh": "0.5junk"], registered: registered, catalog: catalog)
+        #expect(refreshDiag.isEmpty, "0.5junk falls back; it is not invalid and not 0.5")
+        #expect(refresh.values["graphs.refresh"] == nil, "the fallback 1.0 is the catalog default")
+        let refreshEntry = try #require(catalog.entry("graphs.refresh"))
+        #expect(refresh.value("graphs.refresh", catalog: catalog) == refreshEntry.defaultValue)
+
+        // A real prefix would have been stored. The helper must not do that.
+        let (accepted, acceptedDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["graphRefresh": "0.5"], catalog: catalog)
+        #expect(acceptedDiag.isEmpty)
+        #expect(accepted.values["graphs.refresh"] == .double(0.5))
+
+        let overflow = String(repeating: "9", count: 40)
+        let (scale, scaleDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["netMinGraphScale": overflow], registered: registered, catalog: catalog)
+        #expect(scaleDiag.isEmpty)
+        #expect(scale.values["graphs.network.minimum_scale"] == .int(1024),
+                "custom integer rejects overflow and uses the registered 1024, not Int64.max")
+
+        // windowLevel and orientation are the custom helpers, then their transforms.
+        let (level, levelDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["windowLevel": "1"], catalog: catalog)
+        #expect(levelDiag.isEmpty)
+        #expect(level.values["general.window.level"] == .string("floating"))
+
+        let (orientation, orientDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["graphOrientationVertical": "NO"], catalog: catalog)
+        #expect(orientDiag.isEmpty)
+        #expect(orientation.values["general.window.orientation"] == .string("horizontal"))
+
+        // `"Yonder"` is not a helper spelling. With the registered YES it stays vertical.
+        let (yonder, yonderDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["graphOrientationVertical": "Yonder"], registered: registered, catalog: catalog)
+        #expect(yonderDiag.isEmpty)
+        #expect(yonder.values["general.window.orientation"] == nil,
+                "fallback YES is the catalog default vertical, not a stored horizontal")
+        #expect(yonder.value("general.window.orientation", catalog: catalog) == .string("vertical"))
     }
 
     /// A small synthetic 0.2.2 domain whose scalar keys are stored as the
@@ -569,9 +674,10 @@ struct SettingsMigrationTests {
     @Test func unconvertibleKeyFallsBackAndReports() throws {
         let catalog = try XRGSettingsCatalog.load()
 
-        // macOS: a level index with no meaning, and a monitor-source blob
-        // that is not JSON. Both take their defaults and are reported; the
-        // valid key in the same domain still migrates.
+        // macOS: windowLevel 9 is outside apply's 0...2 range, so 0.2.2
+        // falls back to the registered 0 (normal) — not an invalid-value.
+        // A monitor-source blob that is not JSON still cannot convert.
+        // The valid key in the same domain still migrates.
         let badMac: [String: Any] = [
             "windowLevel": 9,
             "borderWidth": 3,
@@ -579,10 +685,10 @@ struct SettingsMigrationTests {
         ]
         let (macDocument, macDiagnostics) = XRGSettingsMigration.fromMacDefaults(badMac, catalog: catalog)
         #expect(macDiagnostics == [
-            XRGSettingsDiagnostic(id: "general.window.level", problem: "invalid-value"),
             XRGSettingsDiagnostic(id: "sources.cpu.core", problem: "invalid-value"),
         ])
-        #expect(macDocument.values == ["general.window.border_width": .int(3)])
+        #expect(macDocument.values["general.window.border_width"] == .int(3))
+        #expect(macDocument.values["general.window.level"] == nil)
         #expect(macDocument.value("general.window.level", catalog: catalog) == .string("normal"))
 
         // Linux: a layout Rust would reject and a unit the transform does
@@ -686,14 +792,14 @@ struct SettingsMigrationTests {
             XRGSettingsDiagnostic(id: "appearance.text.color", problem: "unsupported-color-space:adobe-rgb"),
         ]
         let expectedInvalidDiagnostics = [
-            XRGSettingsDiagnostic(id: "general.window.level", problem: "invalid-value"),
+            XRGSettingsDiagnostic(id: "appearance.display_effect", problem: "invalid-value"),
         ]
         let mismatches = await withTaskGroup(of: Int.self) { group in
             for index in 0..<200 {
                 let expectsAdobe = index.isMultiple(of: 2)
                 group.addTask {
                     let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
-                        expectsAdobe ? adobeDomain : ["windowLevel": 9, "borderWidth": 6],
+                        expectsAdobe ? adobeDomain : ["graphStyle": 9, "borderWidth": 6],
                         catalog: catalog)
                     guard diagnostics == (expectsAdobe ? expectedAdobeDiagnostics
                                                         : expectedInvalidDiagnostics) else { return 1 }
