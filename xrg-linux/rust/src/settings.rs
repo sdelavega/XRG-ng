@@ -497,9 +497,9 @@ pub enum Layout {
     Horizontal,
 }
 /// The shared Stocks settings, as the Linux view of the unified settings
-/// document carries them (ruling R2). The core's version-40 view maps no
-/// Stocks graph yet, so the graph's own visibility rides the document's
-/// `graphs.stock.visible` value until the core maps it (see `Store::view`).
+/// document carries them. The core now maps the Stocks graph itself, so its
+/// presentation (visible, style, height, colours) and its position in
+/// `graphs.order` travel through the core like every other graph.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct StockSettings {
@@ -649,8 +649,8 @@ impl Settings {
     }
     /// Join every graph the model knows that the module list lacks, hidden,
     /// exactly as the upgrade chain appends graphs an older file never
-    /// stored. The core's version-40 view names no Stocks graph yet (ruling
-    /// R2), so this is what keeps every in-memory `Settings` complete.
+    /// stored. A defensive completeness guard for legacy documents; the
+    /// core's Linux view already names every graph, including Stocks.
     pub(crate) fn ensure_modules(&mut self) {
         for id in Module::ALL {
             if !self.modules.iter().any(|m| m.id == id) {
@@ -889,7 +889,7 @@ impl Settings {
         if result.version == 39 {
             result.version = 40;
         }
-        // Version 40 never stored the Stocks graph (ruling R2): it joins
+        // Older version-40 files may predate the Stocks graph: it joins
         // hidden, the way the chain already appended earlier opt-in graphs.
         result.ensure_modules();
         result.validate()?;
@@ -982,84 +982,20 @@ fn catalog_defaults() -> &'static Vec<(String, serde_json::Value)> {
             .collect()
     })
 }
-/// The typed view the app runs on: the core's Linux view — which names no
-/// Stocks graph yet, the version-40 shape (ruling R2) — with the Stocks
-/// graph joined hidden and the document's own `graphs.stock.*` catalog
-/// values applied, so the stock graph's controls reach the dashboard before
-/// the core maps the graph. Every read of a stored document goes through
-/// here.
+/// The typed view the app runs on: the core's Linux view, which now maps
+/// every graph — including the Stocks graph's presentation (visible, style,
+/// height, colours) and its position in `graphs.order` — through the one
+/// shared model. Every read of a stored document goes through here; nothing
+/// is decoded, defaulted or range-checked on the Rust side.
 fn view(document: &[u8]) -> Result<Settings, String> {
-    let mut settings = document::linux_view(document)?;
-    settings.ensure_modules();
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(document) else {
-        // The document the store holds is always the core's canonical JSON;
-        // the defaults stand if it ever were not.
-        return Ok(settings);
-    };
-    let at = |id: &str| value.get("settings").and_then(|settings| settings.get(id));
-    let stocks = settings.module_mut(Module::Stocks);
-    if let Some(visible) = at("graphs.stock.visible").and_then(serde_json::Value::as_bool) {
-        stocks.visible = visible;
-    }
-    if let Some(style) = at("graphs.stock.style").and_then(serde_json::Value::as_str) {
-        stocks.style = match style {
-            "solid" => GraphStyle::Solid,
-            "pixel" => GraphStyle::Pixel,
-            "dot" => GraphStyle::Dot,
-            "hollow" => GraphStyle::Hollow,
-            _ => stocks.style,
-        };
-    }
-    if let Some(height) = at("graphs.stock.height").and_then(serde_json::Value::as_u64) {
-        stocks.height = u32::try_from(height)
-            .ok()
-            .filter(|height| (64..=240).contains(height));
-    }
-    if let Some(color) = color_at(&value, "graphs.stock.color.background") {
-        stocks.colors.background = Some(color);
-    }
-    for (index, id) in [
-        "graphs.stock.color.series1",
-        "graphs.stock.color.series2",
-        "graphs.stock.color.series3",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if let Some(color) = color_at(&value, id) {
-            stocks.colors.series[index] = Some(color);
-        }
-    }
-    Ok(settings)
+    document::linux_view(document)
 }
 
-/// One stored RGBA color, or None when the entry is absent, null or not a
-/// bounded color — the inherit state.
-fn color_at(value: &serde_json::Value, id: &str) -> Option<[f64; 4]> {
-    let array = value
-        .get("settings")?
-        .get(id)?
-        .as_array()?
-        .iter()
-        .map(|component| {
-            component
-                .as_f64()
-                .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    array.try_into().ok()
-}
-
-/// The version-40 JSON the core's migration maps: the view with the Stocks
-/// graph removed, because the core's version-40 model does not know it and
-/// an unknown module id would leak into the migrated `graphs.order`. The
-/// Stocks settings themselves stay in the object, exactly as the pinned
-/// corpus fixtures carry them; the core's migration names none of them
-/// (ruling R2).
+/// The version-40 JSON the core's migration maps. The core now knows the
+/// Stocks graph, so the whole view travels unchanged: its presentation and
+/// its position in `graphs.order` are carried by the core in both directions.
 fn v40_bytes(settings: &Settings) -> Result<Vec<u8>, String> {
-    let mut v40 = settings.clone();
-    v40.modules.retain(|m| m.id != Module::Stocks);
-    serde_json::to_vec(&v40).map_err(|e| e.to_string())
+    serde_json::to_vec(settings).map_err(|e| e.to_string())
 }
 
 /// The shared settings document as the Linux app stores it: the canonical
@@ -1250,9 +1186,9 @@ impl Store {
     /// preferences editor and `Writer` use. Only the entries whose value
     /// changed since the last loaded or saved view travel through the core's
     /// `set` path, so a save can never reset a document entry it did not
-    /// derive: the Stocks settings (ruling R2 — a view migration names none
-    /// of them), other platforms' catalog keys and unknown keys are left
-    /// exactly as the document holds them. Any value the core refuses aborts
+    /// derive: the Stocks settings (whose catalog entries have no
+    /// version-40 mapping), other platforms' catalog keys and unknown keys
+    /// are left exactly as the document holds them. Any value the core refuses aborts
     /// the save before anything is written.
     pub fn save(&mut self, settings: &Settings) -> Result<(), String> {
         if self.blocked {
@@ -1265,12 +1201,11 @@ impl Store {
     }
     /// The settings map the core derives from one Linux view through
     /// `migrate_v40`: every entry with a legacy Linux mapping, at the value
-    /// the view carries, plus the Stocks graph's own catalog entries — the
-    /// core's version-40 migration names no Stocks graph (ruling R2), so
-    /// its presentation travels directly the way the settings window's own
-    /// edits do. Entries at their default are absent from the migrated map,
-    /// exactly as the core's migration writes them, so this map is the
-    /// complete set of document ids a view save may ever touch.
+    /// the view carries — now including the Stocks graph's presentation and
+    /// `graphs.order`, which the core maps. Entries at their default are
+    /// absent from the migrated map, exactly as the core's migration writes
+    /// them, so this map is the complete set of document ids a view save may
+    /// ever touch.
     fn view_entries(
         &self,
         settings: &Settings,
@@ -1287,43 +1222,12 @@ impl Store {
                         diagnostic.problem
                     ));
                 }
-                let mut value: serde_json::Value =
+                let value: serde_json::Value =
                     serde_json::from_slice(&document).map_err(|e| e.to_string())?;
-                let map = value["settings"].as_object_mut().expect("canonical map");
-                let stocks = settings.module(Module::Stocks);
-                map.insert("graphs.stock.visible".into(), stocks.visible.into());
-                map.insert(
-                    "graphs.stock.style".into(),
-                    serde_json::to_value(stocks.style).map_err(|e| e.to_string())?,
-                );
-                map.insert(
-                    "graphs.stock.height".into(),
-                    stocks
-                        .height
-                        .map_or(serde_json::Value::Null, |height| height.into()),
-                );
-                map.insert(
-                    "graphs.stock.color.background".into(),
-                    stocks
-                        .colors
-                        .background
-                        .map_or(serde_json::Value::Null, |color| serde_json::json!(color)),
-                );
-                for (index, id) in [
-                    "graphs.stock.color.series1",
-                    "graphs.stock.color.series2",
-                    "graphs.stock.color.series3",
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    map.insert(
-                        id.into(),
-                        stocks.colors.series[index]
-                            .map_or(serde_json::Value::Null, |color| serde_json::json!(color)),
-                    );
-                }
-                Ok(map.clone())
+                Ok(value["settings"]
+                    .as_object()
+                    .cloned()
+                    .expect("canonical map"))
             }
             document::Loaded::Unreadable { diagnostic } => Err(format!(
                 "the settings did not convert: {}",

@@ -12,7 +12,7 @@
 use crate::{
     dashboard::{Readout, Row},
     engine::{Panel, Scale},
-    https::{self, https_get},
+    https::{self},
     settings::{Module, StockSettings},
     shared,
 };
@@ -85,20 +85,25 @@ pub fn price_string(price: Option<f64>) -> String {
 pub type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, String> + Send>;
 
 /// The change string exactly as macOS formats it: `n/a` without a value,
-/// `unch` on a zero change, otherwise an arrow and the magnitude.
+/// `unch` on a zero change, otherwise a direction glyph and the magnitude.
+/// The bundled fonts carry no ▲/▼ geometric shapes (they render as tofu), so
+/// the direction is a `+`/`-` ASCII sign every font has (visual finding V1).
 pub fn change_string(change: Option<f64>) -> String {
-    match change {
-        Some(change) if change != 0. => {
-            format!("{}{:.2}", if change > 0. { "▲" } else { "▼" }, change.abs())
-        }
-        _ => "unch".into(),
+    let Some(change) = change else {
+        return "n/a".into();
+    };
+    if change == 0. {
+        return "unch".into();
     }
+    format!("{}{:.2}", if change > 0. { "+" } else { "-" }, change.abs())
 }
 
-/// The live fetch path: the same bounded HTTPS GET the weather collector
-/// uses, with the same timeouts and response cap (spec §7).
+/// The live fetch path: the bounded HTTPS GET that keeps the HTTP status and
+/// body, so a 404's not-found envelope reaches the classifier. Weather keeps
+/// its own `--fail` client; both share the same timeouts and response cap
+/// (spec §7).
 pub fn live_fetcher() -> Fetch {
-    Box::new(|url| https_get(url, https::TIMEOUT))
+    Box::new(|url| https::stock_https_get(url, https::TIMEOUT))
 }
 
 /// How the engine starts the collector: the initial visible state and the
@@ -353,7 +358,11 @@ fn fetch_ticker(fetch: &dyn Fn(&str) -> Result<Vec<u8>, String>, ticker: &str) -
     {
         Some((price, change)) => (Some(price), Some(change)),
         None => match closes.as_slice() {
-            [.., last, previous] => (Some(*last), Some(last - previous)),
+            // `[.., previous, last]`: the final close is the price and the
+            // change is final minus its predecessor, exactly as macOS
+            // `getCurrentPriceAndChange` computes. (The reversed binding
+            // made the penultimate close the price and negated the change.)
+            [.., previous, last] => (Some(*last), Some(last - previous)),
             _ => (None, None),
         },
     };
@@ -440,6 +449,12 @@ impl Graph {
     pub fn clear_graph(&mut self) {
         self.switched = None;
     }
+    /// Position the rotating ticker at one index (tests and diagnostics);
+    /// the next timed tick keeps rotating from here.
+    pub fn set_phase(&mut self, phase: usize) {
+        self.phase = phase;
+        self.switched = Some(Instant::now());
+    }
     pub fn panel(&mut self, update: Option<&Update>) -> Panel {
         let mut panel = Panel {
             title: "Stocks",
@@ -482,6 +497,20 @@ impl Graph {
                 .into();
             return panel;
         }
+        // The rotation macOS shows: the next ticker every 30 seconds,
+        // starting with the list's first ticker.
+        let now = Instant::now();
+        match self.switched {
+            Some(switched) if now.duration_since(switched) >= ROTATE => {
+                self.switched = Some(now);
+                self.phase = self.phase.wrapping_add(1);
+            }
+            None => self.switched = Some(now),
+            _ => (),
+        }
+        let selected_index = self.phase % symbols.len();
+        let selected =
+            reading(&symbols[selected_index]).expect("settled readings cover every symbol");
         if let Some(djia) = djia {
             panel
                 .readout
@@ -492,7 +521,11 @@ impl Graph {
             "Period",
             timeframe_text(update.settings.timeframe),
         ));
-        for ticker in &symbols {
+        // macOS starts the visible quote rows at the displayed ticker
+        // (`stockToShow`), so the rotating curve's own quote is never
+        // clipped away when the list is longer than the panel holds.
+        for index in (selected_index..symbols.len()).chain(0..selected_index) {
+            let ticker = &symbols[index];
             let Some(reading) = reading(ticker) else {
                 continue;
             };
@@ -506,20 +539,15 @@ impl Graph {
                     .top
                     .push(Row::new("", change_string(reading.change)));
             }
-        }
-        // The rotation macOS shows: the next ticker every 30 seconds,
-        // starting with the list's first ticker.
-        let now = Instant::now();
-        match self.switched {
-            Some(switched) if now.duration_since(switched) >= ROTATE => {
-                self.switched = Some(now);
-                self.phase = self.phase.wrapping_add(1);
+            // `panel.label` is not painted while quote rows exist, so a
+            // failed ticker's status must appear in the readout itself.
+            if reading.status != StockStatus::Ok {
+                panel
+                    .readout
+                    .top
+                    .push(Row::new("Status", failure_label(reading.status)));
             }
-            None => self.switched = Some(now),
-            _ => (),
         }
-        let selected = &symbols[self.phase % symbols.len()];
-        let selected = reading(selected).expect("settled readings cover every symbol");
         let change = if update.settings.show_change && selected.change.is_some() {
             format!(" {}", change_string(selected.change))
         } else {
@@ -540,16 +568,18 @@ impl Graph {
         panel.detail = detail(&update.settings, &update.readings, &symbols);
         // The filled curve of the rotating ticker, and the Dow as macOS's
         // unfilled secondary curve, each scaled to its own padded range.
-        if selected.status == StockStatus::Ok
-            && let Some((lower, upper)) =
-                curve_bounds(&slice(&selected.closes, update.settings.timeframe))
+        // Retained closes stay drawn through a failure (NetworkError keeps
+        // the last values): only an empty slice has no bounds, so the
+        // error/stale label above still reports the failure state.
+        if let Some((lower, upper)) =
+            curve_bounds(&slice(&selected.closes, update.settings.timeframe))
         {
             panel.scale = Scale::Stocks { lower, upper };
             panel
                 .series
                 .push(slice(&selected.closes, update.settings.timeframe));
             let mut secondary = None;
-            if let Some(djia) = djia.filter(|djia| djia.status == StockStatus::Ok) {
+            if let Some(djia) = djia {
                 let sliced = slice(&djia.closes, update.settings.timeframe);
                 if let Some((lower, upper)) = curve_bounds(&sliced) {
                     secondary = Some(crate::weather::SecondaryAxis {
@@ -570,6 +600,16 @@ impl Graph {
             });
         }
         panel
+    }
+}
+
+/// The short status label shown in the readout for a failed ticker.
+fn failure_label(status: StockStatus) -> &'static str {
+    match status {
+        StockStatus::Ok => "ok",
+        StockStatus::NotFound => "not found",
+        StockStatus::NetworkError => "network error",
+        StockStatus::BadResponse => "bad response",
     }
 }
 

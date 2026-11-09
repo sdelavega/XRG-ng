@@ -344,6 +344,67 @@ struct SettingsMigrationTests {
                 && fields.keys.contains("ai") && fields.keys.contains("weather"))
     }
 
+    @Test func linuxViewCarriesStocksPresentationAndOrder() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        var document = XRGSettingsDocument()
+        // A distinct Stocks presentation, and a non-default graphs.order that
+        // places `stock` between disk and weather (not appended last).
+        try document.set("graphs.stock.visible", .bool(true), catalog: catalog)
+        try document.set("graphs.stock.style", .string("dot"), catalog: catalog)
+        try document.set("graphs.stock.height", .int(150), catalog: catalog)
+        try document.set("graphs.stock.color.background", .color([0.5, 0.25, 0.75, 1]), catalog: catalog)
+        try document.set("graphs.stock.color.series1", .color([0.25, 0.5, 0.75, 1]), catalog: catalog)
+        let order = "cpu,gpu,npu,vram,memory,battery,temperature,fans,network,disk,stock,weather,ai,processes"
+        try document.set("graphs.order", .string(order), catalog: catalog)
+
+        let view = XRGSettingsMigration.linuxView(document, catalog: catalog)
+        guard let text = String(data: view, encoding: .utf8),
+              case .object(let fields)? = JSONValue.parse(text),
+              case .array(let modules)? = fields["modules"] else {
+            Issue.record("the Linux view is not a JSON object with a modules array")
+            return
+        }
+        let ids: [String] = modules.compactMap { module in
+            guard case .object(let fields) = module,
+                  case .string(let id)? = fields["id"] else { return nil }
+            return id
+        }
+        #expect(ids == ["cpu", "gpu", "tpu", "gpu_memory", "memory", "battery",
+                        "temperature", "fans", "network", "disk", "stocks", "weather",
+                        "ai", "processes"],
+                "Stocks must appear in modules at its stored graphs.order position")
+        guard case .object(let stocks)? = modules.first(where: { module in
+            guard case .object(let fields) = module else { return false }
+            return fields["id"] == .string("stocks")
+        }) else {
+            Issue.record("the Stocks module is missing from the view")
+            return
+        }
+        #expect(stocks["visible"] == .bool(true))
+        #expect(stocks["style"] == .string("dot"))
+        #expect(stocks["height"] == .number("150"))
+        if case .object(let colors)? = stocks["colors"] {
+            #expect(colors["background"] != .null)
+            if case .array(let series)? = colors["series"] {
+                #expect(series.first != .null)
+            } else {
+                Issue.record("the Stocks series colours are missing")
+            }
+        } else {
+            Issue.record("the Stocks colours are missing")
+        }
+
+        // The reverse migration carries the presentation and the order back
+        // through the same core, so a whole-view save cannot drop them.
+        let (round, _) = try XRGSettingsMigration.fromLinuxV40(view, catalog: catalog)
+        #expect(round.values["graphs.stock.visible"] == .bool(true))
+        #expect(round.values["graphs.stock.style"] == .string("dot"))
+        #expect(round.values["graphs.stock.height"]?.numberValue == 150)
+        #expect(round.values["graphs.stock.color.background"] == .color([0.5, 0.25, 0.75, 1]))
+        #expect(round.values["graphs.stock.color.series1"] == .color([0.25, 0.5, 0.75, 1]))
+        #expect(round.values["graphs.order"] == .string(order))
+    }
+
     @Test func linuxViewKeepsEditedColorsOnASelectedPreset() throws {
         let catalog = try XRGSettingsCatalog.load()
 

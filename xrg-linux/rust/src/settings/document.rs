@@ -418,9 +418,9 @@ pub fn linux_view(doc: &[u8]) -> Result<Settings, String> {
     let mut settings: Settings = serde_json::from_slice(&view).map_err(|error| {
         format!("the shared core's Linux view is not the model's shape: {error}")
     })?;
-    // The core's version-40 view names no Stocks graph yet (ruling R2); it
-    // joins hidden here, so every view the app holds is a complete module
-    // list and the model's own lookup never misses.
+    // A defensive completeness guard for older documents: the core's Linux
+    // view already names every graph (including Stocks), so this is a no-op
+    // for core-produced views but keeps the module lookup safe regardless.
     settings.ensure_modules();
     Ok(settings)
 }

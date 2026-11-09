@@ -134,13 +134,10 @@ fn new_installs_fill_and_each_graph_style_survives_reorder_hide_and_round_trip()
             .all(|m| m.style == GraphStyle::Solid)
     );
     for (index, module) in settings.modules.iter_mut().enumerate() {
-        // Stocks ride the view only in 0.2.3 (ruling R2): no core mapping
-        // carries their presentation through a save yet, so the per-index
-        // pattern covers the graphs the core maps.
-        if module.id != Module::Stocks {
-            module.style = GraphStyle::ALL[index % 4];
-            module.visible = index % 2 == 0;
-        }
+        // The core now carries every graph's presentation through a save,
+        // Stocks included, so the per-index pattern covers all of them.
+        module.style = GraphStyle::ALL[index % 4];
+        module.visible = index % 2 == 0;
     }
     settings.move_module(Module::Cpu, 8);
     let (mut store, _, error) = open(&f.0);

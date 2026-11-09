@@ -272,6 +272,20 @@
       "id": "fans",
       "style": "hollow",
       "visible": true
+    },
+    {
+      "colors": {
+        "background": null,
+        "series": [
+          null,
+          null,
+          null
+        ]
+      },
+      "height": null,
+      "id": "stocks",
+      "style": "solid",
+      "visible": false
     }
   ],
   "network_min_scale": 2048,

@@ -1675,3 +1675,43 @@ fn invalid_collapse_settings_are_preserved_on_disk() {
         assert_eq!(open(&f.0).1, Settings::default());
     }
 }
+
+#[test]
+fn stocks_presentation_and_graph_order_round_trip_through_the_abi() {
+    // The single shared model now carries the Stocks graph's presentation
+    // and its position in graphs.order in both directions (presentation and
+    // order round-trip through the core's C ABI, not a Rust-side overlay).
+    let f = Fixture::new();
+    let mut settings = Settings::default();
+    {
+        let stocks = settings.module_mut(Module::Stocks);
+        stocks.visible = true;
+        stocks.style = settings::GraphStyle::Dot;
+        stocks.height = Some(150);
+        stocks.colors.background = Some([0.1, 0.2, 0.3, 1.0]);
+        stocks.colors.series[0] = Some([0.4, 0.5, 0.6, 1.0]);
+    }
+    // Move Stocks away from last, so its stored order position is verified.
+    settings.move_module(Module::Stocks, -5);
+    let expected_order: Vec<Module> = settings.modules.iter().map(|m| m.id).collect();
+
+    let mut store = Store::open(&f.0);
+    assert!(store.load_problem().is_none());
+    store.save(&settings).unwrap();
+    let reopened = Store::open(&f.0);
+    assert!(reopened.load_problem().is_none());
+    let loaded = reopened.settings();
+
+    let stocks = loaded.module(Module::Stocks);
+    assert!(stocks.visible);
+    assert_eq!(stocks.style, settings::GraphStyle::Dot);
+    assert_eq!(stocks.height, Some(150));
+    assert_eq!(stocks.colors.background, Some([0.1, 0.2, 0.3, 1.0]));
+    assert_eq!(stocks.colors.series[0], Some([0.4, 0.5, 0.6, 1.0]));
+
+    let order: Vec<Module> = loaded.modules.iter().map(|m| m.id).collect();
+    assert_eq!(
+        order, expected_order,
+        "Stocks must keep its stored graphs.order position, not be appended last"
+    );
+}

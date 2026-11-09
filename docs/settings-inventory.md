@@ -42,8 +42,8 @@ Conventions:
 - `/modules/<i>/...` rows use the module's index in `Settings::default_order()`
   in `xrg-linux/rust/src/settings.rs` (cpu 0, gpu 1, tpu 2, memory 3, battery 4,
   temperature 5, network 6, disk 7, ai 8, processes 9, gpu_memory 10, fans 11,
-  weather 12). The saved array is the user's display order, so migration must
-  locate the module by its `id` wherever it sits.
+  weather 12, stocks 13). The saved array is the user's display order, so
+  migration must locate the module by its `id` wherever it sits.
 - macOS `graphPresentationV1` fields are inventoried individually, as
   `graphPresentationV1.order`, `graphPresentationV1.version` and
   `graphPresentationV1.overrides.<graph>.<field>` paths into the blob, because
@@ -104,7 +104,7 @@ the catalog value. Task 4 implements them; this task only names them.
 | `unitsToTemperature` | converts the weather units value metric/us, or null, into celsius/fahrenheit, or null. |
 | `unitsToDistance` | converts the weather units value metric/us, or null, into kilometers/miles, or null. |
 | `unitsToPressure` | converts the weather units value metric/us, or null, into hectopascals/inches, or null. |
-| `modulesOrder` | converts the /modules array into a comma-separated list of graph ids in array order, mapping module ids to catalog ids (tpu is npu, gpu_memory is vram). |
+| `modulesOrder` | converts the /modules array into a comma-separated list of graph ids in array order, mapping module ids to catalog ids (tpu is npu, gpu_memory is vram, stocks is stock). |
 | `windowSizePresent` | converts /window_size into true when a size is remembered, or false when it is null. |
 | `uidToString` | converts the numeric user id into its decimal string, or the empty string when it is null. |
 
@@ -545,6 +545,13 @@ the catalog value. Task 4 implements them; this task only names them.
 | `/modules/12/colors/series/0` | RGBA or null | null | Preferences, Graphs (Weather graph), Colors | `graphs.weather.color.series1` |
 | `/modules/12/colors/series/1` | RGBA or null | null | Preferences, Graphs (Weather graph), Colors | `graphs.weather.color.series2` |
 | `/modules/12/colors/series/2` | RGBA or null | null | Preferences, Graphs (Weather graph), Colors | `graphs.weather.color.series3` |
+| `/modules/13/visible` | varies | see module | Preferences, Graphs (Stocks graph) | `graphs.stock.visible` |
+| `/modules/13/style` | varies | see module | Preferences, Graphs (Stocks graph) | `graphs.stock.style` |
+| `/modules/13/height` | varies | see module | Preferences, Graphs (Stocks graph) | `graphs.stock.height` |
+| `/modules/13/colors/background` | RGBA or null | null | Preferences, Graphs (Stocks graph), Colors | `graphs.stock.color.background` |
+| `/modules/13/colors/series/0` | RGBA or null | null | Preferences, Graphs (Stocks graph), Colors | `graphs.stock.color.series1` |
+| `/modules/13/colors/series/1` | RGBA or null | null | Preferences, Graphs (Stocks graph), Colors | `graphs.stock.color.series2` |
+| `/modules/13/colors/series/2` | RGBA or null | null | Preferences, Graphs (Stocks graph), Colors | `graphs.stock.color.series3` |
 | `/modules/9/visible` | varies | see module | Preferences, Graphs (Processes graph) | `graphs.processes.visible` |
 | `/modules/9/style` | varies | see module | Preferences, Graphs (Processes graph) | `graphs.processes.style` |
 | `/modules/9/height` | varies | see module | Preferences, Graphs (Processes graph) | `graphs.processes.height` |

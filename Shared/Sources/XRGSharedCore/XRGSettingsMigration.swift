@@ -170,9 +170,10 @@ public enum XRGSettingsMigration {
     /// serde `Settings` struct deserialises (`xrg-linux/rust/src/settings.rs`),
     /// with every field of that struct filled from the document through the
     /// reverse of each entry's `legacy.linux` mapping and the catalog default
-    /// where the document has no value. The view also carries a top-level
-    /// `stocks` object for the shared Stocks settings (ruling R2: the Rust
-    /// struct gains the matching field); every other name is a field of the
+    /// where the document has no value. The `modules` array now maps every
+    /// graph including Stocks (with its presentation) at its `graphs.order`
+    /// position. The view also carries a top-level `stocks` object for the
+    /// shared Stocks settings; every other name is a field of the Rust
     /// struct, because the Rust model rejects unknown ones.
     public static func linuxView(_ document: XRGSettingsDocument, catalog: XRGSettingsCatalog) -> Data {
         let fields: [String: JSONValue] = [
@@ -362,7 +363,7 @@ public enum XRGSettingsMigration {
     /// catalog's `/modules/<i>/...` pointers index into.
     private static let defaultModuleOrder = ["cpu", "gpu", "tpu", "memory", "battery",
                                             "temperature", "network", "disk", "ai",
-                                            "processes", "gpu_memory", "fans", "weather"]
+                                            "processes", "gpu_memory", "fans", "weather", "stocks"]
 
     /// The value a catalog `legacy.linux` pointer names. `/modules/<i>/...`
     /// is special: the index is the module's position in Rust's default
@@ -1356,7 +1357,7 @@ public enum XRGSettingsMigration {
         var ids: [String] = []
         for item in items {
             guard case .object(let fields) = item, case .string(let id)? = fields["id"] else { return nil }
-            ids.append(id == "tpu" ? "npu" : (id == "gpu_memory" ? "vram" : id))
+            ids.append(id == "tpu" ? "npu" : (id == "gpu_memory" ? "vram" : (id == "stocks" ? "stock" : id)))
         }
         return completeOrder(ids, entry: entry).map { .string($0) }
     }
@@ -1394,12 +1395,14 @@ public enum XRGSettingsMigration {
         }
     }
 
-    /// The v40 module id for a catalog graph id; nil for a graph the
-    /// version-40 model does not know — stock joins it in a later task.
+    /// The v40 module id for a catalog graph id. The Stocks graph joins the
+    /// Linux view in 0.2.3, so `stock` now maps to the `stocks` module and
+    /// appears in `modules` and `graphs.order` at its stored position.
     private static let moduleIds: [String: String] = [
         "cpu": "cpu", "gpu": "gpu", "npu": "tpu", "vram": "gpu_memory", "memory": "memory",
         "battery": "battery", "temperature": "temperature", "network": "network", "disk": "disk",
         "ai": "ai", "processes": "processes", "fans": "fans", "weather": "weather",
+        "stock": "stocks",
     ]
 
     /// The modules with retained-history pointers into `metrics`, with their

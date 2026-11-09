@@ -4101,7 +4101,8 @@ public enum XRGSettingsCatalogData {
       "linux"
     ],
     "legacy": {
-      "macos": "showStockGraph"
+      "macos": "showStockGraph",
+      "linux": "/modules/13/visible"
     }
   },
   {
@@ -4123,7 +4124,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "graphPresentationV1.overrides.stock.height",
-      "macosTransform": "graphPreferenceHeight"
+      "macosTransform": "graphPreferenceHeight",
+      "linux": "/modules/13/height"
     }
   },
   {
@@ -4158,7 +4160,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "graphPresentationV1.overrides.stock.curve",
-      "macosTransform": "graphPreferenceCurve"
+      "macosTransform": "graphPreferenceCurve",
+      "linux": "/modules/13/style"
     }
   },
   {
@@ -4213,7 +4216,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "graphPresentationV1.overrides.stock.colors.0",
-      "macosTransform": "graphPreferenceColor"
+      "macosTransform": "graphPreferenceColor",
+      "linux": "/modules/13/colors/background"
     }
   },
   {
@@ -4230,7 +4234,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "graphPresentationV1.overrides.stock.colors.1",
-      "macosTransform": "graphPreferenceColor"
+      "macosTransform": "graphPreferenceColor",
+      "linux": "/modules/13/colors/series/0"
     }
   },
   {
@@ -4247,7 +4252,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "graphPresentationV1.overrides.stock.colors.2",
-      "macosTransform": "graphPreferenceColor"
+      "macosTransform": "graphPreferenceColor",
+      "linux": "/modules/13/colors/series/1"
     }
   },
   {
@@ -4264,7 +4270,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "macos": "graphPresentationV1.overrides.stock.colors.3",
-      "macosTransform": "graphPreferenceColor"
+      "macosTransform": "graphPreferenceColor",
+      "linux": "/modules/13/colors/series/2"
     }
   },
   {
