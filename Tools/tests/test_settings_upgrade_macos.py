@@ -37,15 +37,17 @@ assert spec.loader is not None
 spec.loader.exec_module(upgrade)
 
 
-def app_document_with_all_sizes(base_document, overrides=None, drop=()):
+def app_document_with_all_sizes(base_document, overrides=None, drop=(), geometry=None):
     """A LAUNCHED-APP-style document: the pure-migration oracle's settings PLUS
     ALL 26 explicit layout size keys set to their EXPECTED values DERIVED from
-    the app's own layout rules + controlled geometry + seed (fix round 4).
-    Since fix round 3 load_app_document REQUIRES all 26 present and valid, and
-    fix round 4 additionally requires CORRECT (derived) values, not just any
-    in-range number."""
+    the app's own layout rules + a geometry + seed (fix round 4). Fix round 5:
+    ``geometry`` is the INDEPENDENTLY MEASURED geometry (measured_geometry());
+    ``None`` keeps the deterministic unit-test reference so all pre-round-5
+    tests remain valid. Since fix round 3 load_app_document REQUIRES all 26
+    present and valid, and fix round 4 additionally requires CORRECT (derived)
+    values, not just any in-range number."""
     obj = json.loads(base_document)
-    for key, (expected, _tol) in upgrade.expected_layout_sizes().items():
+    for key, (expected, _tol) in upgrade.expected_layout_sizes(geometry).items():
         obj["settings"][key] = expected
     for key in drop:
         obj["settings"].pop(key, None)
@@ -1088,6 +1090,172 @@ class SizeCorrectnessTests(unittest.TestCase):
         font = plistlib.loads(seed["graphFont"])
         self.assertEqual(font["$objects"][1]["NSSize"], 11.0)
         self.assertEqual(font["$objects"][2], "Menlo-Regular")
+
+
+# --------------------------------------------------------------------------
+# Fix round 5, finding 2b: expected sizes must be DERIVED FROM INDEPENDENTLY
+# MEASURED geometry (the launched app's window frame + the seed font metric),
+# NOT from this host's hardcoded expandedWindowWidth=1779 / titleHeight=13,
+# and NOT from the 26 size values under validation. RED: the pre-round-5 script
+# has no measured_geometry / measurement helpers and its only geometry is the
+# host-specific CONTROLLED_GEOMETRY.
+# --------------------------------------------------------------------------
+
+class MeasuredGeometryHelpersTests(unittest.TestCase):
+    @staticmethod
+    def _domain_bytes(frames, sizes=None):
+        dom = dict(frames)
+        if sizes:
+            dom.update(sizes)
+        return plistlib.dumps(dom, fmt=plistlib.FMT_BINARY)
+
+    def test_parse_frame_rect(self):
+        self.assertEqual(upgrade.parse_frame_rect("{{216, 136}, {280, 684}}"), (280.0, 684.0))
+        self.assertEqual(upgrade.parse_frame_rect("{{152,54},{1779,684}}"), (1779.0, 684.0))
+        self.assertEqual(upgrade.parse_frame_rect("{{0,0},{1779.5,684.5}}"), (1779.5, 684.5))
+        self.assertIsNone(upgrade.parse_frame_rect("not a rect"))
+        self.assertIsNone(upgrade.parse_frame_rect(123))
+
+    def test_window_frame_from_domain_reads_app_written_frame_keys(self):
+        # The frame comes from AppKit window-frame keys the app writes (NOT one
+        # of the 26 graphs.*.size_* keys); the widest (expanded) frame wins.
+        raw = self._domain_bytes({
+            "unminimizedFrame": "{{152,54},{1779,684}}",
+            "NSWindow Frame XRG": "{{216,136},{280,684}}",
+        })
+        w, h, key = upgrade.window_frame_from_domain(raw)
+        self.assertEqual((w, h), (1779.0, 684.0))
+        self.assertIn(key, ("unminimizedFrame", "NSWindow Frame XRG"))
+
+    def test_window_frame_measurement_is_independent_of_the_26_size_keys(self):
+        # A domain holding ONLY the 26 size-like keys (and NO app-written window
+        # frame key) yields NO measurement: the frame MUST NOT be inferred from
+        # the very sizes under validation ("do not infer the inputs from the 26
+        # sizes being validated").
+        only_sizes = {k: 157.45454545454547 for k in upgrade.LAYOUT_SIZE_KEYS}
+        only_sizes.update({"XRGModule_CPU_width": 157.45, "XRGModule_CPU_height": 140})
+        self.assertIsNone(upgrade.window_frame_from_domain(
+            self._domain_bytes({}, sizes=only_sizes)))
+
+    def test_window_frame_from_domain_absent_when_no_frame_key(self):
+        self.assertIsNone(upgrade.window_frame_from_domain(
+            self._domain_bytes({}, sizes={"windowWidth": 280})))
+
+    def test_measured_geometry_uses_only_the_measured_inputs(self):
+        g = upgrade.measured_geometry(2000.0, 900.0, 19.0)
+        self.assertEqual(g["expandedWindowWidth"], 2000.0)
+        self.assertEqual(g["windowHeight"], 900.0)
+        self.assertEqual(g["textRectHeight"], 19.0)
+        # Portable seed/code constants are preserved, not host-measured.
+        self.assertEqual(g["borderWidth"], 6)
+        self.assertEqual(g["moduleSeparatorWidth"], 2)
+        self.assertEqual(g["minHeight"], 30)
+
+    def test_measured_geometry_rejects_nonpositive_or_nonfinite_inputs(self):
+        for bad in (0, -1, float("nan"), float("inf"), "x", None):
+            with self.subTest(bad=bad):
+                for args in ((bad, 684, 13), (1779, bad, 13), (1779, 684, bad)):
+                    with self.assertRaises(RuntimeError):
+                        upgrade.measured_geometry(*args)
+
+    def test_font_descriptor_from_seed(self):
+        self.assertEqual(upgrade.font_descriptor_from_seed(SEED), ("Menlo-Regular", 11.0))
+
+    def test_size_upper_bound_scales_with_the_measured_frame(self):
+        # A tall/wide alternate-host window must not spuriously fail the
+        # secondary range gate: the bound scales with the MEASURED frame.
+        g = upgrade.measured_geometry(2500.0, 1200.0, 13.0)
+        self.assertGreaterEqual(upgrade.size_upper_bound(g), 2500.0)
+
+    def test_frames_consistent(self):
+        self.assertTrue(upgrade.frames_consistent((1779, 684), (1779, 684)))
+        self.assertTrue(upgrade.frames_consistent((1779, 684), (3558, 1368)))  # Retina 2x
+        self.assertFalse(upgrade.frames_consistent((1779, 684), (500, 300)))
+        self.assertIsNone(upgrade.frames_consistent((1779, 684), None))
+
+
+class MeasuredGeometrySizeTests(unittest.TestCase):
+    """The REQUIRED finding-2b cases, all against an ALTERNATE-HOST geometry
+    (a different MEASURED frame width AND title height)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.alt = upgrade.measured_geometry(2000.0, 900.0, 19.0)
+        cls.ref = upgrade.CONTROLLED_GEOMETRY
+
+    def _base(self):
+        _, base = upgrade.parse_expected(EXPECTED)
+        return base
+
+    def _document_for(self, geometry, overrides=None, drop=()):
+        return app_document_with_all_sizes(self._base(), overrides=overrides,
+                                           drop=drop, geometry=geometry)
+
+    def test_alternate_host_geometry_passes(self):
+        # A DIFFERENT measured frame width (2000 vs 1779) and title height
+        # (19 vs 13) with CORRECTLY DERIVED sizes PASSES: the oracle is derived
+        # from the measured inputs, not from this host's hardcoded values.
+        self.assertEqual(len(upgrade.assert_layout_sizes(
+            self._document_for(self.alt), geometry=self.alt)), 26)
+        d = upgrade.layout_size_derivation(self.alt)
+        self.assertAlmostEqual(d["unit"], (2000 - 12 - 19 - 22) / 11, places=9)
+        self.assertEqual(d["contentHeight"], 900 - 12)
+
+    def test_all_zero_sizes_fail_with_measured_geometry(self):
+        zeros = {k: 0 for k in upgrade.LAYOUT_SIZE_KEYS}
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document_for(self.alt, overrides=zeros),
+                                        geometry=self.alt)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_cpu_override_140_to_900_fails_with_measured_geometry(self):
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document_for(
+                self.alt, overrides={"graphs.cpu.size_height": 900}), geometry=self.alt)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_hidden_nonzero_size_fails_with_measured_geometry(self):
+        for key in ("graphs.gpu.size_width", "graphs.weather.size_height"):
+            with self.subTest(key=key):
+                with self.assertRaises(RuntimeError) as caught:
+                    upgrade.assert_layout_sizes(self._document_for(
+                        self.alt, overrides={key: 0.4}), geometry=self.alt)
+                self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_sizes_inconsistent_with_measured_frame_fail(self):
+        # Sizes correct for ONE measured frame (1779) MUST FAIL when validated
+        # against a DIFFERENT measured frame (2000): expected sizes are a
+        # function of the measured frame, so a document that does not match the
+        # launched app's ACTUAL frame is rejected (not silently accepted).
+        doc_for_ref = self._document_for(self.ref)
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(doc_for_ref, geometry=self.alt)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_expected_width_depends_on_measured_frame_and_title_height(self):
+        g1 = upgrade.measured_geometry(1779.0, 684.0, 13.0)
+        wider = upgrade.measured_geometry(2000.0, 684.0, 13.0)
+        taller_title = upgrade.measured_geometry(1779.0, 684.0, 19.0)
+        self.assertGreater(upgrade.layout_size_derivation(wider)["unit"],
+                           upgrade.layout_size_derivation(g1)["unit"])
+        self.assertLess(upgrade.layout_size_derivation(taller_title)["unit"],
+                        upgrade.layout_size_derivation(g1)["unit"])
+
+    def test_load_app_document_threads_the_measured_geometry(self):
+        # The PRODUCTION gate (load_app_document -> assert_layout_sizes) uses
+        # the SUPPLIED measured geometry, never the host-specific default.
+        _, base = upgrade.parse_expected(EXPECTED)
+        tmp = Path(tempfile.mkdtemp(prefix="xrg-upgrade-measured-"))
+        try:
+            path = tmp / "settings.json"
+            path.write_text(self._document_for(self.alt))
+            self.assertTrue(upgrade.load_app_document(
+                path, [], [], base, geometry=self.alt))
+            with self.assertRaises(RuntimeError) as caught:
+                upgrade.load_app_document(path, [], [], base, geometry=self.ref)
+            self.assertIn("wrong", str(caught.exception).lower())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -40,18 +40,25 @@ without it FAILS the check (never sets downgrade_normalised, never OK). A
 probe-only/--skip-launch run NEVER prints SETTINGS_UPGRADE_MACOS_OK and NEVER
 claims a relaunch.
 
-SIZE KEYS (fix round 3 finding 2; fix round 4 finding 2): the launched app's
-document MUST contain ALL 26 EXPLICIT graphs.<id>.size_width/height keys
-(LAYOUT_SIZE_KEYS, not a regex). Fix round 4 requires CORRECTNESS, not just a
-valid range: assert_layout_sizes derives the EXPECTED width/height of every
-displayed/hidden graph and the seeded CPU height override (140) from the app's
-own layout rules (XRGModuleManager.windowChanged horizontal branch, plus
-XRGModule.dimension / minHeight) applied to the controlled launch geometry and
-the seed, and checks each value within a stated tolerance. All-zero sizes, a
-CPU override changed 140->900, or a hidden graph with a nonzero size all FAIL.
+SIZE KEYS (fix round 3 finding 2; fix round 4 finding 2; fix round 5 finding
+2b): the launched app's document MUST contain ALL 26 EXPLICIT
+graphs.<id>.size_width/height keys (LAYOUT_SIZE_KEYS, not a regex). Fix round 4
+requires CORRECTNESS, not just a valid range: assert_layout_sizes derives the
+EXPECTED width/height of every displayed/hidden graph and the seeded CPU height
+override (140) from the app's own layout rules (XRGModuleManager.windowChanged
+horizontal branch, plus XRGModule.dimension / minHeight), and checks each value
+within a stated tolerance. All-zero sizes, a CPU override changed 140->900, or
+a hidden graph with a nonzero size all FAIL. Fix round 5 makes those EXPECTED
+sizes host-INDEPENDENT: the geometry is built by measured_geometry() from
+INDEPENDENTLY MEASURED inputs -- the LAUNCHED app's window frame (the app-written
+AppKit restore rectangle 'unminimizedFrame', a value the app writes that is NOT
+one of the 26 size keys, corroborated by a live CGWindowList measurement) and
+the font metric (the seed graphFont's line height, computed portably via the
+same AppKit metric XRGSettings.textRectHeight uses). Production NEVER uses the
+hardcoded round-4 1779/13 (kept ONLY as a deterministic unit-test reference).
 The 26 keys are still projected out ONLY of the app-vs-oracle DOCUMENT
-comparison (runtime layout feedback); they are validated here and included in
-the post-downgrade DOMAIN comparison.
+comparison (runtime layout feedback); they are validated here against the
+MEASURED geometry and included in the post-downgrade DOMAIN comparison.
 
 POST-DOWNGRADE EXCLUSIONS are ONLY genuinely volatile AppKit window geometry:
 ``NSWindow Frame `` (autosaved frames) and ``unminimizedFrame`` (restore rect).
@@ -80,12 +87,15 @@ fails with a non-zero exit and NO OK line.
 Prints SETTINGS_UPGRADE_MACOS_OK on full success.
 """
 import argparse
+import ctypes
+import ctypes.util
 import json
 import math
 import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shutil
 import signal
 import subprocess
@@ -140,92 +150,131 @@ GRAPH_IDS = ("cpu", "gpu", "npu", "vram", "memory", "battery",
 LAYOUT_SIZE_KEYS = frozenset(
     f"graphs.{gid}.size_{dim}" for gid in GRAPH_IDS for dim in ("width", "height"))
 
-# Seed-derived inputs (fix round 4, finding 2b). Each comes from the SEED
-# fixture Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist:
-#   showGPUGraph=false, showWeatherGraph=false -> exactly gpu + weather hidden,
-#     the other 11 displayed; graphPresentationV1 cpu.height=140 (its
-#     gpu.height=72 is irrelevant because gpu is hidden);
-#   borderWidth=6, graphOrientationVertical=false (HORIZONTAL),
-#     graphFont=Menlo-Regular 11, windowWidth=280, windowHeight=684,
-#     "NSWindow Frame XRG"={{216,136},{280,684}}, unminimizedFrame=280x684.
-# App-source constants: moduleSeparatorWidth=2 and minHeight=30 are the
-# XRGModuleManager.swift / XRGModule.swift defaults; titleHeight=
-# XRGModule.dimension(textRectHeight)=13 = the Menlo-11 "A" line height the
-# app derives from the seeded font (XRGSettings.swift / XRGModuleManager.swift:75).
-# See the report's "Fix round 4 / size derivation" for the full derivation.
+# --------------------------------------------------------------------------
+# Fix round 5, finding 2b: EXPECTED graph sizes must NOT depend on THIS host.
+#
+# Fix round 4 hardcoded the expanded frame width (1779) and the font-derived
+# title height (13) into the production oracle, so correct layouts on a host
+# with different display/font metrics could fail the +/-1 pt check. The fix:
+# MEASURE the LAUNCHED 0.2.3 app's window frame and the font metric INDEPENDENTLY
+# of the 26 graphs.<id>.size_* values under validation, and feed those MEASURED
+# inputs into the UNCHANGED XRGModuleManager.windowChanged derivation:
+#   * measured frame (W, H): the launched app's AppKit-autosaved window-frame
+#     keys (unminimizedFrame / "NSWindow Frame *") -- values THE APP WRITES that
+#     are NOT one of the 26 size keys -- corroborated by a live CGWindowList
+#     (kCGWindowBounds) measurement of the running process;
+#   * measured font metric (textRectHeight = the layout's titleHeight):
+#     COMPUTED PORTABLY from the seed's graphFont via the SAME AppKit
+#     ("A").size(withAttributes:) call XRGSettings uses (XRGSettings.swift:390),
+#     on whatever host runs the check.
+# Neither input is inferred from the 26 sizes being validated.
+#
+# SEED_GEOMETRY holds ONLY portable seed/code constants (no host-specific
+# value). measured_geometry(frame_w, frame_h, title_h) builds the complete
+# geometry from the three INDEPENDENTLY MEASURED inputs. main() ALWAYS passes
+# that measured geometry to load_app_document/assert_layout_sizes; the
+# REFERENCE_* constants below are a DETERMINISTIC UNIT-TEST FIXTURE (the round-4
+# observed values), used ONLY as the geometry=None default of the pure
+# derivation helpers -- NO production code path reads them.
+#
+# The derivation (UNCHANGED, XRGModuleManager.swift:206-209 HORIZONTAL branch):
+#   contentWidth  = frameWidth  - 2*border
+#   contentHeight = frameHeight - 2*border
+#   unit          = max(0, contentWidth - titleHeight - separator*count)/count
+#   displayed width = unit (all 11); displayed height = min(contentHeight,
+#       fixedHeight ?? contentHeight); cpu fixedHeight = max(minHeight, 140)=140;
+#   hidden (gpu, weather) -> NSSize.zero -> width=height=0.
+# Wrong-but-in-range values (all-zero, cpu 140->900, nonzero hidden) fail.
+# --------------------------------------------------------------------------
 HIDDEN_GRAPHS = frozenset({"gpu", "weather"})
 DISPLAYED_GRAPHS = tuple(gid for gid in GRAPH_IDS if gid not in HIDDEN_GRAPHS)
 HEIGHT_OVERRIDES = {"cpu": 140}
 
-# Fix round 4, finding 2b: the 26 EXPECTED sizes are DERIVED from the app's OWN
-# layout rules applied to the CONTROLLED launch geometry and the SEED -- they
-# are NOT copied from any observed settings.json. The only "observed output" is
-# the 26 graphs.*.size_* values the app writes; here every expected value is
-# COMPUTED by XRGModuleManager.windowChanged(to:)'s HORIZONTAL else-branch
-# (XRGModuleManager.swift:206-209), with XRGModule.dimension/minHeight
-# (XRGModule.swift:51,120-122) and the zero rule for hidden modules
-# (XRGModuleManager.swift:176-179).
-#
-# CONTROLLED LAUNCH GEOMETRY (the `size` INPUT to windowChanged): the seeded
-# window is 280x684 and collapsed. On launch the app's checkWindowSize()
-# (XRGGraphWindow.swift:498-504) expands it to manager.getMinSize()
-# (XRGModuleManager.swift:154-166) = titleHeight + (maxMinWidth + separator)
-# *count + 2*border, i.e. wide enough for the 11-graph horizontal row. On THIS
-# controlled host (Menlo-11 labels, 1920x1205 display) that frame is 1779x684
-# pt (AppKit rounds it to whole points); the domain's unminimizedFrame becomes
-# {{...,...},{1779,684}} after the launch. 1779 is therefore a CONTROLLED
-# launch INPUT, not one of the 26 document values being validated; a frame that
-# drifted from it would make the width assertion FAIL loudly, not pass.
-#
-# Applying windowChanged(to: 1779x684), HORIZONTAL branch:
-#   border=6; separator=2; titleHeight=13; minHeight=30; count=11;
-#   contentWidth  = 1779 - 2*6 = 1767;  contentHeight = 684 - 2*6 = 672;
-#   unit = max(0, 1767 - 13 - 2*11)/11 = 1732/11 = 157.45454545454547;
-#   displayed width = unit (the same for all 11 displayed graphs);
-#   displayed height = min(672, fixedHeight ?? 672):
-#     cpu fixedHeight = max(minHeight=30, 140) = 140 -> 140 (the override);
-#     the other 10 displayed graphs have no height override -> 672;
-#   hidden (gpu, weather): apply(.zero) clamps to 0, saveSize stores 0
-#     -> width=height=0.
-# So the width, both height classes, the CPU override and the zeros are all
-# DERIVED; a wrong-but-in-range value (0, 900, a nonzero hidden size) is now
-# rejected by assert_layout_sizes, which the old [0, 964] range check accepted.
-CONTROLLED_GEOMETRY = {
+# PORTABLE seed/code constants ONLY. borderWidth=6 (seed), moduleSeparatorWidth=2
+# & minHeight=30 (XRGCore defaults), hidden/displayed graphs & the cpu height
+# override (seed). windowWidth/windowHeight are the SEEDED collapsed frame
+# (used only for the secondary range-bound floor and documentation).
+SEED_GEOMETRY = {
     "windowWidth": 280,
     "windowHeight": 684,
     "windowFrame": "{{216, 136}, {280, 684}}",
     "orientation": "horizontal",
     "source": "Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist",
-    "observedDisplay": "1920x1205",
-    # Controlled launch geometry (the windowChanged `size` argument):
-    "expandedWindowWidth": 1779,
-    # Seed + XRGModuleManager / XRGModule layout-rule constants:
     "borderWidth": 6,
     "moduleSeparatorWidth": 2,
     "minHeight": 30,
-    "textRectHeight": 13,
     "hiddenGraphs": HIDDEN_GRAPHS,
     "displayedGraphs": DISPLAYED_GRAPHS,
     "heightOverrides": HEIGHT_OVERRIDES,
 }
-# A finite, non-negative graph dimension larger than windowWidth+windowHeight
-# is inconsistent with launching inside the controlled geometry: a SECONDARY
-# sanity bound (the correctness check below is far tighter).
-SIZE_UPPER_BOUND = CONTROLLED_GEOMETRY["windowWidth"] + CONTROLLED_GEOMETRY["windowHeight"]
-# Tolerances (points). The layout inputs are integer points except the font-
-# derived titleHeight; a +/-1 pt tolerance covers sub-point font-metric/window-
-# frame rounding (the 11-way share moves <0.1 pt per graph for a 1 pt frame
-# change). It still rejects the corruptions finding 2b names (an all-zero
-# displayed size, a 900 CPU height, a nonzero hidden size) by >= 138 pt.
-# Hidden values are EXACTLY 0: windowChanged applies NSSize.zero to
-# non-displayed modules and XRGModule.dimension/saveSize store 0.0, so a tiny
-# 1e-6 tolerance (float representation only) rejects ANY meaningful nonzero
-# hidden size -- a +/-0.5 pt tolerance would wrongly accept e.g. 0.4.
+# Seed-based floor for the secondary range gate (portable).
+SIZE_UPPER_BOUND = SEED_GEOMETRY["windowWidth"] + SEED_GEOMETRY["windowHeight"]
+
+
+def measured_geometry(frame_width, frame_height, text_rect_height, base=None):
+    """Build the COMPLETE layout geometry from three INDEPENDENTLY MEASURED
+    inputs plus the portable seed constants.
+
+    frame_width/frame_height are the LAUNCHED 0.2.3 app's MEASURED window frame
+    (the `size` argument to XRGModuleManager.windowChanged); text_rect_height is
+    the MEASURED font metric (XRGSettings.textRectHeight). NO host-specific
+    value is hardcoded: expandedWindowWidth, windowHeight and textRectHeight all
+    come from these arguments. Pure and unit tested (alternate-host geometry,
+    inconsistent measured frame). This is the geometry the PRODUCTION check uses.
+    """
+    geom = dict(base if base is not None else SEED_GEOMETRY)
+    for label, value in (("frameWidth", frame_width),
+                         ("frameHeight", frame_height),
+                         ("textRectHeight", text_rect_height)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                f"SETTINGS_UPGRADE_MACOS: measured {label}={value!r} is not a "
+                f"number; refusing to derive expected sizes") from error
+        if not math.isfinite(number) or number <= 0:
+            raise RuntimeError(
+                f"SETTINGS_UPGRADE_MACOS: measured {label}={value!r} is not a "
+                f"finite positive number; refusing to derive expected sizes")
+    geom["expandedWindowWidth"] = float(frame_width)
+    geom["windowHeight"] = float(frame_height)
+    geom["textRectHeight"] = float(text_rect_height)
+    return geom
+
+
+def size_upper_bound(geometry):
+    """Secondary finite/range sanity bound, PORTABLE: a correct graph dimension
+    can never exceed the MEASURED window's larger side (contentWidth /
+    contentHeight are each smaller than it). Scales with the measured frame so a
+    taller/wider host cannot spuriously fail; SIZE_UPPER_BOUND is a seed-based
+    floor for the deterministic unit-test reference geometry."""
+    return max(SIZE_UPPER_BOUND,
+               float(geometry["expandedWindowWidth"]),
+               float(geometry["windowHeight"]))
+
+
+# DETERMINISTIC UNIT-TEST REFERENCE ONLY (the round-4 observed values on THIS
+# host). PRODUCTION NEVER uses these: main() builds geometry via
+# measured_geometry() from INDEPENDENTLY measured frame + font inputs and passes
+# it explicitly. These literals exist SOLELY so the pure derivation helpers
+# have a stable geometry=None default for unit tests; finding 2b is fixed
+# because the production oracle is 100% MEASURED, not these constants.
+REFERENCE_FRAME_WIDTH = 1779.0
+REFERENCE_FRAME_HEIGHT = 684.0
+REFERENCE_TITLE_HEIGHT = 13.0
+CONTROLLED_GEOMETRY = measured_geometry(
+    REFERENCE_FRAME_WIDTH, REFERENCE_FRAME_HEIGHT, REFERENCE_TITLE_HEIGHT)
+
+# +/-1 pt for the 22 displayed values: layout inputs are integer points except
+# the font titleHeight; the 11-way share moves <0.1 pt per graph for a 1 pt
+# frame change, so +/-1 pt covers sub-point font-metric/frame rounding but still
+# rejects every named corruption by >= 138 pt. Hidden values are EXACTLY 0
+# (windowChanged applies NSSize.zero; saveSize stores 0.0), so a 1e-6 tolerance
+# (float representation only) rejects ANY meaningful nonzero hidden size.
 SIZE_TOLERANCE = 1.0
 HIDDEN_SIZE_TOLERANCE = 1e-6
-# Fix round 4, finding 2a: the 0.2.2 normalisation launch loop is BOUNDED (it
-# cannot run indefinitely) and MUST demonstrate convergence within this many
-# attempts, or the check fails.
+# Fix round 4, finding 2a: the 0.2.2 normalisation loop is BOUNDED and MUST
+# demonstrate convergence within this many attempts, or the check fails.
 MAX_NORMALISE_ATTEMPTS = 3
 
 # The ordered phases of a FULL run (finding 2). The DOWNGRADE REFERENCE is
@@ -414,8 +463,8 @@ def project_layout_sizes(document_text):
 
 def _valid_layout_size(value, bound):
     """A single graph dimension is valid iff it is a finite JSON number in
-    [0, bound] -- consistent with the controlled geometry. Rejects missing
-    (handled by caller), null/string/bool, negative, NaN/inf and huge values."""
+    [0, bound] -- consistent with the geometry. Rejects missing (handled by
+    caller), null/string/bool, negative, NaN/inf and huge values."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     try:
@@ -425,10 +474,102 @@ def _valid_layout_size(value, bound):
     return math.isfinite(number) and 0 <= number <= bound
 
 
+# --------------------------------------------------------------------------
+# Fix round 5, finding 2b: INDEPENDENT geometry MEASUREMENT (pure helpers).
+# NONE of these reads any of the 26 graphs.<id>.size_* values under validation.
+# --------------------------------------------------------------------------
+_FRAME_RECT_RE = re.compile(
+    r"\{\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\}")
+
+
+def parse_frame_rect(text):
+    """Parse an AppKit NSStringFromRect string '{{x, y}, {w, h}}' -> (w, h).
+    The LAST '{a, b}' is the size rectangle (the first is the origin); the
+    trailing outer '}' is ignored. Pure and unit tested. Returns None for any
+    non-rect value; never consults graph sizes."""
+    if not isinstance(text, str):
+        return None
+    matches = _FRAME_RECT_RE.findall(text)
+    if not matches:
+        return None
+    width, height = matches[-1]
+    return (float(width), float(height))
+
+
+def window_frame_from_domain(exported_bytes):
+    """Measure the LAUNCHED app's window frame from values THE APP WRITES that
+    are NOT one of the 26 size keys: the AppKit-autosaved 'NSWindow Frame *'
+    keys and the graph window's 'unminimizedFrame' restore rectangle. These are
+    genuinely volatile AppKit WINDOW geometry (see VOLATILE_KEYS/PREFIXES),
+    written by AppKit / XRGBackgroundView from the live NSWindow.frame -- the
+    EXACT `size` argument passed to XRGModuleManager.windowChanged. The widest
+    frame is the expanded (getMinSize) window, not the seeded collapsed 280x684.
+    Returns (width, height, key) or None. Pure and unit tested: a domain holding
+    ONLY size keys (no frame key) yields None, proving the measurement cannot be
+    inferred from the values under validation.
+    """
+    domain = plistlib.loads(exported_bytes)
+    frames = []
+    for key, value in domain.items():
+        if key == "unminimizedFrame" or key.startswith("NSWindow Frame "):
+            rect = parse_frame_rect(value)
+            if rect and rect[0] > 0 and rect[1] > 0:
+                frames.append((rect[0], rect[1], key))
+    if not frames:
+        return None
+    # Widest (expanded) frame wins; on a width tie prefer the graph window's
+    # dedicated restore rectangle.
+    return max(frames, key=lambda f: (f[0], f[2] == "unminimizedFrame"))
+
+
+def font_descriptor_from_seed(seed):
+    """Read the seed's archived NSFont (graphFont) -> (fontName, pointSize).
+    PORTABLE: the font is a SEED setting (Menlo-Regular 11), NOT one of the 26
+    size keys; its line-height metric is measured on the host by
+    measure_title_height. Pure and unit tested."""
+    domain = plistlib.loads(Path(seed).read_bytes())
+    blob = domain.get("graphFont")
+    if not isinstance(blob, (bytes, bytearray)):
+        raise RuntimeError("SETTINGS_UPGRADE_MACOS: seed has no archived graphFont")
+    objects = plistlib.loads(bytes(blob))["$objects"]
+    nsfont = next((o for o in objects if isinstance(o, dict) and "NSSize" in o), None)
+    if nsfont is None:
+        raise RuntimeError("SETTINGS_UPGRADE_MACOS: cannot parse seed graphFont size")
+    size = float(nsfont["NSSize"])
+    uid = nsfont.get("NSName")
+    name = objects[uid.data] if isinstance(uid, plistlib.UID) else str(uid)
+    if not isinstance(name, str) or not name or not math.isfinite(size) or size <= 0:
+        raise RuntimeError("SETTINGS_UPGRADE_MACOS: seed graphFont is invalid")
+    return name, size
+
+
+FRAME_CROSSCHECK_TOLERANCE = 2.0
+
+
+def frames_consistent(domain_frame, live_frame):
+    """True when an independently measured live CGWindowList frame corroborates
+    the app-written domain frame (same shape). Tolerates a single 0.5x/1x/2x
+    backing-scale difference (Retina points vs pixels). Returns None when no
+    live measurement is available. Pure and unit tested."""
+    if not live_frame:
+        return None
+    dw, dh = float(domain_frame[0]), float(domain_frame[1])
+    lw, lh = float(live_frame[0]), float(live_frame[1])
+    if min(dw, dh, lw, lh) <= 0:
+        return False
+    for scale in (0.5, 1.0, 2.0):
+        if (abs(lw - dw * scale) <= FRAME_CROSSCHECK_TOLERANCE + 0.01 * dw * scale
+                and abs(lh - dh * scale) <= FRAME_CROSSCHECK_TOLERANCE + 0.01 * dh * scale):
+            return True
+    return False
+
+
 def layout_size_derivation(geometry=None):
-    """Fix round 4, finding 2b: reproduce XRGModuleManager.windowChanged(to:)'s
-    HORIZONTAL else-branch purely from the controlled geometry + seed. Returns
-    the intermediate quantities of the derivation (diagnostics / unit tests):
+    """Fix round 4/5, finding 2b: reproduce XRGModuleManager.windowChanged(to:)'s
+    HORIZONTAL else-branch purely from the MEASURED geometry + seed. The frame
+    width/height and titleHeight in `geometry` come from independent measurement
+    (measured_geometry), NOT from this host. Returns the intermediate quantities
+    of the derivation (diagnostics / unit tests):
       contentWidth  = expandedWindowWidth - 2*border
       contentHeight = windowHeight - 2*border
       unit          = max(0, contentWidth - titleHeight - separator*count)/count
@@ -478,14 +619,15 @@ def expected_layout_sizes(geometry=None):
 
 
 def assert_layout_sizes(document_text, geometry=None):
-    """Fix round 4 / finding 2: the app's document MUST contain ALL 26 explicit
+    """Fix round 4/5 / finding 2: the app's document MUST contain ALL 26 explicit
     ``graphs.<id>.size_width/height`` settings, each a finite number, AND each
     value MUST MATCH the EXPECTED size DERIVED from the app's own layout rules
-    + controlled geometry + seed, within a stated tolerance. A MISSING or
-    CORRUPTED entry FAILS, and so does a WRONG-BUT-IN-RANGE entry (all-zero,
-    cpu 140->900, or a hidden graph with a nonzero size) -- the old fix-round-3
-    range check accepted those. Returns the {key: value} dict of the 26
-    validated sizes on success.
+    + INDEPENDENTLY MEASURED geometry + seed, within a stated tolerance. The
+    measured frame is the launched app's window; a document whose sizes are
+    inconsistent with that measured frame FAILS. A MISSING or CORRUPTED entry
+    FAILS, and so does a WRONG-BUT-IN-RANGE entry (all-zero, cpu 140->900, or
+    a hidden graph with a nonzero size) -- the old fix-round-3 range check
+    accepted those. Returns the {key: value} dict of the 26 validated sizes.
     """
     geometry = geometry or CONTROLLED_GEOMETRY
     obj = json.loads(document_text)
@@ -494,6 +636,7 @@ def assert_layout_sizes(document_text, geometry=None):
     settings = obj["settings"]
     derivation = layout_size_derivation(geometry)
     expected = expected_layout_sizes(geometry)
+    bound = size_upper_bound(geometry)  # PORTABLE: scales with the measured frame
     values = {}
     for key in sorted(LAYOUT_SIZE_KEYS):
         if key not in settings:
@@ -501,24 +644,27 @@ def assert_layout_sizes(document_text, geometry=None):
                 f"SETTINGS_UPGRADE_MACOS: the app document is MISSING required "
                 f"layout size setting {key}")
         value = settings[key]
-        if not _valid_layout_size(value, SIZE_UPPER_BOUND):
+        if not _valid_layout_size(value, bound):
             raise RuntimeError(
                 f"SETTINGS_UPGRADE_MACOS: the app document has a CORRUPTED layout "
                 f"size setting {key}={value!r}; expected a finite number in "
-                f"[0, {SIZE_UPPER_BOUND}] consistent with the controlled "
-                f"{geometry['windowWidth']}x{geometry['windowHeight']} window")
+                f"[0, {bound}] consistent with the MEASURED "
+                f"{geometry['expandedWindowWidth']}x"
+                f"{geometry['windowHeight']} window")
         expected_value, tolerance = expected[key]
         if abs(float(value) - expected_value) > tolerance:
             raise RuntimeError(
                 f"SETTINGS_UPGRADE_MACOS: the app document has a WRONG layout "
                 f"size {key}={value!r}; the app's windowChanged layout for the "
-                f"controlled {geometry['expandedWindowWidth']}x"
-                f"{geometry['windowHeight']} window expects "
+                f"MEASURED {geometry['expandedWindowWidth']}x"
+                f"{geometry['windowHeight']} window (titleHeight="
+                f"{geometry['textRectHeight']}) expects "
                 f"{expected_value!r} +/- {tolerance} (unit="
                 f"{derivation['unit']!r}, contentHeight="
                 f"{derivation['contentHeight']!r}, cpuOverride="
                 f"{derivation['cpuHeight']!r}, hidden="
-                f"{sorted(geometry['hiddenGraphs'])})")
+                f"{sorted(geometry['hiddenGraphs'])}) -- sizes inconsistent "
+                f"with the measured window frame")
         values[key] = value
     return values
 
@@ -560,12 +706,17 @@ def compare_app_document(expected_diagnostics, expected_document, actual_diagnos
             "be legitimate: STOP and report it rather than editing the fixture to pass")
 
 
-def load_app_document(document_path, actual_diagnostics, expected_diagnostics, expected_document):
+def load_app_document(document_path, actual_diagnostics, expected_diagnostics,
+                      expected_document, geometry=None):
     """Read the document the LAUNCHED APP produced and compare it.
 
     If the app did not migrate -- no document at its R11 store, as when the env
     var is withheld -- this FAILS. The check never fabricates the document
     itself; this is the negative-control gate (finding 1).
+
+    ``geometry`` is the INDEPENDENTLY MEASURED geometry (fix round 5, finding
+    2b): production always supplies it so the 26 size values are validated
+    against the launched app's MEASURED frame/font, not a host-specific oracle.
     """
     document_path = Path(document_path)
     if not document_path.is_file():
@@ -576,9 +727,10 @@ def load_app_document(document_path, actual_diagnostics, expected_diagnostics, e
     document = document_path.read_bytes().decode("utf-8")
     # Finding 2 (rr2 / rr3 fix round 4): do NOT silently project the 26 size
     # keys away. The app's document must actually CONTAIN all 26, with CORRECT
-    # values derived from the app's layout rules (not just a valid range);
-    # a missing, corrupted or wrong entry fails here before the comparison.
-    assert_layout_sizes(document)
+    # values derived from the app's layout rules applied to the MEASURED
+    # geometry (not just a valid range); a missing, corrupted or wrong entry
+    # fails here before the comparison.
+    assert_layout_sizes(document, geometry=geometry)
     compare_app_document(expected_diagnostics, expected_document, actual_diagnostics, document)
     return document
 
@@ -703,7 +855,8 @@ def summary_fields(domain, seed, expected, document_path, diagnostics,
                    oracle_derived_from_normalised_seed=False,
                    reference_captured_before_upgrade=False,
                    layout_size_keys_validated=False, r26=None,
-                   derived_oracle_matches_pinned=False, baseline_converged=False):
+                   derived_oracle_matches_pinned=False, baseline_converged=False,
+                   measured_geometry=None):
     """Only a full (launched) run may claim a 0.2.2 relaunch (finding 2)."""
     return {
         "domain": domain, "seed": str(seed), "expected": str(expected),
@@ -712,6 +865,8 @@ def summary_fields(domain, seed, expected, document_path, diagnostics,
         "documentMatchesExpected": True, "diagnostics": diagnostics,
         "layoutSizeSettingsNormalised": layout_size_settings_normalised,
         "layoutSizeKeysValidated": layout_size_keys_validated,
+        "expectedSizesFromMeasuredGeometry": measured_geometry is not None,
+        "measuredGeometry": measured_geometry,
         "migrationOracleDerivedFromNormalisedSeed": oracle_derived_from_normalised_seed,
         "derivedOracleMatchesPinnedProjected": derived_oracle_matches_pinned,
         "referenceCapturedBeforeUpgrade": reference_captured_before_upgrade,
@@ -1099,14 +1254,27 @@ def launch_one(app, domain, results, timeout, processes, extra_env=None, phase="
                 "resident": False, "outcome": "exited-clean"}
 
 
-def launch_phase(app, domain, results, timeout, processes, reaped, extra_env=None, phase="app"):
+def launch_phase(app, domain, results, timeout, processes, reaped, extra_env=None,
+                 phase="app", observe=None):
     """Launch one renamed app, prove residency, then quit/reap its whole group.
 
     On success the pid is marked reaped so the top-level finally does not
     re-signal a freed pid; on a reap failure it stays pending and is retried.
+
+    ``observe(pid)`` is an OPTIONAL, observational measurement run while the
+    app is still RESIDENT (before reaping): fix round 5 uses it to read the
+    launched process's live window frame via CGWindowList. It NEVER breaks the
+    launch (best-effort), so a missing Screen Recording permission cannot fail
+    an otherwise valid run.
     """
     record = launch_one(app, domain, results, timeout, processes, extra_env, phase)
     process = processes[-1]
+    if observe is not None:
+        try:
+            record["liveWindowFrame"] = observe(process.pid)
+        except Exception as error:  # observational only
+            record["liveWindowFrame"] = None
+            record["liveWindowFrameError"] = f"{type(error).__name__}: {error}"
     terminate_and_reap([process])  # finding 3: may raise (no success)
     reaped.add(process.pid)
     return record
@@ -1146,6 +1314,202 @@ def seed_domain(domain, seed):
 def export_domain(domain):
     return subprocess.run(["/usr/bin/defaults", "export", domain, "-"], check=True,
                           capture_output=True).stdout
+
+
+# --------------------------------------------------------------------------
+# Fix round 5, finding 2b: INDEPENDENT geometry MEASUREMENT (integration).
+# The window frame is measured from the LAUNCHED process via CGWindowList and
+# from app-written window-frame keys; the font metric is computed portably from
+# the seed font. None is inferred from the 26 size keys under validation.
+# --------------------------------------------------------------------------
+
+def live_window_frame(pid):
+    """INDEPENDENT live OS measurement of the launched process's window frame
+    via CGWindowList (Quartz): match kCGWindowOwnerPID == pid and take the
+    largest kCGWindowBounds. This is 'read the window's frame from the launched
+    process via the CGWindowList APIs' -- entirely outside the app's settings
+    data and the 26 size keys. Screen Recording permission is NOT needed for
+    bounds/PID. Returns (width, height) or None (best-effort, never raises).
+    """
+    try:
+        cg_path = ctypes.util.find_library("CoreGraphics")
+        cf_path = ctypes.util.find_library("CoreFoundation")
+        if not cg_path or not cf_path:
+            return None
+        cg = ctypes.CDLL(cg_path)
+        cf = ctypes.CDLL(cf_path)
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFArrayGetCount.restype = ctypes.c_long
+        cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+        cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+        cf.CFDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFDictionaryGetValue.restype = ctypes.c_void_p
+        cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFNumberGetValue.restype = ctypes.c_ubyte
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+
+        def cfstr(text):
+            return cf.CFStringCreateWithCString(None, text.encode("ascii"), 0x0600)
+
+        def number(dictionary, key):
+            value_ref = cf.CFDictionaryGetValue(dictionary, key)
+            if not value_ref:
+                return None
+            out = ctypes.c_double()
+            if cf.CFNumberGetValue(value_ref, 13, ctypes.byref(out)):  # kCFNumberDoubleType
+                return out.value
+            return None
+
+        k_pid = cfstr("kCGWindowOwnerPID")
+        k_bounds = cfstr("kCGWindowBounds")
+        k_width = cfstr("Width")
+        k_height = cfstr("Height")
+        best = None
+        # kCGWindowListOptionOnScreenOnly|ExcludeDesktopElements AND option All
+        # (so a collapsed/minimised window is still considered); keep the
+        # largest window owned by the launched pid across BOTH lists. NOTE: the
+        # seed starts the main graph window MINIMIZED (windowIsMinimized=True),
+        # so CGWindowList sees the collapsed strip + sensor window but NOT the
+        # expanded graph window. The layout `size` input is therefore measured
+        # from the app-written restore rectangle (unminimizedFrame) instead --
+        # see collect_measured_geometry; this live measurement is an independent
+        # corroboration that the app genuinely launched an AppKit window.
+        for option in (1 | 16, 0):
+            array = cg.CGWindowListCopyWindowInfo(option, 0)
+            if not array:
+                continue
+            count = cf.CFArrayGetCount(array)
+            for index in range(count):
+                window = cf.CFArrayGetValueAtIndex(array, index)
+                owner = number(window, k_pid)
+                if owner is None or int(owner) != int(pid):
+                    continue
+                bounds = cf.CFDictionaryGetValue(window, k_bounds)
+                if not bounds:
+                    continue
+                width = number(bounds, k_width)
+                height = number(bounds, k_height)
+                if width is None or height is None or width <= 0 or height <= 0:
+                    continue
+                if best is None or width * height > best[0] * best[1]:
+                    best = (width, height)
+        return best
+    except (OSError, ValueError, TypeError, OverflowError, ctypes.ArgumentError):
+        return None
+
+
+# The portable font-metric helper: it computes XRGSettings.textRectHeight EXACTLY
+# (XRGSettings.swift:390/492), from the seed's graphFont, on the host running
+# the check. Its output is a MEASURED layout INPUT, not one of the 26 sizes.
+TITLE_HEIGHT_SWIFT = r'''// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Stephen de la Vega.
+import AppKit
+import Foundation
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data(("title-height-helper: " + message + "\n").utf8))
+    exit(1)
+}
+let arguments = CommandLine.arguments
+guard arguments.count == 3, let size = Double(arguments[2]) else {
+    fail("usage: TITLEHELPER <font-name> <point-size>")
+}
+let name = arguments[1]
+let font: NSFont = name == "System"
+    ? NSFont.systemFont(ofSize: CGFloat(size))
+    : (NSFont(name: name, size: CGFloat(size)) ?? NSFont.systemFont(ofSize: CGFloat(size)))
+let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .right
+let attributes: [NSAttributedString.Key: Any] = [
+    .font: font, .foregroundColor: NSColor.black, .paragraphStyle: paragraph]
+// The SAME line-height metric XRGSettings.textRectHeight (and therefore
+// XRGModuleManager.titleHeight) uses.
+let height = ("A" as NSString).size(withAttributes: attributes).height
+guard height.isFinite, height > 0 else { fail("font produced a non-positive line height") }
+print("TITLE_HEIGHT " + String(format: "%.6f", height))
+'''
+
+
+def measure_title_height(font_name, font_size, results):
+    """COMPUTE the font metric PORTABLY: the line height of 'A' in the seed's
+    graphFont via the SAME AppKit NSString.size(withAttributes:) call the app
+    uses for textRectHeight. Measured on the host running the check (NOT a
+    hardcoded constant, NOT inferred from the 26 sizes)."""
+    source = results / "TitleHeightHelper.swift"
+    source.write_text(TITLE_HEIGHT_SWIFT)
+    executable = results / "TitleHeightHelper"
+    subprocess.run(["xcrun", "swiftc", "-swift-version", "5", str(source), "-o", str(executable)],
+                   check=True, stdout=subprocess.DEVNULL)
+    result = subprocess.run([str(executable), font_name, str(font_size)],
+                            check=True, capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        if line.startswith("TITLE_HEIGHT "):
+            value = float(line.split(maxsplit=1)[1])
+            if math.isfinite(value) and value > 0:
+                return value
+    raise RuntimeError("SETTINGS_UPGRADE_MACOS: could not measure the font title height")
+
+
+def collect_measured_geometry(domain, seed, results, live_frame=None,
+                              export=export_domain, measure_font=measure_title_height):
+    """Build the geometry whose EXPECTED sizes the PRODUCTION check validates,
+    from INDEPENDENTLY MEASURED inputs (fix round 5, finding 2b). NONE of these
+    is one of the 26 graphs.<id>.size_* values under validation:
+      * frame (W, H): the launched 0.2.3 app's AppKit window-frame keys it
+        writes into its disposable domain (window_frame_from_domain -- a value
+        the app writes that is NOT a size key), corroborated by a LIVE
+        CGWindowList measurement of the running process (live_frame);
+      * title height: the seed graphFont's line height, COMPUTED PORTABLY via
+        AppKit (measure_font) -- the font metric the layout uses.
+    Returns (geometry, provenance). FAILS LOUDLY if the frame cannot be
+    measured (never silently falls back to host-specific hardcoded geometry).
+    """
+    frame = window_frame_from_domain(export(domain))
+    if frame is None:
+        raise RuntimeError(
+            "SETTINGS_UPGRADE_MACOS: cannot MEASURE the launched 0.2.3 app's "
+            "window frame from its app-written AppKit window-frame keys "
+            "(unminimizedFrame / 'NSWindow Frame *'); refusing to derive "
+            "expected sizes from host-specific hardcoded geometry")
+    frame_w, frame_h, frame_key = frame
+    font_name, font_size = font_descriptor_from_seed(seed)
+    title_height = measure_font(font_name, font_size, results)
+    geometry = measured_geometry(frame_w, frame_h, title_height)
+    provenance = {
+        "measurement": "independent of the 26 graphs.*.size_* keys under validation",
+        "frameWidth": frame_w,
+        "frameHeight": frame_h,
+        "frameSource": ("app-written AppKit window-frame key "
+                        f"'{frame_key}' in the launched app's disposable defaults "
+                        "domain (NOT a size key)"),
+        "titleHeight": title_height,
+        "titleHeightSource": ("AppKit (\"A\").size(withAttributes:) line height of "
+                              f"the seed graphFont '{font_name} {font_size:g}' -- the "
+                              "SAME metric as XRGSettings.textRectHeight, computed "
+                              "portably on this host"),
+        "fontName": font_name,
+        "fontSize": font_size,
+        "liveWindowFrame": list(live_frame) if live_frame else None,
+        "liveFrameSource": ("CGWindowList kCGWindowBounds of the launched process "
+                            "(independent live OS measurement)"),
+        "liveFrameCorroboratesLaunch": live_frame is not None,
+        "liveFrameConsistent": frames_consistent((frame_w, frame_h), live_frame),
+        "liveFrameNote": (
+            "The seed starts the main graph window MINIMIZED "
+            "(windowIsMinimized=True), so CGWindowList reports the live on-screen "
+            "collapsed strip / sensor windows, NOT the expanded graph window; "
+            "liveFrameConsistent is therefore EXPECTED to be False and is purely "
+            "informational (it never gates success). The layout `size` input is "
+            "measured from the AppKit restore rectangle 'unminimizedFrame' -- the "
+            "EXACT NSWindow.frame.size passed to windowChanged(to:) -- a value the "
+            "app writes that is NOT one of the 26 size keys. Both sources are "
+            "independent of the 26 validated sizes."),
+        "sizeTolerance": SIZE_TOLERANCE,
+        "hiddenSizeTolerance": HIDDEN_SIZE_TOLERANCE,
+        "sizeUpperBound": size_upper_bound(geometry),
+    }
+    return geometry, provenance
 
 
 # --------------------------------------------------------------------------
@@ -1312,6 +1676,7 @@ def main(argv=None):
     oracle_matches_pinned = False
     reference_captured_before_upgrade = False
     r26 = None
+    measured_geometry_provenance = None  # fix round 5, finding 2b
     oracle_document = expected_document
     try:
         # Finding 1: "starts with no document".
@@ -1377,25 +1742,45 @@ def main(argv=None):
             oracle_derived_from_normalised_seed = True
 
             # ---- [3] 0.2.3-upgrade (migration) --------------------------------
-            launches.append(launch_phase(new_copy, domain, results, args.launch_timeout,
-                                         processes, reaped, env_for_upgrade, "0.2.3-upgrade"))
+            # Fix round 5, finding 2b: while the 0.2.3 app is RESIDENT, take an
+            # INDEPENDENT live CGWindowList measurement of its window frame.
+            upgrade_record = launch_phase(
+                new_copy, domain, results, args.launch_timeout,
+                processes, reaped, env_for_upgrade, "0.2.3-upgrade",
+                observe=live_window_frame)
+            launches.append(upgrade_record)
             settle(args.settle_timeout)
 
             # ---- [4] validate-app-document (negative-control gate) ------------
+            # Fix round 5, finding 2b: MEASURE the launched app's window frame
+            # (app-written frame keys + live CGWindowList cross-check) and the
+            # font metric (seed graphFont line height, computed portably), then
+            # DERIVE the expected sizes from those INDEPENDENTLY MEASURED inputs
+            # -- NEVER from hardcoded 1779/13, NEVER from the 26 size keys.
+            measured, measured_geometry_provenance = collect_measured_geometry(
+                domain, seed, results,
+                live_frame=upgrade_record.get("liveWindowFrame"))
+            (results / "measured-geometry.json").write_text(json.dumps(
+                measured_geometry_provenance, indent=2, sort_keys=True) + "\n")
             # load_app_document now ALSO requires ALL 26 explicit size keys to be
-            # present and valid (assert_layout_sizes); missing/corrupt -> fail.
+            # present and CORRECT w.r.t. the MEASURED geometry; a missing,
+            # corrupted or frame-inconsistent entry fails here.
             document = load_app_document(document_path, driver_diagnostics,
-                                         expected_diagnostics, oracle_document)
+                                         expected_diagnostics, oracle_document,
+                                         geometry=measured)
             (results / "0.2.3-document.json").write_text(document)
             before_bytes = document_path.read_bytes()
             (results / "layout-sizes.json").write_text(json.dumps(
-                assert_layout_sizes(document), indent=2, sort_keys=True) + "\n")
-            # Record the DERIVED expected sizes and tolerances (fix round 4),
-            # so the correctness oracle is auditable from the run artifacts.
+                assert_layout_sizes(document, geometry=measured),
+                indent=2, sort_keys=True) + "\n")
+            # Record the MEASURED geometry + DERIVED expected sizes and
+            # tolerances, so the correctness oracle is fully auditable.
             (results / "layout-size-derivation.json").write_text(json.dumps(
-                {"derivation": layout_size_derivation(CONTROLLED_GEOMETRY),
+                {"measuredGeometry": measured_geometry_provenance,
+                 "derivation": layout_size_derivation(measured),
                  "expected": {k: {"expected": v, "tolerance": t}
-                              for k, (v, t) in expected_layout_sizes().items()},
+                              for k, (v, t) in expected_layout_sizes(measured).items()},
+                 "sizeUpperBound": size_upper_bound(measured),
                  "sizeTolerance": SIZE_TOLERANCE,
                  "hiddenSizeTolerance": HIDDEN_SIZE_TOLERANCE},
                 indent=2, sort_keys=True) + "\n")
@@ -1433,7 +1818,8 @@ def main(argv=None):
             downgrade_normalised, layout_size_settings_normalised,
             oracle_derived_from_normalised_seed, reference_captured_before_upgrade,
             layout_size_keys_validated, r26, oracle_matches_pinned,
-            baseline_converged=downgrade_normalised), indent=2) + "\n")
+            baseline_converged=downgrade_normalised,
+            measured_geometry=measured_geometry_provenance), indent=2) + "\n")
     finally:
         # Finding 3: GATE storage deletion on CONFIRMED process-group termination.
         # reap_and_cleanup reaps every launched group and CONFIRMS they are gone
