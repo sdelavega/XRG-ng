@@ -198,6 +198,11 @@ SEED_GEOMETRY = {
     "windowWidth": 280,
     "windowHeight": 684,
     "windowFrame": "{{216, 136}, {280, 684}}",
+    # The fixture's orientation is the deterministic DEFAULT for the
+    # geometry=None pure unit tests. The PRODUCTION check ALWAYS overrides it
+    # with orientation_from_domain(export(domain)) -- see collect_measured_
+    # geometry / measured_geometry -- so both orientations are derived from the
+    # seeded/normalised domain, never hardcoded and never from the 26 sizes.
     "orientation": "horizontal",
     "source": "Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist",
     "borderWidth": 6,
@@ -211,7 +216,7 @@ SEED_GEOMETRY = {
 SIZE_UPPER_BOUND = SEED_GEOMETRY["windowWidth"] + SEED_GEOMETRY["windowHeight"]
 
 
-def measured_geometry(frame_width, frame_height, text_rect_height, base=None):
+def measured_geometry(frame_width, frame_height, text_rect_height, base=None, orientation=None):
     """Build the COMPLETE layout geometry from three INDEPENDENTLY MEASURED
     inputs plus the portable seed constants.
 
@@ -219,8 +224,11 @@ def measured_geometry(frame_width, frame_height, text_rect_height, base=None):
     (the `size` argument to XRGModuleManager.windowChanged); text_rect_height is
     the MEASURED font metric (XRGSettings.textRectHeight). NO host-specific
     value is hardcoded: expandedWindowWidth, windowHeight and textRectHeight all
-    come from these arguments. Pure and unit tested (alternate-host geometry,
-    inconsistent measured frame). This is the geometry the PRODUCTION check uses.
+    come from these arguments. `orientation` is read from the SEEDED/NORMALISED
+    domain (orientation_from_domain); when omitted, the base's orientation (the
+    fixture's horizontal) is kept as the deterministic unit-test default. Pure
+    and unit tested (alternate-host geometry, inconsistent measured frame, both
+    orientations). This is the geometry the PRODUCTION check uses.
     """
     geom = dict(base if base is not None else SEED_GEOMETRY)
     for label, value in (("frameWidth", frame_width),
@@ -239,6 +247,12 @@ def measured_geometry(frame_width, frame_height, text_rect_height, base=None):
     geom["expandedWindowWidth"] = float(frame_width)
     geom["windowHeight"] = float(frame_height)
     geom["textRectHeight"] = float(text_rect_height)
+    if orientation is not None:
+        if orientation not in ("vertical", "horizontal"):
+            raise RuntimeError(
+                f"SETTINGS_UPGRADE_MACOS: measured orientation={orientation!r} "
+                f"is not vertical/horizontal; refusing to derive expected sizes")
+        geom["orientation"] = orientation
     return geom
 
 
@@ -496,14 +510,48 @@ def parse_frame_rect(text):
     return (float(width), float(height))
 
 
+def _legacy_bool(value):
+    """Coerce a raw 0.2.2 defaults value the way UserDefaults.bool(forKey:)
+    (and 0.2.2's XRGWindowPreferences.apply bool() helper) does: a CFBoolean,
+    an integer/float NSNumber (nonzero = true), or a string parsed with NSString
+    boolValue semantics. Used ONLY to read graphOrientationVertical from the
+    seeded/normalised domain, never from the 26 size keys under validation."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        text = value.strip()
+        upper = text.upper()
+        if upper in ("YES", "TRUE", "Y", "T"):
+            return True
+        if upper in ("NO", "FALSE", "N", "F", ""):
+            return False
+        # NSString boolValue: a nonzero numeric string is true.
+        try:
+            return float(text) != 0.0
+        except ValueError:
+            return False
+    return False
+
+
+def orientation_from_domain(domain_bytes):
+    """Read general.window.orientation's legacy key graphOrientationVertical
+    from the SEEDED/NORMALISED domain (NOT one of the 26 size keys), coerced
+    with the same bool semantics 0.2.2 read it with. Independent of the sizes
+    under validation and of any host-specific geometry. Pure and unit tested.
+    """
+    domain = plistlib.loads(domain_bytes)
+    return "vertical" if _legacy_bool(domain.get("graphOrientationVertical", False)) else "horizontal"
+
+
 def window_frame_from_domain(exported_bytes):
     """Measure the LAUNCHED app's window frame from values THE APP WRITES that
     are NOT one of the 26 size keys: the AppKit-autosaved 'NSWindow Frame *'
     keys and the graph window's 'unminimizedFrame' restore rectangle. These are
     genuinely volatile AppKit WINDOW geometry (see VOLATILE_KEYS/PREFIXES),
     written by AppKit / XRGBackgroundView from the live NSWindow.frame -- the
-    EXACT `size` argument passed to XRGModuleManager.windowChanged. The widest
-    frame is the expanded (getMinSize) window, not the seeded collapsed 280x684.
+    EXACT `size` argument passed to XRGModuleManager.windowChanged.
     Returns (width, height, key) or None. Pure and unit tested: a domain holding
     ONLY size keys (no frame key) yields None, proving the measurement cannot be
     inferred from the values under validation.
@@ -517,8 +565,20 @@ def window_frame_from_domain(exported_bytes):
                 frames.append((rect[0], rect[1], key))
     if not frames:
         return None
-    # Widest (expanded) frame wins; on a width tie prefer the graph window's
-    # dedicated restore rectangle.
+    # The graph window's OWN restore rectangle is the EXPANDED frame the layout
+    # receives for BOTH orientations. In a VERTICAL layout that frame is TALL
+    # and NARROW, so the old width-only "widest frame wins" rule wrongly picks
+    # the shorter/wider collapsed frame; prefer the dedicated restore rectangle
+    # when present. Neither source is one of the 26 validated size keys.
+    restore = [f for f in frames if f[2] == "unminimizedFrame"]
+    if restore:
+        return max(restore, key=lambda f: f[0] * f[1])
+    vertical = _legacy_bool(domain.get("graphOrientationVertical", False))
+    if vertical:
+        # Expanded vertical windows are TALL: prefer the tallest frame.
+        return max(frames, key=lambda f: (f[1], f[0]))
+    # Widest (expanded) horizontal frame wins; on a width tie prefer the graph
+    # window's dedicated restore rectangle.
     return max(frames, key=lambda f: (f[0], f[2] == "unminimizedFrame"))
 
 
@@ -565,49 +625,102 @@ def frames_consistent(domain_frame, live_frame):
 
 
 def layout_size_derivation(geometry=None):
-    """Fix round 4/5, finding 2b: reproduce XRGModuleManager.windowChanged(to:)'s
-    HORIZONTAL else-branch purely from the MEASURED geometry + seed. The frame
-    width/height and titleHeight in `geometry` come from independent measurement
-    (measured_geometry), NOT from this host. Returns the intermediate quantities
-    of the derivation (diagnostics / unit tests):
+    """Reproduce XRGModuleManager.windowChanged(to:) for the geometry's
+    orientation: the HORIZONTAL else-branch (lines 206-209) or the VERTICAL
+    branch (lines 185-205). The frame width/height and titleHeight come from
+    independent measurement (measured_geometry), NOT this host; the orientation
+    is read from the seeded/normalised domain. Returns the derivation's
+    intermediate quantities (diagnostics / unit tests).
+
+    HORIZONTAL:
       contentWidth  = expandedWindowWidth - 2*border
       contentHeight = windowHeight - 2*border
       unit          = max(0, contentWidth - titleHeight - separator*count)/count
       cpuHeight     = min(contentHeight, max(minHeight, cpuOverride))
+    VERTICAL (XRGCore/XRGModuleManager.swift:185-205): every displayed graph
+      spans the FULL contentWidth; heights come from a vertical stack that
+      reserves each graph's minimum (minHeight == XRGGraphLabels.lineHeight ==
+      textRectHeight, the same measured font metric as titleHeight), gives the
+      cpu its fixed 140, and shares the remaining `available` height among the
+      automatic graphs. Hidden graphs get NSSize.zero -> 0.
     """
     geometry = geometry or CONTROLLED_GEOMETRY
     border = float(geometry["borderWidth"])
     separator = float(geometry["moduleSeparatorWidth"])
     title_height = float(geometry["textRectHeight"])
     min_height = float(geometry["minHeight"])
-    count = len(geometry["displayedGraphs"])
+    displayed = list(geometry["displayedGraphs"])
+    count = len(displayed)
     content_width = float(geometry["expandedWindowWidth"]) - 2 * border
     content_height = float(geometry["windowHeight"]) - 2 * border
-    unit = max(0.0, content_width - title_height - separator * count) / count
-    cpu_height = min(content_height,
-                     max(min_height, float(geometry["heightOverrides"].get("cpu", min_height))))
-    return {
+    overrides = geometry["heightOverrides"]
+    orientation = geometry.get("orientation", "horizontal")
+    result = {
         "border": border, "separator": separator, "titleHeight": title_height,
         "minHeight": min_height, "displayedCount": count,
         "contentWidth": content_width, "contentHeight": content_height,
-        "unit": unit, "cpuHeight": cpu_height,
+        "orientation": orientation,
     }
+    if orientation == "vertical":
+        available = max(0.0, content_height - title_height - separator * count)
+        fixed = {gid: max(min_height, float(h)) for gid, h in overrides.items()
+                 if gid in displayed}
+        automatic = [gid for gid in displayed if gid not in fixed]
+        if len(automatic) == count:
+            heights = {gid: available / count for gid in displayed}
+        else:
+            line = title_height  # XRGGraphLabels.lineHeight == textRectHeight
+            minima = {gid: line for gid in displayed}
+            base = sum(minima.values())
+            extra = max(0.0, available - base)
+            requested = sum(max(0.0, (fixed.get(gid, minima[gid]) - minima[gid]))
+                            for gid in displayed)
+            factor = min(1.0, extra / requested) if requested > 0 else 0.0
+            automatic_extra = (max(0.0, extra - requested) / len(automatic)
+                               if automatic else 0.0)
+            heights = {}
+            for gid in displayed:
+                minimum = minima[gid]
+                if gid in fixed:
+                    value = minimum + max(0.0, fixed[gid] - minimum) * factor
+                else:
+                    value = minimum + automatic_extra
+                heights[gid] = (minimum * available / base
+                                if base > available and base > 0 else value)
+        result.update({
+            "unit": content_width,  # vertical: full width, not the shared unit
+            "cpuHeight": heights.get("cpu", min_height),
+            "verticalWidth": content_width,
+            "verticalHeights": heights,
+            "available": available,
+        })
+    else:
+        unit = max(0.0, content_width - title_height - separator * count) / count
+        cpu_height = min(content_height,
+                         max(min_height, float(overrides.get("cpu", min_height))))
+        result.update({"unit": unit, "cpuHeight": cpu_height})
+    return result
 
 
 def expected_layout_sizes(geometry=None):
     """The EXPECTED value + tolerance for all 26 size keys, DERIVED from the
-    controlled geometry + seed via windowChanged (horizontal branch). Pure and
-    unit tested. Hidden graphs expect exactly 0 (windowChanged applies .zero to
-    non-displayed modules; XRGModule.dimension clamps 0 and saves 0)."""
+    measured geometry + seed via windowChanged for the geometry's orientation
+    (horizontal else-branch or vertical branch). Pure and unit tested for BOTH
+    orientations. Hidden graphs expect exactly 0 (windowChanged applies .zero
+    to non-displayed modules; XRGModule.dimension clamps 0 and saves 0)."""
     geometry = geometry or CONTROLLED_GEOMETRY
     d = layout_size_derivation(geometry)
     hidden = frozenset(geometry["hiddenGraphs"])
     overrides = geometry["heightOverrides"]
+    vertical = d["orientation"] == "vertical"
     expected = {}
     for gid in GRAPH_IDS:
         if gid in hidden:
             expected[f"graphs.{gid}.size_width"] = (0.0, HIDDEN_SIZE_TOLERANCE)
             expected[f"graphs.{gid}.size_height"] = (0.0, HIDDEN_SIZE_TOLERANCE)
+        elif vertical:
+            expected[f"graphs.{gid}.size_width"] = (d["verticalWidth"], SIZE_TOLERANCE)
+            expected[f"graphs.{gid}.size_height"] = (d["verticalHeights"][gid], SIZE_TOLERANCE)
         else:
             expected[f"graphs.{gid}.size_width"] = (d["unit"], SIZE_TOLERANCE)
             height = d["contentHeight"]
@@ -1465,7 +1578,8 @@ def collect_measured_geometry(domain, seed, results, live_frame=None,
     Returns (geometry, provenance). FAILS LOUDLY if the frame cannot be
     measured (never silently falls back to host-specific hardcoded geometry).
     """
-    frame = window_frame_from_domain(export(domain))
+    exported = export(domain)
+    frame = window_frame_from_domain(exported)
     if frame is None:
         raise RuntimeError(
             "SETTINGS_UPGRADE_MACOS: cannot MEASURE the launched 0.2.3 app's "
@@ -1475,8 +1589,16 @@ def collect_measured_geometry(domain, seed, results, live_frame=None,
     frame_w, frame_h, frame_key = frame
     font_name, font_size = font_descriptor_from_seed(seed)
     title_height = measure_font(font_name, font_size, results)
-    geometry = measured_geometry(frame_w, frame_h, title_height)
+    # R9-2: the orientation MUST come from the seeded/normalised domain, not a
+    # hardcoded "horizontal". XRGModuleManager defaults to vertical. Read it
+    # from the same domain export as the frame (never from the 26 size keys).
+    orientation = orientation_from_domain(exported)
+    geometry = measured_geometry(frame_w, frame_h, title_height, orientation=orientation)
     provenance = {
+        "orientation": orientation,
+        "orientationSource": ("graphOrientationVertical in the seeded/normalised "
+                              "domain, coerced with UserDefaults.bool(forKey:) "
+                              "semantics -- independent of the 26 validated size keys"),
         "measurement": "independent of the 26 graphs.*.size_* keys under validation",
         "frameWidth": frame_w,
         "frameHeight": frame_h,

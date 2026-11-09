@@ -1258,5 +1258,137 @@ class MeasuredGeometrySizeTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------
+# R9 follow-up: the check must derive expected sizes for BOTH orientations
+# from XRGModuleManager.windowChanged, using the orientation read from the
+# seeded/normalised domain (NOT hardcoded horizontal, NOT the 26 size keys).
+# --------------------------------------------------------------------------
+
+class OrientationFromDomainTests(unittest.TestCase):
+    @staticmethod
+    def _domain(value):
+        return plistlib.dumps({"graphOrientationVertical": value},
+                              fmt=plistlib.FMT_BINARY)
+
+    def test_orientation_is_read_from_the_domain(self):
+        self.assertEqual(upgrade.orientation_from_domain(self._domain(True)), "vertical")
+        self.assertEqual(upgrade.orientation_from_domain(self._domain(False)), "horizontal")
+        # A string-typed flag, exactly the form 0.2.2's bool reader accepts
+        # (R9-1), must be honoured too.
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("YES")), "vertical")
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("NO")), "horizontal")
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("1")), "vertical")
+        self.assertEqual(upgrade.orientation_from_domain(self._domain("0")), "horizontal")
+        # Absent flag defaults to the fixture's horizontal orientation.
+        self.assertEqual(upgrade.orientation_from_domain(plistlib.dumps({})), "horizontal")
+
+    def test_orientation_is_independent_of_the_26_size_keys(self):
+        dom = {k: 157.45454545454547 for k in upgrade.LAYOUT_SIZE_KEYS}
+        dom["graphOrientationVertical"] = True
+        self.assertEqual(upgrade.orientation_from_domain(plistlib.dumps(dom)), "vertical")
+
+    def test_collect_measured_geometry_threads_vertical_orientation(self):
+        # A VERTICAL expanded frame is TALL and NARROW, while the collapsed
+        # frame is wider: the dedicated unminimizedFrame restore rectangle must
+        # win, and the orientation must be read from that same domain.
+        dom = {
+            "unminimizedFrame": "{{0,0},{139,849}}",
+            "NSWindow Frame XRG": "{{216,136},{280,684}}",
+            "graphOrientationVertical": True,
+        }
+        exported = plistlib.dumps(dom, fmt=plistlib.FMT_BINARY)
+        results = Path(tempfile.mkdtemp(prefix="xrg-orient-"))
+        try:
+            geom, prov = upgrade.collect_measured_geometry(
+                "com.sdelavega.xrg.upgradecheck.fake", SEED, results,
+                export=lambda _d: exported,
+                measure_font=lambda _name, _size, _results: 13.0)
+            self.assertEqual(geom["orientation"], "vertical")
+            self.assertEqual(prov["orientation"], "vertical")
+            self.assertEqual(geom["expandedWindowWidth"], 139.0)
+            self.assertEqual(geom["windowHeight"], 849.0)
+        finally:
+            shutil.rmtree(results, ignore_errors=True)
+
+
+class VerticalLayoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # A VERTICAL measured frame: tall and narrow (XRGModuleManager defaults
+        # to graphOrientationVertical = true). 139x849 frame, titleHeight 13.
+        cls.vert = upgrade.measured_geometry(139.0, 849.0, 13.0, orientation="vertical")
+        cls.vert2 = upgrade.measured_geometry(160.0, 1000.0, 13.0, orientation="vertical")
+        cls.horiz = upgrade.CONTROLLED_GEOMETRY
+
+    def _base(self):
+        _, base = upgrade.parse_expected(EXPECTED)
+        return base
+
+    def _document_for(self, geometry, overrides=None, drop=()):
+        return app_document_with_all_sizes(self._base(), overrides=overrides,
+                                           drop=drop, geometry=geometry)
+
+    def test_geometry_records_vertical_orientation(self):
+        self.assertEqual(self.vert["orientation"], "vertical")
+        self.assertEqual(self.horiz["orientation"], "horizontal")
+
+    def test_vertical_derivation_matches_windowChanged(self):
+        d = upgrade.layout_size_derivation(self.vert)
+        self.assertEqual(d["orientation"], "vertical")
+        # windowChanged vertical branch: every displayed graph spans the FULL
+        # content width, not the shared horizontal unit.
+        self.assertEqual(d["verticalWidth"], 139.0 - 12)
+        available = (849.0 - 12) - 13.0 - 2 * 11  # contentHeight - titleHeight - separator*count
+        self.assertAlmostEqual(d["available"], available, places=9)
+        self.assertAlmostEqual(d["verticalHeights"]["cpu"], 140.0, places=9)
+        self.assertAlmostEqual(d["verticalHeights"]["ai"],
+                               (available - 140.0) / 10, places=9)
+        expected = upgrade.expected_layout_sizes(self.vert)
+        self.assertEqual(set(expected), set(upgrade.LAYOUT_SIZE_KEYS))
+        self.assertEqual(expected["graphs.ai.size_width"][0], 139.0 - 12)
+        self.assertEqual(expected["graphs.cpu.size_height"][0], 140.0)
+        self.assertEqual(expected["graphs.gpu.size_width"][0], 0.0)
+        self.assertEqual(expected["graphs.weather.size_height"][0], 0.0)
+
+    def test_vertical_correct_sizes_pass(self):
+        self.assertEqual(len(upgrade.assert_layout_sizes(
+            self._document_for(self.vert), geometry=self.vert)), 26)
+
+    def test_vertical_all_zero_sizes_fail(self):
+        zeros = {k: 0 for k in upgrade.LAYOUT_SIZE_KEYS}
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document_for(self.vert, overrides=zeros),
+                                        geometry=self.vert)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_vertical_cpu_override_140_to_900_fails(self):
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(self._document_for(
+                self.vert, overrides={"graphs.cpu.size_height": 900}), geometry=self.vert)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_vertical_hidden_nonzero_size_fails(self):
+        for key in ("graphs.gpu.size_width", "graphs.weather.size_height"):
+            with self.subTest(key=key):
+                with self.assertRaises(RuntimeError) as caught:
+                    upgrade.assert_layout_sizes(self._document_for(
+                        self.vert, overrides={key: 0.4}), geometry=self.vert)
+                self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_vertical_sizes_inconsistent_with_measured_frame_fail(self):
+        # Sizes correct for ONE vertical measured frame MUST FAIL when
+        # validated against a DIFFERENT measured frame.
+        doc = self._document_for(self.vert)
+        with self.assertRaises(RuntimeError) as caught:
+            upgrade.assert_layout_sizes(doc, geometry=self.vert2)
+        self.assertIn("wrong", str(caught.exception).lower())
+
+    def test_vertical_and_horizontal_expected_sizes_differ(self):
+        h = upgrade.expected_layout_sizes(self.horiz)
+        v = upgrade.expected_layout_sizes(self.vert)
+        self.assertNotEqual(h["graphs.ai.size_width"][0], v["graphs.ai.size_width"][0])
+        self.assertNotEqual(h["graphs.ai.size_height"][0], v["graphs.ai.size_height"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -232,6 +232,104 @@ struct SettingsMigrationTests {
         #expect(document.values["appearance.display_effect"] == nil)
     }
 
+    // MARK: R9 follow-up — string-typed 0.2.2 scalar preferences
+
+    /// 0.2.2 read boolean keys with `UserDefaults.bool(forKey:)` (and its
+    /// `XRGWindowPreferences.apply` bool() helper), which accept CFBoolean,
+    /// integer/float NSNumbers (nonzero = true) and strings parsed with
+    /// NSString boolValue semantics. A real 0.2.2 domain stores
+    /// `showCPUTemperature` as the STRING "NO"; a stored "YES" must survive the
+    /// upgrade, not be dropped to the default with an invalid-value diagnostic.
+    @Test func stringTypedBooleanScalarsMigrateLike022() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let cases: [(Any, Bool)] = [
+            ("YES", true), ("NO", false), ("true", true), ("1", true), ("0", false),
+            (NSNumber(value: 1), true), (NSNumber(value: 0), false),
+            (NSNumber(value: 2), true), (NSNumber(value: 0.5), true),
+        ]
+        for (raw, expected) in cases {
+            let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                ["showCPUTemperature": raw], catalog: catalog)
+            #expect(diagnostics.isEmpty,
+                    "\(raw) must not be diagnosed as invalid-value")
+            #expect(document.value("graphs.cpu.show_temperature", catalog: catalog) == .bool(expected),
+                    "\(raw) must migrate to the same value 0.2.2 showed")
+            if expected {
+                // Non-default: prove the value was STORED, not silently lost.
+                #expect(document.values["graphs.cpu.show_temperature"] == .bool(true),
+                        "a stored YES/integer must not be lost on upgrade")
+            }
+        }
+    }
+
+    /// integer(forKey:) / double(forKey:) accept numeric strings with NSString
+    /// integerValue / doubleValue semantics, and CFBoolean (1/0).
+    @Test func stringTypedNumericScalarsMigrateLike022() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let (intDoc, intDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["netMinGraphScale": "2048"], catalog: catalog)
+        #expect(intDiag.isEmpty)
+        #expect(intDoc.values["graphs.network.minimum_scale"] == .int(2048))
+        #expect(intDoc.value("graphs.network.minimum_scale", catalog: catalog) == .int(2048))
+
+        let (doubleDoc, doubleDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["graphRefresh": "0.5"], catalog: catalog)
+        #expect(doubleDiag.isEmpty)
+        #expect(doubleDoc.values["graphs.refresh"] == .double(0.5))
+
+        // The 26 module sizes are read/written by 0.2.2's
+        // defaults.double(forKey:) (XRGModule.swift:100); a numeric string
+        // migrates to the same double even though the catalog default is null.
+        let (sizeDoc, sizeDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["XRGModule_CPU_width": "142.5"], catalog: catalog)
+        #expect(sizeDiag.isEmpty)
+        #expect(sizeDoc.values["graphs.cpu.size_width"] == .double(142.5))
+
+        // CFBoolean is accepted by integer(forKey:) too.
+        let (boolIntDoc, boolIntDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["netMinGraphScale": true], catalog: catalog)
+        #expect(boolIntDiag.isEmpty)
+        #expect(boolIntDoc.values["graphs.network.minimum_scale"] == .int(1))
+    }
+
+    /// Values the accessors would reject (a wrong type, or a string that is
+    /// neither a boolean spelling nor a number) still produce invalid-value.
+    @Test func junkLegacyScalarsStillDiagnose() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let junk: [(String, Any, String)] = [
+            ("showCPUTemperature", "garbage", "graphs.cpu.show_temperature"),
+            ("showCPUTemperature", Data("junk".utf8), "graphs.cpu.show_temperature"),
+            ("netMinGraphScale", "not-a-number", "graphs.network.minimum_scale"),
+            ("netMinGraphScale", Data("junk".utf8), "graphs.network.minimum_scale"),
+            ("graphRefresh", ["bad"], "graphs.refresh"),
+        ]
+        for (key, raw, id) in junk {
+            let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                [key: raw], catalog: catalog)
+            #expect(diagnostics == [XRGSettingsDiagnostic(id: id, problem: "invalid-value")],
+                    "\(key)=\(raw) must still be diagnosed")
+            #expect(document.values[id] == nil, "\(key) junk must fall back to the default")
+        }
+    }
+
+    /// A small synthetic 0.2.2 domain whose scalar keys are stored as the
+    /// string/PLIST forms a real `defaults write` / 0.2.2 registration leaves
+    /// behind. The main macos-0.2.2-defaults.plist / expected.json fixtures are
+    /// NOT modified. Values are hand-derived from the catalog's legacy mapping.
+    @Test func syntheticStringTypedFixtureMigrates() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let defaults = try loadDefaultsPlist("macos-0.2.2-string-typed-defaults")
+        let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(defaults, catalog: catalog)
+        #expect(diagnostics.isEmpty)
+        #expect(document.values["graphs.cpu.show_temperature"] == .bool(true))
+        #expect(document.values["graphs.cpu.visible"] == .bool(false))
+        #expect(document.values["graphs.network.minimum_scale"] == .int(2048))
+        #expect(document.values["graphs.refresh"] == .double(0.5))
+        #expect(document.values["graphs.cpu.size_width"] == .double(142.5))
+        // A correctly-typed key in the same domain still migrates.
+        #expect(document.values["general.window.border_width"] == .int(6))
+    }
+
     // MARK: Linux version 40 -> document
 
     @Test func linuxV40MigratesToExpectedDocument() throws {

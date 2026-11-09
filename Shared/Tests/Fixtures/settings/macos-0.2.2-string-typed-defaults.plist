@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Stephen de la Vega. -->
+<!-- Synthetic 0.2.2 domain: the scalar values a real `defaults write` and
+     0.2.2's registered defaults leave as STRINGS. R9 follow-up fixture; the
+     main macos-0.2.2-defaults.plist / expected.json are untouched. -->
+<plist version="1.0">
+<dict>
+	<key>XRGModule_CPU_width</key>
+	<string>142.5</string>
+	<key>borderWidth</key>
+	<integer>6</integer>
+	<key>graphRefresh</key>
+	<string>0.5</string>
+	<key>netMinGraphScale</key>
+	<string>2048</string>
+	<key>showCPUGraph</key>
+	<string>NO</string>
+	<key>showCPUTemperature</key>
+	<string>YES</string>
+</dict>
+</plist>

@@ -38,7 +38,7 @@ public enum XRGSettingsMigration {
         if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
             return transform(raw, entry).value
         }
-        return macIdentity(raw)
+        return macIdentity(raw, for: entry)
     }
 
     /// Migrate a 0.2.2 `NSUserDefaults` persistent domain — the dictionary
@@ -72,7 +72,7 @@ public enum XRGSettingsMigration {
                 if let name = entry.legacy?.macosTransform, let transform = macosTransform(named: name) {
                     outcome = transform(raw, entry)
                 } else {
-                    outcome = TransformOutcome(macIdentity(raw))
+                    outcome = TransformOutcome(macIdentity(raw, for: entry))
                 }
                 store(outcome.value, unconvertibleColorSpace: outcome.unconvertibleColorSpace,
                       for: entry, into: &document, diagnostics: &diagnostics, catalog: catalog)
@@ -412,15 +412,117 @@ public enum XRGSettingsMigration {
 
     // MARK: Raw macOS values
 
-    /// A defaults value that already is the document value: strings, plain
-    /// numbers and booleans need no transform (docs/settings-inventory.md);
-    /// a data blob does, and has none.
-    private static func macIdentity(_ raw: Any) -> XRGSettingsValue? {
-        if let string = raw as? String { return .string(string) }
-        if let bool = macBool(raw) { return .bool(bool) }
-        if let int = macInt(raw) { return .int(int) }
-        if let double = macDouble(raw) { return .double(double) }
-        return nil
+    /// Which 0.2.2 `UserDefaults` accessor read an identity (no named
+    /// transform) legacy key. Confirmed from v0.2.2's
+    /// `XRGWindowPreferences.apply` (its bool()/integer()/double()/string()
+    /// helpers) and its scattered `defaults.bool/integer/double(forKey:)`
+    /// reads (XRGSettings.swift, the *View.swift modules, XRGModule.swift).
+    /// Only these three accessors coerce CFBoolean, integer/float NSNumbers
+    /// and strings; keys 0.2.2 read as strings, data, objects or blobs, and
+    /// every key with a named transform (its own index/flag/archive decoder),
+    /// keep the strict identity path and are unchanged (ruling "keys 0.2.2
+    /// read differently keep their current strictness").
+    private enum LegacyScalarAccessor {
+        case bool, integer, double
+    }
+
+    private static func legacyScalarAccessor(for entry: XRGSettingsEntry) -> LegacyScalarAccessor? {
+        // A named transform is 0.2.2's own index/flag/archive decoder, read
+        // through XRGWindowPreferences.apply, NOT one of these three
+        // UserDefaults accessors: it keeps its current strict parsing.
+        guard entry.legacy?.macosTransform == nil, let key = entry.legacy?.macos else { return nil }
+        // The catalog control is a faithful, key-accurate stand-in for the
+        // accessor 0.2.2 used (checked against v0.2.2 source): every bool
+        // toggle, integer, decimal and duration identity key, and the 26
+        // null-default XRGModule_* size keys (all `decimal`), is read with the
+        // corresponding bool/integer/double accessor. The one place a whole
+        // default (1.0 decoding as an int) would mislead is `duration`:
+        // graphRefresh is 0.2.2's double() helper, while the
+        // *HistoryMinutes.v1 time-window keys are integer(forKey:).
+        switch entry.control {
+        case .toggle: return .bool
+        case .integer, .segmented: return .integer
+        case .decimal: return .double
+        case .duration: return key.hasSuffix("HistoryMinutes.v1") ? .integer : .double
+        default: return nil  // text/choice/color/...: read as strings/data/objects
+        }
+    }
+
+    /// A defaults value that already is the document value. For a legacy key
+    /// 0.2.2 read with a bool/integer/double accessor, accept exactly what that
+    /// accessor accepts: CFBoolean, integer/float NSNumbers (nonzero = true for
+    /// a bool) and strings parsed with NSString boolValue/integerValue/
+    /// doubleValue semantics. A value of any other type, or a string that is
+    /// neither a boolean spelling nor a number, is something the accessor
+    /// could not have shown and still fails conversion (invalid-value).
+    private static func macIdentity(_ raw: Any, for entry: XRGSettingsEntry) -> XRGSettingsValue? {
+        switch legacyScalarAccessor(for: entry) {
+        case .bool: return legacyBool(raw).map { .bool($0) }
+        case .integer: return legacyInteger(raw).map { .int($0) }
+        case .double: return legacyDouble(raw).map { .double($0) }
+        case nil:
+            // Strict identity path, unchanged: strings, plain numbers and
+            // booleans need no transform (docs/settings-inventory.md);
+            // a data blob does, and has none.
+            if let string = raw as? String { return .string(string) }
+            if let bool = macBool(raw) { return .bool(bool) }
+            if let int = macInt(raw) { return .int(int) }
+            if let double = macDouble(raw) { return .double(double) }
+            return nil
+        }
+    }
+
+    /// The three 0.2.2 `UserDefaults` scalar readers reproduced over a raw
+    /// plist value. Foundation's documented behaviour (verified with a Swift
+    /// probe, macOS 26 / Swift 6.4): `bool(forKey:)` is true for CFBoolean
+    /// true and for ANY nonzero CFNumber (integer/float), and uses
+    /// NSString.boolValue for strings; `integer(forKey:)`/`double(forKey:)`
+    /// use NSNumber.int64Value/doubleValue and NSString.integerValue/
+    /// doubleValue. NSString parses a leading numeric prefix, so a string
+    /// with no numeric prefix (junk) is not a value the reader produced and
+    /// is refused, producing invalid-value rather than a silent 0/false.
+    private static func hasNumericPrefix(_ text: String) -> Bool {
+        var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        if let first = rest.first, first == "+" || first == "-" { rest = rest.dropFirst() }
+        if rest.first == "." { rest = rest.dropFirst() }
+        guard let first = rest.first else { return false }
+        return "0123456789".contains(first)
+    }
+
+    /// A string 0.2.2's bool reader could show as a boolean: a YES/NO/TRUE/
+    /// FALSE (and Y/N/T/F) spelling or a number. Junk that is neither is
+    /// rejected so it still diagnoses.
+    private static func isBoolSpelling(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        if ["YES", "NO", "TRUE", "FALSE", "Y", "N", "T", "F"].contains(trimmed.uppercased()) {
+            return true
+        }
+        return hasNumericPrefix(trimmed)
+    }
+
+    private static func legacyBool(_ raw: Any) -> Bool? {
+        // "nonzero = true" is computed from doubleValue rather than boolValue:
+        // on swift-corelibs-foundation NSNumber.boolValue is int-based, so a
+        // fractional 0.5 would wrongly read false on Linux. doubleValue != 0
+        // is true for CFBoolean true and every nonzero integer/float NSNumber
+        // on both platforms, matching UserDefaults.bool(forKey:).
+        if let number = raw as? NSNumber { return number.doubleValue != 0.0 }
+        guard let text = raw as? String, isBoolSpelling(text) else { return nil }
+        return (text.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).boolValue
+    }
+
+    private static func legacyInteger(_ raw: Any) -> Int64? {
+        if let number = raw as? NSNumber { return number.int64Value }
+        guard let text = raw as? String, hasNumericPrefix(text) else { return nil }
+        return Int64((text as NSString).integerValue)
+    }
+
+    private static func legacyDouble(_ raw: Any) -> Double? {
+        if let number = raw as? NSNumber { return number.doubleValue }
+        guard let text = raw as? String, hasNumericPrefix(text) else { return nil }
+        let value = (text as NSString).doubleValue
+        return value.isFinite ? value : nil
     }
 
     /// A property-list boolean. A plist integer 0 or 1 also bridges to `Bool`,
