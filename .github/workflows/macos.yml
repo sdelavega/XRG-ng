@@ -30,6 +30,29 @@ jobs:
       - name: Build universal app and run tests
         id: verify
         run: bash Tools/ci-macos.sh "${{ matrix.configuration }}"
+      - name: Settings survive 0.2.2 -> 0.2.3 -> 0.2.2 on macOS (Release)
+        # Real 0.2.2 (tag v0.2.2) and 0.2.3 (HEAD) app copies, each launched as
+        # a renamed private bundle id. The check seeds a disposable defaults
+        # domain, migrates it to the shared document, compares against the
+        # Task 4 oracle, and asserts the 0.2.2 defaults (the downgrade) are
+        # byte-identical. Never touches the real com.sdelavega.xrg domain.
+        if: matrix.configuration == 'Release'
+        run: |
+          set -euo pipefail
+          scratch="${{ runner.temp }}/xrg-0.2.2-baseline"
+          rm -rf "$scratch"; mkdir -p "$scratch"
+          trap 'rm -rf "$scratch"' EXIT
+          git init --quiet "$scratch"
+          git -C "$scratch" remote add origin "$(git remote get-url origin)"
+          git -C "$scratch" fetch --no-tags --depth=1 origin refs/tags/v0.2.2
+          git -C "$scratch" checkout --detach FETCH_HEAD
+          xcodebuild -project "$scratch/XRG-ng.xcodeproj" -scheme XRG-ng \
+            -configuration Release -destination 'platform=macOS' \
+            -derivedDataPath "$scratch/DerivedData" CODE_SIGNING_ALLOWED=NO build
+          baseline="$scratch/DerivedData/Build/Products/Release/XRG-ng.app"
+          app="${{ steps.verify.outputs.results }}/DerivedData/Build/Products/Release/XRG-ng.app"
+          python3 Tools/settings-upgrade-macos.py --app "$app" --baseline "$baseline" \
+            --results "${{ steps.verify.outputs.results }}/SettingsUpgrade"
       - name: Upload logs and test results
         if: always() && steps.verify.outputs.results != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -46,5 +69,7 @@ jobs:
             ${{ steps.verify.outputs.results }}/PackagedSmoke/*.json
             ${{ steps.verify.outputs.results }}/PackagedSmoke-x86_64/*.log
             ${{ steps.verify.outputs.results }}/PackagedSmoke-x86_64/*.json
+            ${{ steps.verify.outputs.results }}/SettingsUpgrade/*.log
+            ${{ steps.verify.outputs.results }}/SettingsUpgrade/*.json
           retention-days: 7
           if-no-files-found: warn

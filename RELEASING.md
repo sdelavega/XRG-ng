@@ -15,9 +15,13 @@ regular version.
    the sources. Dispatch Linux CI with release package naming:
    `gh workflow run linux.yml --ref main -f release_candidate=true`.
 2. All ten build/desktop/runtime jobs must succeed on that exact commit. The
-   workflow also builds the frozen 0.2.1 application in a separate target directory
-   and tests a real 0.2.1-to-0.2.2 archive upgrade with custom preferences, in
-   addition to native packaging revision upgrades.
+   workflow also builds the frozen 0.2.2 application (tag `v0.2.2`, commit
+   `9a4b401`) in a separate target directory and tests a real
+   0.2.2 → 0.2.3 → 0.2.2 upgrade/downgrade with custom preferences: it migrates
+   a seeded version-40 `settings.conf` into the shared `settings.json`, checks
+   that document against the Task 4 conformance oracle, verifies `settings.conf`
+   stays byte-identical, then runs 0.2.2 again and confirms its effective
+   settings are unchanged. See "Upgrade and downgrade checks" below.
 3. On the signing Mac, install GnuPG and RPM tools, and use the dedicated protected
    identity described in [signing/README.md](signing/README.md). First-time setup
    uses `python3 Tools/release-signing.py init`; it refuses to replace an identity.
@@ -59,7 +63,8 @@ described in THIRD_PARTY_NOTICES.md. Preserve the original notices in the app.
    versions in the Xcode project, `latest_version.txt` and the Cargo manifest;
    0.2.2 ships as build 3.
 2. Run `bash Tools/ci-macos.sh Release`. Both native and Rosetta suites and packaged
-   checks must pass on an ARM host. Commit the release sources before packaging.
+   checks must pass on an ARM host, along with the macOS settings upgrade/downgrade
+   check described below. Commit the release sources before packaging.
 3. Use a valid Developer ID Application identity and an existing notarytool
    Keychain profile. Never put credentials or private keys into this repository.
 
@@ -80,6 +85,48 @@ them. Publish the ZIP, DMG, checksums and build metadata on the same `vX.Y.Z`
 release that carries the Linux assets. Keep build directories, certificates,
 notarization credentials and temporary submission archives out of Git and GitHub
 release assets. Retain the archive/dSYMs locally for diagnostics.
+
+# Upgrade and downgrade checks
+
+Both checks prove settings survive 0.2.2 → 0.2.3 → 0.2.2 before a release is
+signed. Old data is deliberately left in place so a user can downgrade.
+
+- **macOS — `Tools/settings-upgrade-macos.py`.** It takes `--app` (the built
+  0.2.3 app) and `--baseline` (the 0.2.2 app built from tag `v0.2.2`), plus
+  optional `--seed`, `--expected`, `--products`, `--results`. It seeds a
+  disposable preferences domain
+  (`com.sdelavega.xrg.upgradecheck.<uuid>`) from
+  `Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist`, makes a
+  renamed-CFBundleIdentifier copy of each app (the packaged-smoke pattern), runs
+  the 0.2.3 shared-core migration over that domain and compares the document
+  with `Shared/Tests/Fixtures/settings/macos-0.2.2-expected.json`, then asserts
+  the 0.2.2 defaults are byte-identical (the downgrade). It prints
+  `SETTINGS_UPGRADE_MACOS_OK`. The 0.2.3 document is written to the R11 private
+  store `~/Library/Application Support/XRG-ng-Private/<id>/settings.json`; the
+  domain, its plist and that folder are removed at the end, even on failure.
+  The real `com.sdelavega.xrg` domain, its plist and the real
+  `~/Library/Application Support/XRG-ng/settings.json` are never read, written,
+  exported, deleted or launched against — the script refuses if any target id
+  equals `com.sdelavega.xrg`. The seed plist is an argument so the check can be
+  run once against a real 0.2.2 preferences export (which is never committed);
+  if the 0.2.3 document ever legitimately differs from the oracle (e.g. a
+  catalog change), report it — do not edit the fixture to pass.
+- **Linux — `Tools/application-upgrade-linux.py`.** CI's `preview-install` job
+  runs it against the frozen 0.2.2 baseline archive and the current 0.2.3
+  archive (real installers). It seeds a version-40 `settings.conf` from
+  `Shared/Tests/Fixtures/settings/linux-v40.json`, upgrades, asserts
+  `settings.json` equals `Shared/Tests/Fixtures/settings/linux-v40-expected.json`
+  and `settings.conf` is unchanged, then reinstalls/runs 0.2.2 and asserts its
+  effective settings are unchanged. It prints
+  `APPLICATION_UPGRADE_OK 0.2.2-to-0.2.3 ...`. The frozen baseline is built by
+  `Tools/build-upgrade-baseline.sh` (checked by
+  `Tools/tests/check-baseline-isolation.sh`) from commit `9a4b401` (`v0.2.2`).
+
+Both are wired into CI: the Linux check in `.github/workflows/linux.yml`
+(`preview-install`), the macOS check (Release matrix) in
+`.github/workflows/macos.yml`. Locally, run the macOS check on a Release build of
+HEAD with the 0.2.2 app built from tag `v0.2.2`, and the Linux check in the
+`xrg-ng-linux-validation:latest` container as described by the standing rules.
 
 # Publishing
 

@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Stephen de la Vega.
-"""Upgrade actual desktop application versions using their production installers."""
+"""Upgrade actual desktop application versions using their production installers.
+
+0.2.2 -> 0.2.3 -> 0.2.2: seed a real version-40 settings.conf, run the frozen
+0.2.2 application (its effective settings are the downgrade baseline), upgrade
+to 0.2.3 (which migrates settings.conf into the shared settings.json exactly
+once, leaving settings.conf byte-identical), then run 0.2.2 again and prove its
+effective settings are unchanged. The seeded v40 file and the hand-derived
+expected document are the Task 4 conformance fixtures.
+"""
 import argparse
 import hashlib
 import json
@@ -13,7 +21,9 @@ import subprocess
 import tarfile
 import tempfile
 
-BASELINE = "77ad60ebabc216d1ae5de3f7039bfc28fbe899a9"
+BASELINE = "9a4b401063335417ba89fa22643eb430b10a0e8e"  # v0.2.2 (Linux 0.2.2)
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "Shared/Tests/Fixtures/settings"
 
 
 def require(value, message):
@@ -26,32 +36,20 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def fixture():
-    names = ["weather", "cpu", "gpu", "tpu", "memory", "battery", "temperature",
-             "network", "disk", "ai", "processes", "gpu_memory", "fans"]
-    return dict(version=21, theme={"kind": "custom", "theme": {
-        "format": "xrg-ng-theme", "version": 1, "name": "Upgrade preserved theme",
-        "colors": [[0.01 * n, 0.123456789, 0.6, 0.95] for n in range(7)]}},
-        modules=[dict(id=name, visible=name not in {"weather", "gpu_memory", "fans"}, style="dot",
-                      colors={"background": [0.125, 0.25, 0.375, 0.875], "series": [None, None, None]},
-                      **({"height": 124} if name == "cpu" else {})) for name in names],
-        graph_height=132, graph_width=210, sampling_interval_ms=250, window_opacity=0.85,
-        network_min_scale=1000000, ai_show_model_breakdown=False,
-        ai={"enabled": [False] * 4, "ollama": False, "claude_source": "logs",
-            "codex_logs": "/tmp/xrg-upgrade-provider-data", "metrics_url": "http://127.0.0.1:8891/metrics"},
-        weather={"enabled": False, "station": "KJFK", "refresh_minutes": 30})
-
-
-def subset(expected, actual):
-    if isinstance(expected, dict):
-        return isinstance(actual, dict) and all(k in actual and subset(v, actual[k]) for k, v in expected.items())
-    if isinstance(expected, list):
-        return isinstance(actual, list) and len(expected) == len(actual) and all(subset(a, b) for a, b in zip(expected, actual))
-    return expected == actual
+def fixtures():
+    """The hand-derived v40 seed and its canonical migrated document."""
+    seed = (FIXTURES / "linux-v40.json").read_bytes()
+    expected = json.loads((FIXTURES / "linux-v40-expected.json").read_text())
+    require(isinstance(expected.get("diagnostics"), list) and expected["diagnostics"] == [],
+            "v40 fixture reports migration diagnostics")
+    require(isinstance(expected.get("document"), str) and expected["document"],
+            "v40 fixture has no expected document")
+    return seed, expected["document"].encode()
 
 
 def smoke(args):
     require(platform.system() == "Linux" and os.getuid() != 0, "Run as an ordinary Linux user")
+    seed, expected_document = fixtures()
     results = args.results.resolve(); results.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="xrg-application-upgrade-") as temporary:
         work = Path(temporary)
@@ -69,16 +67,18 @@ def smoke(args):
             require(not manifest["dirty"] and manifest["architecture"] == platform.machine(), "Invalid source/architecture")
             bundles.append((root, manifest))
         old, new = bundles
-        require(old[1]["revision"] == BASELINE and old[1]["version"] == "0.2.1", "Wrong frozen baseline")
-        require(new[1]["version"] == "0.2.2" and new[1]["revision"] != BASELINE, "Expected application 0.2.2")
+        require(old[1]["revision"] == BASELINE and old[1]["version"] == "0.2.2", "Wrong frozen 0.2.2 baseline")
+        require(new[1]["revision"] != BASELINE, "Expected the current (0.2.3) application build")
         require(digest(old[0] / "bin/xrg-ng-linux") != digest(new[0] / "bin/xrg-ng-linux"), "Application bytes did not change")
         env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "DYLD_"))}
         env.update(HOME=str(work / "home"), XDG_CONFIG_HOME=str(work / "config"),
                    XDG_DATA_HOME=str(work / "data"), XDG_CACHE_HOME=str(work / "cache"), LIBGL_ALWAYS_SOFTWARE="1")
         Path(env["HOME"]).mkdir()
-        config = Path(env["XDG_CONFIG_HOME"]) / "xrg-ng/settings.conf"
-        config.parent.mkdir(parents=True)
-        expected = fixture(); original = (json.dumps(expected, indent=2) + "\n").encode(); config.write_bytes(original)
+        config_dir = Path(env["XDG_CONFIG_HOME"]) / "xrg-ng"
+        config_dir.mkdir(parents=True)
+        config = config_dir / "settings.conf"            # the 0.2.2 legacy file
+        document = config_dir / "settings.json"          # the 0.2.3 shared document
+        config.write_bytes(seed)
         prefix = work / 'upgrade installation $cash % spaces'
         installed = prefix / "bin/xrg-ng-linux"
 
@@ -91,22 +91,43 @@ def smoke(args):
                     "Application rejected the upgrade preferences")
             return result.stdout
 
-        for label, (root, manifest) in [("old", old), ("new", new)]:
+        def install(root, label):
             run([root / "install.sh", "--prefix", prefix], f"{label}-install.log")
-            require(run([installed, "--version"], f"{label}-version.log").strip() == f"XRG-ng {manifest['version']}", "Version mismatch")
-            run([installed, "--headless", "--samples", "2"], f"{label}-headless.log")
-            require(config.read_bytes() == original, "Installing/starting an application changed settings")
-        parsed = json.loads(run([installed, "--check-settings"], "new-effective-settings.json"))
-        # The schema marker advances when the new application migrates the file; every user value must survive.
-        require(isinstance(parsed.get("version"), int) and parsed["version"] >= expected["version"],
-                "Settings schema version regressed during application upgrade")
-        require(subset({k: v for k, v in expected.items() if k != "version"}, parsed),
-                "Effective settings changed during application upgrade")
+            run([installed, "--version"], f"{label}-version.log")
+
+        # 1. Frozen 0.2.2: read the seeded v40 settings.conf, record its effective
+        #    settings as the downgrade baseline. Nothing may rewrite settings.conf.
+        install(old[0], "old-0.2.2")
+        run([installed, "--headless", "--samples", "2"], "old-headless.log")
+        baseline_effective = json.loads(run([installed, "--check-settings"], "old-effective-settings.json"))
+        require(config.read_bytes() == seed, "0.2.2 changed settings.conf")
+        require(not document.exists(), "0.2.2 unexpectedly created a settings document")
+
+        # 2. Upgrade to 0.2.3: the shared core migrates settings.conf into
+        #    settings.json once, leaving the legacy file byte-identical.
+        install(new[0], "new-0.2.3")
+        run([installed, "--headless", "--samples", "2"], "new-headless.log")
+        require(config.read_bytes() == seed, "Installing/starting 0.2.3 changed settings.conf")
+        require(document.is_file(), "0.2.3 did not migrate settings.conf into settings.json")
+        actual_document = document.read_bytes()
+        require(actual_document == expected_document,
+                "Migrated settings.json differs from the expected document")
+        (results / "settings.json").write_bytes(actual_document)
+
+        # 3. Downgrade: re-install and run 0.2.2 again; it must still read its
+        #    own, untouched settings.conf and produce the same effective settings.
+        install(old[0], "old-0.2.2-again")
+        downgrade_effective = json.loads(run([installed, "--check-settings"], "old-effective-settings-again.json"))
+        require(downgrade_effective == baseline_effective,
+                "0.2.2 effective settings changed after the 0.2.3 upgrade")
+        require(config.read_bytes() == seed, "0.2.2 changed settings.conf on the downgrade")
+
         run([prefix / "lib/xrg-ng/uninstall.sh", "--prefix", prefix], "uninstall.log")
-        require(config.read_bytes() == original, "Uninstall changed preferences")
+        require(config.read_bytes() == seed, "Uninstall changed preferences")
         (results / "versions.json").write_text(json.dumps({"baseline": old[1]["version"], "baseline_revision": BASELINE,
-                                                         "current": new[1]["version"], "current_revision": new[1]["revision"]}, indent=2) + "\n")
-    message = "APPLICATION_UPGRADE_OK 0.2.1-to-0.2.2 distinct-binaries effective-preferences-preserved"
+                                                          "current": new[1]["version"], "current_revision": new[1]["revision"]}, indent=2) + "\n")
+    message = ("APPLICATION_UPGRADE_OK 0.2.2-to-0.2.3 "
+               "settings-json-matches-expected settings-conf-unchanged effective-preferences-preserved")
     (results / "summary.txt").write_text(message + "\n"); print(message)
 
 

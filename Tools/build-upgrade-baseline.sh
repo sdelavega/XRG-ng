@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ $# == 1 && "$1" == /* ]] || { echo 'Use an absolute output directory' >&2; exit 2; }
 output="$1"
-baseline=77ad60ebabc216d1ae5de3f7039bfc28fbe899a9
+baseline=9a4b401063335417ba89fa22643eb430b10a0e8e
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/xrg-upgrade-baseline.XXXXXX")
 cleanup() {
     du -sk "$scratch" 2>/dev/null || true
@@ -40,4 +40,4 @@ with archive.open("rb") as stream:
 assert checksum.read_text().split() == [expected, archive.name], "Baseline checksum mismatch"
 assert {p.name for p in root.iterdir()} == {archive.name, checksum.name}, "Unexpected baseline files"
 PY
-echo "APPLICATION_BASELINE_OK version=0.2.1 revision=$baseline"
+echo "APPLICATION_BASELINE_OK version=0.2.2 revision=$baseline"

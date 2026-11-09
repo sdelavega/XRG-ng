@@ -140,7 +140,12 @@ jobs:
           python3 Tools/deb-smoke-linux.py --disposable-system
           --package /tmp/xrg-preview-download/*.deb
           --results /tmp/xrg-preview-results/native
-      - name: Upgrade application 0.2.1 to 0.2.2 and verify effective preferences
+      - name: Settings survive 0.2.2 -> 0.2.3 -> 0.2.2 on Linux
+        # The frozen 0.2.2 baseline and the current 0.2.3 archive are real
+        # installed applications. The check migrates a seeded v40 settings.conf
+        # into settings.json, asserts the document matches the Task 4 oracle and
+        # that settings.conf is byte-identical, then runs 0.2.2 again to prove
+        # its effective settings (the downgrade) are unchanged.
         run: >-
           runuser -u xrg-preview -- python3 Tools/application-upgrade-linux.py
           --baseline /tmp/xrg-upgrade-baseline/*.tar.gz
