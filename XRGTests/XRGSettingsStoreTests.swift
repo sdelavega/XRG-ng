@@ -335,6 +335,153 @@ struct XRGSettingsStoreTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.documentURL.path))
     }
 
+    // MARK: External changes are coordinated, never overwritten (final review, finding 2 / R28)
+
+    /// A helper for reading one stored value out of the document file.
+    private func storedValue(_ key: String, in data: Data) throws -> Any? {
+        let object = try #require(try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return (object["settings"] as? [String: Any])?[key]
+    }
+
+    /// Two stores over one document must not lose each other's edits: each
+    /// write compares the file with what that store last observed, adopts
+    /// the other's content and re-applies only its own pending edit.
+    @Test func twoStoresDoNotLoseEachOthersEdits() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let a = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                 catalog: catalog, legacyDomain: [:])
+        let b = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                 catalog: catalog, legacyDomain: [:])
+        try a.set("general.window.title", .string("From A"))
+        try b.set("graphs.refresh", .double(2))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.title", in: bytes) as? String == "From A")
+        #expect(try storedValue("graphs.refresh", in: bytes) as? Double == 2)
+        // Both stores still serve their own view of the one document.
+        #expect(a.value("general.window.title") == .string("From A"))
+        #expect(b.value("graphs.refresh") == .double(2))
+        // A third reader sees both edits.
+        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                        catalog: catalog, legacyDomain: [:])
+        #expect(reopened.value("general.window.title") == .string("From A"))
+        #expect(XRGSettingsValue.sameValue(reopened.value("graphs.refresh"), .double(2)))
+    }
+
+    /// An external editor's additions and edits survive the next app write,
+    /// and the store adopts the external values it does not edit itself.
+    @Test func externalEditsAreAdoptedAndPreserved() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                      catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("Mine"))
+        // An external editor adds an unknown key and retitles the window.
+        let external = """
+        {
+          "format": "xrg-ng-settings",
+          "version": 1,
+          "settings": {
+            "future.widget.config": true,
+            "general.window.title": "External"
+          }
+        }
+        """
+        try Data(external.utf8).write(to: fixture.documentURL)
+        // The next app edit adopts the external content, re-applies its own
+        // edit, and keeps both the unknown key and the external title.
+        try store.set("general.window.border_width", .int(8))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("future.widget.config", in: bytes) as? Bool == true)
+        #expect(try storedValue("general.window.title", in: bytes) as? String == "External")
+        #expect(try storedValue("general.window.border_width", in: bytes) as? Int == 8)
+        // The store now serves the externally-set title too.
+        #expect(store.value("general.window.title") == .string("External"))
+        #expect(store.value("general.window.border_width") == .int(8))
+    }
+
+    /// An external replacement with malformed content is never overwritten by
+    /// the next app edit: the write stops and the same confirmation a load
+    /// would surface appears, with the pending edit kept in memory.
+    @Test func externallyMalformedReplacementIsNeverOverwritten() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                      catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("Mine"))
+        let garbage = Data("definitely not a settings document".utf8)
+        try garbage.write(to: fixture.documentURL)
+        try store.set("general.window.border_width", .int(8))
+        #expect(store.loadProblem?.problem == XRGSettingsDiagnostic.malformed)
+        #expect(try documentBytes(fixture.documentURL) == garbage)
+        #expect(store.value("general.window.border_width") == .int(8), "the pending edit is kept in memory")
+        // The user's confirmed replacement writes the in-memory document.
+        store.replaceUnreadableFile()
+        #expect(store.loadProblem == nil)
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.border_width", in: bytes) as? Int == 8)
+    }
+
+    /// An external replacement from a newer version is protected the same
+    /// way: never overwritten, surfaced as the load's own unsupported-version
+    /// problem, replaceable only by the user's confirmation.
+    @Test func externallyNewerVersionIsNeverOverwritten() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                      catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("Mine"))
+        let future = Data("""
+        {
+          "format": "xrg-ng-settings",
+          "version": 2,
+          "settings": {
+            "general.window.title": "From the future"
+          }
+        }
+        """.utf8)
+        try future.write(to: fixture.documentURL)
+        try store.set("general.window.border_width", .int(8))
+        #expect(store.loadProblem?.problem == XRGSettingsDiagnostic.unsupportedVersion)
+        #expect(try documentBytes(fixture.documentURL) == future)
+        store.replaceUnreadableFile()
+        #expect(store.loadProblem == nil)
+        #expect(try storedValue("general.window.border_width",
+                                in: try #require(documentBytes(fixture.documentURL))) as? Int == 8)
+    }
+
+    /// An edit that no longer applies to the externally changed document is
+    /// refused with the core's own error: the external content is kept in
+    /// memory and on disk, and nothing is written.
+    @Test func editConflictingWithExternalContentIsRefusedNotWritten() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                      catalog: catalog, legacyDomain: [:])
+        try store.set("graphs.cpu.samples", .int(300))
+        // An external editor turns the time window on, which forbids the
+        // samples count the store is about to set.
+        let external = """
+        {
+          "format": "xrg-ng-settings",
+          "version": 1,
+          "settings": {
+            "graphs.cpu.time_window": 5
+          }
+        }
+        """
+        try Data(external.utf8).write(to: fixture.documentURL)
+        #expect(throws: XRGSettingsError.dependencyNotMet) {
+            try store.set("graphs.cpu.samples", .int(500))
+        }
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("graphs.cpu.time_window", in: bytes) as? Int == 5)
+        #expect(try storedValue("graphs.cpu.samples", in: bytes) == nil,
+                "the refused edit must not reach the file")
+        // The store adopted the external window and serves it.
+        #expect(store.value("graphs.cpu.time_window") == .int(5))
+    }
+
     // MARK: Effective 0.2.2 values survive an upgrade (review issue 4)
 
     /// An empty 0.2.2 domain migrates the effective registered default for

@@ -145,6 +145,14 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     /// The theme import/export engine: settings over the same store.
     private var themeSettings: XRGSettings?
     var storeObserver: NSObjectProtocol?
+    /// Observes the store's persistence state (final review, finding 3) so
+    /// a write failure or recovery shows — and clears — immediately while a
+    /// section is open, instead of only at the next section render.
+    var persistenceObserver: NSObjectProtocol?
+    /// The current section's persistence banner and its message: installed
+    /// in every section, hidden while the store reports no problem.
+    private(set) var persistenceBanner: NSView?
+    private weak var persistenceBannerText: NSTextField?
     /// The sidebar's section buttons, in catalog order.
     private(set) var sectionButtons: [XRGSettingsFlatButton] = []
     public private(set) var currentControls: [XRGSettingsEntryControl] = []
@@ -176,10 +184,15 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
                 let id = note.userInfo?["id"] as? String
                 MainActor.assumeIsolated { self?.storeChanged(id: id) }
             }
+        persistenceObserver = NotificationCenter.default.addObserver(
+            forName: XRGSettingsStore.persistenceStateDidChange, object: store, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.persistenceStateChanged() }
+            }
     }
     @available(*, unavailable) required public init?(coder: NSCoder) { fatalError("Programmatic window") }
     isolated deinit {
         if let storeObserver { NotificationCenter.default.removeObserver(storeObserver) }
+        if let persistenceObserver { NotificationCenter.default.removeObserver(persistenceObserver) }
     }
 
     // MARK: Appearance
@@ -384,11 +397,15 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         title.textColor = XRGAether7b.Color.textMain(dark: dark)
         pane.addArrangedSubview(title)
 
-        // The unreadable-file banner (spec §2): the file is never
-        // overwritten until the user confirms replacing it.
-        if store.loadProblem != nil {
-            pane.addArrangedSubview(makeBanner(dark: dark))
-        }
+        // The persistence banner (spec §2; final review, finding 3): always
+        // installed for the section, shown only while the store reports a
+        // problem, so a failure or recovery that happens while the section
+        // is open appears immediately — without re-rendering the section or
+        // disturbing any control's in-flight text.
+        let banner = makeBanner(dark: dark)
+        banner.isHidden = store.loadProblem == nil
+        persistenceBanner = banner
+        pane.addArrangedSubview(banner)
 
         // One card per group, in catalog order.
         let entries = catalog.entries.filter { $0.section == section && $0.platforms.contains(.macos) && $0.shown }
@@ -462,12 +479,12 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         banner.layer?.borderWidth = 1
         banner.layer?.cornerRadius = XRGAether7b.Radius.lg
         banner.identifier = NSUserInterfaceItemIdentifier("unreadable-file-banner")
-        let text = NSTextField(wrappingLabelWithString:
-            "The settings file could not be read. Changes are kept in memory and the file is left untouched.")
+        let text = NSTextField(wrappingLabelWithString: Self.persistenceMessage(for: store.loadProblem))
         text.identifier = NSUserInterfaceItemIdentifier("settings-load-problem")
         text.font = sansFont(XRGAether7b.TypeScale.sm.size)
         text.textColor = XRGAether7b.Color.textMain(dark: dark)
         text.translatesAutoresizingMaskIntoConstraints = false
+        persistenceBannerText = text
         let replace = XRGSettingsFlatButton(title: "Replace the file with the current settings") { [weak self] in
             self?.replaceUnreadableFile()
         }
@@ -491,6 +508,34 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     func replaceUnreadableFile() {
         store.replaceUnreadableFile()
         refresh()
+    }
+
+    /// The store's persistence state changed while the window is open (final
+    /// review, finding 3): show or hide the section's banner immediately,
+    /// with the message that names what happened, and keep the key-view
+    /// loop in step with the banner's visibility. Nothing re-renders, so
+    /// every control keeps its in-flight text and the pending edits stay.
+    func persistenceStateChanged() {
+        let problem = store.loadProblem
+        persistenceBanner?.isHidden = problem == nil
+        if let problem {
+            persistenceBannerText?.stringValue = Self.persistenceMessage(for: problem)
+        }
+        wireKeyViewLoop()
+    }
+
+    /// What the banner says for a persistence problem: a file that cannot be
+    /// read (malformed, a newer version, permissions) keeps its old message;
+    /// a file that cannot be written names that, so the already-open section
+    /// tells the user which recovery action applies.
+    static func persistenceMessage(for problem: XRGSettingsDiagnostic?) -> String {
+        guard let problem else {
+            return "The settings file could not be read. Changes are kept in memory and the file is left untouched."
+        }
+        if problem.problem.hasPrefix("unreadable:") {
+            return "The settings file could not be written. Changes are kept in memory and the file is left untouched."
+        }
+        return "The settings file could not be read. Changes are kept in memory and the file is left untouched."
     }
 
     private func makeCard(title group: String, dark: Bool) -> XRGSettingsCardView {

@@ -30,10 +30,26 @@ import Foundation
     /// id in `userInfo["id"]` and the store as the notification's object.
     public static let didChange: Notification.Name = Notification.Name("XRGSettingsStore.didChange")
 
+    /// Posted on the main thread whenever `loadProblem` changes, with the
+    /// store as the notification's object (final review, finding 3): a
+    /// persistence failure or recovery is its own observable event, so an
+    /// already-open settings section shows — and clears — the warning
+    /// banner without waiting for the next section render.
+    public static let persistenceStateDidChange: Notification.Name =
+        Notification.Name("XRGSettingsStore.persistenceStateDidChange")
+
     /// The problem that stopped the settings file being loaded, nil when the
     /// document is the source of truth. Non-nil while the file is malformed,
-    /// of an unknown format, of a newer version, or unreadable.
-    public private(set) var loadProblem: XRGSettingsDiagnostic?
+    /// of an unknown format, of a newer version, or unreadable — including a
+    /// file that loaded but cannot be written (every change is then held in
+    /// memory and reported, exactly like an unreadable file).
+    public private(set) var loadProblem: XRGSettingsDiagnostic? {
+        didSet {
+            if oldValue != loadProblem {
+                NotificationCenter.default.post(name: Self.persistenceStateDidChange, object: self)
+            }
+        }
+    }
 
     // All three are immutable and (except `defaults`, which is documented
     // thread-safe) Sendable, so the nonisolated legacy read below can use
@@ -51,6 +67,15 @@ import Foundation
         case legacy
     }
     private let backend: Backend
+
+    /// The bytes of the settings file this store last saw on disk, nil while
+    /// no readable file existed (final review, finding 2 / ruling R28).
+    /// Every write compares the file with these bytes first: a file someone
+    /// else changed is never silently overwritten — it is reloaded, this
+    /// store's pending edit re-applied over the new contents, and only then
+    /// replaced. New unreadable content stops the write and surfaces the
+    /// same confirmation a load would.
+    private var observedBytes: Data?
 
     /// The document under its lock. Every read and write — including the
     /// main-actor ones — goes through the lock, so the nonisolated read the
@@ -214,6 +239,7 @@ import Foundation
         var problem: XRGSettingsDiagnostic?
         let exists = FileManager.default.fileExists(atPath: fileURL.path)
         if exists, let data = try? Data(contentsOf: fileURL) {
+            observedBytes = data
             switch XRGSettingsDocument.load(data, catalog: catalog) {
             case .ok(let document, let diagnostics):
                 locked.mutate { $0 = document }
@@ -313,6 +339,16 @@ import Foundation
     /// notification — so the launch paths that re-assert restored state
     /// (the sensors window, the collapse latch) leave settings.json
     /// untouched (spec §2: opening or restoring never rewrites the file).
+    ///
+    /// The write coordinates with everyone else who may touch the file
+    /// (final review, finding 2 / ruling R28): a file that changed on disk
+    /// since this store last saw it is reloaded, this edit re-applied over
+    /// the new contents, and only then written — so another store, another
+    /// process or an external editor never loses an edit. Content the new
+    /// file holds that this store cannot adopt (malformed, a newer version)
+    /// stops the write and surfaces the same confirmation a load would. An
+    /// edit that no longer applies to the reloaded document is refused with
+    /// the core's own error, exactly as it would be at the window.
     public func set(_ id: String, _ value: XRGSettingsValue) throws(XRGSettingsError) {
         guard let entry = catalog.entry(id) else { throw .unknownId }
         switch backend {
@@ -324,8 +360,19 @@ import Foundation
             if XRGSettingsValue.sameValue(value, settingsValue(id)) { return }
             if let error = locked.set(id, value, catalog: catalog) { throw error }
             if loadProblem == nil {
-                if let error = persistError() {
+                switch persist(reapplying: { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
+                    try document.set(id, value, catalog: catalog)
+                }) {
+                case nil:
+                    break
+                case .failure(let error):
                     loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                case .conflict(let error):
+                    // The reloaded document refuses this edit; it is not
+                    // stored, and the document is the reloaded one.
+                    throw error
+                case .unreadable(let diagnostic):
+                    loadProblem = diagnostic
                 }
             }
         }
@@ -412,8 +459,14 @@ import Foundation
                     }
                 }
                 if loadProblem == nil {
-                    if let error = persistError() {
-                        loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                    persistAndReport { document in
+                        for id in named {
+                            if let value = migrated.values[id] {
+                                try? document.storeMigrated(id, value, catalog: self.catalog)
+                            } else if let entry = self.catalog.entry(id) {
+                                try? document.storeMigrated(id, entry.defaultValue, catalog: self.catalog)
+                            }
+                        }
                     }
                 }
                 for id in named { post(id) }
@@ -439,8 +492,8 @@ import Foundation
             let storedSomething = entries.contains { locked.document.values[$0.id] != nil }
             locked.mutate { $0.resetSection(section, catalog: catalog, platform: .macos) }
             if storedSomething, loadProblem == nil {
-                if let error = persistError() {
-                    loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+                persistAndReport { document in
+                    document.resetSection(section, catalog: self.catalog, platform: .macos)
                 }
             }
         }
@@ -448,13 +501,34 @@ import Foundation
     }
 
     /// The user confirmed replacing an unreadable settings file: write the
-    /// current in-memory document over it and clear the problem.
+    /// current in-memory document over it and clear the problem. The user's
+    /// confirmation is the point, so this write does not compare with what
+    /// anyone else put on disk in the meantime.
     public func replaceUnreadableFile() {
         guard case .document = backend else { return }
         if let error = persistError() {
             loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
         } else {
             loadProblem = nil
+        }
+    }
+
+    /// Persist the current document, re-applying `reapply` over a file that
+    /// changed on disk, and surface the outcome through `loadProblem` (final
+    /// review, findings 2 and 3). A plain failure keeps the pending change
+    /// in memory and reports the write problem like an unreadable file.
+    private func persistAndReport(_ reapply: @escaping (inout XRGSettingsDocument) -> Void) {
+        switch persist(reapplying: reapply) {
+        case nil:
+            break
+        case .failure(let error):
+            loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+        case .conflict:
+            // Unreachable for the callers that share this helper: their
+            // re-applyments cannot be refused (no `depends` is checked).
+            break
+        case .unreadable(let diagnostic):
+            loadProblem = diagnostic
         }
     }
 
@@ -489,9 +563,37 @@ import Foundation
     /// closure is stateless, so the unchecked isolation is sound.
     nonisolated(unsafe) var durableWrite: DurableFileWrite = XRGSettingsStore.defaultDurableWrite
 
-    /// Write the document atomically: a temporary file in the same directory,
-    /// fsync, then rename over the settings file (spec §2). Mode 0600. Returns
-    /// the error that stopped the write, nil on success.
+    /// What a persistence attempt concluded (final review, findings 2 and 3):
+    /// nil means the document reached the file.
+    private enum PersistOutcome {
+        /// The file or directory refused the write: nothing changed on disk,
+        /// the pending edit stays in memory and `loadProblem` must report it.
+        case failure(NSError)
+        /// The file changed on disk into content this store cannot adopt —
+        /// malformed or a newer version: the write stopped, the new content
+        /// is protected exactly like an unreadable load, and `loadProblem`
+        /// must surface the confirmation the spec requires.
+        case unreadable(XRGSettingsDiagnostic)
+        /// The file changed on disk and was adopted, but the pending edit no
+        /// longer applies to the adopted document (the core refused it):
+        /// nothing was written, the in-memory document is the adopted one,
+        /// and the caller reports the refusal.
+        case conflict(XRGSettingsError)
+    }
+
+    /// Write the document atomically, coordinating with everyone else who
+    /// may touch the file (final review, finding 2 / ruling R28): a
+    /// temporary file in the same directory, fsync, then rename over the
+    /// settings file (spec §2). Mode 0600.
+    ///
+    /// Before anything is replaced, the file is compared with the bytes this
+    /// store last observed. Unchanged, the write proceeds. Changed, the new
+    /// contents are loaded: readable and the same version, this store's
+    /// pending edit — `reapply` — is applied over the adopted document
+    /// before the write, so another store in this process, another process
+    /// or an external editor never loses an edit to this one. Unreadable
+    /// content stops the write with `.unreadable`. A pending edit the
+    /// adopted document refuses stops it with `.conflict`.
     ///
     /// A destination that cannot be written — a settings file whose mode
     /// lacks owner write, or a directory that is not writable — is never
@@ -503,9 +605,67 @@ import Foundation
     /// requires (fix round 2, finding 1). Durability is checked too: a
     /// temporary file that cannot be opened or synced stops the write
     /// instead of proceeding to the replacement (review issue 10).
+    private func persist(reapplying reapply: (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void)
+        -> PersistOutcome? {
+        guard case .document(let fileURL) = backend else { return nil }
+        var document = locked.document
+        // Coordinate before the write: compare the file with the bytes this
+        // store last saw (R28). A file that is gone has no content left to
+        // preserve; a file that changed is adopted first.
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let current: Data
+            do {
+                current = try Data(contentsOf: fileURL)
+            } catch {
+                return .failure(error as NSError)
+            }
+            if current != observedBytes {
+                switch XRGSettingsDocument.load(current, catalog: catalog) {
+                case .ok(let adopted, let diagnostics):
+                    Self.note(diagnostics)
+                    var reapplied = adopted
+                    do {
+                        try reapply(&reapplied)
+                    } catch {
+                        // The edit no longer applies to the new contents:
+                        // keep what the new file holds, refuse the edit.
+                        locked.mutate { $0 = adopted }
+                        observedBytes = current
+                        return .conflict(error)
+                    }
+                    document = reapplied
+                    locked.mutate { $0 = reapplied }
+                    // The adopted values belong to the document now; the
+                    // window re-presents every control for them.
+                    NotificationCenter.default.post(name: Self.didChange, object: self)
+                case .unreadable(let diagnostic):
+                    // External malformed or future content is never
+                    // overwritten: surface the load's own confirmation.
+                    return .unreadable(diagnostic)
+                }
+            }
+        }
+        if let error = writeBytes(document.serialized()) {
+            return .failure(error)
+        }
+        return nil
+    }
+
+    /// The plain write of bytes over the settings file, used by the
+    /// confirmed replacement of an unreadable file: the user has already
+    /// decided the destination's fate, so no comparison happens, but the
+    /// observed bytes still follow what was written.
     private func persistError() -> NSError? {
         guard case .document(let fileURL) = backend else { return nil }
-        let bytes = locked.document.serialized()
+        if let error = writeBytes(locked.document.serialized()) { return error }
+        return nil
+    }
+
+    /// The file write both persistence paths share: the guard checks, the
+    /// atomic replacement and the observed-bytes bookkeeping. Returns the
+    /// error that stopped the write, nil on success.
+    private func writeBytes(_ bytes: Data) -> NSError? {
+        guard case .document(let fileURL) = backend else { return nil }
         let directory = fileURL.deletingLastPathComponent()
         func denied(_ path: String) -> NSError {
             NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES),
@@ -535,6 +695,9 @@ import Foundation
                 try? FileManager.default.removeItem(at: temporary)
                 return error as NSError
             }
+            // These are the bytes this store now observes on disk; the next
+            // write compares against them (R28).
+            observedBytes = bytes
             return nil
         } catch {
             return error as NSError

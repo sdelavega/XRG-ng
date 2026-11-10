@@ -613,8 +613,10 @@ struct XRGSettingsWindowTests {
         window.show(section: "general")
         let views = walkAll(content(window))
         let banner = try #require(views.first { $0.identifier?.rawValue == "unreadable-file-banner" })
+        #expect(!banner.isHidden, "the banner must be visible while the file cannot be read")
+        let message = try #require(views.first { $0.identifier?.rawValue == "settings-load-problem" } as? NSTextField)
+        #expect(!message.stringValue.isEmpty)
         let replace = try #require(views.first { $0.identifier?.rawValue == "replace-unreadable-file" } as? XRGSettingsFlatButton)
-        #expect(views.contains { $0.identifier?.rawValue == "settings-load-problem" && !($0 as? NSTextField)!.stringValue.isEmpty })
         // A change while the file is unreadable stays in memory only.
         let controls = walkControls(window)
         let toggle = try #require(controls.first { $0.entry.id == "general.window.sticky_edges" } as? XRGSettingsToggleControl)
@@ -627,8 +629,60 @@ struct XRGSettingsWindowTests {
         #expect(store.loadProblem == nil)
         let written = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.documentURL)) as? [String: Any]
         #expect((written?["settings"] as? [String: Any])?["general.window.sticky_edges"] as? Bool == false)
-        #expect(walkAll(content(window)).contains { $0.identifier?.rawValue == "unreadable-file-banner" } == false)
-        _ = banner
+        #expect(banner.isHidden, "the banner must hide once the file is replaced")
+    }
+
+    /// Final review, finding 3: a persistence failure that begins while a
+    /// section is already open is displayed immediately — with the failure
+    /// named and the recovery action present — without re-rendering, and it
+    /// clears the same way once the write succeeds again.
+    @Test func writeFailureAfterTheSectionOpensShowsTheBannerImmediately() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "general")
+        let banner = try #require(walkAll(content(window)).first {
+            $0.identifier?.rawValue == "unreadable-file-banner"
+        })
+        #expect(banner.isHidden, "no banner while the file persists fine")
+        // The document becomes read-only while the section is open.
+        try FileManager.default.setAttributes([.posixPermissions: 0o400],
+                                              ofItemAtPath: fixture.documentURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                        ofItemAtPath: fixture.documentURL.path) }
+        let before = try Data(contentsOf: fixture.documentURL)
+        // A real control action: the edit applies in memory, the write fails,
+        // and the banner appears on the already-open section — no re-render,
+        // so the section's controls keep their state.
+        let toggle = try #require(walkControls(window).first {
+            $0.entry.id == "general.window.sticky_edges"
+        } as? XRGSettingsToggleControl)
+        #expect(toggle.accessibilityPerformPress())
+        #expect(store.loadProblem != nil, "the write failure must be reported")
+        #expect(store.value("general.window.sticky_edges") == .bool(false), "the edit is kept in memory")
+        #expect(try Data(contentsOf: fixture.documentURL) == before, "the read-only file is untouched")
+        #expect(!banner.isHidden, "the failure banner must appear without a re-render")
+        let message = try #require(persistenceBannerMessage(window))
+        #expect(message.contains("could not be written"), "the banner names the write failure: \(message)")
+        // The recovery action is present and, once the file is writable
+        // again, it persists the held edit and the banner clears.
+        let replace = try #require(walkAll(content(window)).first {
+            $0.identifier?.rawValue == "replace-unreadable-file"
+        } as? XRGSettingsFlatButton)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                               ofItemAtPath: fixture.documentURL.path)
+        #expect(replace.accessibilityPerformPress())
+        #expect(store.loadProblem == nil)
+        #expect(banner.isHidden, "the banner must hide once the write succeeds")
+        let written = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.documentURL)) as? [String: Any]
+        #expect((written?["settings"] as? [String: Any])?["general.window.sticky_edges"] as? Bool == false,
+                "the held edit reached the file")
+    }
+
+    /// The banner's message, from the section's installed banner.
+    @MainActor private func persistenceBannerMessage(_ window: XRGSettingsWindowController) -> String? {
+        walkAll(content(window)).first { $0.identifier?.rawValue == "settings-load-problem" }
+            .flatMap { ($0 as? NSTextField)?.stringValue }
     }
 
     // MARK: Source pickers (review issue 5)
