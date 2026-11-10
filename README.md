@@ -130,7 +130,7 @@ XRG-ng displays real-time graphs for:
 - **Battery** - Charge level, time remaining, health
 - **Temperature** - CPU, GPU, and system sensors
 - **Weather** - METAR station observations with optional 6/12/24-hour history and a secondary curve
-- **Stock Prices** - Real-time market data (macOS and Linux; off by default on Linux)
+- **Stock Prices** - Stock quotes and historical charts, refreshed every two hours (macOS and Linux; off by default on Linux)
 - **AI Token Usage** - Live token consumption and cost tracking for Claude, Codex, Gemini, Ollama, and Hermes agents
 
 ## AI Token Monitoring
