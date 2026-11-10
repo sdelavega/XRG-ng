@@ -707,12 +707,19 @@ impl Settings {
         Ok(())
     }
     /// Repair a view the workers would refuse (final review, finding 1 /
-    /// ruling R29): each component that fails its own validation falls back
-    /// to that component's default — the same per-setting fallback a
-    /// malformed entry gets at load — and the caller reports the
-    /// replacement. A combination no component check catches falls back to
-    /// the whole default view, so a loaded document can never fail
-    /// `validate()` downstream and the launch never panics.
+    /// ruling R29; round 2, issue 2 / ruling R33): reset ONLY the settings
+    /// that break a rule, never a whole component, and report every
+    /// replacement — the same per-setting fallback a malformed entry gets
+    /// at load. Every rule `validate()` carries gets its own field-level
+    /// repair here: the bounds of each scalar, the per-module graph rules,
+    /// each process, AI and weather field, the per-slot metric choices —
+    /// and the cross-setting combinations: a secondary sensor curve
+    /// without a primary clears the offending curves only, a duplicate
+    /// curve clears the later copy only, and an enabled weather collector
+    /// without an addressable station disables the collector only. A
+    /// combination no per-field repair catches falls back to the whole
+    /// default view, so a loaded document can never fail `validate()`
+    /// downstream and the launch never panics.
     pub fn repaired(&self) -> (Settings, Vec<&'static str>) {
         let mut repaired = self.clone();
         let mut replaced: Vec<&'static str> = Vec::new();
@@ -725,21 +732,21 @@ impl Settings {
             repaired.activity_bars = default.activity_bars.clone();
             replaced.push("the activity bar colours");
         }
-        if self.metrics.validate().is_err() {
-            repaired.metrics = default.metrics.clone();
-            replaced.push("a graph source");
-        }
-        if self.processes.validate().is_err() {
-            repaired.processes = default.processes.clone();
-            replaced.push("the process view");
-        }
-        if self.ai.validate().is_err() {
-            repaired.ai = default.ai.clone();
-            replaced.push("an AI setting");
-        }
-        if self.weather.validate().is_err() {
-            repaired.weather = default.weather.clone();
-            replaced.push("a weather setting");
+        let ids: std::collections::BTreeSet<_> = self.modules.iter().map(|m| m.id).collect();
+        if ids.len() != Module::ALL.len() || self.modules.len() != Module::ALL.len() {
+            repaired.modules = default.modules.clone();
+            replaced.push("the graph set");
+        } else {
+            for module in &mut repaired.modules {
+                if module.colors.validate().is_err() {
+                    module.colors = GraphColors::default();
+                    replaced.push("a graph's colours");
+                }
+                if module.height.is_some_and(|height| !(64..=240).contains(&height)) {
+                    module.height = None;
+                    replaced.push("a graph's height");
+                }
+            }
         }
         if !(64..=240).contains(&self.graph_height) {
             repaired.graph_height = default.graph_height;
@@ -766,6 +773,204 @@ impl Settings {
         {
             repaired.window_size = None;
             replaced.push("the window size");
+        }
+        // The process view, per field.
+        if !(10..=200).contains(&self.processes.limit) {
+            repaired.processes.limit = default.processes.limit;
+            replaced.push("the process row limit");
+        }
+        if self.processes.filter.chars().count() > 128
+            || self.processes.filter.chars().any(char::is_control)
+        {
+            repaired.processes.filter = default.processes.filter;
+            replaced.push("the process filter");
+        }
+        // The AI preferences, per field.
+        if self.ai.accounting.validate().is_err() {
+            repaired.ai.accounting = default.ai.accounting.clone();
+            replaced.push("an AI accounting setting");
+        }
+        if self.ai.history_minutes > crate::shared::timed_history_settings()[0] {
+            repaired.ai.history_minutes = default.ai.history_minutes;
+            replaced.push("the AI time window");
+        }
+        if self.ai.history_samples > crate::shared::sampling_settings()[3] {
+            repaired.ai.history_samples = default.ai.history_samples;
+            replaced.push("the AI history capacity");
+        }
+        for (field, path) in [
+            (&mut repaired.ai.claude_logs, self.ai.claude_logs.as_deref()),
+            (&mut repaired.ai.claude_database, self.ai.claude_database.as_deref()),
+            (&mut repaired.ai.codex_logs, self.ai.codex_logs.as_deref()),
+            (&mut repaired.ai.gemini_logs, self.ai.gemini_logs.as_deref()),
+            (&mut repaired.ai.hermes_database, self.ai.hermes_database.as_deref()),
+        ] {
+            let invalid = path.is_some_and(|path| {
+                let value = path.to_str().unwrap_or("");
+                !path.is_absolute() || value.len() > 4096 || value.chars().any(char::is_control)
+            });
+            if invalid {
+                *field = None;
+                replaced.push("an AI path");
+            }
+        }
+        if crate::ai::validate_url(&self.ai.metrics_url).is_err() {
+            repaired.ai.metrics_url = default.ai.metrics_url;
+            replaced.push("the AI metrics endpoint");
+        }
+        if crate::ai::validate_url(&self.ai.ollama_url).is_err() {
+            repaired.ai.ollama_url = default.ai.ollama_url;
+            replaced.push("the Ollama endpoint");
+        }
+        // The weather preferences, per field.
+        if self
+            .weather
+            .history_hours
+            .is_some_and(|hours| ![6, 12, 24].contains(&hours))
+        {
+            repaired.weather.history_hours = None;
+            replaced.push("the weather history");
+        }
+        if !(5..=60).contains(&self.weather.refresh_minutes) {
+            repaired.weather.refresh_minutes = default.weather.refresh_minutes;
+            replaced.push("the weather refresh interval");
+        }
+        if self.weather.station.trim().is_empty() {
+            // An enabled collector without an addressable station is the
+            // cross-setting combination: the collector alone steps back.
+            if self.weather.enabled {
+                repaired.weather.enabled = false;
+                replaced.push("the weather station toggle");
+            }
+        } else if shared::metar_station(&self.weather.station).is_none() {
+            repaired.weather.station = default.weather.station.clone();
+            replaced.push("the weather station");
+            if self.weather.enabled {
+                repaired.weather.enabled = false;
+                replaced.push("the weather station toggle");
+            }
+        }
+        // The metric selection, per field.
+        if self.metrics.cpu.is_some_and(|index| index > 1_048_575) {
+            repaired.metrics.cpu = None;
+            replaced.push("the CPU index");
+        }
+        for (offender, field) in [
+            ("the network device", &mut repaired.metrics.network),
+            ("the disk device", &mut repaired.metrics.disk),
+        ] {
+            if field
+                .as_deref()
+                .is_some_and(|name| {
+                    name.is_empty()
+                        || name == "."
+                        || name == ".."
+                        || name.len() > 255
+                        || name
+                            .chars()
+                            .any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == ':')
+                })
+            {
+                *field = None;
+                replaced.push(offender);
+            }
+        }
+        for (offender, field) in [
+            ("the GPU source", &mut repaired.metrics.gpu),
+            ("the temperature curve", &mut repaired.metrics.temperature),
+            ("the fan curve", &mut repaired.metrics.fan),
+        ] {
+            if field.as_deref().is_some_and(|id| {
+                id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control)
+            }) {
+                *field = None;
+                replaced.push(offender);
+            }
+        }
+        for (offenders, extra) in [
+            (
+                ["the temperature curve 2", "the temperature curve 3"],
+                &mut repaired.metrics.temperature_extra,
+            ),
+            (
+                ["the fan curve 2", "the fan curve 3"],
+                &mut repaired.metrics.fan_extra,
+            ),
+        ] {
+            for slot in 0..2 {
+                if extra[slot].as_deref().is_some_and(|id| {
+                    id.is_empty() || id.len() > 4096 || id.chars().any(char::is_control)
+                }) {
+                    extra[slot] = None;
+                    replaced.push(offenders[slot]);
+                }
+            }
+        }
+        let supported = |module: &Module| {
+            matches!(
+                module,
+                Module::Memory
+                    | Module::Network
+                    | Module::Disk
+                    | Module::Gpu
+                    | Module::Tpu
+                    | Module::GpuMemory
+                    | Module::Temperature
+                    | Module::Fans
+                    | Module::Battery
+            )
+        };
+        repaired.metrics.history_minutes.retain(|module, count| {
+            let ok = supported(module) && *count <= shared::timed_projection_settings()[0];
+            if !ok {
+                replaced.push("a time window");
+            }
+            ok
+        });
+        repaired.metrics.history_samples.retain(|module, count| {
+            let ok = supported(module) && *count <= shared::sampling_settings()[3];
+            if !ok {
+                replaced.push("a history capacity");
+            }
+            ok
+        });
+        if self.metrics.cpu_history_minutes > shared::timed_projection_settings()[0] {
+            repaired.metrics.cpu_history_minutes = default.metrics.cpu_history_minutes;
+            replaced.push("the CPU time window");
+        }
+        if self.metrics.cpu_history_samples > shared::sampling_settings()[3] {
+            repaired.metrics.cpu_history_samples = default.metrics.cpu_history_samples;
+            replaced.push("the CPU history");
+        }
+        // The sensor combinations (ruling R33): a secondary curve without
+        // a primary clears the offending curves only, and a duplicate
+        // clears the later copy only.
+        for (offenders, primary, extra) in [
+            (
+                ["the temperature curve 2", "the temperature curve 3"],
+                self.metrics.temperature.as_deref(),
+                &mut repaired.metrics.temperature_extra,
+            ),
+            (
+                ["the fan curve 2", "the fan curve 3"],
+                self.metrics.fan.as_deref(),
+                &mut repaired.metrics.fan_extra,
+            ),
+        ] {
+            let mut seen: Vec<&str> = primary.into_iter().collect();
+            for slot in 0..2 {
+                if let Some(id) = extra[slot].as_deref() {
+                    if primary.is_none() {
+                        extra[slot] = None;
+                        replaced.push(offenders[slot]);
+                    } else if seen.contains(&id) {
+                        extra[slot] = None;
+                        replaced.push(offenders[slot]);
+                    } else {
+                        seen.push(id);
+                    }
+                }
+            }
         }
         if repaired.validate().is_ok() {
             return (repaired, replaced);

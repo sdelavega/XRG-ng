@@ -348,6 +348,53 @@ struct SettingsDocumentTests {
         }
     }
 
+    /// The cross-setting combinations the workers enforce, refused before
+    /// save from either side of the combination (final review round 2,
+    /// issue 2 / ruling R33).
+    @Test func setRefusesCombinationsTheWorkersReject() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        var document = XRGSettingsDocument.defaults(catalog: catalog, platform: .linux)
+        // Weather: an enabled collector needs a station the worker can
+        // address. Setting the empty station first (entry-valid on its own),
+        // then enabling, is the exact combination settings.rs rejects.
+        try document.set("weather.station", .string(""), catalog: catalog)
+        #expect(throws: XRGSettingsError.constraint) {
+            try document.set("weather.enabled", .bool(true), catalog: catalog)
+        }
+        #expect(document.values["weather.enabled"] == nil, "the refused edit must not be stored")
+        // The same refusal from the other side: enabling first (the default
+        // station is addressable), then clearing the station it needs.
+        try document.set("weather.station", .string("KSEA"), catalog: catalog)
+        try document.set("weather.enabled", .bool(true), catalog: catalog)
+        #expect(throws: XRGSettingsError.constraint) {
+            try document.set("weather.station", .string(""), catalog: catalog)
+        }
+        #expect(document.value("weather.station", catalog: catalog) == .string("KSEA"))
+        // Sensor curves: a secondary requires a primary, and each curve uses
+        // a different sensor.
+        #expect(throws: XRGSettingsError.constraint) {
+            try document.set("sources.temperature.sensor2", .string("coretemp-isa-0000"), catalog: catalog)
+        }
+        try document.set("sources.temperature.sensor1", .string("coretemp-isa-0000"), catalog: catalog)
+        try document.set("sources.temperature.sensor2", .string("acpitz-1"), catalog: catalog)
+        #expect(throws: XRGSettingsError.constraint) {
+            try document.set("sources.temperature.sensor3", .string("acpitz-1"), catalog: catalog)
+        }
+        // Clearing the primary while a secondary is drawn is refused too;
+        // clearing the secondary first fixes the document.
+        #expect(throws: XRGSettingsError.constraint) {
+            try document.set("sources.temperature.sensor1", .null, catalog: catalog)
+        }
+        try document.set("sources.temperature.sensor2", .null, catalog: catalog)
+        try document.set("sources.temperature.sensor1", .null, catalog: catalog)
+        #expect(document.value("sources.temperature.sensor1", catalog: catalog) == .null)
+        // A document that satisfies the combinations still saves.
+        try document.set("weather.station", .string(" ksea "), catalog: catalog)
+        try document.set("sources.fans.sensor1", .string("applesmc-fan1"), catalog: catalog)
+        try document.set("sources.fans.sensor2", .string("applesmc-fan2"), catalog: catalog)
+        #expect(document.value("sources.fans.sensor2", catalog: catalog) == .string("applesmc-fan2"))
+    }
+
     /// The same rules accept the values the workers accept, so a valid edit
     /// still saves — including the fractional sampling interval, where both
     /// platforms genuinely use fractions (ruling R30).

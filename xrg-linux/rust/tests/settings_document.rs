@@ -743,3 +743,86 @@ fn a_document_the_workers_would_refuse_starts_on_repaired_settings() {
     let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, store.settings());
     drop(worker);
 }
+
+/// A document that is valid entry by entry but breaks a cross-setting
+/// combination the workers reject — the core's per-entry load repair
+/// touches nothing here — reaches the defensive startup repair, which
+/// resets ONLY the offending settings and reports each; the unrelated
+/// choices survive (final review round 2, issue 2 / ruling R33).
+#[test]
+fn combination_repairs_reset_only_the_offending_settings() {
+    let f = Fixture::new();
+    f.write_json(
+        br#"{"format": "xrg-ng-settings", "version": 1, "settings": {
+            "weather.enabled": true, "weather.station": "",
+            "sources.fans.sensor1": "applesmc-fan1",
+            "sources.fans.sensor2": "applesmc-fan1",
+            "sources.fans.sensor3": "applesmc-fan2",
+            "sources.temperature.sensor2": "coretemp-isa-0000",
+            "graphs.cpu.time_window": 30}}"#,
+    );
+    let store = Store::open(f.root());
+    // Every entry is valid on its own: the load reports nothing.
+    assert!(store.load_problem().is_none());
+    let (repaired, replaced) = store.settings().repaired();
+    assert!(repaired.validate().is_ok());
+    // Only the offending settings were reset: the fan primary and its
+    // distinct third curve survive, the duplicate second curve does not;
+    // the secondary temperature curve without a primary does not.
+    assert_eq!(repaired.metrics.fan, Some("applesmc-fan1".into()));
+    assert_eq!(
+        repaired.metrics.fan_extra,
+        [None, Some("applesmc-fan2".into())]
+    );
+    assert_eq!(repaired.metrics.temperature, None);
+    assert_eq!(repaired.metrics.temperature_extra, [None, None]);
+    // Unrelated metric choices survive the repair.
+    assert_eq!(repaired.metrics.cpu_history_minutes, 30);
+    // The enabled collector without an addressable station is the one
+    // combination repair: the collector steps back, the rest stays.
+    assert!(!repaired.weather.enabled);
+    assert!(replaced.contains(&"the fan curve 2"));
+    assert!(!replaced.contains(&"the fan curve 3"));
+    assert!(replaced.contains(&"the temperature curve 2"));
+    assert!(replaced.contains(&"the weather station toggle"));
+    assert!(!replaced.contains(&"settings that failed validation"));
+    // The workers start on the repaired view without panicking.
+    let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, store.settings());
+    drop(worker);
+}
+
+/// The same combinations are refused before save through the shared core:
+/// neither a single edit from either side of a combination, nor a
+/// whole-view save that breaks one, reaches the file (ruling R33).
+#[test]
+fn combination_breaking_saves_are_refused_before_writing() {
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    store.save(&custom_settings()).unwrap();
+    // The empty station is valid entry on its own while the collector is
+    // off; enabling it is the combination settings.rs rejects.
+    store.set("weather.station", serde_json::json!("")).unwrap();
+    let mut before = fs::read(f.json()).unwrap();
+    assert_eq!(
+        store.set("weather.enabled", serde_json::json!(true)),
+        Err(document::SetError::ConstraintFailed)
+    );
+    assert_eq!(fs::read(f.json()).unwrap(), before);
+    // A secondary fan curve without a primary, from the other side.
+    assert_eq!(
+        store.set("sources.fans.sensor2", serde_json::json!("applesmc-fan1")),
+        Err(document::SetError::ConstraintFailed)
+    );
+    assert_eq!(fs::read(f.json()).unwrap(), before);
+    // A whole-view save that breaks the combination is refused the same
+    // way, before anything is written.
+    store
+        .set("sources.fans.sensor1", serde_json::json!("applesmc-fan1"))
+        .unwrap();
+    before = fs::read(f.json()).unwrap();
+    let mut wanted = custom_settings();
+    wanted.metrics.fan = Some("applesmc-fan1".into());
+    wanted.metrics.fan_extra = [Some("applesmc-fan1".into()), None];
+    assert!(store.save(&wanted).is_err());
+    assert_eq!(fs::read(f.json()).unwrap(), before);
+}

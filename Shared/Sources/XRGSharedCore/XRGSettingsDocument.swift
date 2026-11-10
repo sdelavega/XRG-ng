@@ -433,11 +433,78 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         return catalog.entry(id)?.defaultValue ?? .null
     }
 
+    // MARK: Cross-setting combinations (final review round 2, issue 2 / ruling R33)
+
+    /// The cross-setting combinations the workers enforce that no single
+    /// entry can express (ruling R33) — the rules the Linux `validate()`
+    /// walk applies across settings.rs, beyond the per-entry constraints
+    /// above:
+    ///
+    /// - weather: an enabled collector (`weather.enabled`, Linux) needs a
+    ///   station the worker can address — non-empty and a valid ICAO code
+    ///   (weather.rs `validate()`);
+    /// - sensor curves: a secondary curve (slot 2 or 3) requires a primary
+    ///   (slot 1), and each curve of a family uses a different sensor
+    ///   (settings.rs `metrics.validate()`);
+    ///
+    /// The single-entry rules `validate()` also carries — the bounds, the
+    /// ICAO station, the AI paths and endpoints, the process filter, the
+    /// device names and source identities, the whole-minute durations, the
+    /// module list's membership — are the entries' own `constraint`,
+    /// `range` and `order` rules above.
+    ///
+    /// Returns the offending entry ids, in deterministic order, for the
+    /// prospective value map of a document: an edit whose result appears
+    /// here is refused before save on both platforms (the Linux store and
+    /// the commit path go through this same `set`), and nothing is written.
+    static func combinationOffenders(_ values: [String: XRGSettingsValue],
+                                      catalog: XRGSettingsCatalog) -> [String] {
+        func effective(_ id: String) -> XRGSettingsValue {
+            values[id] ?? catalog.entry(id)?.defaultValue ?? .null
+        }
+        var offenders: [String] = []
+        // Weather: an enabled collector needs a station the worker can
+        // address (settings.rs weather validate()).
+        if case .bool(true) = effective("weather.enabled") {
+            var addressable = false
+            if case .string(let text) = effective("weather.station") {
+                addressable = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && XRGWeatherReport.station(text) != nil
+            }
+            if !addressable { offenders.append("weather.enabled") }
+        }
+        // Sensor curves: a secondary requires a primary, and each curve
+        // uses a different sensor (settings.rs metrics validate()).
+        for family in ["sources.temperature", "sources.fans"] {
+            var seen: [String] = []
+            var hasPrimary = false
+            if case .string = effective("\(family).sensor1") { hasPrimary = true }
+            for slot in 1...3 {
+                let id = "\(family).sensor\(slot)"
+                if case .string(let source) = effective(id) {
+                    if slot > 1 && !hasPrimary {
+                        offenders.append(id)
+                    } else if seen.contains(source) {
+                        offenders.append(id)
+                    } else {
+                        seen.append(source)
+                    }
+                }
+            }
+        }
+        return offenders
+    }
+
     /// Store a value for a setting, enforcing the entry's rules. Storing the
     /// entry's default removes the value again, so defaults are never
     /// serialised. A `depends` requirement must already hold (its control is
     /// disabled in the window otherwise); the dependency is checked against
     /// the effective value, so setting it to its default counts.
+    ///
+    /// The resulting document must also satisfy the cross-setting
+    /// combinations the workers enforce (ruling R33): an edit that leaves a
+    /// combination broken — from either side of it — is refused with the
+    /// core's constraint error before anything is saved, on both platforms.
     public mutating func set(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) throws(XRGSettingsError) {
         guard let entry = catalog.entry(id) else { throw .unknownId }
         if let depends = entry.depends {
@@ -446,11 +513,16 @@ public struct XRGSettingsDocument: Equatable, Sendable {
             }
         }
         if let error = Self.validate(value, for: entry) { throw error }
+        var prospective = values
         if XRGSettingsValue.sameValue(value, entry.defaultValue) {
-            values.removeValue(forKey: id)
+            prospective.removeValue(forKey: id)
         } else {
-            values[id] = value
+            prospective[id] = value
         }
+        if !Self.combinationOffenders(prospective, catalog: catalog).isEmpty {
+            throw .constraint
+        }
+        values = prospective
     }
 
     /// Store a migrated value. The entry's own rules apply — type, bounds,
