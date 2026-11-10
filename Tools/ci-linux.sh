@@ -67,12 +67,14 @@ done
 # inherited environment would resolve to) both live under scratch, are
 # compared before and after there, and the REAL inherited
 # HOME/XDG_CONFIG_HOME tree is never read, created or inspected. The launch
-# must use its own scratch root — writing its document there — and must
+# must resolve its configuration root to the scratch root — migrating the
+# legacy settings.conf it finds there into its own settings.json — and must
 # leave the simulated inherited tree untouched, byte for byte, without
 # migrating it. (The smoke launches are already isolated: their harness runs
 # against its own scratch configuration root.)
 headless_config="$output/headless-config"
-mkdir -p "$headless_config"
+mkdir -p "$headless_config/xrg-ng"
+printf 'theme=Classic\n' > "$headless_config/xrg-ng/settings.conf"
 inherited_config="$output/inherited-config"
 sentinel_dir="$inherited_config/xrg-ng"
 mkdir -p "$sentinel_dir"
