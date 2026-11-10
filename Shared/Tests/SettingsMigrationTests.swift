@@ -334,41 +334,176 @@ struct SettingsMigrationTests {
         #expect(XRGLegacyMacOSReader.nsBoolValue("+ 12") == false)
     }
 
-    /// UserDefaults-backed keys take the NSString reader, then the transform.
-    /// Custom-helper keys do not: `"Yonder"` is not a helper spelling.
-    @Test func userDefaultsStringScalarsMigrateLikeFoundation() throws {
+    /// UserDefaults-backed keys take the R27-probed UserDefaults accessor
+    /// semantics, NOT NSString. Custom-helper keys are unchanged. The oracle
+    /// is the actual `bool/integer/double(forKey:)` probe on this macOS.
+    @Test func userDefaultsStringScalarsMatchTheAccessorProbe() throws {
         let catalog = try XRGSettingsCatalog.load()
-        // Default is false, so a parsed true must be stored.
+        // bool(forKey:): the five probed keyword strings are FALSE on this
+        // macOS (not true as NSString.boolValue gives). The catalog default is
+        // false, so a false result must NOT be stored as true.
         for text in ["Yonder", "yellow", "Tomorrow", "tomato", "  YES"] {
             let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
                 ["aiTokensTrackingEnabled": text], catalog: catalog)
-            #expect(diagnostics.isEmpty, "\(text) must not be invalid-value")
-            #expect(document.values["ai.tracking.enabled"] == .bool(true),
-                    "\(text) is true for UserDefaults.bool")
+            #expect(diagnostics.isEmpty, "\(text) is a plain false, not invalid-value")
+            #expect(document.values["ai.tracking.enabled"] == nil,
+                    "\(text) is false for UserDefaults.bool(forKey:), the default")
         }
-        // Default is true, so a parsed false must be stored. `"0 1"` is false
-        // on macOS (the integer scan stops at the space) and must not become true.
+        // The accessor's exact truth set: case-insensitive YES/TRUE and "1".
+        for text in ["YES", "yes", "TRUE", "true", "1"] {
+            let (document, diagnostics) = XRGSettingsMigration.fromMacDefaults(
+                ["aiTokensTrackingEnabled": text], catalog: catalog)
+            #expect(diagnostics.isEmpty)
+            #expect(document.values["ai.tracking.enabled"] == .bool(true),
+                    "\(text) is true for UserDefaults.bool(forKey:)")
+        }
+        // A numeric string other than "1" is false ("2" has integerValue 2 but
+        // bool(forKey:) is false): not stored.
+        let (two, twoDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["aiTokensTrackingEnabled": "2"], catalog: catalog)
+        #expect(twoDiag.isEmpty)
+        #expect(two.values["ai.tracking.enabled"] == nil)
+
+        // A graph-visibility bool whose default is true: "0 1" is false for
+        // the accessor and must be STORED as false.
         let (zeroOne, zeroDiag) = XRGSettingsMigration.fromMacDefaults(
             ["showCPUGraph": "0 1"], catalog: catalog)
         #expect(zeroDiag.isEmpty)
         #expect(zeroOne.values["graphs.cpu.visible"] == .bool(false))
 
+        // integer(forKey:): "  +12" -> 12 (strict parse, leading whitespace).
         let (plus, plusDiag) = XRGSettingsMigration.fromMacDefaults(
             ["aiTokensDailyBudget": "  +12"], catalog: catalog)
         #expect(plusDiag.isEmpty)
         #expect(plus.values["ai.tracking.daily_budget"] == .int(12))
 
+        // "1.9" -> 0 (strict whole-string parse), NOT 1 (NSString.integerValue).
+        // 0 is the catalog default, so it is not stored.
         let (truncated, truncDiag) = XRGSettingsMigration.fromMacDefaults(
             ["aiTokensDailyBudget": "1.9"], catalog: catalog)
         #expect(truncDiag.isEmpty)
-        #expect(truncated.values["ai.tracking.daily_budget"] == .int(1))
+        #expect(truncated.values["ai.tracking.daily_budget"] == nil,
+                "1.9 -> 0 for UserDefaults.integer(forKey:), the default")
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger("1.9") == 0)
 
-        // graphStyle is defaults.integer, then graphStyleIndex. `"1"` is scanlines.
+        // graphStyle is defaults.integer, then graphStyleIndex. "1" is scanlines.
         let (style, styleDiag) = XRGSettingsMigration.fromMacDefaults(
             ["graphStyle": "1"], catalog: catalog)
         #expect(styleDiag.isEmpty)
         #expect(style.value("appearance.display_effect", catalog: catalog) == .string("scanlines"))
         #expect(style.values["appearance.display_effect"] == .string("scanlines"))
+    }
+
+    /// Deterministic, platform-independent reproduction of the R27 probe for
+    /// `UserDefaults.bool/integer/double(forKey:)`. Every value below is one
+    /// the disposable macOS probe returned (disk-import and set agreed); the
+    /// migration must match on macOS AND Linux without calling UserDefaults.
+    @Test func userDefaultsAccessorsReproduceTheProbedGrammar() {
+        // bool(forKey:): exact spellings only; no keyword prefix, no trimming,
+        // no numeric coercion of other numbers.
+        for text in ["YES", "yes", "Yes", "yEs", "TRUE", "true", "True", "tRue", "1"] {
+            #expect(XRGLegacyMacOSReader.userDefaultsBool(text), "\(text) is bool true")
+        }
+        for text in ["Yonder", "yellow", "Tomorrow", "tomato", "  YES", "\tYES",
+                     "YES ", " NO", "0", "NO", "no", "FALSE", "false", "",
+                     "2", "01", "+1", "1 ", " 1", "1.9", "12"] {
+            #expect(XRGLegacyMacOSReader.userDefaultsBool(text) == false,
+                    "\(text) is bool false on this macOS")
+        }
+        #expect(XRGLegacyMacOSReader.userDefaultsBool(NSNumber(value: 0.5)) == true)
+        #expect(XRGLegacyMacOSReader.userDefaultsBool(NSNumber(value: 0)) == false)
+
+        // integer(forKey:): strict whole signed-decimal string; leading and
+        // after-sign whitespace (incl. newline) skipped; trailing junk/spaces
+        // -> 0; Int32 clamp on overflow. NSNumber is NOT clamped.
+        let ints: [(String, Int64)] = [
+            ("1", 1), ("2", 2), ("10", 10), ("-1", -1), ("0", 0), ("12", 12),
+            ("-12", -12), ("  12", 12), ("+12", 12), ("  +12", 12),
+            ("+ 12", 12), ("+  12", 12), ("-  12", -12), ("\n12", 12),
+            ("00012", 12), ("012", 12), ("1.9", 0), ("1.9abc", 0),
+            ("12abc", 0), ("12 ", 0), (" 12 ", 0), ("0.5", 0), ("0.5junk", 0),
+            ("1_0", 0), ("0 1", 0), ("1 0", 0), ("1e3", 0), ("0x10", 0),
+            ("2147483646", 2147483646), ("2147483647", 2147483647),
+            ("2147483648", 2147483647), ("99999999999999999999", 2147483647),
+            ("9223372036854775808", 2147483647), ("-2147483648", -2147483648),
+            ("-2147483649", -2147483648), ("-99999999999999999999", -2147483648),
+            ("-9223372036854775809", -2147483648),
+        ]
+        for (text, expected) in ints {
+            #expect(XRGLegacyMacOSReader.userDefaultsInteger(text) == expected,
+                    "integer(\"\(text)\") == \(expected) (R27 probe)")
+        }
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger(NSNumber(value: Int64(2147483648))) == 2147483648)
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger(NSNumber(value: 1.9)) == 1)
+
+        // double(forKey:): leading-numeric-prefix grammar, PROBED (not
+        // inferred from NSString): junk suffix ignored, newline NOT skipped,
+        // sign must be glued to the digits, inf/nan -> 0.
+        let doubles: [(String, Double)] = [
+            ("1.9", 1.9), ("1.9abc", 1.9), ("0.5", 0.5), ("0.5junk", 0.5),
+            ("12abc", 12), ("12 ", 12), (" 12 ", 12), ("00012", 12),
+            ("1_0", 1), ("0 1", 0), ("1 0", 1), ("1.2.3", 1.2),
+            ("  12", 12), ("+12", 12), ("+ 12", 0), ("\n12", 0),
+            (".5", 0.5), ("5.", 5), ("-.5", -0.5), ("1,5", 1),
+            ("1e3", 1000), ("1e-3", 0.001), ("142.5", 142.5),
+            ("inf", 0), ("nan", 0), ("0x10", 0), ("2147483648", 2147483648),
+        ]
+        for (text, expected) in doubles {
+            #expect(XRGLegacyMacOSReader.userDefaultsDouble(text) == expected,
+                    "double(\"\(text)\") == \(expected) (R27 probe)")
+        }
+        #expect(XRGLegacyMacOSReader.userDefaultsDouble(NSNumber(value: 1.9)) == 1.9)
+    }
+
+    /// Migration-level integer overflow coverage (R27): an overflowing STRING
+    /// clamps to the Int32 bounds, not Int64. Positive is stored (within the
+    /// budget's range); negative is clamped to Int32.min, which the nonnegative
+    /// range rejects as invalid-value — never a huge Int64 magnitude.
+    @Test func userDefaultsIntegerOverflowClampsToInt32() throws {
+        // Reader-level, both signs: the probed accessor bound.
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger("99999999999999999999") == Int64(Int32.max))
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger("9223372036854775808") == Int64(Int32.max))
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger("-99999999999999999999") == Int64(Int32.min))
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger("-9223372036854775809") == Int64(Int32.min))
+        // NSNumber inputs are NOT clamped (integerValue is 64-bit here).
+        #expect(XRGLegacyMacOSReader.userDefaultsInteger(NSNumber(value: Int64(2147483648))) == 2147483648)
+
+        let catalog = try XRGSettingsCatalog.load()
+        let budget = try #require(catalog.entry("ai.tracking.daily_budget"))
+        // legacyValue is the migration's one-shot conversion (no range gate):
+        // it pins the exact clamped value for BOTH signs.
+        #expect(XRGSettingsMigration.legacyValue("99999999999999999999", for: budget)
+                == .int(Int64(Int32.max)))
+        #expect(XRGSettingsMigration.legacyValue("-99999999999999999999", for: budget)
+                == .int(Int64(Int32.min)))
+
+        // End-to-end: the clamped positive is stored; the clamped negative is
+        // rejected by the nonnegative range (invalid-value), not stored.
+        let (pos, posDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["aiTokensDailyBudget": "99999999999999999999"], catalog: catalog)
+        #expect(posDiag.isEmpty)
+        #expect(pos.values["ai.tracking.daily_budget"] == .int(Int64(Int32.max)))
+        let (neg, negDiag) = XRGSettingsMigration.fromMacDefaults(
+            ["aiTokensDailyBudget": "-99999999999999999999"], catalog: catalog)
+        #expect(negDiag == [XRGSettingsDiagnostic(id: "ai.tracking.daily_budget",
+                                                  problem: "invalid-value")])
+        #expect(neg.values["ai.tracking.daily_budget"] == nil)
+    }
+
+    /// The custom bool() helper passes the RAW registered fallback string to
+    /// legacyBoolValue (v0.2.2 apply); it does NOT run the fallback through the
+    /// trimmed/uppercased spelling list first.
+    @Test func customBoolFallbackUsesLegacyBoolValueOnRawString() {
+        // "FALSE" is not a helper spelling. Spelling-normalising the fallback
+        // would return false; the RAW legacyBoolValue returns true.
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: "FALSE") == true)
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: " 0 ") == true)
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: "NO") == false)
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: "0") == false)
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: "") == false)
+        // An NSNumber fallback uses boolValue (0.5 is true on macOS).
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: NSNumber(value: 0.5)) == true)
+        #expect(XRGLegacyMacOSReader.windowBool("Yonder", fallback: NSNumber(value: 0)) == false)
     }
 
     /// `XRGWindowPreferences` helpers reject what NSString would accept, and

@@ -1434,5 +1434,94 @@ class VerticalLayoutTests(unittest.TestCase):
         self.assertEqual(len(upgrade.assert_layout_sizes(good, geometry=geom)), 26)
 
 
+# --------------------------------------------------------------------------
+# R9 follow-up, round 3 (binding ruling R27): the checker must use the SAME
+# probed UserDefaults.bool(forKey:) semantics as the shared-core migration for
+# graph visibility, its border helper must accept only the Swift helper's
+# syntax, and the custom bool() fallback must be passed RAW to legacy_bool_value.
+# --------------------------------------------------------------------------
+
+class UserDefaultsBoolVisibilityTests(unittest.TestCase):
+    """R27: UserDefaults.bool(forKey:) is NOT NSString.boolValue."""
+
+    def test_string_keyword_prefixes_are_false(self):
+        # The five strings from the round-2 probe: NSString.boolValue returns
+        # true, but bool(forKey:) returns false on this macOS.
+        for text in ("Yonder", "yellow", "Tomorrow", "tomato", "  YES"):
+            with self.subTest(text=text):
+                self.assertFalse(upgrade.user_defaults_bool_from_plist(text))
+
+    def test_bool_truth_set_matches_the_accessor_probe(self):
+        cases = [
+            ("YES", True), ("yes", True), ("Yes", True), ("TRUE", True),
+            ("true", True), ("tRue", True), ("1", True),
+            ("NO", False), ("no", False), ("FALSE", False), ("false", False),
+            ("0", False), ("", False), ("2", False), ("01", False),
+            ("+1", False), ("1 ", False), (" 1", False), ("1.9", False),
+            ("YES ", False), (" YES", False),
+            (True, True), (False, False), (1, True), (0, False),
+            (0.5, True), (0.0, False), (-1, True),
+        ]
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(upgrade.user_defaults_bool_from_plist(value), expected)
+
+    def test_displayed_from_domain_uses_the_corrected_reader(self):
+        # A stored exotic keyword string must HIDE the graph (0.2.2's
+        # bool(forKey:) was false), not display it as the old NSString-style
+        # reader did. "YES" displays it; a numeric string "2" hides it.
+        self.assertIn("cpu", upgrade.displayed_from_domain({"showCPUGraph": "Yonder"})[1])
+        self.assertIn("cpu", upgrade.displayed_from_domain({"showCPUGraph": "YES"})[0])
+        self.assertIn("cpu", upgrade.displayed_from_domain({"showCPUGraph": "2"})[1])
+        self.assertIn("cpu", upgrade.displayed_from_domain({"showCPUGraph": False})[1])
+        self.assertIn("cpu", upgrade.displayed_from_domain({})[0])  # registered default
+
+    def test_visibility_reader_is_independent_of_size_keys(self):
+        # Visibility comes only from the visibility keys, never the 26 sizes.
+        dom = {k: 157.45 for k in upgrade.LAYOUT_SIZE_KEYS}
+        dom["showCPUGraph"] = "Yonder"
+        self.assertIn("cpu", upgrade.displayed_from_domain(dom)[1])
+
+
+class BorderParsingTests(unittest.TestCase):
+    """The border integer helper accepts only Swift's Int/Double syntax."""
+
+    def test_underscore_spelling_falls_back_to_4(self):
+        # Python int("1_0", 10) == 10; the Swift helper rejects "1_0" and
+        # falls back to the registered border 4 (R27 review regression).
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": "1_0"}), 4)
+        self.assertEqual(upgrade.window_integer("1_0", "4", 0, 2 ** 31 - 1), 4)
+        for text in ("1_000", "0b101", "12abc", "0.5junk"):
+            with self.subTest(text=text):
+                self.assertEqual(upgrade.border_from_domain({"borderWidth": text}), 4)
+
+    def test_valid_border_spellings_are_accepted(self):
+        self.assertEqual(upgrade.border_from_domain({}), 4)  # absent -> 4
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": 6}), 6)
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": "6"}), 6)
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": " 6 "}), 6)
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": "12.5"}), 12)
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": "1e3"}), 1000)
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": "0x10"}), 16)
+        # Overflow is rejected by the helper, not saturated.
+        self.assertEqual(upgrade.border_from_domain({"borderWidth": "99999999999999999999"}), 4)
+
+
+class CustomBoolFallbackTests(unittest.TestCase):
+    """window_bool passes the RAW fallback to legacy_bool_value (v0.2.2)."""
+
+    def test_raw_fallback_is_not_spelling_normalised(self):
+        self.assertTrue(upgrade.window_bool("Yonder", fallback="FALSE"))
+        self.assertTrue(upgrade.window_bool("Yonder", fallback=" 0 "))
+        self.assertFalse(upgrade.window_bool("Yonder", fallback="NO"))
+        self.assertFalse(upgrade.window_bool("Yonder", fallback="0"))
+        self.assertFalse(upgrade.window_bool("Yonder", fallback=""))
+        # The registered YES/NO defaults are unaffected; an NSNumber fallback
+        # uses boolValue.
+        self.assertTrue(upgrade.window_bool("Yonder", fallback="YES"))
+        self.assertTrue(upgrade.window_bool("Yonder", fallback=0.5))
+        self.assertFalse(upgrade.window_bool("Yonder", fallback=0))
+
+
 if __name__ == "__main__":
     unittest.main()

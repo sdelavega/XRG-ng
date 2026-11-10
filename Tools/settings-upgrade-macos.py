@@ -510,69 +510,23 @@ def parse_frame_rect(text):
     return (float(width), float(height))
 
 
-def _is_hspace(ch):
-    """CharacterSet.whitespaces: Unicode space, not newlines. The macOS probe
-    skips space/tab/nbsp and does not skip ``\\n``/``\\r``."""
-    return ch.isspace() and ch not in "\n\r\v\f"
+def user_defaults_bool_from_plist(value):
+    """UserDefaults.bool(forKey:) over a plist value (R27 probe, this macOS).
 
-
-def _skip_hspace(text, index):
-    while index < len(text) and _is_hspace(text[index]):
-        index += 1
-    return index
-
-
-def ns_integer_value(text, allow_gap_after_sign=True):
-    """macOS NSString.integerValue, including Int64 saturation. ``"1.9"`` is 1,
-    ``"+12"`` is 12, ``"+ 12"`` is 12. Not Python int() and not strtoll via a
-    platform library — the same rules as XRGLegacyMacOSReader."""
-    index = _skip_hspace(text, 0)
-    if index >= len(text):
-        return 0
-    negative = False
-    if text[index] in "+-":
-        negative = text[index] == "-"
-        index += 1
-        if allow_gap_after_sign:
-            index = _skip_hspace(text, index)
-    if index >= len(text) or not text[index].isdigit():
-        return 0
-    magnitude = 0
-    saturated = False
-    limit = 2 ** 63 - 1
-    while index < len(text) and text[index].isdigit():
-        digit = ord(text[index]) - 48
-        if not saturated:
-            if magnitude > limit // 10 or (magnitude == limit // 10 and digit > limit % 10):
-                saturated = True
-            else:
-                magnitude = magnitude * 10 + digit
-        index += 1
-    if saturated:
-        return -2 ** 63 if negative else limit
-    return -magnitude if negative else magnitude
-
-
-def ns_bool_value(text):
-    """macOS NSString.boolValue. Y/y/T/t prefix is true; ``"0 1"`` is false.
-    A sign must be glued to its digits (``"+ 12"`` is false, unlike integerValue)."""
-    index = _skip_hspace(text, 0)
-    if index >= len(text):
-        return False
-    if text[index] in "YyTt":
-        return True
-    return ns_integer_value(text[index:], allow_gap_after_sign=False) != 0
-
-
-def ns_bool_from_plist(value):
-    """UserDefaults.bool(forKey:) over a plist value: NSString.boolValue for
-    strings, nonzero for numbers, false for any other type."""
+    A CFBoolean/number is nonzero; a STRING is true ONLY when it is exactly
+    (case-insensitively) YES/TRUE or exactly "1". This is NOT
+    NSString.boolValue: there is no Y/y/T/t keyword prefix, no whitespace
+    trimming, and no numeric coercion of other numbers ("2" is false even
+    though integerValue is 2). Matches the shared-core migration's R27
+    UserDefaults bool reader (XRGLegacyMacOSReader.userDefaultsBool), so the
+    checker and migration agree on exactly the visibility 0.2.2 displayed.
+    """
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
         return value != 0
     if isinstance(value, str):
-        return ns_bool_value(value)
+        return value.lower() in ("yes", "true") or value == "1"
     return False
 
 
@@ -597,22 +551,40 @@ def legacy_bool_value(value):
 
 
 def window_bool(value, fallback="YES"):
-    """apply's bool() helper: restricted spellings, then the registered
-    fallback. Not NSString.boolValue and not Python float()."""
+    """apply's bool() helper: restricted spellings for the STORED value, then
+    the registered fallback — passed RAW to legacy_bool_value for a string
+    (v0.2.2 apply does NOT spelling-normalise the fallback first). An NSNumber
+    fallback uses boolValue. Not NSString.boolValue and not Python float()."""
     parsed = _window_bool_spelling(value)
     if parsed is not None:
         return parsed
-    parsed = _window_bool_spelling(fallback)
-    if parsed is not None:
-        return parsed
+    if isinstance(fallback, bool):
+        return fallback
+    if isinstance(fallback, (int, float)):
+        return fallback != 0
     if isinstance(fallback, str):
         return legacy_bool_value(fallback)
     return False
 
 
+# Swift Int(String)/Double(String) whole-string literal grammar, after the
+# helper trims .whitespacesAndNewlines. Python int()/float() additionally
+# accept spellings Swift REJECTS — notably "1_0" (10) — so the conversions
+# are gated by these patterns (R27 review: border "1_0" must fall back to 4).
+_SWIFT_INT_RE = re.compile(r"[+-]?[0-9]+")
+_SWIFT_DOUBLE_RE = re.compile(
+    r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_SWIFT_HEX_RE = re.compile(
+    r"[+-]?0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)"
+    r"(?:[pP][+-]?[0-9]+)?")
+
+
 def _window_integer_parsed(value):
     """apply's integer() parse: whole-string Int, else a finite Double
-    truncated toward zero. ``"0.5junk"`` and overflow are None (fallback)."""
+    truncated toward zero. Mirrors Swift Int(String)/Double(String): NO
+    underscores, hex-integer or junk suffixes. ``"0.5junk"``, ``"1_0"`` and
+    overflow are None (fallback). Python int()/float() accept ``"1_0"`` as
+    10, which the Swift helper rejects (border falls back to 4)."""
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, int):
@@ -623,13 +595,17 @@ def _window_integer_parsed(value):
         return int(value)
     if isinstance(value, str):
         text = value.strip()
-        try:
-            return int(text, 10)
-        except ValueError:
-            pass
-        try:
+        if _SWIFT_INT_RE.fullmatch(text):
+            number = int(text)
+            return number if -(2 ** 63) <= number < 2 ** 63 else None
+        if _SWIFT_DOUBLE_RE.fullmatch(text):
             number = float(text)
-        except ValueError:
+        elif _SWIFT_HEX_RE.fullmatch(text):
+            try:
+                number = float.fromhex(text)
+            except ValueError:
+                return None
+        else:
             return None
         if not math.isfinite(number) or number < -2 ** 63 or number >= 2 ** 63:
             return None
@@ -688,7 +664,7 @@ def displayed_from_domain(domain):
     hidden = []
     for gid in GRAPH_IDS:
         key = VISIBILITY_KEYS[gid]
-        shown = (ns_bool_from_plist(domain[key]) if key in domain
+        shown = (user_defaults_bool_from_plist(domain[key]) if key in domain
                  else REGISTERED_VISIBLE[gid])
         (displayed if shown else hidden).append(gid)
     return tuple(displayed), tuple(hidden)

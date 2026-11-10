@@ -4,24 +4,33 @@
 import Foundation
 
 /// Platform-independent reproductions of the readers v0.2.2 used for each
-/// legacy macOS defaults key.
+/// legacy macOS defaults key. Two families must not be mixed:
 ///
-/// Two families must not be mixed:
-///
-/// - `UserDefaults.bool/integer/double(forKey:)` are NSString
-///   `boolValue`/`integerValue`/`doubleValue` (verified on macOS; see the
-///   R9 round-2 probe). Those accessors always produce a value.
+/// - `UserDefaults.bool/integer/double(forKey:)` — binding ruling R27: the
+///   oracle is the PROBED behaviour of these accessors on this macOS, NOT
+///   NSString. `bool(forKey:)` for a string is true only for case-insensitive
+///   `YES`/`TRUE` or exactly `"1"` (no Y/y/T/t keyword prefixes, no trimming,
+///   no numeric coercion: `"2"` is false). `integer(forKey:)` for a string
+///   requires a whole signed-decimal string and CLAMPS overflow to the Int32
+///   bounds (2147483647 / -2147483648), not Int64. `double(forKey:)` was
+///   probed separately and matches the leading-numeric-prefix grammar of
+///   `nsDoubleValue` (`"0.5junk"` -> 0.5, `"1e3"` -> 1000, a leading newline
+///   is NOT skipped). NSNumber inputs read through their numeric value and
+///   are not clamped. These accessors always produce a value. See the R9
+///   round-3 probe in the task report.
 /// - `XRGWindowPreferences.apply`'s `bool()`/`integer()`/`double()`/`string()`
 ///   helpers (v0.2.2 `XRGCore/XRGWindowPreferences.swift` ~118–150) use their
 ///   own spellings, whole-string Swift parsing, bounds and a registered
 ///   fallback. `"0.5junk"` is not `0.5`; it falls back. Overflow is rejected,
-///   not saturated.
+///   not saturated. A String fallback is passed RAW to `legacyBoolValue`
+///   (it is not spelling-normalised first).
 ///
-/// Nothing here calls `NSString.boolValue`/`integerValue`/`doubleValue`, so
-/// Linux produces the same results as macOS. The macOS probe this matches:
-/// `"Yonder"`/`"yellow"`/`"Tomorrow"`/`"tomato"` boolValue true; leading
-/// spaces and tabs skipped (newlines are not); `"+12"` integer 12; `"1.9"`
-/// integer 1; overflow saturates to `Int64` bounds; `"0 1"` boolValue false.
+/// The `nsBoolValue`/`nsIntegerValue`/`nsDoubleValue` helpers reproduce literal
+/// NSString scalar semantics (R9 round-2 probe) and are kept for the
+/// documentation test; `nsDoubleValue` is also the (probed) `double(forKey:)`
+/// grammar. The migration's UserDefaults bool/integer accessors do NOT use
+/// `nsBoolValue`/`nsIntegerValue`. Nothing here calls
+/// `NSString`/`Scanner`/`UserDefaults`, so Linux matches macOS exactly.
 enum XRGLegacyMacOSReader {
 
     /// How v0.2.2 read one defaults key. Blob and plain-text keys stay
@@ -160,18 +169,79 @@ enum XRGLegacyMacOSReader {
         return negative ? -magnitude : magnitude
     }
 
+    // MARK: UserDefaults.bool/integer/double(forKey:) — R27 probe (this macOS)
+
+    /// `bool(forKey:)` for a STRING, probed on this macOS: true ONLY for the
+    /// exact spellings "YES"/"TRUE" (case-insensitive) or exactly "1". No
+    /// trimming, no Y/y/T/t keyword prefix (unlike NSString.boolValue) and no
+    /// numeric coercion ("2" is false even though integerValue is 2).
+    /// "Yonder"/"yellow"/"Tomorrow"/"tomato"/"  YES" are all false.
+    static func userDefaultsBoolValue(_ text: String) -> Bool {
+        switch text.lowercased() {
+        case "yes", "true": return true
+        default: return text == "1"
+        }
+    }
+
+    /// `integer(forKey:)` for a STRING, probed on this macOS. Grammar: leading
+    /// whitespace (whitespaces AND newlines), optional sign, optional
+    /// whitespace after the sign, then ASCII digits; the WHOLE string must be
+    /// consumed (any trailing character, including whitespace, gives 0).
+    /// Magnitude saturates to Int64 bounds and is then CLAMPED to the Int32
+    /// range — an overflowing string yields 2147483647 / -2147483648, not
+    /// Int64.max/min. This differs from NSString.integerValue (prefix parse,
+    /// Int64 saturation) and is the R27 oracle. NSNumber inputs bypass this.
+    static func userDefaultsIntegerValue(_ text: String) -> Int64 {
+        let scalars = Array(text.unicodeScalars)
+        var index = skipWhitespacesAndNewlines(scalars, from: 0)
+        guard index < scalars.count else { return 0 }
+        var negative = false
+        if scalars[index] == "+" || scalars[index] == "-" {
+            negative = scalars[index] == "-"
+            index += 1
+            index = skipWhitespacesAndNewlines(scalars, from: index)
+        }
+        let digitsStart = index
+        var magnitude: Int64 = 0
+        var saturated = false
+        while index < scalars.count, scalars[index] >= "0" && scalars[index] <= "9" {
+            let digit = Int64(scalars[index].value - 48)
+            if !saturated {
+                if magnitude > Int64.max / 10 || (magnitude == Int64.max / 10 && digit > Int64.max % 10) {
+                    saturated = true
+                } else {
+                    magnitude = magnitude * 10 + digit
+                }
+            }
+            index += 1
+        }
+        guard index > digitsStart, index == scalars.count else { return 0 }
+        let signed = negative ? (saturated ? Int64.min : -magnitude)
+                              : (saturated ? Int64.max : magnitude)
+        if signed > Int64(Int32.max) { return Int64(Int32.max) }
+        if signed < Int64(Int32.min) { return Int64(Int32.min) }
+        return signed
+    }
+
     static func userDefaultsBool(_ raw: Any) -> Bool {
-        if let text = raw as? String { return nsBoolValue(text) }
+        if let text = raw as? String { return userDefaultsBoolValue(text) }
         if let number = raw as? NSNumber { return number.doubleValue != 0 }
         return false
     }
 
+    /// NSNumber inputs are NOT clamped (`int64Value` is 64-bit here); string
+    /// inputs go through the probed strict/Int32-clamped parser above.
     static func userDefaultsInteger(_ raw: Any) -> Int64 {
-        if let text = raw as? String { return nsIntegerValue(text) }
+        if let text = raw as? String { return userDefaultsIntegerValue(text) }
         if let number = raw as? NSNumber { return number.int64Value }
         return 0
     }
 
+    /// `double(forKey:)` was PROBED separately (R27 round 3): for strings it
+    /// reproduces `nsDoubleValue`'s leading-numeric-prefix grammar exactly
+    /// ("0.5junk" -> 0.5, "1e3" -> 1000, a leading newline is NOT skipped,
+    /// inf/nan -> 0). Kept here because the probe CONFIRMED the equivalence,
+    /// not because it was inferred from NSString. NSNumber -> doubleValue.
     static func userDefaultsDouble(_ raw: Any) -> Double {
         if let text = raw as? String { return nsDoubleValue(text) }
         if let number = raw as? NSNumber { return number.doubleValue }
@@ -181,10 +251,15 @@ enum XRGLegacyMacOSReader {
     // MARK: XRGWindowPreferences custom helpers
 
     /// `bool()`: `YES`/`TRUE`/`1` and `NO`/`FALSE`/`0`/`""` after trim and
-    /// uppercase. Anything else, including `"Yonder"`, falls back.
+    /// uppercase, for the STORED value. The registered fallback is NOT run
+    /// through that spelling list — v0.2.2 `apply` passes it straight to its
+    /// reader: an NSNumber fallback uses `boolValue`, a String fallback is
+    /// passed RAW to `legacyBoolValue` (no spelling-normalising first).
     static func windowBool(_ raw: Any?, fallback: Any?) -> Bool {
         if let parsed = windowBoolSpelling(raw) { return parsed }
-        if let parsed = windowBoolSpelling(fallback) { return parsed }
+        if let number = fallback as? NSNumber, !(fallback is String) {
+            return number.doubleValue != 0
+        }
         if let text = fallback as? String { return legacyBoolValue(text) }
         return false
     }
@@ -287,6 +362,17 @@ enum XRGLegacyMacOSReader {
     private static func skipWhitespaces(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
         var index = start
         while index < scalars.count, CharacterSet.whitespaces.contains(scalars[index]) {
+            index += 1
+        }
+        return index
+    }
+
+    /// `UserDefaults.integer(forKey:)` skips leading newlines too (probed:
+    /// "\n12" -> 12), unlike NSString.integerValue which skips only spaces.
+    private static func skipWhitespacesAndNewlines(_ scalars: [Unicode.Scalar],
+                                                   from start: Int) -> Int {
+        var index = start
+        while index < scalars.count, CharacterSet.whitespacesAndNewlines.contains(scalars[index]) {
             index += 1
         }
         return index
