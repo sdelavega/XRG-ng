@@ -608,6 +608,27 @@ struct SettingsMigrationTests {
         }
     }
 
+    /// Ruling R34 (final review round 2, issue 3): the endpoint constraint
+    /// accepts exactly what the Linux AI worker accepts today, so migration
+    /// never drops a working endpoint for the catalog default — a fully
+    /// expanded IPv6 loopback authority and a custom port both survive.
+    @Test func migratedEndpointsKeepExpandedIPv6AndCustomPorts() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let v40 = Data("""
+        {
+          "version": 40,
+          "ai": {
+            "metrics_url": "http://[0:0:0:0:0:0:0:1]:11435",
+            "ollama_url": "http://127.0.0.1:8080/api/tags"
+          }
+        }
+        """.utf8)
+        let (document, diagnostics) = try XRGSettingsMigration.fromLinuxV40(v40, catalog: catalog)
+        #expect(diagnostics.isEmpty, "\(diagnostics)")
+        #expect(document.values["ai.metrics.url"] == .string("http://[0:0:0:0:0:0:0:1]:11435"))
+        #expect(document.values["ai.ollama.url"] == .string("http://127.0.0.1:8080/api/tags"))
+    }
+
     @Test func omittedLinuxUnitOverridesMigrateAsInheritance() throws {
         let catalog = try XRGSettingsCatalog.load()
         // Rust's serde omits an unset optional override

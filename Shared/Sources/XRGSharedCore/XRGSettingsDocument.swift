@@ -655,9 +655,14 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// The loopback-HTTP rule the Linux AI endpoints enforce
     /// (`ai/preferences.rs validate_url`): ASCII, at most 2048 bytes, no
     /// control or whitespace characters, no credentials, query or fragment
-    /// markers, and an authority that is a loopback IPv4 address
-    /// (127.0.0.0/8) or the loopback IPv6 address `[::1]`, each with an
-    /// optional non-zero port; a path may follow the authority.
+    /// markers, and an authority Rust's own `SocketAddr`/`IpAddr` parsing
+    /// accepts — a loopback IPv4 address (127.0.0.0/8) or a loopback IPv6
+    /// address, bracketed, each with an optional port; a path may follow
+    /// the authority. Every textual form the workers' address parser
+    /// accepts counts, exactly as it decides: the fully expanded
+    /// `[0:0:0:0:0:0:0:1]:11435` works today, so the core must keep
+    /// accepting it — and migration must never drop it for the default
+    /// endpoint (final review round 2, issue 3 / ruling R34).
     static func isLoopbackHTTPURL(_ text: String) -> Bool {
         guard text.utf8.count <= 2048, text.allSatisfy(\.isASCII) else { return false }
         for scalar in text.unicodeScalars {
@@ -666,44 +671,151 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         }
         guard text.hasPrefix("http://") else { return false }
         let authority = text.dropFirst("http://".count).prefix { $0 != "/" }
-        if authority.hasPrefix("[") {
-            guard let close = authority.firstIndex(of: "]") else { return false }
-            let host = authority[authority.index(after: authority.startIndex)..<close]
-            var port = authority[authority.index(after: close)...]
-            if port.hasPrefix(":") {
-                port = port.dropFirst()
-                guard let number = Int(port), (1...65_535).contains(number), port == "\(number)" else {
-                    return false
-                }
-            } else if !port.isEmpty {
-                return false
+        // A socket authority ("host:port") is accepted exactly the way
+        // Rust's `SocketAddr::from_str` decides: an unbracketed IPv4
+        // address or a bracketed IPv6 address with a non-zero port — and
+        // any textual form of the address inside it that the parser takes.
+        if let socket = Self.parseSocketAuthority(authority) {
+            guard socket.port != 0, socket.address.isLoopback else { return false }
+            if socket.address.isIPv6 {
+                guard authority.hasPrefix("[") else { return false }
+            } else {
+                guard !authority.contains("["), !authority.contains("]") else { return false }
             }
-            // Only the loopback IPv6 address itself is accepted, and only
-            // bracketed, exactly as the workers' own parser decides.
-            return host == "::1"
+            // The authority parsed as a socket address, so the workers'
+            // canonical-form check passes it by construction.
+            return true
         }
-        var host = Substring(authority)
-        if let colon = host.firstIndex(of: ":") {
-            let port = host[host.index(after: colon)...]
-            host = host[..<colon]
-            guard let number = Int(port), (1...65_535).contains(number), port == "\(number)" else {
-                return false
-            }
+        // A bare address carries no port: only the canonical authorities
+        // survive the workers' final canonical-form comparison — a dotted
+        // loopback quad exactly as written, or the bracketed `::1` itself.
+        var bare = authority
+        while bare.hasPrefix("[") { bare = bare.dropFirst() }
+        while bare.hasSuffix("]") { bare = bare.dropLast() }
+        guard let address = Self.parseIPAddress(String(bare)), address.isLoopback else { return false }
+        if address.isIPv6 {
+            return authority == "[::1]"
         }
-        return Self.isLoopbackIPv4(String(host))
+        return !authority.contains("[") && !authority.contains("]")
     }
 
-    private static func isLoopbackIPv4(_ text: String) -> Bool {
-        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return false }
-        for (index, part) in parts.enumerated() {
-            guard (1...3).contains(part.count), part.allSatisfy(\.isNumber),
-                  part.first != "0" || part.count == 1, let octet = Int(part), octet <= 255 else {
-                return false
+    /// One parsed IP address: the 8 groups of an IPv6 address, or the 4
+    /// octets of an IPv4 address as two groups, with the family recorded.
+    /// The parsers below take exactly what Rust's
+    /// `Ipv4Addr`/`Ipv6Addr::from_str` takes (no leading-zero octets, one
+    /// `::`, an optional trailing dotted quad).
+    struct IPAddress: Sendable {
+        var groups: [UInt16]
+        var isIPv6: Bool
+
+        var isLoopback: Bool {
+            if isIPv6 {
+                return groups == [0, 0, 0, 0, 0, 0, 0, 1]
             }
-            if index == 0 && octet != 127 { return false }
+            return groups[0] >> 8 == 127
         }
-        return true
+    }
+
+    /// An IPv4 dotted quad, or nil when Rust's parser would refuse it:
+    /// exactly four groups of one to three digits, no leading zeros.
+    static func parseIPv4Address(_ text: String) -> [UInt8]? {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var octets: [UInt8] = []
+        for part in parts {
+            guard (1...3).contains(part.count), part.allSatisfy(\.isNumber),
+                  part.first != "0" || part.count == 1, let octet = UInt8(part) else {
+                return nil
+            }
+            octets.append(octet)
+        }
+        return octets
+    }
+
+    /// An IPv6 address, or nil when Rust's parser would refuse it: up to
+    /// eight groups of one to four hex digits, one optional `::` that
+    /// expands to the missing groups, and an optional trailing dotted quad
+    /// that counts as the last two groups. No zone, no empty groups.
+    static func parseIPv6Address(_ text: String) -> [UInt16]? {
+        guard !text.isEmpty else { return nil }
+        let halves = text.components(separatedBy: "::")
+        guard halves.count <= 2 else { return nil }
+        let compressed = halves.count == 2
+        func groups(of part: String) -> [UInt16]? {
+            if part.isEmpty { return [] }
+            func hex(_ piece: String) -> UInt16? {
+                guard (1...4).contains(piece.count), piece.allSatisfy({ $0.isHexDigit }),
+                      let value = UInt16(piece, radix: 16) else { return nil }
+                return value
+            }
+            var pieces = part.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+            guard let last = pieces.popLast() else { return nil }
+            var result: [UInt16] = []
+            for piece in pieces {
+                guard let group = hex(piece) else { return nil }
+                result.append(group)
+            }
+            if last.contains(".") {
+                guard let octets = Self.parseIPv4Address(last) else { return nil }
+                result.append(UInt16(octets[0]) << 8 | UInt16(octets[1]))
+                result.append(UInt16(octets[2]) << 8 | UInt16(octets[3]))
+            } else {
+                guard let group = hex(last) else { return nil }
+                result.append(group)
+            }
+            return result
+        }
+        guard let head = groups(of: halves[0]) else { return nil }
+        let tail = compressed ? (groups(of: halves[1]) ?? []) : []
+        guard head.count + tail.count <= (compressed ? 7 : 8) else { return nil }
+        if !compressed, head.count + tail.count != 8 { return nil }
+        var result = head
+        if compressed {
+            while result.count + tail.count < 8 { result.append(0) }
+        }
+        result.append(contentsOf: tail)
+        return result
+    }
+
+    /// Either family of address, the way `IpAddr::from_str` decides.
+    static func parseIPAddress(_ text: String) -> IPAddress? {
+        if let octets = parseIPv4Address(text) {
+            return IPAddress(groups: [UInt16(octets[0]) << 8 | UInt16(octets[1]),
+                                      UInt16(octets[2]) << 8 | UInt16(octets[3])], isIPv6: false)
+        }
+        guard let groups = parseIPv6Address(text) else { return nil }
+        return IPAddress(groups: groups, isIPv6: true)
+    }
+
+    /// A decimal port the way Rust's socket parser reads one: one to five
+    /// digits, no leading zeros, within range.
+    private static func parsePort(_ text: Substring) -> UInt32? {
+        guard (1...5).contains(text.count), text.allSatisfy(\.isNumber),
+              text.first != "0", let number = UInt32(text), number <= 65_535 else { return nil }
+        return number
+    }
+
+    /// A "host:port" socket authority, or nil when Rust's
+    /// `SocketAddr::from_str` would refuse it: `[IPv6]:port` or `IPv4:port`.
+    static func parseSocketAuthority(_ authority: Substring)
+        -> (address: IPAddress, port: UInt32)? {
+        if authority.hasPrefix("[") {
+            guard let close = authority.firstIndex(of: "]") else { return nil }
+            let host = String(authority[authority.index(after: authority.startIndex)..<close])
+            var rest = authority[authority.index(after: close)...]
+            guard rest.hasPrefix(":") else { return nil }
+            rest = rest.dropFirst()
+            guard let port = Self.parsePort(rest), let groups = Self.parseIPv6Address(host) else {
+                return nil
+            }
+            return (IPAddress(groups: groups, isIPv6: true), port)
+        }
+        guard let colon = authority.firstIndex(of: ":") else { return nil }
+        let host = String(authority[..<colon])
+        guard let port = Self.parsePort(authority[authority.index(after: colon)...]),
+              let octets = Self.parseIPv4Address(host) else { return nil }
+        return (IPAddress(groups: [UInt16(octets[0]) << 8 | UInt16(octets[1]),
+                                   UInt16(octets[2]) << 8 | UInt16(octets[3])], isIPv6: false), port)
     }
 
     /// At most `scalars` Unicode scalars, none of them a control character:

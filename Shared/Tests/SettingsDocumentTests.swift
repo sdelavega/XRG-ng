@@ -399,16 +399,24 @@ struct SettingsDocumentTests {
     /// The named-constraint rules themselves, at the boundaries the workers
     /// decide on: the loopback URL grammar and the device-name rules.
     @Test func constraintBoundariesMatchTheWorkersRules() throws {
-        // Loopback URLs: the accepted authorities and the refused shapes.
+        // Loopback URLs: the accepted authorities and the refused shapes —
+        // every textual form the workers' own `SocketAddr`/`IpAddr` parsing
+        // takes, so migration never drops a working endpoint (R34).
         let accepted = [
             "http://127.0.0.1", "http://127.0.0.1:8889", "http://127.255.0.1:80/metrics",
             "http://[::1]", "http://[::1]:11434", "http://127.0.0.2:80",
+            "http://[0:0:0:0:0:0:0:1]:11435", "http://[::0:0:1]:11435",
+            "http://127.0.0.1:65535/x/y",
         ]
         let refused = [
             "", "https://127.0.0.1", "http://localhost:8889", "http://127.0.0.1:0",
             "http://127.0.0.1:99999", "http://10.0.0.1:80", "http://128.0.0.1:80",
             "http://::1", "http://127.0.0.1:80?q", "http://127.0.0.1:80#f",
             "http://u@127.0.0.1:80", "http://[127.0.0.1]:80", "http://127.0.0.01:80",
+            // Non-canonical bare authorities the workers' own canonical-form
+            // check refuses: expanded IPv6 without a port, unbracketed IPv6.
+            "http://[0:0:0:0:0:0:0:1]", "http://0:0:0:0:0:0:0:1]:11435",
+            "http://0:0:0:0:0:0:0:1", "http://[::1]:0",
         ]
         for url in accepted {
             #expect(XRGSettingsDocument.isLoopbackHTTPURL(url), "\(url) must be accepted")
