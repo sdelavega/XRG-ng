@@ -706,6 +706,72 @@ impl Settings {
         self.weather.validate()?;
         Ok(())
     }
+    /// Repair a view the workers would refuse (final review, finding 1 /
+    /// ruling R29): each component that fails its own validation falls back
+    /// to that component's default — the same per-setting fallback a
+    /// malformed entry gets at load — and the caller reports the
+    /// replacement. A combination no component check catches falls back to
+    /// the whole default view, so a loaded document can never fail
+    /// `validate()` downstream and the launch never panics.
+    pub fn repaired(&self) -> (Settings, Vec<&'static str>) {
+        let mut repaired = self.clone();
+        let mut replaced: Vec<&'static str> = Vec::new();
+        let default = Settings::default();
+        if self.theme.palette().is_err() {
+            repaired.theme = default.theme.clone();
+            replaced.push("the theme");
+        }
+        if self.activity_bars.validate().is_err() {
+            repaired.activity_bars = default.activity_bars.clone();
+            replaced.push("the activity bar colours");
+        }
+        if self.metrics.validate().is_err() {
+            repaired.metrics = default.metrics.clone();
+            replaced.push("a graph source");
+        }
+        if self.processes.validate().is_err() {
+            repaired.processes = default.processes.clone();
+            replaced.push("the process view");
+        }
+        if self.ai.validate().is_err() {
+            repaired.ai = default.ai.clone();
+            replaced.push("an AI setting");
+        }
+        if self.weather.validate().is_err() {
+            repaired.weather = default.weather.clone();
+            replaced.push("a weather setting");
+        }
+        if !(64..=240).contains(&self.graph_height) {
+            repaired.graph_height = default.graph_height;
+            replaced.push("the graph height");
+        }
+        if !(100..=1200).contains(&self.graph_width) {
+            repaired.graph_width = default.graph_width;
+            replaced.push("the graph width");
+        }
+        if crate::sampling::interval(self.sampling_interval_ms).is_err() {
+            repaired.sampling_interval_ms = default.sampling_interval_ms;
+            replaced.push("the sampling interval");
+        }
+        if network_scale::validate(self.network_min_scale).is_err() {
+            repaired.network_min_scale = default.network_min_scale;
+            replaced.push("the network scale");
+        }
+        if !self.window_opacity.is_finite() || !(0.1..=1.0).contains(&self.window_opacity) {
+            repaired.window_opacity = default.window_opacity;
+            replaced.push("the window opacity");
+        }
+        if let Some(size) = self.window_size {
+            if size.validate().is_err() {
+                repaired.window_size = None;
+                replaced.push("the window size");
+            }
+        }
+        if repaired.validate().is_ok() {
+            return (repaired, replaced);
+        }
+        (Settings::default(), vec!["settings that failed validation"])
+    }
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > LIMIT {
             return Err("Settings file exceeds 128 KiB".into());
@@ -1085,7 +1151,24 @@ impl Store {
         // core renders from the document the store holds: fresh, migrated
         // and blocked states alike never fall back to the legacy Rust model.
         match view(&store.document) {
-            Ok(view) => store.settings = view,
+            Ok(view) => {
+                // A view the workers would refuse never reaches them (final
+                // review, finding 1 / ruling R29): each failing component
+                // falls back to its default and the problem is reported
+                // exactly like a malformed entry — the app starts, it never
+                // panics on a loaded document.
+                let (settings, replaced) = view.repaired();
+                if replaced.is_empty() {
+                    store.settings = view;
+                } else {
+                    let problem = format!("a settings value was replaced: {}", replaced.join(", "));
+                    store.problem = match store.problem.take() {
+                        Some(existing) => Some(format!("{existing}; {problem}")),
+                        None => Some(problem),
+                    };
+                    store.settings = settings;
+                }
+            }
             Err(problem) => {
                 store.document = default_document();
                 store.settings = Settings::default();

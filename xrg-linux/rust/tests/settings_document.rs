@@ -644,3 +644,103 @@ fn preset_conf_migrates_once_and_never_rewrites() {
     assert_eq!(reopened.settings(), &expected);
     assert_eq!(fs::read(f.json()).unwrap(), written);
 }
+
+// --- Final review, finding 1 / rulings R29, R30: the core owns the
+// --- workers' semantic constraints, and a loaded document never panics.
+
+/// The values the workers would reject are refused before they are saved:
+/// the one-character ICAO station that crashed the Linux launch, a
+/// fractional whole-minute duration, an unrooted AI path, a non-loopback
+/// endpoint and an oversized process filter never reach the file.
+#[test]
+fn constraint_failures_are_refused_before_saving() {
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    store.save(&custom_settings()).unwrap();
+    let saved = fs::read(f.json()).unwrap();
+    let view = store.settings().clone();
+    let long_filter = "p".repeat(129);
+    for (id, value) in [
+        ("weather.station", serde_json::json!("K")),
+        ("weather.station", serde_json::json!("KSEAA")),
+        (
+            "ai.claude.logs_path",
+            serde_json::json!("relative/path"),
+        ),
+        (
+            "ai.ollama.url",
+            serde_json::json!("http://10.0.0.1:11434"),
+        ),
+        ("graphs.processes.filter", serde_json::json!(long_filter)),
+        ("graphs.cpu.time_window", serde_json::json!(1.5)),
+        ("weather.refresh", serde_json::json!(5.5)),
+    ] {
+        assert_eq!(
+            store.set(id, value),
+            Err(document::SetError::ConstraintFailed),
+            "the core accepted {id}"
+        );
+        assert_eq!(fs::read(f.json()).unwrap(), saved, "{id} changed the file");
+        assert_eq!(store.settings(), &view);
+    }
+    // The values the workers accept still save — including a station that
+    // only normalises at read time, and the fractional sampling interval
+    // where both platforms genuinely use fractions (ruling R30).
+    store
+        .set("weather.station", serde_json::json!(" ksea "))
+        .unwrap();
+    store.set("graphs.refresh", serde_json::json!(0.25)).unwrap();
+    let reopened = Store::open(f.root());
+    assert_eq!(reopened.settings().weather.station, " ksea ");
+    assert_eq!(reopened.settings().sampling_interval_ms, 250);
+}
+
+/// The review's end-to-end case: a document-backed edit → save → reopen →
+/// worker-start cycle. The saved document reopens with the same effective
+/// settings, they pass the workers' own `validate()`, and the workers start
+/// on them without panicking.
+#[test]
+fn saved_documents_reopen_and_start_the_workers() {
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    let mut wanted = custom_settings();
+    wanted.weather.station = "KBLI".into();
+    wanted.metrics.cpu_history_minutes = 5;
+    store.save(&wanted).unwrap();
+    let reopened = Store::open(f.root());
+    assert!(reopened.load_problem().is_none());
+    assert_eq!(reopened.settings().weather.station, "KBLI");
+    assert_eq!(reopened.settings().metrics.cpu_history_minutes, 5);
+    reopened.settings().validate().expect("validated settings");
+    // The engine starts on the reopened view; dropping it joins the worker.
+    let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, reopened.settings());
+    drop(worker);
+}
+
+/// A document that already holds values the workers would refuse — saved by
+/// an earlier build, or hand-edited — loads with per-setting fallbacks and
+/// a reported problem, exactly like a malformed entry: the app starts, it
+/// never panics (ruling R29).
+#[test]
+fn a_document_the_workers_would_refuse_starts_on_repaired_settings() {
+    let f = Fixture::new();
+    // The review's exact crash: a station no worker accepts. The core now
+    // refuses to write it, so this file is what an older 0.2.3 build left.
+    f.write_json(
+        br#"{"format": "xrg-ng-settings", "version": 1, "settings": {
+            "weather.station": "K", "graphs.cpu.time_window": 1.5}}"#,
+    );
+    let store = Store::open(f.root());
+    let problem = store.load_problem().expect("the replacements are reported");
+    assert!(
+        problem.contains("a settings value was replaced"),
+        "unexpected problem: {problem}"
+    );
+    // The per-setting fallback: the station and the window fall back to
+    // their defaults, and the workers start on the repaired view.
+    assert_eq!(store.settings().weather.station, "KMOP");
+    assert_eq!(store.settings().metrics.cpu_history_minutes, 0);
+    store.settings().validate().expect("repaired settings validate");
+    let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, store.settings());
+    drop(worker);
+}

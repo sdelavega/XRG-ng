@@ -631,6 +631,20 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
                 return "Requires \(dependsEntry.label) = \(depends.equals.isTextualDescription)."
             }
             return "Another setting must change first."
+        case .constraint:
+            switch entry.constraint {
+            case "icao-station": return "Enter a four-character ICAO station code, for example KSEA."
+            case "absolute-path": return "Enter an absolute path of at most 4096 characters."
+            case "loopback-url":
+                return "Use an HTTP URL with a loopback IP (127.0.0.1 or [::1]), without credentials, query or fragment."
+            case "process-filter": return "Enter at most 128 printable characters."
+            case "whole-minutes": return "Enter a whole number of minutes."
+            case "theme-name": return "Enter 1–80 printable characters, without leading or trailing spaces."
+            case "device-name": return "Enter a device name of at most 255 characters without spaces, ':' or '/'."
+            case "source-identity": return "Enter an identity of at most 4096 characters."
+            case "cpu-index": return "Enter a CPU index between 0 and 1048575."
+            default: return "The value breaks this setting's rules."
+            }
         }
     }
 

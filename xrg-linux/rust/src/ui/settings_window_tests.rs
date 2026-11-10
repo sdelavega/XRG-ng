@@ -595,6 +595,61 @@ fn invalid_input_shows_danger_and_does_not_save() {
     );
 }
 
+/// A value the shared core's semantic constraints refuse (final review,
+/// finding 1 / ruling R29): the one-character station that used to crash
+/// the Linux launch shows the constraint's reason and saves nothing, and
+/// the station the worker normalises at read time still saves.
+#[test]
+fn constraint_refusal_shows_the_entrys_reason_and_saves_nothing() {
+    let mut harness = Harness::new();
+    harness
+        .store
+        .set("weather.refresh", json!(20))
+        .expect("valid refresh");
+    harness.window.select_section("weather");
+    let _ = harness.quiet();
+    let before = fs::read(harness.document()).unwrap();
+    harness.type_into("weather.station", "K");
+    let frame = harness.quiet();
+    let reason = harness
+        .window
+        .error("weather.station")
+        .expect("the station shows its constraint reason")
+        .to_owned();
+    assert_eq!(
+        reason,
+        "Enter a four-character ICAO station code, for example KSEA."
+    );
+    assert!(
+        labelled(&frame, &reason),
+        "the reason {reason:?} did not render inside the row"
+    );
+    assert_eq!(
+        fs::read(harness.document()).unwrap(),
+        before,
+        "the refused station changed the document"
+    );
+    assert_ne!(
+        harness.values().get("weather.station"),
+        Some(&json!("K")),
+        "the refused station reached the store"
+    );
+    // A station the worker normalises at read time saves; the reason
+    // clears. The egui field submits trimmed text, so the stored value is
+    // the trimmed one.
+    harness.type_into("weather.station", " ksea ");
+    harness.quiet();
+    assert_eq!(
+        harness.values()["weather.station"],
+        json!("ksea"),
+        "the normalising station was not saved"
+    );
+    assert!(
+        harness.window.error("weather.station").is_none(),
+        "the saved station kept its danger reason"
+    );
+}
+
 #[test]
 fn reset_section_asks_then_resets() {
     let mut harness = Harness::new();

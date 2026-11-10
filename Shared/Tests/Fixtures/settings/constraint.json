@@ -1,0 +1,12 @@
+{
+  "format": "xrg-ng-settings",
+  "version": 1,
+  "settings": {
+    "future.widget.config": {
+      "kept": true
+    },
+    "graphs.cpu.time_window": 1.5,
+    "general.window.title": "Kept",
+    "weather.station": "K"
+  }
+}

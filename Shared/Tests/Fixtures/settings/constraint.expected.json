@@ -1,0 +1,13 @@
+{
+  "diagnostics": [
+    {
+      "id": "graphs.cpu.time_window",
+      "problem": "invalid-value"
+    },
+    {
+      "id": "weather.station",
+      "problem": "invalid-value"
+    }
+  ],
+  "document": "{\n  \"format\": \"xrg-ng-settings\",\n  \"settings\": {\n    \"future.widget.config\": {\n      \"kept\": true\n    },\n    \"general.window.title\": \"Kept\"\n  },\n  \"version\": 1\n}\n"
+}

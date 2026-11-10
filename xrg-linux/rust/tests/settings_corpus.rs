@@ -547,13 +547,15 @@ fn the_linux_migration_and_view_round_trip_through_the_model() {
 #[test]
 fn a_core_valid_view_larger_than_the_legacy_rust_limit_loads() {
     shared::check_abi();
-    // A text control has no catalog bound, so the core accepts a process
-    // filter far longer than the legacy Rust model's 128 KiB file limit.
-    // The view the core renders is authoritative: it must deserialise
-    // without a Rust-side size limit or validator.
-    let filter = "x".repeat(140_000);
+    // A text control the catalog leaves length-unbounded — the ticker list —
+    // accepts a value far longer than the legacy Rust model's 128 KiB file
+    // limit. The view the core renders is authoritative: it must deserialise
+    // without a Rust-side size limit or validator. (The process filter
+    // gained the workers' 128-character rule in the final review, finding 1,
+    // so the ticker list is the unbounded control now.)
+    let symbols = "y".repeat(140_000);
     let bytes = format!(
-        r#"{{"format": "xrg-ng-settings", "settings": {{"graphs.processes.filter": "{filter}"}}, "version": 1}}"#
+        r#"{{"format": "xrg-ng-settings", "settings": {{"stocks.symbols": "{symbols}"}}, "version": 1}}"#
     )
     .into_bytes();
     let document = match document::load(&bytes) {
@@ -561,10 +563,10 @@ fn a_core_valid_view_larger_than_the_legacy_rust_limit_loads() {
             document,
             diagnostics,
         } => {
-            assert!(diagnostics.is_empty(), "the long filter is core-valid");
+            assert!(diagnostics.is_empty(), "the long ticker list is core-valid");
             document
         }
-        document::Loaded::Unreadable { .. } => panic!("the long-filter document must load"),
+        document::Loaded::Unreadable { .. } => panic!("the long-symbols document must load"),
     };
     let raw = raw_linux_view(&document);
     assert!(
@@ -573,7 +575,7 @@ fn a_core_valid_view_larger_than_the_legacy_rust_limit_loads() {
         raw.len()
     );
     let settings = document::linux_view(&document).expect("the core's view must load");
-    assert_eq!(settings.processes.filter, filter);
+    assert_eq!(settings.stocks.symbols, symbols);
 }
 
 #[test]

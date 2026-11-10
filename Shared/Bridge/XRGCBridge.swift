@@ -427,6 +427,7 @@ private struct SettingsErrorJSON: Encodable {
         case .outOfRange(let min, let max): self.init(kind: "out-of-range", min: min, max: max)
         case .notAnOption: self.init(kind: "not-an-option", min: nil, max: nil)
         case .dependencyNotMet: self.init(kind: "dependency-not-met", min: nil, max: nil)
+        case .constraint: self.init(kind: "constraint-failed", min: nil, max: nil)
         }
     }
 }

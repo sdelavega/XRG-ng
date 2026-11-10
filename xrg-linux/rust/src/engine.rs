@@ -1153,7 +1153,18 @@ impl Worker {
         settings: &crate::settings::Settings,
         stocks_fetcher: Option<crate::stocks::Fetch>,
     ) -> Self {
-        settings.validate().expect("Validated settings");
+        // A settings view that fails `validate()` must never panic the
+        // launch (final review, finding 1 / ruling R29): fall back per
+        // setting to defaults and report it, exactly like the store does
+        // with a malformed entry.
+        let (settings, replaced) = settings.repaired();
+        if !replaced.is_empty() {
+            eprintln!(
+                "XRG-ng settings: {} were replaced with their defaults",
+                replaced.join(", ")
+            );
+        }
+        let settings = &settings;
         let mut stocks = crate::stocks::Launch::from_settings(settings);
         stocks.fetcher = stocks_fetcher;
         Self::start_timed(
@@ -1169,10 +1180,17 @@ impl Worker {
         source: LinuxSources,
         settings: &crate::settings::Settings,
     ) -> Self {
-        settings.validate().expect("Validated settings");
+        // As above: start, never panic, on a view the workers would refuse.
+        let (repaired, replaced) = settings.repaired();
+        if !replaced.is_empty() {
+            eprintln!(
+                "XRG-ng settings: {} were replaced with their defaults",
+                replaced.join(", ")
+            );
+        }
         Self::spawn(
-            settings.metrics.clone(),
-            settings.sampling_interval_ms,
+            repaired.metrics.clone(),
+            repaired.sampling_interval_ms,
             move |_, _, _| Sampler::with_sources(source),
         )
     }

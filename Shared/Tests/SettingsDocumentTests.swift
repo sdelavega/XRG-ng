@@ -310,6 +310,127 @@ struct SettingsDocumentTests {
         #expect(document.value("graphs.cpu.samples", catalog: catalog) == .int(500))
     }
 
+    // MARK: named semantic constraints (final review, finding 1 / R29, R30)
+
+    /// The values the workers would reject are refused before they are ever
+    /// saved — the exact review case is the one-character ICAO station that
+    /// crashed the Linux launch, and its siblings.
+    @Test func setRefusesValuesTheWorkersWouldReject() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        var document = XRGSettingsDocument.defaults(catalog: catalog, platform: .linux)
+        let cases: [(String, XRGSettingsValue)] = [
+            // The review's crash: a station no worker accepts.
+            ("weather.station", .string("K")),
+            ("weather.station", .string("KSEAA")),
+            // AI paths must be absolute, bounded and printable.
+            ("ai.claude.logs_path", .string("relative/path")),
+            ("ai.hermes.database_path", .string("")),
+            // AI endpoints must be loopback HTTP, without credentials/query.
+            ("ai.metrics.url", .string("http://localhost:8889/metrics")),
+            ("ai.ollama.url", .string("http://10.0.0.1:11434")),
+            ("ai.metrics.url", .string("http://127.0.0.1:8889/metrics?x=1")),
+            ("ai.ollama.url", .string("http://user@127.0.0.1:11434")),
+            // The process filter is bounded printable text.
+            ("graphs.processes.filter", .string(String(repeating: "a", count: 129))),
+            // Whole-minute durations refuse fractions (ruling R30).
+            ("graphs.cpu.time_window", .double(1.5)),
+            ("weather.refresh", .double(5.5)),
+        ]
+        for (id, value) in cases {
+            #expect(throws: XRGSettingsError.constraint) {
+                try document.set(id, value, catalog: catalog)
+            }
+            #expect(document.values[id] == nil, "\(id) must not be stored")
+        }
+        // A theme name is bounded printable text, trimmed.
+        #expect(throws: XRGSettingsError.constraint) {
+            try document.set("themes.name", .string(" padded "), catalog: catalog)
+        }
+    }
+
+    /// The same rules accept the values the workers accept, so a valid edit
+    /// still saves — including the fractional sampling interval, where both
+    /// platforms genuinely use fractions (ruling R30).
+    @Test func setAcceptsValuesThatSatisfyTheConstraints() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        var document = XRGSettingsDocument.defaults(catalog: catalog, platform: .linux)
+        try document.set("weather.station", .string(" ksea "), catalog: catalog)
+        try document.set("ai.claude.logs_path", .string("/home/user/.claude/projects"), catalog: catalog)
+        try document.set("ai.metrics.url", .string("http://127.0.0.1:8889/metrics"), catalog: catalog)
+        try document.set("ai.ollama.url", .string("http://[::1]:11434"), catalog: catalog)
+        try document.set("graphs.processes.filter", .string("chrome"), catalog: catalog)
+        try document.set("graphs.cpu.time_window", .int(5), catalog: catalog)
+        try document.set("weather.refresh", .int(20), catalog: catalog)
+        try document.set("graphs.refresh", .double(0.25), catalog: catalog)
+        #expect(document.value("weather.station", catalog: catalog) == .string(" ksea "))
+        #expect(document.value("graphs.refresh", catalog: catalog) == .double(0.25))
+    }
+
+    /// An old document that already holds worker-refusing values loads with
+    /// per-key fallbacks and reports them, exactly like any other invalid
+    /// value — the file is not unreadable and the rest still loads.
+    @Test func loadReplacesValuesThatBreakTheirConstraint() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let input = Data("""
+        {
+          "format": "xrg-ng-settings",
+          "version": 1,
+          "settings": {
+            "general.window.title": "Kept",
+            "graphs.cpu.time_window": 1.5,
+            "weather.station": "K",
+            "ai.ollama.url": "http://10.0.0.1:11434"
+          }
+        }
+        """.utf8)
+        let (document, diagnostics) = try #require(loadOK(input, catalog))
+        #expect(diagnostics == [
+            XRGSettingsDiagnostic(id: "ai.ollama.url", problem: "invalid-value"),
+            XRGSettingsDiagnostic(id: "graphs.cpu.time_window", problem: "invalid-value"),
+            XRGSettingsDiagnostic(id: "weather.station", problem: "invalid-value"),
+        ])
+        // Each entry falls back to its catalog default; the rest loads.
+        #expect(document.value("general.window.title", catalog: catalog) == .string("Kept"))
+        #expect(document.value("graphs.cpu.time_window", catalog: catalog) == .int(0))
+        #expect(document.value("weather.station", catalog: catalog) == .string("KMOP"))
+        #expect(document.value("ai.ollama.url", catalog: catalog) == .string("http://127.0.0.1:11434"))
+    }
+
+    /// The named-constraint rules themselves, at the boundaries the workers
+    /// decide on: the loopback URL grammar and the device-name rules.
+    @Test func constraintBoundariesMatchTheWorkersRules() throws {
+        // Loopback URLs: the accepted authorities and the refused shapes.
+        let accepted = [
+            "http://127.0.0.1", "http://127.0.0.1:8889", "http://127.255.0.1:80/metrics",
+            "http://[::1]", "http://[::1]:11434", "http://127.0.0.2:80",
+        ]
+        let refused = [
+            "", "https://127.0.0.1", "http://localhost:8889", "http://127.0.0.1:0",
+            "http://127.0.0.1:99999", "http://10.0.0.1:80", "http://128.0.0.1:80",
+            "http://::1", "http://127.0.0.1:80?q", "http://127.0.0.1:80#f",
+            "http://u@127.0.0.1:80", "http://[127.0.0.1]:80", "http://127.0.0.01:80",
+        ]
+        for url in accepted {
+            #expect(XRGSettingsDocument.isLoopbackHTTPURL(url), "\(url) must be accepted")
+        }
+        for url in refused {
+            #expect(!XRGSettingsDocument.isLoopbackHTTPURL(url), "\(url) must be refused")
+        }
+        // Device names: the network/disk rule.
+        #expect(XRGSettingsDocument.isDeviceName("en0"))
+        #expect(!XRGSettingsDocument.isDeviceName(""))
+        #expect(!XRGSettingsDocument.isDeviceName("."))
+        #expect(!XRGSettingsDocument.isDeviceName(".."))
+        #expect(!XRGSettingsDocument.isDeviceName("disk0s2:1"))
+        #expect(!XRGSettingsDocument.isDeviceName("has space"))
+        #expect(!XRGSettingsDocument.isDeviceName(String(repeating: "a", count: 256)))
+        // Absolute paths: rooted, bounded, printable.
+        #expect(XRGSettingsDocument.isAbsolutePath("/"))
+        #expect(XRGSettingsDocument.isAbsolutePath("/home/u/.claude/projects"))
+        #expect(!XRGSettingsDocument.isAbsolutePath("home/u"))
+        #expect(!XRGSettingsDocument.isAbsolutePath("/a\u{1}b"))
+    }
+
     // MARK: reset
 
     @Test func resetSectionOnlyTouchesThatSection() throws {

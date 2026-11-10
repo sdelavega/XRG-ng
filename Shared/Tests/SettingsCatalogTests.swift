@@ -80,6 +80,12 @@ struct SettingsCatalogTests {
         let catalog = try XRGSettingsCatalog.load()
         for entry in catalog.entries {
             let value = entry.defaultValue
+            // A default must satisfy its own named constraint (final review,
+            // finding 1): a default the core would refuse could never load.
+            if let name = entry.constraint,
+               XRGSettingsDocument.constraintError(value, name: name) != nil {
+                Issue.record("\(entry.id): the default breaks its \(name) constraint")
+            }
             // null is the catalog's documented "not set" default: the platform
             // inherits, so it is valid for every control.
             if case XRGSettingsValue.null = value { continue }
@@ -146,6 +152,31 @@ struct SettingsCatalogTests {
     private func withinRange(_ value: XRGSettingsValue, _ range: XRGSettingsRange) -> Bool {
         guard let number = asNumber(value) else { return false }
         return number >= range.min && number <= range.max
+    }
+
+    /// Every named constraint is one the shared core implements (final
+    /// review, finding 1 / ruling R29): a name outside the core's set would
+    /// refuse every value, so the catalog can never name one.
+    @Test func constraintNamesAreImplementedByTheCore() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        for entry in catalog.entries {
+            guard let name = entry.constraint else { continue }
+            #expect(XRGSettingsDocument.constraintNames.contains(name),
+                    "\(entry.id): no core implementation for constraint \(name)")
+        }
+    }
+
+    /// The whole-minute durations (ruling R30) are exactly the minute-unit
+    /// durations: every duration a consumer reads as whole minutes carries
+    /// the constraint, and no other duration does — fractions stay allowed
+    /// only where both platforms support them, like sampling intervals.
+    @Test func wholeMinuteDurationsAreExactlyTheMinuteOnes() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        for entry in catalog.entries where entry.control == .duration {
+            let minutes = entry.range?.unit == "min"
+            #expect(minutes == (entry.constraint == "whole-minutes"),
+                    "\(entry.id): a minute-unit duration must carry the whole-minutes constraint")
+        }
     }
 
     @Test func everyInventoryKeyIsMapped() throws {

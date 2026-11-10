@@ -142,13 +142,19 @@ int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *ou
  * document is the canonical bytes as a JSON string, null when unreadable.
  * xrg_settings_set writes {"document":...} or
  * {"error":{"kind":"unknown-id"|"wrong-type"|"out-of-range"|"not-an-option"|
- * "dependency-not-met"|"request-too-large"|"unparsable-request",
+ * "dependency-not-met"|"constraint-failed"|"request-too-large"|
+ * "unparsable-request",
  * "min":...,"max":...}} with the
  * bounds present only for out-of-range; request-too-large means the id or
  * the value exceeded its documented bound while the document itself may be
  * fine, and unparsable-request means the id or the value could not be
  * parsed — invalid UTF-8, malformed JSON, or nesting past the core parser's
- * depth limit — again while the document itself may be fine. -1 stays
+ * depth limit — again while the document itself may be fine.
+ * constraint-failed means the value broke the entry's named semantic
+ * constraint (the catalog's "constraint" field: the worker-enforced rules
+ * such as the ICAO station format, AI paths and endpoints, the process
+ * filter, and whole-minute durations); the windows turn the entry's
+ * constraint into the user-facing reason. -1 stays
  * reserved for invalid arguments and a document that does not load.
  * xrg_settings_reset_section writes {"document":...} after
  * restoring both platforms' entries of one catalog section — or the same

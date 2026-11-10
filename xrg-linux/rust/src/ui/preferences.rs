@@ -598,11 +598,15 @@ impl SettingsWindow {
                         mark_custom_preset(store, &catalog);
                     }
                 } else if matches!(result, Err(SetError::Transport)) {
-                    // The core accepted the value and only the write
-                    // failed: retain the latest failed value for Retry,
-                    // replacing any older retained one — a retry must
-                    // never save a value older than the newest edit
-                    // (fix round 3, review rr2 finding 1).
+                    // The value did not persist: the commit failed — here,
+                    // while the frame renders the save, or later in a retry,
+                    // which can hit the same refusal — or the pinned core
+                    // binding answered in a shape it never produces. What is
+                    // certain is only that nothing was written, so retain the
+                    // latest failed value for Retry, replacing any older
+                    // retained one — a retry must never save a value older
+                    // than the newest edit (fix round 3, review rr2
+                    // finding 1).
                     held.insert(id.to_owned(), value);
                 }
                 result

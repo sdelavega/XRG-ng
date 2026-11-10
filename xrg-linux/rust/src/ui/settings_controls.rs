@@ -245,6 +245,28 @@ pub fn refusal_reason(error: &SetError, entry: &CatalogEntry) -> String {
         }
         SetError::NotAnOption => "Choose one of the listed options.".into(),
         SetError::DependencyNotMet => "Another setting must change first.".into(),
+        SetError::ConstraintFailed => match entry.constraint.as_deref() {
+            Some("icao-station") => {
+                "Enter a four-character ICAO station code, for example KSEA.".into()
+            }
+            Some("absolute-path") => "Enter an absolute path of at most 4096 characters.".into(),
+            Some("loopback-url") => {
+                "Use an HTTP URL with a loopback IP (127.0.0.1 or [::1]), without credentials, query or fragment.".into()
+            }
+            Some("process-filter") => {
+                "Enter at most 128 printable characters.".into()
+            }
+            Some("whole-minutes") => "Enter a whole number of minutes.".into(),
+            Some("theme-name") => {
+                "Enter 1–80 printable characters, without leading or trailing spaces.".into()
+            }
+            Some("device-name") => {
+                "Enter a device name of at most 255 characters without spaces, ':' or '/'.".into()
+            }
+            Some("source-identity") => "Enter an identity of at most 4096 characters.".into(),
+            Some("cpu-index") => "Enter a CPU index between 0 and 1048575.".into(),
+            _ => "The value breaks this setting's rules.".into(),
+        },
         SetError::InvalidDocument => {
             "The settings document did not load; replace it before saving.".into()
         }

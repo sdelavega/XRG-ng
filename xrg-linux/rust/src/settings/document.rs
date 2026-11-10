@@ -89,6 +89,12 @@ pub enum SetError {
     NotAnOption,
     /// The entry's `depends` requirement does not hold.
     DependencyNotMet,
+    /// The value broke the entry's named semantic constraint (final review,
+    /// finding 1 / ruling R29): a rule a worker enforces at runtime — the
+    /// ICAO station format, AI paths and endpoints, the process filter,
+    /// whole-minute durations — refused before the document is saved. The
+    /// entry's `constraint` names the rule for the user-facing reason.
+    ConstraintFailed,
     /// The request could not be encoded, or the pinned shared core answered
     /// in a shape it never produces: a binding problem, not a document one.
     Transport,
@@ -135,6 +141,13 @@ pub struct CatalogEntry {
     pub depends: Option<CatalogDependency>,
     /// The runtime source kind whose options the platform supplies.
     pub source: Option<String>,
+    /// The semantic constraint the shared core enforces for this entry, on
+    /// top of the control's shape and range (final review, finding 1 /
+    /// ruling R29). Names the worker-enforced rule the refusal reason
+    /// explains: `icao-station`, `absolute-path`, `loopback-url`,
+    /// `process-filter`, `whole-minutes`, `theme-name`, `device-name`,
+    /// `source-identity`, `cpu-index`.
+    pub constraint: Option<String>,
 }
 
 fn shown_by_default() -> bool {
@@ -198,6 +211,7 @@ impl From<WireError> for SetError {
             },
             "not-an-option" => Self::NotAnOption,
             "dependency-not-met" => Self::DependencyNotMet,
+            "constraint-failed" => Self::ConstraintFailed,
             // A kind outside the pinned ABI's set: the core, not the request.
             _ => Self::Transport,
         }

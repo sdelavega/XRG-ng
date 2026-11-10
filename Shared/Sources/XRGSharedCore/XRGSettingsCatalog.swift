@@ -146,12 +146,20 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
     /// The runtime source kind (`temperature`, `gpu`, ...) whose options the
     /// platform supplies for a `source` control.
     public var source: String?
+    /// The semantic constraint the shared core enforces for this entry, on
+    /// top of the control's own shape and range (final review, finding 1 /
+    /// ruling R29): the named rules both platforms' workers require, so an
+    /// edit that would crash or be rejected downstream is refused before it
+    /// is ever saved. The names and their rules live in
+    /// `XRGSettingsDocument.constraintError`.
+    public var constraint: String?
 
     public init(id: String, section: String, group: String, label: String, help: String? = nil,
                 control: XRGSettingsControl, defaultValue: XRGSettingsValue,
                 range: XRGSettingsRange? = nil, options: [XRGSettingsOption]? = nil,
                 platforms: [XRGSettingsPlatform], legacy: XRGSettingsLegacy? = nil,
-                depends: XRGSettingsDependency? = nil, source: String? = nil, shown: Bool = true) {
+                depends: XRGSettingsDependency? = nil, source: String? = nil, shown: Bool = true,
+                constraint: String? = nil) {
         self.id = id
         self.section = section
         self.group = group
@@ -166,12 +174,13 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
         self.depends = depends
         self.source = source
         self.shown = shown
+        self.constraint = constraint
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, section, group, label, help, control
         case defaultValue = "default"
-        case range, options, platforms, shown, legacy, depends, source
+        case range, options, platforms, shown, legacy, depends, source, constraint
     }
 
     public init(from decoder: Decoder) throws {
@@ -190,6 +199,7 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
         legacy = try container.decodeIfPresent(XRGSettingsLegacy.self, forKey: .legacy)
         depends = try container.decodeIfPresent(XRGSettingsDependency.self, forKey: .depends)
         source = try container.decodeIfPresent(String.self, forKey: .source)
+        constraint = try container.decodeIfPresent(String.self, forKey: .constraint)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -209,6 +219,7 @@ public struct XRGSettingsEntry: Codable, Equatable, Sendable {
         try container.encodeIfPresent(legacy, forKey: .legacy)
         try container.encodeIfPresent(depends, forKey: .depends)
         try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(constraint, forKey: .constraint)
     }
 }
 

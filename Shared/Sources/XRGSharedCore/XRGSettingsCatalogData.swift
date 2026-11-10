@@ -1150,7 +1150,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGCPUView.HistoryMinutes.v1",
       "linux": "/metrics/cpu_history_minutes"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.cpu.samples",
@@ -1416,7 +1417,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGGPUView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/gpu"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.gpu.samples",
@@ -1682,7 +1684,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGNPUView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/tpu"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.npu.samples",
@@ -1948,7 +1951,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGHardwareGraphView.VRAM.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/gpu_memory"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.vram.samples",
@@ -2214,7 +2218,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGMemoryView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/memory"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.memory.samples",
@@ -2480,7 +2485,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGBatteryView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/battery"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.battery.samples",
@@ -2746,7 +2752,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGTemperatureView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/temperature"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.temperature.samples",
@@ -3012,7 +3019,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGNetView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/network"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.network.samples",
@@ -3278,7 +3286,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGDiskView.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/disk"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.disk.samples",
@@ -3544,7 +3553,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGAITokenView.HistoryMinutes.v1",
       "linux": "/ai/history_minutes"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.ai.samples",
@@ -3810,7 +3820,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "XRGHardwareGraphView.Fans.HistoryMinutes.v1",
       "linux": "/metrics/history_minutes/fans"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "graphs.fans.samples",
@@ -4897,7 +4908,8 @@ public enum XRGSettingsCatalogData {
       "macos": "processInspectorV1.search",
       "macosTransform": "processInspectorField",
       "linux": "/processes/filter"
-    }
+    },
+    "constraint": "process-filter"
   },
   {
     "id": "graphs.processes.user",
@@ -4972,7 +4984,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "cpuMonitorSource",
       "linux": "/metrics/cpu"
     },
-    "source": "cpu"
+    "source": "cpu",
+    "constraint": "cpu-index"
   },
   {
     "id": "sources.gpu.device",
@@ -4991,7 +5004,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "gpuMonitorSource",
       "linux": "/metrics/gpu"
     },
-    "source": "gpu"
+    "source": "gpu",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.gpu.xe_pmu",
@@ -5025,7 +5039,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "networkInterfaceAll",
       "linux": "/metrics/network"
     },
-    "source": "network"
+    "source": "network",
+    "constraint": "device-name"
   },
   {
     "id": "sources.disk.device",
@@ -5041,7 +5056,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "linux": "/metrics/disk"
     },
-    "source": "disk"
+    "source": "disk",
+    "constraint": "device-name"
   },
   {
     "id": "sources.vram.slot1",
@@ -5060,7 +5076,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "hardwareSourceSlot",
       "linux": "/metrics/gpu"
     },
-    "source": "gpu_memory"
+    "source": "gpu_memory",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.vram.slot2",
@@ -5077,7 +5094,8 @@ public enum XRGSettingsCatalogData {
       "macos": "vramGraphSourcesV1",
       "macosTransform": "hardwareSourceSlot"
     },
-    "source": "gpu_memory"
+    "source": "gpu_memory",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.vram.slot3",
@@ -5094,7 +5112,8 @@ public enum XRGSettingsCatalogData {
       "macos": "vramGraphSourcesV1",
       "macosTransform": "hardwareSourceSlot"
     },
-    "source": "gpu_memory"
+    "source": "gpu_memory",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.fans.sensor1",
@@ -5113,7 +5132,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "hardwareSourceSlot",
       "linux": "/metrics/fan"
     },
-    "source": "fans"
+    "source": "fans",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.fans.sensor2",
@@ -5132,7 +5152,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "hardwareSourceSlot",
       "linux": "/metrics/fan_extra/0"
     },
-    "source": "fans"
+    "source": "fans",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.fans.sensor3",
@@ -5151,7 +5172,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "hardwareSourceSlot",
       "linux": "/metrics/fan_extra/1"
     },
-    "source": "fans"
+    "source": "fans",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.temperature.sensor1",
@@ -5170,7 +5192,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "temperatureSensorSlot",
       "linux": "/metrics/temperature"
     },
-    "source": "temperature"
+    "source": "temperature",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.temperature.sensor2",
@@ -5189,7 +5212,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "temperatureSensorSlot",
       "linux": "/metrics/temperature_extra/0"
     },
-    "source": "temperature"
+    "source": "temperature",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.temperature.sensor3",
@@ -5208,7 +5232,8 @@ public enum XRGSettingsCatalogData {
       "macosTransform": "temperatureSensorSlot",
       "linux": "/metrics/temperature_extra/1"
     },
-    "source": "temperature"
+    "source": "temperature",
+    "constraint": "source-identity"
   },
   {
     "id": "sources.temperature.show_unknown",
@@ -5526,7 +5551,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/claude_logs"
-    }
+    },
+    "constraint": "absolute-path"
   },
   {
     "id": "ai.claude.database_path",
@@ -5541,7 +5567,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/claude_database"
-    }
+    },
+    "constraint": "absolute-path"
   },
   {
     "id": "ai.codex.logs_path",
@@ -5556,7 +5583,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/codex_logs"
-    }
+    },
+    "constraint": "absolute-path"
   },
   {
     "id": "ai.gemini.logs_path",
@@ -5571,7 +5599,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/gemini_logs"
-    }
+    },
+    "constraint": "absolute-path"
   },
   {
     "id": "ai.hermes.database_path",
@@ -5586,7 +5615,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/hermes_database"
-    }
+    },
+    "constraint": "absolute-path"
   },
   {
     "id": "ai.metrics.url",
@@ -5601,7 +5631,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/metrics_url"
-    }
+    },
+    "constraint": "loopback-url"
   },
   {
     "id": "ai.ollama.url",
@@ -5616,7 +5647,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/ai/ollama_url"
-    }
+    },
+    "constraint": "loopback-url"
   },
   {
     "id": "ai.reset",
@@ -5661,7 +5693,8 @@ public enum XRGSettingsCatalogData {
     "legacy": {
       "macos": "icao",
       "linux": "/weather/station"
-    }
+    },
+    "constraint": "icao-station"
   },
   {
     "id": "weather.station_list",
@@ -5693,7 +5726,8 @@ public enum XRGSettingsCatalogData {
     ],
     "legacy": {
       "linux": "/weather/refresh_minutes"
-    }
+    },
+    "constraint": "whole-minutes"
   },
   {
     "id": "weather.units.system",
@@ -6090,7 +6124,8 @@ public enum XRGSettingsCatalogData {
       "macos": "portableThemeName",
       "linux": "/theme",
       "linuxTransform": "themeName"
-    }
+    },
+    "constraint": "theme-name"
   },
   {
     "id": "themes.import",

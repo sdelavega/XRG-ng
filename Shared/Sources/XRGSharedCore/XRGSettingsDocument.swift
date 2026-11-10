@@ -301,6 +301,12 @@ public enum XRGSettingsError: Error, Equatable, Sendable {
     case notAnOption
     /// The entry's `depends` requirement does not hold.
     case dependencyNotMet
+    /// The value breaks the entry's named semantic constraint (final review,
+    /// finding 1 / ruling R29): a rule a platform's worker enforces at
+    /// runtime, refused here so it is never saved. The constraint's name is
+    /// the entry's `constraint`; the windows turn it into the user-facing
+    /// reason.
+    case constraint
 }
 
 /// The result of loading a settings document. `.unreadable` means the file is
@@ -505,6 +511,16 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         if case XRGSettingsValue.null = value {
             return entry.control == .action ? .wrongType : nil
         }
+        if let error = Self.shapeError(value, for: entry) { return error }
+        // The entry's named semantic constraint, on top of the shape above.
+        if let name = entry.constraint, let error = Self.constraintError(value, name: name) {
+            return error
+        }
+        return nil
+    }
+
+    /// The control's own shape and range rules.
+    private static func shapeError(_ value: XRGSettingsValue, for entry: XRGSettingsEntry) -> XRGSettingsError? {
         switch entry.control {
         case .action:
             return .wrongType
@@ -537,6 +553,174 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         case .order:
             guard case .string(let list) = value else { return .wrongType }
             return entry.containsSameIds(as: list) ? nil : .notAnOption
+        }
+    }
+
+    // MARK: Named semantic constraints (final review, finding 1 / R29)
+
+    /// The constraint names the core implements. The catalog test fails the
+    /// build when the catalog names one outside this list, so a constraint
+    /// can never silently accept (or refuse) everything.
+    public static let constraintNames = [
+        "whole-minutes", "icao-station", "absolute-path", "loopback-url", "process-filter",
+        "theme-name", "device-name", "source-identity", "cpu-index",
+    ]
+
+    /// The error for a value that breaks the entry's named constraint, nil
+    /// when the value satisfies it (or the constraint is not known, which
+    /// the catalog's transform-coverage test prevents). Every rule here is
+    /// one a worker enforces at runtime — the Linux `validate()` walk the
+    /// review traced, and the ICAO station the weather collector requires —
+    /// so refusing the edit here means no saved document can make a worker
+    /// refuse its settings, crash, or quietly change them.
+    static func constraintError(_ value: XRGSettingsValue, name: String) -> XRGSettingsError? {
+        switch name {
+        case "whole-minutes":
+            // Whole-minute durations (ruling R30): a fraction is in range
+            // for the control but the consumers read whole minutes — the
+            // Linux view needs an exact integer and macOS truncates, so a
+            // fraction would mean a different setting on each platform.
+            guard let number = value.numberValue, number.isFinite,
+                  number == number.rounded() else { return .constraint }
+            return nil
+        case "icao-station":
+            if case .null = value { return nil }
+            guard case .string(let text) = value else { return .constraint }
+            // The worker's own rule: an empty station is "not set" (the
+            // platform's default, kept when weather is off); a non-empty
+            // one must be a station the worker can address.
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+            return XRGWeatherReport.station(text) != nil ? nil : .constraint
+        case "absolute-path":
+            if case .null = value { return nil }
+            guard case .string(let text) = value, Self.isAbsolutePath(text) else { return .constraint }
+            return nil
+        case "loopback-url":
+            if case .null = value { return nil }
+            guard case .string(let text) = value, Self.isLoopbackHTTPURL(text) else { return .constraint }
+            return nil
+        case "process-filter":
+            if case .null = value { return nil }
+            guard case .string(let text) = value, Self.isPrintableBounded(text, scalars: 128) else {
+                return .constraint
+            }
+            return nil
+        case "theme-name":
+            if case .null = value { return nil }
+            guard case .string(let text) = value,
+                  text.trimmingCharacters(in: .whitespacesAndNewlines) == text,
+                  !text.isEmpty, text.unicodeScalars.count <= 80,
+                  !text.unicodeScalars.contains(where: Self.isControlScalar) else { return .constraint }
+            return nil
+        case "device-name":
+            if case .null = value { return nil }
+            guard case .string(let text) = value, Self.isDeviceName(text) else { return .constraint }
+            return nil
+        case "source-identity":
+            if case .null = value { return nil }
+            guard case .string(let text) = value, !text.isEmpty, text.utf8.count <= 4096,
+                  !text.unicodeScalars.contains(where: Self.isControlScalar) else { return .constraint }
+            return nil
+        case "cpu-index":
+            if case .null = value { return nil }
+            switch value {
+            case .int(let index): return (0...1_048_575).contains(index) ? nil : .constraint
+            case .string(let text):
+                guard let index = Int64(text), index >= 0, String(index) == text,
+                      (0...1_048_575).contains(index) else { return .constraint }
+                return nil
+            default: return .constraint
+            }
+        default:
+            // An unknown constraint name never silently accepts the value:
+            // the catalog test fails the build for a name the core does not
+            // implement, so this arm is unreachable for a shipped catalog.
+            return .constraint
+        }
+    }
+
+    /// A Unicode control character (category Cc), the set Rust's
+    /// `char::is_control` accepts and the workers reject.
+    static func isControlScalar(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value <= 0x1F || (0x7F...0x9F).contains(scalar.value)
+    }
+
+    /// The absolute-path rule the Linux AI readers enforce: rooted, at most
+    /// 4096 UTF-8 bytes, no control characters.
+    static func isAbsolutePath(_ text: String) -> Bool {
+        text.hasPrefix("/") && text.utf8.count <= 4096
+            && !text.unicodeScalars.contains(where: Self.isControlScalar)
+    }
+
+    /// The loopback-HTTP rule the Linux AI endpoints enforce
+    /// (`ai/preferences.rs validate_url`): ASCII, at most 2048 bytes, no
+    /// control or whitespace characters, no credentials, query or fragment
+    /// markers, and an authority that is a loopback IPv4 address
+    /// (127.0.0.0/8) or the loopback IPv6 address `[::1]`, each with an
+    /// optional non-zero port; a path may follow the authority.
+    static func isLoopbackHTTPURL(_ text: String) -> Bool {
+        guard text.utf8.count <= 2048, text.allSatisfy(\.isASCII) else { return false }
+        for scalar in text.unicodeScalars {
+            if scalar.value <= 0x20 || scalar.value == 0x7F { return false }
+            if "@?#\\".unicodeScalars.contains(scalar) { return false }
+        }
+        guard text.hasPrefix("http://") else { return false }
+        let authority = text.dropFirst("http://".count).prefix { $0 != "/" }
+        if authority.hasPrefix("[") {
+            guard let close = authority.firstIndex(of: "]") else { return false }
+            let host = authority[authority.index(after: authority.startIndex)..<close]
+            var port = authority[authority.index(after: close)...]
+            if port.hasPrefix(":") {
+                port = port.dropFirst()
+                guard let number = Int(port), (1...65_535).contains(number), port == "\(number)" else {
+                    return false
+                }
+            } else if !port.isEmpty {
+                return false
+            }
+            // Only the loopback IPv6 address itself is accepted, and only
+            // bracketed, exactly as the workers' own parser decides.
+            return host == "::1"
+        }
+        var host = Substring(authority)
+        if let colon = host.firstIndex(of: ":") {
+            let port = host[host.index(after: colon)...]
+            host = host[..<colon]
+            guard let number = Int(port), (1...65_535).contains(number), port == "\(number)" else {
+                return false
+            }
+        }
+        return Self.isLoopbackIPv4(String(host))
+    }
+
+    private static func isLoopbackIPv4(_ text: String) -> Bool {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        for (index, part) in parts.enumerated() {
+            guard (1...3).contains(part.count), part.allSatisfy(\.isNumber),
+                  part.first != "0" || part.count == 1, let octet = Int(part), octet <= 255 else {
+                return false
+            }
+            if index == 0 && octet != 127 { return false }
+        }
+        return true
+    }
+
+    /// At most `scalars` Unicode scalars, none of them a control character:
+    /// the process-filter rule the Linux process view enforces.
+    static func isPrintableBounded(_ text: String, scalars: Int) -> Bool {
+        text.unicodeScalars.count <= scalars
+            && !text.unicodeScalars.contains(where: Self.isControlScalar)
+    }
+
+    /// The network/disk device-name rule the Linux metric selection enforces:
+    /// not empty, not `.` or `..`, at most 255 bytes, and no control,
+    /// whitespace, `:` or `/` characters.
+    static func isDeviceName(_ text: String) -> Bool {
+        guard !text.isEmpty, text != ".", text != "..", text.utf8.count <= 255 else { return false }
+        return !text.unicodeScalars.contains { scalar in
+            Self.isControlScalar(scalar) || CharacterSet.whitespacesAndNewlines.contains(scalar)
+                || scalar == ":" || scalar == "/"
         }
     }
 
