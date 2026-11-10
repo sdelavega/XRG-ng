@@ -1506,6 +1506,14 @@ class BorderParsingTests(unittest.TestCase):
         # Overflow is rejected by the helper, not saturated.
         self.assertEqual(upgrade.border_from_domain({"borderWidth": "99999999999999999999"}), 4)
 
+    def test_hexadecimal_overflow_falls_back_to_4(self):
+        # float.fromhex raises OverflowError past the double range; the Swift
+        # helper rejects non-finite values and falls back to border 4.
+        for text in ("0x1p1024", "-0x1p1024"):
+            with self.subTest(text=text):
+                self.assertEqual(upgrade.window_integer(text, "4", 0, 2 ** 31 - 1), 4)
+                self.assertEqual(upgrade.border_from_domain({"borderWidth": text}), 4)
+
 
 class CustomBoolFallbackTests(unittest.TestCase):
     """window_bool passes the RAW fallback to legacy_bool_value (v0.2.2)."""

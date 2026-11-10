@@ -603,7 +603,8 @@ def _window_integer_parsed(value):
         elif _SWIFT_HEX_RE.fullmatch(text):
             try:
                 number = float.fromhex(text)
-            except ValueError:
+            except (ValueError, OverflowError):
+                # Swift rejects non-finite values; fall back like the helper.
                 return None
         else:
             return None
