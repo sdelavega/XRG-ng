@@ -482,6 +482,46 @@ struct XRGSettingsStoreTests {
         #expect(store.value("graphs.cpu.time_window") == .int(5))
     }
 
+    // MARK: The isolated factory for non-production tools (final review, finding 6 / R31)
+
+    /// The isolated factory migrates exactly the domain it is given: fixture
+    /// data seeded into a disposable suite travels the real first-launch
+    /// path, and nothing else is read.
+    @Test func isolatedStoreMigratesTheNamedDisposableDomainOnly() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        fixture.seed(["windowTitle": "Fixture Tool", "borderWidth": 3])
+        let store = XRGSettingsStore.isolatedStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                                   catalog: catalog, legacySourceDomain: fixture.domain)
+        #expect(store.loadProblem == nil)
+        #expect(store.value("general.window.title") == .string("Fixture Tool"))
+        #expect(store.value("general.window.border_width") == .int(3))
+    }
+
+    /// A test that fails if the production domain is queried from a
+    /// nonproduction tool: the injected reader records every domain the
+    /// factory asks for and answers anything but the named one with a
+    /// poison value, so a factory that ever consulted the production
+    /// ``com.sdelavega.xrg`` domain — whose real contents differ from the
+    /// fixture — would surface them here.
+    @Test func isolatedStoreNeverQueriesAnotherDomain() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let fixtureDomain = "com.sdelavega.XRG-ng.ToolFixture." + UUID().uuidString
+        var readDomains: [String] = []
+        let store = XRGSettingsStore.isolatedStore(
+            fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog,
+            legacySourceDomain: fixtureDomain,
+            legacyDomainFor: { name in
+                readDomains.append(name)
+                return name == fixtureDomain ? ["windowTitle": "Fixture Tool"] : ["windowTitle": "POISON"]
+            })
+        #expect(readDomains == [fixtureDomain],
+                "the factory must ask for the named domain and nothing else")
+        #expect(store.value("general.window.title") == .string("Fixture Tool"))
+        #expect(store.value("general.window.title") != .string("POISON"))
+    }
+
     // MARK: Effective 0.2.2 values survive an upgrade (review issue 4)
 
     /// An empty 0.2.2 domain migrates the effective registered default for

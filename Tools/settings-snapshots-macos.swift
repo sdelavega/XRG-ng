@@ -68,17 +68,35 @@ enum SettingsSnapshots {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 
         _ = NSApplication.shared
-        // A disposable store in a temp directory: the real
-        // com.sdelavega.xrg domain and the real ~/Library/Application
-        // Support/XRG-ng/settings.json are never read or written.
+        // A disposable store in a temp directory, seeded from the committed
+        // 0.2.2 fixture through the isolated factory (final review, finding
+        // 6 / ruling R31): the legacy source domain is named explicitly and
+        // is the only domain ever read, so the production com.sdelavega.xrg
+        // domain and the real ~/Library/Application Support/XRG-ng/
+        // settings.json are never read or written, and no personal
+        // configuration can reach the screenshots.
         let domain = "com.sdelavega.XRG-ng.Snapshots." + UUID().uuidString
         guard let defaults = UserDefaults(suiteName: domain) else { fail("no defaults suite") }
         defer { defaults.removePersistentDomain(forName: domain) }
         let root = scratch.appendingPathComponent(domain, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // The committed synthetic 0.2.2 export (Shared/Tests/
+        // Fixtures/settings/macos-0.2.2-defaults.plist) is the seed.
+        let repository = URL(fileURLWithPath: #filePath, isDirectory: false)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let fixturePlist = repository.appendingPathComponent("Shared/Tests/Fixtures/settings/macos-0.2.2-defaults.plist")
+        guard let fixtureData = try? Data(contentsOf: fixturePlist),
+              let fixture = try? PropertyListSerialization.propertyList(
+                  from: fixtureData, options: [], format: nil) as? [String: Any],
+              !fixture.isEmpty else {
+            fail("could not read the 0.2.2 fixture \(fixturePlist.path)")
+        }
+        for (key, value) in fixture { defaults.set(value, forKey: key) }
+        defaults.synchronize()
         let catalog = try XRGSettingsCatalog.load()
-        let store = XRGSettingsStore(fileURL: root.appendingPathComponent("settings.json"),
-                                      defaults: defaults, catalog: catalog)
+        let store = XRGSettingsStore.isolatedStore(fileURL: root.appendingPathComponent("settings.json"),
+                                                    defaults: defaults, catalog: catalog,
+                                                    legacySourceDomain: domain)
         let controller = XRGSettingsWindowController(store: store, catalog: catalog,
                                                      sources: XRGHardwareSettingsSourceProvider())
         guard let window = controller.window else { fail("no settings window") }

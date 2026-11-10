@@ -187,6 +187,25 @@ import Foundation
                          defaults: .standard, catalog: loadCatalog())
     }()
 
+    /// A document-backed store for non-production tools (final review,
+    /// finding 6 / ruling R31): the caller names the legacy source domain
+    /// EXPLICITLY, and that one domain is the only legacy state read —
+    /// through `legacyDomainFor` when the tool injects its own reader.
+    /// The factory never queries the production ``com.sdelavega.xrg`` domain
+    /// the convenience initializer migrates, so a tool seeded with fixture
+    /// data can never migrate the user's real preferences into its output.
+    /// `defaults` still carries the allowlisted non-setting state (Sparkle's
+    /// `SU*` keys, window frames, the recorded usage data) exactly as the
+    /// convenience initializer's does.
+    @MainActor public static func isolatedStore(
+        fileURL: URL, defaults: UserDefaults, catalog: XRGSettingsCatalog,
+        legacySourceDomain: String,
+        legacyDomainFor: ((String) -> [String: Any]?)? = nil) -> XRGSettingsStore {
+        let legacyDomain = legacyDomainFor.map { $0(legacySourceDomain) ?? [:] }
+            ?? defaults.persistentDomain(forName: legacySourceDomain) ?? [:]
+        return XRGSettingsStore(fileURL: fileURL, defaults: defaults, catalog: catalog, legacyDomain: legacyDomain)
+    }
+
     private nonisolated(unsafe) static var legacyCache: [ObjectIdentifier: XRGSettingsStore] = [:]
     private nonisolated static let legacyCacheLock = NSLock()
 
