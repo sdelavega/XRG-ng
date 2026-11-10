@@ -591,6 +591,35 @@ struct SettingsDocumentTests {
         #expect(document.value("ai.ollama.url", catalog: catalog) == .string("http://127.0.0.1:11434"))
     }
 
+    /// The shared loopback-endpoint parity table (round 3, ruling R40): the
+    /// accept/reject cases live in one committed table both platforms assert
+    /// identically — this suite through `isLoopbackHTTPURL`, the Rust suite
+    /// through the workers' own `validate_url`, whose authority parsing is
+    /// std's `SocketAddr`/`IpAddr` parser. Every case here is derived from
+    /// what Rust's parser does, so a working endpoint is never dropped and a
+    /// malformed one is never newly accepted.
+    @Test func loopbackURLGrammarMatchesTheSharedParityTable() throws {
+        let tableURL = Self.fixturesDirectory.deletingLastPathComponent()
+            .appendingPathComponent("url-parity.json")
+        struct Case: Decodable { let url: String; let accept: Bool }
+        struct Table: Decodable { let cases: [Case] }
+        let table = try JSONDecoder().decode(Table.self, from: Data(contentsOf: tableURL))
+        #expect(!table.cases.isEmpty, "the shared parity table is missing")
+        for parity in table.cases {
+            #expect(XRGSettingsDocument.isLoopbackHTTPURL(parity.url) == parity.accept,
+                    "\(parity.url) must \(parity.accept ? "be accepted" : "be refused")")
+        }
+        // The parser rules the table pins, at the boundaries (ruling R40):
+        // a leading-zero port parses to its value, and an embedded IPv4 quad
+        // is accepted only AFTER a "::", never before it.
+        #expect(XRGSettingsDocument.parseIPv6Address("::1.2.3.4") == [0, 0, 0, 0, 0, 0, 0x0102, 0x0304])
+        #expect(XRGSettingsDocument.parseIPv6Address("0.0.0.0::1") == nil)
+        #expect(XRGSettingsDocument.parseIPv6Address("1:2:3:4:5:6:1.2.3.4") == [1, 2, 3, 4, 5, 6, 0x0102, 0x0304])
+        #expect(XRGSettingsDocument.parseIPv6Address("1:2:3:4:5:6:7:1.2.3.4") == nil,
+                "seven groups plus an embedded quad is nine: Rust rejects it")
+        #expect(XRGSettingsDocument.parseIPv6Address("0:0:0:0:0:0:0:1") == [0, 0, 0, 0, 0, 0, 0, 1])
+    }
+
     /// The named-constraint rules themselves, at the boundaries the workers
     /// decide on: the loopback URL grammar and the device-name rules.
     @Test func constraintBoundariesMatchTheWorkersRules() throws {
@@ -602,6 +631,8 @@ struct SettingsDocumentTests {
             "http://[::1]", "http://[::1]:11434", "http://127.0.0.2:80",
             "http://[0:0:0:0:0:0:0:1]:11435", "http://[::0:0:1]:11435",
             "http://127.0.0.1:65535/x/y",
+            // Leading-zero ports parse in Rust's socket parser (ruling R40).
+            "http://127.0.0.1:080/metrics",
         ]
         let refused = [
             "", "https://127.0.0.1", "http://localhost:8889", "http://127.0.0.1:0",
@@ -612,6 +643,9 @@ struct SettingsDocumentTests {
             // check refuses: expanded IPv6 without a port, unbracketed IPv6.
             "http://[0:0:0:0:0:0:0:1]", "http://0:0:0:0:0:0:0:1]:11435",
             "http://0:0:0:0:0:0:0:1", "http://[::1]:0",
+            // An embedded IPv4 quad before the "::" is not an IPv6 address
+            // in Rust's parser (ruling R40) — never a loopback endpoint.
+            "http://[0.0.0.0::1]:80",
         ]
         for url in accepted {
             #expect(XRGSettingsDocument.isLoopbackHTTPURL(url), "\(url) must be accepted")

@@ -955,13 +955,16 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// An IPv6 address, or nil when Rust's parser would refuse it: up to
     /// eight groups of one to four hex digits, one optional `::` that
     /// expands to the missing groups, and an optional trailing dotted quad
-    /// that counts as the last two groups. No zone, no empty groups.
+    /// that counts as the last two groups — but NEVER a dotted quad before
+    /// the `::` (Rust's `parse_ipv6` rejects an embedded IPv4 in the part
+    /// that precedes the compression, round 3 / ruling R40). No zone, no
+    /// empty groups.
     static func parseIPv6Address(_ text: String) -> [UInt16]? {
         guard !text.isEmpty else { return nil }
         let halves = text.components(separatedBy: "::")
         guard halves.count <= 2 else { return nil }
         let compressed = halves.count == 2
-        func groups(of part: String) -> [UInt16]? {
+        func groups(of part: String, allowEmbeddedIPv4: Bool) -> [UInt16]? {
             if part.isEmpty { return [] }
             func hex(_ piece: String) -> UInt16? {
                 guard (1...4).contains(piece.count), piece.allSatisfy({ $0.isHexDigit }),
@@ -976,7 +979,9 @@ public struct XRGSettingsDocument: Equatable, Sendable {
                 result.append(group)
             }
             if last.contains(".") {
-                guard let octets = Self.parseIPv4Address(last) else { return nil }
+                // Only the final group of the address may be an embedded IPv4
+                // quad: before a "::" it never may.
+                guard allowEmbeddedIPv4, let octets = Self.parseIPv4Address(last) else { return nil }
                 result.append(UInt16(octets[0]) << 8 | UInt16(octets[1]))
                 result.append(UInt16(octets[2]) << 8 | UInt16(octets[3]))
             } else {
@@ -985,8 +990,11 @@ public struct XRGSettingsDocument: Equatable, Sendable {
             }
             return result
         }
-        guard let head = groups(of: halves[0]) else { return nil }
-        let tail = compressed ? (groups(of: halves[1]) ?? []) : []
+        // The dotted quad is allowed only in the LAST piece of the whole
+        // address: after the compression when there is one, in the final
+        // group when there is not.
+        guard let head = groups(of: halves[0], allowEmbeddedIPv4: !compressed) else { return nil }
+        let tail = compressed ? (groups(of: halves[1], allowEmbeddedIPv4: true) ?? []) : []
         guard head.count + tail.count <= (compressed ? 7 : 8) else { return nil }
         if !compressed, head.count + tail.count != 8 { return nil }
         var result = head
@@ -1008,10 +1016,11 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     }
 
     /// A decimal port the way Rust's socket parser reads one: one to five
-    /// digits, no leading zeros, within range.
+    /// digits — leading zeros allowed, so "080" is 80 exactly as Rust's
+    /// `read_port` reads it (round 3, ruling R40) — within range.
     private static func parsePort(_ text: Substring) -> UInt32? {
         guard (1...5).contains(text.count), text.allSatisfy(\.isNumber),
-              text.first != "0", let number = UInt32(text), number <= 65_535 else { return nil }
+              let number = UInt32(text), number <= 65_535 else { return nil }
         return number
     }
 

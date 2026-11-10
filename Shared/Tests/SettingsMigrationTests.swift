@@ -608,10 +608,12 @@ struct SettingsMigrationTests {
         }
     }
 
-    /// Ruling R34 (final review round 2, issue 3): the endpoint constraint
-    /// accepts exactly what the Linux AI worker accepts today, so migration
-    /// never drops a working endpoint for the catalog default — a fully
-    /// expanded IPv6 loopback authority and a custom port both survive.
+    /// Ruling R34 (final review round 2, issue 3), extended by R40 (round 3):
+    /// the endpoint constraint accepts exactly what the Linux AI worker
+    /// accepts today — std's own socket-authority grammar, leading-zero
+    /// ports included — so migration never drops a working endpoint for the
+    /// catalog default: a fully expanded IPv6 loopback authority, custom
+    /// ports (leading zeros included) and paths all survive.
     @Test func migratedEndpointsKeepExpandedIPv6AndCustomPorts() throws {
         let catalog = try XRGSettingsCatalog.load()
         let v40 = Data("""
@@ -627,6 +629,15 @@ struct SettingsMigrationTests {
         #expect(diagnostics.isEmpty, "\(diagnostics)")
         #expect(document.values["ai.metrics.url"] == .string("http://[0:0:0:0:0:0:0:1]:11435"))
         #expect(document.values["ai.ollama.url"] == .string("http://127.0.0.1:8080/api/tags"))
+
+        // A leading-zero port is a port Rust's socket parser accepts, so the
+        // worker serves it today and migration must keep it (ruling R40).
+        let zeroed = Data(#"""
+        {"version": 40, "ai": {"metrics_url": "http://127.0.0.1:080/metrics"}}
+        """#.utf8)
+        let (kept, keptDiagnostics) = try XRGSettingsMigration.fromLinuxV40(zeroed, catalog: catalog)
+        #expect(keptDiagnostics.isEmpty, "\(keptDiagnostics)")
+        #expect(kept.values["ai.metrics.url"] == .string("http://127.0.0.1:080/metrics"))
     }
 
     @Test func omittedLinuxUnitOverridesMigrateAsInheritance() throws {
