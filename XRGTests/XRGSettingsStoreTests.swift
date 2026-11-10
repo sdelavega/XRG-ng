@@ -587,6 +587,132 @@ struct XRGSettingsStoreTests {
         #expect(try storedValue("graphs.refresh", in: written) as? Double == 2)
     }
 
+    // MARK: Real competing transactions (round 3, ruling R39)
+
+    /// Two REAL competing transactions — the same locked write path `set`
+    /// runs, driven from two threads so they genuinely race for the
+    /// `settings.json.lock` — both keep their unrelated edits: the file
+    /// ends with both, the later transaction adopts the earlier one's
+    /// content, and a third reader sees both (ruling R39).
+    @Test func concurrentTransactionsKeepTheirUnrelatedEdits() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let a = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                 catalog: catalog, legacyDomain: [:])
+        let b = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                 catalog: catalog, legacyDomain: [:])
+        try a.set("general.window.title", .string("From A"))
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "XRG.concurrentTransactions", attributes: .concurrent)
+        queue.async(group: group) {
+            _ = a.persist { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
+                try document.set("general.window.border_width", .int(8), catalog: catalog)
+            }
+        }
+        queue.async(group: group) {
+            _ = b.persist { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
+                try document.set("graphs.refresh", .double(2), catalog: catalog)
+            }
+        }
+        group.wait()
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.title", in: bytes) as? String == "From A")
+        #expect(try storedValue("general.window.border_width", in: bytes) as? Int == 8,
+                "A's concurrent edit must survive B's transaction")
+        #expect(try storedValue("graphs.refresh", in: bytes) as? Double == 2,
+                "B's concurrent edit must survive A's transaction")
+        // The later transaction adopted the earlier one's content: its
+        // in-memory document carries both edits.
+        let merged = try #require(documentBytes(fixture.documentURL))
+        #expect(a.value("general.window.border_width") == .int(8))
+        #expect(b.value("graphs.refresh") == .double(2))
+        #expect(try storedValue("general.window.title", in: merged) != nil)
+        // A third reader sees both edits.
+        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                        catalog: catalog, legacyDomain: [:])
+        #expect(reopened.value("general.window.title") == .string("From A"))
+        #expect(XRGSettingsValue.sameValue(reopened.value("graphs.refresh"), .double(2)))
+        #expect(reopened.value("general.window.border_width") == .int(8))
+    }
+
+    /// Two first launches of the same 0.2.2 installation: the first
+    /// migrates and creates the document; the second finds the appeared
+    /// file, adopts it and rewrites nothing — its own migration is dropped,
+    /// never clobbered over the other's (ruling R39).
+    @Test func twoFirstLaunchesConvergeOnOneMigratedFile() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let legacy: [String: Any] = ["windowTitle": "My XRG", "borderWidth": 7]
+        fixture.seed(legacy)
+        let first = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: legacy)
+        #expect(first.loadProblem == nil)
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        let stamp = try modificationDate(fixture.documentURL)
+        // The second launch, "concurrent" with the first: the file appeared
+        // before its own migration write, so it adopts the file instead.
+        let second = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                       catalog: catalog, legacyDomain: legacy)
+        #expect(second.loadProblem == nil)
+        #expect(second.value("general.window.title") == .string("My XRG"))
+        #expect(second.value("general.window.border_width") == .int(7))
+        #expect(try documentBytes(fixture.documentURL) == bytes,
+                "the second launch adopts the appeared file and rewrites nothing")
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+    }
+
+    /// A destination that becomes UNREADABLE at the final re-check —
+    /// absent and unreadable are different states (ruling R39) — is never
+    /// overwritten: the transaction aborts, the problem is surfaced like a
+    /// write failure, and the pending edit stays in memory until the user
+    /// confirms the replacement.
+    @Test func destinationUnreadableAtTheFinalRecheckIsNeverOverwritten() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("Mine"))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        store.stageInterleave = {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o000],
+                                                    ofItemAtPath: fixture.documentURL.path)
+        }
+        try store.set("general.window.border_width", .int(8))
+        #expect(store.loadProblem?.problem == "unreadable:destination",
+                "the unreadable destination is surfaced, not overwritten")
+        #expect(store.value("general.window.border_width") == .int(8),
+                "the pending edit stays in memory")
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                ofItemAtPath: fixture.documentURL.path)
+        #expect(try documentBytes(fixture.documentURL) == bytes,
+                "the file's own bytes are untouched")
+        store.replaceUnreadableFile()
+        #expect(store.loadProblem == nil)
+        #expect(try storedValue("general.window.border_width",
+                                in: try #require(documentBytes(fixture.documentURL))) as? Int == 8)
+    }
+
+    /// A destination that is ABSENT at the final re-check — deleted under
+    /// the lock by a writer that ignored it — is created again: the
+    /// transaction loops once, adopts the absence, recreates the file with
+    /// the pending edit applied, and nothing is lost (ruling R39).
+    @Test func destinationAbsentAtTheFinalRecheckIsCreatedAgain() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("Mine"))
+        store.stageInterleave = {
+            try? FileManager.default.removeItem(at: fixture.documentURL)
+        }
+        try store.set("graphs.refresh", .double(2))
+        #expect(store.loadProblem == nil)
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.title", in: bytes) as? String == "Mine",
+                "the earlier edit is not lost to the deletion")
+        #expect(try storedValue("graphs.refresh", in: bytes) as? Double == 2)
+    }
+
     /// The isolated factory migrates exactly the domain it is given: fixture
     /// data seeded into a disposable suite travels the real first-launch
     /// path, and nothing else is read.

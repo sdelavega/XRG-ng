@@ -28,7 +28,10 @@ import Foundation
 @MainActor public final class XRGSettingsStore {
     /// Posted on the main thread after every stored change, with the changed
     /// id in `userInfo["id"]` and the store as the notification's object.
-    public static let didChange: Notification.Name = Notification.Name("XRGSettingsStore.didChange")
+    /// Nonisolated: the locked write transaction may complete — and adopt
+    /// another writer's content — on any thread (ruling R39), so it reads
+    /// this from there; the post itself is always made on the main thread.
+    public nonisolated static let didChange: Notification.Name = Notification.Name("XRGSettingsStore.didChange")
 
     /// Posted on the main thread whenever `loadProblem` changes, with the
     /// store as the notification's object (final review, finding 3): a
@@ -68,23 +71,29 @@ import Foundation
     }
     private let backend: Backend
 
-    /// The bytes of the settings file this store last saw on disk, nil while
-    /// no readable file existed (final review, finding 2 / ruling R28).
-    /// Every write compares the file with these bytes first: a file someone
-    /// else changed is never silently overwritten — it is reloaded, this
-    /// store's pending edit re-applied over the new contents, and only then
-    /// replaced. New unreadable content stops the write and surfaces the
-    /// same confirmation a load would.
-    private var observedBytes: Data?
+    // The bytes this store last observed on disk live under the document's
+    // own lock (`LockedDocument.observedBytes`), because the locked write
+    // transaction that compares them runs on any thread (ruling R39).
 
     /// The document under its lock. Every read and write — including the
     /// main-actor ones — goes through the lock, so the nonisolated read the
     /// AI token observer makes from its worker threads cannot race a write.
-    private final class LockedDocument: @unchecked Sendable {
+    /// The bytes the store last saw on disk live under the same lock, so the
+    /// locked write transaction may run on any thread (round 3, ruling R39).
+    final class LockedDocument: @unchecked Sendable {
         private let lock = NSLock()
         private var storage: XRGSettingsDocument
+        /// The bytes of the settings file this store last saw on disk, nil
+        /// while no readable file existed (final review, finding 2 / ruling
+        /// R28). Every write compares the file with these bytes first.
+        private var observed: Data?
+        /// A test seam (rulings R32/R39): called between staging and the
+        /// final identity re-check, while the transaction lock is held.
+        var stageInterleave: (() -> Void)?
         init(_ document: XRGSettingsDocument) { storage = document }
         var document: XRGSettingsDocument { lock.withLock { storage } }
+        var observedBytes: Data? { lock.withLock { observed } }
+        func setObserved(_ bytes: Data?) { lock.withLock { observed = bytes } }
         func mutate(_ body: (inout XRGSettingsDocument) -> Void) { lock.withLock { body(&storage) } }
         func set(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) -> XRGSettingsError? {
             lock.lock()
@@ -94,7 +103,7 @@ import Foundation
             return nil
         }
     }
-    private let locked: LockedDocument
+    let locked: LockedDocument
 
     // MARK: Creation
 
@@ -258,7 +267,7 @@ import Foundation
         var problem: XRGSettingsDiagnostic?
         let exists = FileManager.default.fileExists(atPath: fileURL.path)
         if exists, let data = try? Data(contentsOf: fileURL) {
-            observedBytes = data
+            locked.setObserved(data)
             switch XRGSettingsDocument.load(data, catalog: catalog) {
             case .ok(let document, let diagnostics):
                 locked.mutate { $0 = document }
@@ -291,8 +300,20 @@ import Foundation
                 legacyDomain, registered: registered, catalog: catalog)
             locked.mutate { $0 = migrated }
             Self.note(diagnostics)
-            if let error = persistError() {
+            // The migration write is the same locked transaction every
+            // other write runs (round 3, ruling R39): under the lock, an
+            // absent destination is created only if it is still absent, and
+            // a file that appeared meanwhile is adopted — never overwritten.
+            switch persist(reapplying: { _ in }) {
+            case nil:
+                break
+            case .failure(let error):
                 problem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+            case .conflict:
+                // The identity re-apply cannot be refused.
+                break
+            case .unreadable(let diagnostic):
+                problem = diagnostic
             }
         }
         loadProblem = problem
@@ -307,7 +328,9 @@ import Foundation
         locked = LockedDocument(XRGSettingsDocument())
     }
 
-    private static func note(_ diagnostics: [XRGSettingsDiagnostic]) {
+    /// Nonisolated: the locked write transaction logs adoptions from any
+    /// thread (ruling R39).
+    nonisolated private static func note(_ diagnostics: [XRGSettingsDiagnostic]) {
         for diagnostic in diagnostics {
             NSLog("XRG-ng settings: \(diagnostic.problem) for \(diagnostic.id ?? "document")")
         }
@@ -477,10 +500,10 @@ import Foundation
                 case .applied(let applied):
                     locked.mutate { $0 = applied }
                     if loadProblem == nil {
-                        persistAndReport { document in
+                        persistAndReport { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
                             guard case .applied(let next) = XRGSettingsDocument.apply(
                                 changes, to: document, catalog: self.catalog) else {
-                                throw .constraint
+                                throw XRGSettingsError.constraint
                             }
                             document = next
                         }
@@ -526,10 +549,10 @@ import Foundation
                 case .applied(let applied):
                     locked.mutate { $0 = applied }
                     if loadProblem == nil {
-                        persistAndReport { document in
+                        persistAndReport { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
                             guard case .applied(let next) = XRGSettingsDocument.apply(
                                 removals, to: document, catalog: self.catalog) else {
-                                throw .constraint
+                                throw XRGSettingsError.constraint
                             }
                             document = next
                         }
@@ -610,15 +633,17 @@ import Foundation
     nonisolated(unsafe) var durableWrite: DurableFileWrite = XRGSettingsStore.defaultDurableWrite
 
     /// What a persistence attempt concluded (final review, findings 2 and 3):
-    /// nil means the document reached the file.
-    private enum PersistOutcome {
+    /// nil means the document reached the file. Internal so the store's
+    /// tests can observe the locked transaction's outcome (ruling R39).
+    enum PersistOutcome {
         /// The file or directory refused the write: nothing changed on disk,
         /// the pending edit stays in memory and `loadProblem` must report it.
         case failure(NSError)
         /// The file changed on disk into content this store cannot adopt —
-        /// malformed or a newer version: the write stopped, the new content
-        /// is protected exactly like an unreadable load, and `loadProblem`
-        /// must surface the confirmation the spec requires.
+        /// malformed, a newer version, or a read that failed: the write
+        /// stopped, the new content is protected exactly like an unreadable
+        /// load, and `loadProblem` must surface the confirmation the spec
+        /// requires.
         case unreadable(XRGSettingsDiagnostic)
         /// The file changed on disk and was adopted, but the pending edit no
         /// longer applies to the adopted document (the core refused it):
@@ -627,54 +652,114 @@ import Foundation
         case conflict(XRGSettingsError)
     }
 
+    /// What one read of the settings file's destination found (round 3,
+    /// ruling R39): ABSENT and UNREADABLE are different states — a missing
+    /// file may be created, a file that exists but cannot be read is
+    /// protected.
+    private enum DestinationState {
+        /// No file exists at the destination.
+        case absent
+        /// A file exists but its bytes cannot be read.
+        case unreadable(XRGSettingsDiagnostic)
+        /// The file's current bytes.
+        case bytes(Data)
+    }
+
+    /// One read of the destination, never conflating absence with failure
+    /// (round 3, ruling R39): `Data(contentsOf:)` alone cannot tell a file
+    /// that is gone from one that cannot be read.
+    private nonisolated static func destinationState(_ url: URL) -> DestinationState {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .absent }
+        guard let data = try? Data(contentsOf: url) else {
+            return .unreadable(XRGSettingsDiagnostic(id: nil, problem: "unreadable:destination"))
+        }
+        return .bytes(data)
+    }
+
     /// An advisory exclusive lock over one settings file, taken on a sibling
     /// lock file (`settings.json.lock`, created with mode 0600 and never
-    /// deleted while held) for the duration of one read → compare →
-    /// re-apply → stage → replace transaction (final review round 2,
-    /// issue 1 / ruling R32): two stores in one process — or two
-    /// processes — cannot both pass the comparison and then each replace
-    /// the file, losing the other's edit. External editors that ignore the
-    /// lock are covered by the last-moment identity re-check
-    /// `persist(reapplying:)` makes before the atomic replace.
+    /// deleted) for the duration of one read → compare → stage → re-check →
+    /// replace transaction (final review round 2, issue 1 / ruling R32;
+    /// round 3, ruling R39): two stores in one process — or two processes —
+    /// cannot both pass the comparison and then each replace the file,
+    /// losing the other's edit. External editors that ignore the lock are
+    /// narrowed to the final instant by the last-moment identity re-check
+    /// (see RELEASE notes' known limitations).
     private final class SettingsFileLock: @unchecked Sendable {
         private let descriptor: Int32
+        /// One owner: `release` closes the descriptor exactly once, and the
+        /// deinitializer only delegates (round 3, ruling R39: the round-2
+        /// shape closed the same descriptor twice, and a re-used descriptor
+        /// number between the calls would close an unrelated file).
+        private var released = false
         private init(descriptor: Int32) { self.descriptor = descriptor }
 
-        /// Acquire the lock, waiting at most `wait` seconds; nil means the
-        /// bounded wait expired and the edit stays pending (ruling R32).
-        static func acquire(url: URL, wait: TimeInterval) -> SettingsFileLock? {
+        /// Acquire the lock, waiting at most `wait` seconds. Opening or
+        /// chmodding the lock file is a FAILURE, never contention; only the
+        /// bounded wait expiring is contention (ruling R39).
+        static func acquire(url: URL, wait: TimeInterval) -> Result<SettingsFileLock, AcquireProblem> {
             let descriptor = open(url.path, O_RDWR | O_CREAT, 0o600)
-            guard descriptor >= 0 else { return nil }
-            fchmod(descriptor, 0o600)
+            guard descriptor >= 0 else {
+                return .failure(.open(NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                    userInfo: [NSLocalizedDescriptionKey: "Could not open the settings lock file \(url.path)"])))
+            }
+            if fchmod(descriptor, 0o600) != 0 {
+                let error = NSError(domain: NSPOSIXErrorDomain, code: Int(errno),
+                    userInfo: [NSLocalizedDescriptionKey: "Could not restrict the settings lock file \(url.path)"])
+                close(descriptor)
+                return .failure(.open(error))
+            }
             let deadline = Date().addingTimeInterval(wait)
-            repeat {
+            while true {
                 if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
-                    return SettingsFileLock(descriptor: descriptor)
+                    return .success(SettingsFileLock(descriptor: descriptor))
+                }
+                if Date() >= deadline {
+                    close(descriptor)
+                    return .failure(.busy)
                 }
                 usleep(20_000)
-            } while Date() < deadline
-            close(descriptor)
-            return nil
+            }
         }
 
         func release() {
+            guard !released else { return }
+            released = true
             flock(descriptor, LOCK_UN)
             close(descriptor)
         }
-
-        deinit { close(descriptor) }
     }
 
-    /// A test seam for ruling R32: called between staging the temporary file
-    /// and the last-moment identity re-check, while the transaction lock is
-    /// held, so tests can interleave another writer exactly there.
-    var stageInterleave: (() -> Void)?
+    /// Why a lock could not be acquired: another writer holds it, or the
+    /// lock file itself failed to open or chmod (a failure, never
+    /// contention, ruling R39).
+    private enum AcquireProblem: Error {
+        case busy
+        case open(NSError)
+    }
+
+    /// A test seam for rulings R32/R39: called between staging the
+    /// temporary file and the final identity re-check, while the transaction
+    /// lock is held, so tests can interleave another writer exactly there.
+    var stageInterleave: (() -> Void)? {
+        get { locked.stageInterleave }
+        set { locked.stageInterleave = newValue }
+    }
 
     /// Write the document atomically, coordinating with everyone else who
-    /// may touch the file (final review, finding 2 / rulings R28 and R32):
-    /// the whole read → compare → re-apply → stage → replace transaction
-    /// runs under the advisory exclusive lock, and the destination's
-    /// identity is re-checked immediately before the atomic replace.
+    /// may touch the file (final review, finding 2 / rulings R28, R32 and
+    /// R39): the whole read → compare → stage → re-check → replace
+    /// transaction runs under the advisory exclusive lock — the migration
+    /// write of a first launch included — and the destination's identity is
+    /// re-checked immediately before the atomic replace.
+    ///
+    /// ABSENT and UNREADABLE are separate states everywhere (ruling R39):
+    /// a destination that exists but cannot be read is never overwritten —
+    /// the write aborts and the load's own confirmation is surfaced. A
+    /// destination that is absent is created only if it is still absent
+    /// under the lock at the final re-check; a file that appeared meanwhile
+    /// is adopted — its content becomes the document (the pending edit is
+    /// re-applied over it like any adoption) — never clobbered with ours.
     ///
     /// Before anything is replaced, the file is compared with the bytes this
     /// store last observed. Unchanged, the write proceeds. Changed, the new
@@ -699,56 +784,81 @@ import Foundation
     /// finding 1). Durability is checked too: a temporary file that cannot
     /// be opened or synced stops the write instead of proceeding to the
     /// replacement (review issue 10).
-    private func persist(reapplying reapply: (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void)
+    ///
+    /// Nonisolated, and internal, so the tests can run the transaction from
+    /// any thread: it touches only the locked state (`locked`) and immutable
+    /// lets, so two real competing transactions — the same code path `set`
+    /// and the first-launch migration run — can race for the lock (ruling
+    /// R39's concurrency test).
+    nonisolated func persist(reapplying reapply: (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void)
         -> PersistOutcome? {
         guard case .document(let fileURL) = backend else { return nil }
         if let error = Self.writePermissionError(fileURL) { return .failure(error) }
-        guard let lock = SettingsFileLock.acquire(
-            url: fileURL.deletingLastPathComponent()
-                .appendingPathComponent(fileURL.lastPathComponent + ".lock"), wait: 2) else {
+        let lockURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(fileURL.lastPathComponent + ".lock")
+        let lock: SettingsFileLock
+        switch SettingsFileLock.acquire(url: lockURL, wait: 2) {
+        case .failure(.busy):
             // The bounded wait expired: another writer holds the file. The
             // edit stays pending in memory and the banner reports it,
             // exactly like a refused write (ruling R32).
             return .failure(NSError(domain: NSPOSIXErrorDomain, code: Int(EWOULDBLOCK),
                 userInfo: [NSLocalizedDescriptionKey: "Another settings writer holds \(fileURL.path)"]))
+        case .failure(.open(let error)):
+            // A lock that cannot be opened or restricted is a failure of
+            // the write itself, never contention (ruling R39).
+            return .failure(error)
+        case .success(let acquired):
+            lock = acquired
         }
         defer { lock.release() }
-        var document = locked.document
         for attempt in 0..<2 {
-            // Read and compare: the file against the bytes this store last
-            // saw (R28). A file that is gone has no content left to
-            // preserve; a file that changed is adopted first.
-            var onDisk: Data?
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                do {
-                    onDisk = try Data(contentsOf: fileURL)
-                } catch {
-                    return .failure(error as NSError)
-                }
-            }
-            if let current = onDisk, current != observedBytes {
-                switch XRGSettingsDocument.load(current, catalog: catalog) {
-                case .ok(let adopted, let diagnostics):
-                    Self.note(diagnostics)
-                    var reapplied = adopted
-                    do {
-                        try reapply(&reapplied)
-                    } catch {
-                        // The edit no longer applies to the new contents:
-                        // keep what the new file holds, refuse the edit.
-                        locked.mutate { $0 = adopted }
-                        observedBytes = current
-                        return .conflict(error)
+            // Read: absent, unreadable, or the current bytes — never a
+            // conflated nil (ruling R39).
+            let onDisk = Self.destinationState(fileURL)
+            var document = locked.document
+            switch onDisk {
+            case .unreadable(let diagnostic):
+                // A destination that exists but cannot be read is never
+                // overwritten: abort and surface it.
+                return .unreadable(diagnostic)
+            case .absent:
+                // No file: this transaction creates one below, unless a file
+                // appears meanwhile (adopted at the re-check loop).
+                break
+            case .bytes(let current):
+                // Compare with the bytes this store last saw; a file that
+                // changed is adopted before anything is written (R28).
+                if current != locked.observedBytes {
+                    switch XRGSettingsDocument.load(current, catalog: catalog) {
+                    case .ok(let adopted, let diagnostics):
+                        Self.note(diagnostics)
+                        var reapplied = adopted
+                        do {
+                            try reapply(&reapplied)
+                        } catch {
+                            // The edit no longer applies to the new contents:
+                            // keep what the new file holds, refuse the edit.
+                            locked.mutate { $0 = adopted }
+                            locked.setObserved(current)
+                            return .conflict(error)
+                        }
+                        document = reapplied
+                        locked.mutate { $0 = reapplied }
+                        // The adopted values belong to the document now; the
+                        // window re-presents every control for them. The
+                        // post is made on the main thread however the
+                        // transaction itself ran.
+                        let store = self
+                        let posting = {
+                            NotificationCenter.default.post(name: XRGSettingsStore.didChange, object: store)
+                        }
+                        if Thread.isMainThread { posting() } else { DispatchQueue.main.async(execute: posting) }
+                    case .unreadable(let diagnostic):
+                        // External malformed or future content is never
+                        // overwritten: surface the load's own confirmation.
+                        return .unreadable(diagnostic)
                     }
-                    document = reapplied
-                    locked.mutate { $0 = reapplied }
-                    // The adopted values belong to the document now; the
-                    // window re-presents every control for them.
-                    NotificationCenter.default.post(name: Self.didChange, object: self)
-                case .unreadable(let diagnostic):
-                    // External malformed or future content is never
-                    // overwritten: surface the load's own confirmation.
-                    return .unreadable(diagnostic)
                 }
             }
             // Stage: the durable temporary file, still under the lock.
@@ -761,22 +871,31 @@ import Foundation
                 try? FileManager.default.removeItem(at: temporary)
                 return .failure(error as NSError)
             }
-            stageInterleave?()
+            locked.stageInterleave?()
             // Re-check the destination's identity immediately before the
-            // atomic replace, still under the lock (R32): a writer that
+            // atomic replace, still under the lock (R32/R39): a writer that
             // ignored the lock cannot be overwritten unnoticed.
-            var recheck: Data?
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                recheck = try? Data(contentsOf: fileURL)
-            }
-            if recheck != onDisk {
+            let recheck = Self.destinationState(fileURL)
+            if case .unreadable(let diagnostic) = recheck {
                 try? FileManager.default.removeItem(at: temporary)
-                if attempt == 0 {
-                    // The destination changed during staging: loop once
-                    // through compare/re-apply over the new content.
-                    continue
-                }
-                // It changed again: stop writing and surface it.
+                return .unreadable(diagnostic)
+            }
+            let unchanged: Bool
+            switch (onDisk, recheck) {
+            case (.absent, .absent):
+                // Still absent under the lock: create (ruling R39).
+                unchanged = true
+            case (.bytes(let before), .bytes(let after)):
+                unchanged = before == after
+            default:
+                // Appeared, vanished, or changed: loop once through
+                // compare/adopt over the new state (ruling R39: a file that
+                // appeared is adopted, never clobbered).
+                unchanged = false
+            }
+            if !unchanged {
+                try? FileManager.default.removeItem(at: temporary)
+                if attempt == 0 { continue }
                 return .failure(NSError(domain: NSPOSIXErrorDomain, code: Int(EAGAIN),
                     userInfo: [NSLocalizedDescriptionKey: "The settings file changed during staging"]))
             }
@@ -788,7 +907,7 @@ import Foundation
             }
             // These are the bytes this store now observes on disk; the next
             // write compares against them (R28).
-            observedBytes = bytes
+            locked.setObserved(bytes)
             return nil
         }
         return .failure(NSError(domain: NSPOSIXErrorDomain, code: Int(EAGAIN),
@@ -800,7 +919,9 @@ import Foundation
     /// both `access(W_OK)` and its owner-write mode bit, and the directory
     /// must be writable. Returns the error that stops the write, nil when
     /// the destination may be replaced.
-    private static func writePermissionError(_ fileURL: URL) -> NSError? {
+    /// Nonisolated: the locked write transaction runs its guard from any
+    /// thread (ruling R39).
+    nonisolated private static func writePermissionError(_ fileURL: URL) -> NSError? {
         let directory = fileURL.deletingLastPathComponent()
         func denied(_ path: String) -> NSError {
             NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES),
@@ -855,7 +976,7 @@ import Foundation
         }
         // These are the bytes this store now observes on disk; the next
         // write compares against them (R28).
-        observedBytes = bytes
+        locked.setObserved(bytes)
         return nil
     }
 
