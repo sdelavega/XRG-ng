@@ -632,8 +632,11 @@ private func settingsApplyResponse(_ outcome: XRGSettingsBatchOutcome,
 /// Apply one batch of entry changes to a document — every set and every
 /// removal an interactive write carries, validated as one final document
 /// (round 3 redesign, ruling R37/R38). `changes` is a UTF-8 JSON object
-/// mapping each entry id to the value to store, or `null` to remove the
-/// entry (it reverts to its default). Writes
+/// with two members: `"set"`, an object mapping each entry id to the value
+/// to store — a value that is itself `null` is a REAL value the control
+/// accepts (for example the weather units' "inherit"), stored explicitly —
+/// and `"remove"`, an array of entry ids that revert to their catalog
+/// defaults (a removal is not the same as setting `null`). Writes
 /// `{"document":...,"diagnostics":[],"error":null}` on success — never a
 /// partial application — or `{"document":null,"diagnostics":[{"id":...,
 /// "problem":...}...],"error":{"kind":...}}` for a refusal, where the
@@ -642,8 +645,9 @@ private func settingsApplyResponse(_ outcome: XRGSettingsBatchOutcome,
 /// batch is refused only for a rule the final document breaks that the
 /// starting document did not (ruling R38). Request-level problems — an id
 /// over 256 bytes, a value over 8 KiB, a changes object that is not UTF-8
-/// JSON, or a value no control can hold — ride the wire as
-/// request-too-large, unparsable-request or wrong-type like `xrg_settings_set`.
+/// JSON or not this shape, or a value no control can hold — ride the wire
+/// as request-too-large, unparsable-request or wrong-type like
+/// `xrg_settings_set`.
 @c(xrg_settings_apply) public func settingsApply(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
     _ changes: UnsafePointer<UInt8>?, _ changesLen: UInt32,
     _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
@@ -658,23 +662,30 @@ private func settingsApplyResponse(_ outcome: XRGSettingsBatchOutcome,
                               output, capacity, needed)
     }
     var batch: [XRGSettingsChange] = []
-    for key in fields.keys.sorted(by: XRGSettingsDocument.precedes) {
-        guard key.utf8.count <= 256 else {
-            return settingsRefusal(SettingsErrorJSON(kind: "request-too-large", min: nil, max: nil),
-                                   output, capacity, needed)
-        }
-        let json = fields[key]!
-        let value: XRGSettingsValue?
-        if case .null = json {
-            value = nil
-        } else {
-            guard let settingsValue = XRGSettingsValue(json: json) else {
+    // The entries to store: each id's value — including an explicit `null`,
+    // which is a value a control accepts, never a removal.
+    if let sets = fields["set"], case .object(let entries) = sets {
+        for key in entries.keys.sorted(by: XRGSettingsDocument.precedes) {
+            guard key.utf8.count <= 256 else {
+                return settingsRefusal(SettingsErrorJSON(kind: "request-too-large", min: nil, max: nil),
+                                       output, capacity, needed)
+            }
+            guard let settingsValue = XRGSettingsValue(json: entries[key]!) else {
                 return settingsRefusal(SettingsErrorJSON(kind: "wrong-type", min: nil, max: nil),
                                        output, capacity, needed)
             }
-            value = settingsValue
+            batch.append(XRGSettingsChange(id: key, value: settingsValue))
         }
-        batch.append(XRGSettingsChange(id: key, value: value))
+    }
+    // The entries that revert to their catalog defaults.
+    if let removes = fields["remove"], case .array(let ids) = removes {
+        for id in ids {
+            guard case .string(let key) = id, key.utf8.count <= 256 else {
+                return settingsRefusal(SettingsErrorJSON(kind: "unparsable-request", min: nil, max: nil),
+                                       output, capacity, needed)
+            }
+            batch.append(XRGSettingsChange(id: key, value: nil))
+        }
     }
     return settingsApplyResponse(XRGSettingsDocument.apply(batch, to: document, catalog: catalog),
                                  output, capacity, needed)

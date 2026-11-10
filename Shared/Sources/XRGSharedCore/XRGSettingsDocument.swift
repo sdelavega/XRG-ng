@@ -650,12 +650,15 @@ public struct XRGSettingsDocument: Equatable, Sendable {
                 prospective.removeValue(forKey: change.id)
             }
         }
-        // `depends` against the FINAL document: a batch may set a dependency
-        // and its dependent in either order (ruling R37).
+        // `depends` must ALREADY hold — checked against the STARTING
+        // document, exactly the single-entry rule's own reading ("its
+        // control is disabled in the window otherwise"): a batch may
+        // change a dependency and store its dependent together, like
+        // migration does, and the dependent's control renders disabled.
         for change in changes {
             guard change.value != nil, let entry = catalog.entry(change.id),
                   let depends = entry.depends else { continue }
-            let effective = prospective[depends.id] ?? catalog.entry(depends.id)?.defaultValue ?? .null
+            let effective = document.values[depends.id] ?? catalog.entry(depends.id)?.defaultValue ?? .null
             if !XRGSettingsValue.sameValue(effective, depends.equals) {
                 refusals.append((change.id, .dependencyNotMet))
             }

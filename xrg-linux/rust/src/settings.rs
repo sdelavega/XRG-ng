@@ -18,7 +18,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
@@ -1246,18 +1246,9 @@ fn default_document() -> Vec<u8> {
         }
     }
 }
-/// Every catalog id with its default, from the core, once.
-fn catalog_defaults() -> &'static Vec<(String, serde_json::Value)> {
-    static DEFAULTS: OnceLock<Vec<(String, serde_json::Value)>> = OnceLock::new();
-    DEFAULTS.get_or_init(|| {
-        document::catalog()
-            .expect("the shared core provides the settings catalog")
-            .entries
-            .into_iter()
-            .map(|entry| (entry.id, entry.default))
-            .collect()
-    })
-}
+// (The dependency-ordered commit path — `application_rank`,
+// `changed_document`, `catalog_defaults` — is deleted with this round,
+// ruling R37: a save is one batch applied through `document::apply`.)
 /// The typed view the app runs on: the core's Linux view, which now maps
 /// every graph — including the Stocks graph's presentation (visible, style,
 /// height, colours) and its position in `graphs.order` — through the one
@@ -1361,15 +1352,15 @@ impl Store {
         // core renders from the document the store holds: fresh, migrated
         // and blocked states alike never fall back to the legacy Rust model.
         match view(&store.document) {
-            Ok(view) => {
+            Ok(raw) => {
                 // A view the workers would refuse never reaches them (final
                 // review, finding 1 / ruling R29): each failing component
                 // falls back to its default and the problem is reported
                 // exactly like a malformed entry — the app starts, it never
                 // panics on a loaded document.
-                let (settings, replaced) = view.repaired();
+                let (settings, replaced) = raw.repaired();
                 if replaced.is_empty() {
-                    store.settings = view;
+                    store.settings = raw;
                 } else {
                     let problem = format!("a settings value was replaced: {}", replaced.join(", "));
                     store.problem = match store.problem.take() {
@@ -1377,6 +1368,26 @@ impl Store {
                         None => Some(problem),
                     };
                     store.settings = settings;
+                }
+                // A view whose CROSS-SETTING combinations the workers refuse
+                // (round 3, ruling R38) — the document is valid entry by
+                // entry, so the core's per-entry repair touches nothing — is
+                // repaired IN MEMORY through the core: only the offending
+                // settings revert to their defaults, each repair is
+                // reported, the disk bytes are left untouched, and the
+                // document the store edits is the SAME repaired copy (so
+                // an ordinary save of it is an authorized, validated save).
+                let (repaired, ids) = document::repair_combinations(&store.document);
+                if !ids.is_empty() {
+                    let problem = format!("a settings value was replaced: {}", ids.join(", "));
+                    store.problem = match store.problem.take() {
+                        Some(existing) => Some(format!("{existing}; {problem}")),
+                        None => Some(problem),
+                    };
+                    store.document = repaired;
+                    store.settings = view(&store.document)
+                        .map(|view| view.repaired().0)
+                        .unwrap_or_default();
                 }
             }
             Err(problem) => {
@@ -1419,37 +1430,40 @@ impl Store {
             })
             .unwrap_or_default()
     }
-    /// Store one value, validating it through the core, and write the
-    /// resulting document atomically with mode 0600. Refused values leave
-    /// the file and the in-memory settings untouched; a blocked file (it
-    /// exists but does not load) must be `replace_unreadable`d first.
+    /// Store one value, validating it through the core — ONE BATCH OF ONE
+    /// (round 3 redesign, ruling R37): `apply` is the same validated batch
+    /// every interactive write runs. The new document is written atomically
+    /// with mode 0600. Refused values leave the file and the in-memory
+    /// settings untouched; a blocked file (it exists but does not load)
+    /// must be `replace_unreadable`d first.
     pub fn set(&mut self, id: &str, value: serde_json::Value) -> Result<(), document::SetError> {
         if self.blocked {
             return Err(document::SetError::InvalidDocument);
         }
-        let document = document::set(&self.document, id, &value)?;
+        let document = document::apply(&self.document, &[document::Change::Set(id.into(), value)])?;
         self.commit(document)
             .map_err(|_| document::SetError::Transport)?;
         Ok(())
     }
     /// Validate one edit through the shared core without writing anything:
-    /// the refusal `set` would report for the same value. Held edits —
-    /// the in-memory changes a blocked document carries — are applied to
-    /// the validation document first, so dependencies among them hold
-    /// exactly as they will after the replacement applies them.
+    /// the refusal `set` would report for the same value — a single-entry
+    /// `set` IS a batch of one (round 3, ruling R37). Held edits — the
+    /// in-memory changes a blocked document carries — are applied to the
+    /// validation document as one batch first, exactly as the replacement
+    /// applies them, so dependencies and combinations among them hold as
+    /// they will after the replacement.
     pub fn validate_held(
         &self,
         held: &std::collections::BTreeMap<String, serde_json::Value>,
         id: &str,
         value: &serde_json::Value,
     ) -> Result<(), document::SetError> {
-        let mut document = self.document.clone();
-        for (held_id, held_value) in held {
-            if let Ok(next) = document::set(&document, held_id, held_value) {
-                document = next;
-            }
-        }
-        document::set(&document, id, value).map(|_| ())
+        let mut changes: Vec<document::Change> = held
+            .iter()
+            .map(|(held_id, held_value)| document::Change::Set(held_id.clone(), held_value.clone()))
+            .collect();
+        changes.push(document::Change::Set(id.into(), value.clone()));
+        document::apply(&self.document, &changes).map(|_| ())
     }
     /// Restore every entry of one catalog section to its default, in the
     /// document the core returns; unknown keys and other sections are
@@ -1476,20 +1490,44 @@ impl Store {
         Ok(())
     }
     /// Persist a whole settings view: the transitional whole-object save the
-    /// preferences editor and `Writer` use. Only the entries whose value
-    /// changed since the last loaded or saved view travel through the core's
-    /// `set` path, so a save can never reset a document entry it did not
-    /// derive: the Stocks settings (whose catalog entries have no
-    /// version-40 mapping), other platforms' catalog keys and unknown keys
-    /// are left exactly as the document holds them. Any value the core refuses aborts
-    /// the save before anything is written.
+    /// preferences editor and `Writer` use. ONE batch (round 3 redesign,
+    /// ruling R37): every entry whose value differs from the last loaded or
+    /// saved view, and every entry that reverts to its default, is applied
+    /// to a copy together and the FINAL document is validated once through
+    /// the core — so a save can never pass through an intermediate state
+    /// the per-edit rules would reject (the d73ca1b ordering is gone: no
+    /// static addition/removal ranking can handle a sensor swap, and none
+    /// is needed when the final document is what is validated). Only the
+    /// entries whose value changed travel: the Stocks settings (whose
+    /// catalog entries have no version-40 mapping), other platforms' catalog
+    /// keys and unknown keys are left exactly as the document holds them.
+    /// The cross-setting check is "don't make it worse" (ruling R38): a
+    /// document that already carries violations stays savable — fixing one
+    /// of two violations in one save is allowed; only ADDING a violation is
+    /// refused. Any refusal aborts the save before anything is written.
     pub fn save(&mut self, settings: &Settings) -> Result<(), String> {
         if self.blocked {
             return Err("The settings document did not load; replace it before saving".into());
         }
         let desired = self.view_entries(settings)?;
         let baseline = self.view_entries(&self.settings)?;
-        let document = self.changed_document(&desired, &baseline)?;
+        // The batch: every changed entry, and every baseline entry the
+        // desired view no longer maps (it reverted to its default).
+        let mut changes: Vec<document::Change> = Vec::new();
+        for (id, value) in &desired {
+            if baseline.get(id) != Some(value) {
+                // A `null` here is a REAL value the control accepts
+                // ("inherit"), stored explicitly — never a removal.
+                changes.push(document::Change::Set(id.clone(), value.clone()));
+            }
+        }
+        for id in baseline.keys() {
+            if !desired.contains_key(id) {
+                changes.push(document::Change::Remove(id.clone()));
+            }
+        }
+        let document = document::apply(&self.document, &changes)
+            .map_err(|error| format!("the settings did not convert: {error:?}"))?;
         self.commit(document)
     }
     /// The settings map the core derives from one Linux view through
@@ -1528,64 +1566,11 @@ impl Store {
             )),
         }
     }
-    /// The order the commit path applies entries through the core (ruling
-    /// R33): the station an enabled collector needs comes before the
-    /// enable, and a primary sensor curve before its secondaries, so a
-    /// multi-entry save never passes through a cross-setting combination
-    /// the core's per-edit refusal would reject on the way to a valid
-    /// final view.
-    fn application_rank(id: &str) -> (u8, &str) {
-        match id {
-            "weather.enabled" => (1, id),
-            "sources.temperature.sensor2" => (1, id),
-            "sources.temperature.sensor3" => (2, id),
-            "sources.fans.sensor2" => (1, id),
-            "sources.fans.sensor3" => (2, id),
-            _ => (0, id),
-        }
-    }
-    /// The current document with the desired view's changed entries stored
-    /// through the core: every entry whose value differs from the baseline
-    /// view is `set`, every entry the desired view reverted to its default
-    /// is `set` to that default, which removes it again. Entries neither
-    /// map names — the Stocks settings, other platforms' keys, unknown keys
-    /// — are left exactly as they are. The entries are applied in the
-    /// dependency order `application_rank` prescribes, so no intermediate
-    /// document breaks a cross-setting combination. Any value the core
-    /// refuses aborts the save before anything is written.
-    fn changed_document(
-        &self,
-        desired: &serde_json::Map<String, serde_json::Value>,
-        baseline: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<Vec<u8>, String> {
-        let mut document = self.document.clone();
-        let mut desired_entries: Vec<(&String, &serde_json::Value)> = desired.iter().collect();
-        desired_entries.sort_by_key(|(id, _)| Self::application_rank(id));
-        for (id, value) in desired_entries {
-            if baseline.get(id) != Some(value) {
-                document = document::set(&document, id, value)
-                    .map_err(|_| format!("the settings did not convert: {id}"))?;
-            }
-        }
-        let mut removals: Vec<&String> = baseline
-            .keys()
-            .filter(|id| !desired.contains_key(*id))
-            .collect();
-        // Reverting to defaults clears the dependent entries first.
-        removals.sort_by_key(|id| std::cmp::Reverse(Self::application_rank(id)));
-        for id in removals {
-            let Some((_, default)) = catalog_defaults().iter().find(|(entry, _)| entry == id)
-            else {
-                continue;
-            };
-            document = document::set(&document, id, default)
-                .map_err(|_| format!("the settings did not convert: {id}"))?;
-        }
-        Ok(document)
-    }
     /// Fail the next `count` commits without writing. Tests inject a
     /// persistence error into the replacement's held-edit sequence; production
-    /// builds have no such hook.
+    /// builds have no such hook. (The dependency order this used to sit next
+    /// to is deleted: a save is one batch validated as the final document,
+    /// round 3, ruling R37.)
     #[cfg(test)]
     pub fn fail_next_commits(&mut self, count: u32) {
         self.fail_commits = count;

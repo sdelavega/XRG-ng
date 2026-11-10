@@ -31,6 +31,22 @@ unsafe extern "C" {
         cap: u32,
         needed: *mut u32,
     ) -> i32;
+    fn xrg_settings_apply(
+        doc: *const u8,
+        len: u32,
+        changes: *const u8,
+        changes_len: u32,
+        out: *mut u8,
+        cap: u32,
+        needed: *mut u32,
+    ) -> i32;
+    fn xrg_settings_repair(
+        doc: *const u8,
+        len: u32,
+        out: *mut u8,
+        cap: u32,
+        needed: *mut u32,
+    ) -> i32;
     fn xrg_settings_reset_section(
         doc: *const u8,
         len: u32,
@@ -360,6 +376,118 @@ pub fn set(doc: &[u8], id: &str, value: &serde_json::Value) -> Result<Vec<u8>, S
     wire.document
         .map(String::into_bytes)
         .ok_or(SetError::Transport)
+}
+
+/// One entry change in a batch write (round 3 redesign, ruling R37). A
+/// `Set` stores its value — WHICH MAY BE `null`: a real value the control
+/// accepts (for example the weather units' "inherit"), stored explicitly —
+/// and a `Remove` reverts the entry to its catalog default. They are not
+/// the same operation: storing `null` records "not set" as a value, a
+/// removal forgets the entry entirely.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Change {
+    Set(String, serde_json::Value),
+    Remove(String),
+}
+
+/// Apply one batch of entry changes as the FINAL document (round 3
+/// redesign, ruling R37): either the batch is applied whole and the new
+/// canonical bytes are returned, or it is refused with per-entry
+/// diagnostics and NOTHING is applied. A batch is refused only for a
+/// cross-setting combination the final document breaks that the starting
+/// document did not (ruling R38).
+pub fn apply(doc: &[u8], changes: &[Change]) -> Result<Vec<u8>, SetError> {
+    let doc_len = u32::try_from(doc.len()).map_err(|_| SetError::InvalidDocument)?;
+    let mut sets = serde_json::Map::new();
+    let mut removes = Vec::new();
+    for change in changes {
+        match change {
+            Change::Set(id, value) => {
+                sets.insert(id.clone(), value.clone());
+            }
+            Change::Remove(id) => removes.push(serde_json::Value::String(id.clone())),
+        }
+    }
+    let mut object = serde_json::Map::new();
+    if !sets.is_empty() {
+        object.insert("set".into(), serde_json::Value::Object(sets));
+    }
+    if !removes.is_empty() {
+        object.insert("remove".into(), serde_json::Value::Array(removes));
+    }
+    let changes_json = serde_json::to_vec(&object).map_err(|_| SetError::Transport)?;
+    let changes_len = u32::try_from(changes_json.len()).map_err(|_| SetError::RequestTooLarge)?;
+    let response = json_call(|out, cap, needed| unsafe {
+        xrg_settings_apply(
+            doc.as_ptr(),
+            doc_len,
+            changes_json.as_ptr(),
+            changes_len,
+            out,
+            cap,
+            needed,
+        )
+    })
+    .map_err(|failure| match failure {
+        CallError::Rejected => SetError::InvalidDocument,
+        CallError::Transport(_) => SetError::Transport,
+    })?;
+    let wire: Wire = serde_json::from_slice(&response).map_err(|_| SetError::Transport)?;
+    if let Some(error) = wire.error {
+        // The first refusal's own kind (and bounds), so a batch of one is
+        // reported exactly the single-entry `set` reports it.
+        return Err(error.into());
+    }
+    wire.document
+        .map(String::into_bytes)
+        .ok_or(SetError::Transport)
+}
+
+/// The document with every cross-setting combination's own offenders reverted
+/// to their defaults — the IN-MEMORY repair a load applies without touching
+/// the file (round 3, ruling R38) — plus the ids of every repaired entry,
+/// so the platform reports each repaired setting.
+pub fn repair_combinations(doc: &[u8]) -> (Vec<u8>, Vec<String>) {
+    let length = u32::try_from(doc.len())
+        .map_err(|_| SetError::InvalidDocument)
+        .and_then(|len| {
+            if doc.len() <= INPUT_LIMIT {
+                Ok(len)
+            } else {
+                Err(SetError::InvalidDocument)
+            }
+        })
+        .and_then(|len| {
+            match json_call(|out, cap, needed| unsafe {
+                xrg_settings_repair(doc.as_ptr(), len, out, cap, needed)
+            }) {
+                Ok(response) => Ok(response),
+                Err(_) => Err(SetError::InvalidDocument),
+            }
+        })
+        .and_then(|response| {
+            serde_json::from_slice::<Wire>(&response).map_err(|_| SetError::InvalidDocument)
+        });
+    let repair = match length {
+        Ok(wire) => {
+            let ids = wire
+                .diagnostics
+                .iter()
+                .filter_map(|diagnostic| diagnostic.id.clone())
+                .collect::<Vec<_>>();
+            wire.document
+                .map(String::into_bytes)
+                .map(|document| (document, ids))
+        }
+        Err(_) => None,
+    };
+    match repair {
+        Some((document, ids)) => (document, ids),
+        // The core repairs its own combinations or refuses the whole call;
+        // an unreachable refusal here (a torn input) falls back to the
+        // document unchanged, which the caller already treats as repaired.
+        None => (doc.to_vec(), Vec::new()),
+    }
 }
 
 /// Restore every entry of one catalog section to its default, in the document

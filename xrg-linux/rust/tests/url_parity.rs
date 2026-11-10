@@ -8,8 +8,12 @@
 //! `SocketAddr`/`IpAddr` parser. The table is derived from what Rust's
 //! parser does, so a working 0.2.2 endpoint is never dropped and a
 //! malformed one is never newly accepted.
-use std::{fs, net::{Ipv6Addr, SocketAddr}, path::Path};
 use serde::Deserialize;
+use std::{
+    fs,
+    net::{Ipv6Addr, SocketAddr},
+    path::Path,
+};
 
 /// One parity case: the URL and whether the workers' endpoint rule accepts.
 #[derive(Deserialize)]
@@ -37,7 +41,11 @@ fn the_shared_table_matches_the_workers_std_parser() {
             case.accept,
             "{} must {} by the workers' own rule",
             case.url,
-            if case.accept { "be accepted" } else { "be refused" }
+            if case.accept {
+                "be accepted"
+            } else {
+                "be refused"
+            }
         );
     }
 }

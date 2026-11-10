@@ -787,14 +787,15 @@ fn combination_repairs_reset_only_the_offending_settings() {
     assert!(replaced.contains(&"the temperature curve 2"));
     assert!(replaced.contains(&"the weather station toggle"));
     assert!(!replaced.contains(&"settings that failed validation"));
-    // The startup path runs the same per-setting repair and reports every
-    // replacement, exactly like a malformed entry.
-    let store = Store::open(f.root());
+    // The startup path runs the same per-setting repair, reports every
+    // replacement by its entry id (round 3, ruling R38), and — the new
+    // rule — the DOCUMENT it edits is the same repaired in-memory copy.
+    let mut store = Store::open(f.root());
     let problem = store.load_problem().expect("the replacements are reported");
-    assert!(problem.contains("the weather station toggle"), "{problem}");
-    assert!(problem.contains("the fan curve 2"), "{problem}");
-    assert!(problem.contains("the temperature curve 2"), "{problem}");
-    assert!(!problem.contains("the fan curve 3"), "{problem}");
+    assert!(problem.contains("weather.enabled"), "{problem}");
+    assert!(problem.contains("sources.fans.sensor2"), "{problem}");
+    assert!(problem.contains("sources.temperature.sensor2"), "{problem}");
+    assert!(!problem.contains("sources.fans.sensor3"), "{problem}");
     let started = store.settings();
     assert!(started.validate().is_ok());
     assert_eq!(
@@ -803,9 +804,143 @@ fn combination_repairs_reset_only_the_offending_settings() {
     );
     assert_eq!(started.metrics.cpu_history_minutes, 30);
     assert!(!started.weather.enabled);
+    // The repaired copy is editable: an ordinary save is an authorized,
+    // validated save (ruling R38).
+    store
+        .set("general.window.title", serde_json::json!("Edited"))
+        .expect("an edit after the startup repair applies");
     // The workers start on the repaired view without panicking.
     let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, store.settings());
     drop(worker);
+}
+
+/// The "don't make it worse" rule (round 3, ruling R38): a document that
+/// carries TWO independent cross-setting violations — each entry valid on
+/// its own, saved by an older build or hand-edited — loads, an UNRELATED
+/// edit succeeds, fixing EITHER violation alone succeeds, and the document
+/// the store edits is the repaired in-memory copy (so an ordinary save of
+/// it is an authorized, validated save). The disk file is left byte-for-byte
+/// unchanged until that authorized save.
+#[test]
+fn existing_violations_stay_editable_and_fixable_one_at_a_time() {
+    let f = Fixture::new();
+    f.write_json(
+        br#"{"format": "xrg-ng-settings", "version": 1, "settings": {
+            "general.window.title": "Hand edited",
+            "weather.enabled": true, "weather.station": "",
+            "sources.fans.sensor2": "applesmc-fan2"}}"#,
+    );
+    let original = fs::read(f.json()).unwrap();
+    // Before anything repairs it: the document-level rules (round 3, ruling
+    // R38) keep the violated document editable — an unrelated single edit
+    // applies, and fixing EITHER violation alone applies, because neither
+    // makes anything worse.
+    let raw = original.clone();
+    document::apply(
+        &raw,
+        &[document::Change::Set(
+            "general.window.title".into(),
+            serde_json::json!("Renamed"),
+        )],
+    )
+    .expect("an unrelated single edit applies on the violated document");
+    document::apply(
+        &raw,
+        &[document::Change::Set(
+            "weather.station".into(),
+            serde_json::json!("KSEA"),
+        )],
+    )
+    .expect("fixing the first violation alone applies");
+    document::apply(
+        &raw,
+        &[document::Change::Set(
+            "sources.fans.sensor1".into(),
+            serde_json::json!("applesmc-fan1"),
+        )],
+    )
+    .expect("fixing the second violation alone applies");
+    let mut store = Store::open(f.root());
+    // The startup repair reported both offending settings, reset ONLY them,
+    // and left the file untouched.
+    let problem = store.load_problem().expect("the repairs are reported");
+    assert!(problem.contains("weather.enabled"), "{problem}");
+    assert!(problem.contains("sources.fans.sensor2"), "{problem}");
+    let started = store.settings();
+    assert!(!started.weather.enabled, "the collector alone steps back");
+    assert_eq!(started.metrics.fan, None);
+    assert_eq!(
+        started.metrics.fan_extra,
+        [None, None],
+        "the orphan secondary clears"
+    );
+    assert_eq!(
+        fs::read(f.json()).unwrap(),
+        original,
+        "the repair is in memory only"
+    );
+    // An unrelated edit on the repaired copy succeeds: nothing gets worse.
+    store
+        .set("general.window.title", serde_json::json!("Renamed"))
+        .expect("an unrelated edit applies after the startup repair");
+    // Fixing both violations through ordinary edits succeeds, one at a time.
+    store
+        .set("weather.station", serde_json::json!("KSEA"))
+        .expect("the station fix applies");
+    store
+        .set("weather.enabled", serde_json::json!(true))
+        .expect("the collector fix applies");
+    store
+        .set("sources.fans.sensor1", serde_json::json!("applesmc-fan1"))
+        .expect("the primary fix applies");
+    store
+        .set("sources.fans.sensor2", serde_json::json!("applesmc-fan2"))
+        .expect("the secondary fix applies");
+    assert_eq!(store.load_problem(), None, "the file is healthy now");
+    store
+        .settings()
+        .validate()
+        .expect("the saved view validates");
+    // The file the repair authorized: every edit above reached it.
+    let saved = fs::read(f.json()).unwrap();
+    assert_ne!(saved, original);
+    let reopened = Store::open(f.root());
+    assert_eq!(reopened.load_problem(), None);
+    assert!(reopened.settings().weather.enabled);
+    assert_eq!(reopened.settings().weather.station, "KSEA");
+    assert_eq!(
+        reopened.settings().metrics.fan,
+        Some("applesmc-fan1".into())
+    );
+    assert_eq!(
+        reopened.settings().metrics.fan_extra,
+        [Some("applesmc-fan2".into()), None]
+    );
+}
+
+/// A working 0.2.2 endpoint is never dropped by migration (ruling R40):
+/// a version-40 file carrying a leading-zero port — a form Rust's own
+/// socket parser accepts, so the worker serves it today — migrates into
+/// the document intact, never replaced with the default endpoint.
+#[test]
+fn migration_keeps_working_leading_zero_port_endpoints() {
+    // The endpoint form itself is a working endpoint: std's parser accepts it.
+    assert!(xrg_ng_linux::ai::validate_url("http://127.0.0.1:080/metrics").is_ok());
+    let v40 = br#"{"version": 40, "ai": {"metrics_url": "http://127.0.0.1:080/metrics"}}"#;
+    // The legacy-import path (the same core migration `migrate_legacy` runs)
+    // keeps the endpoint intact, never replacing it with the default.
+    let document = match document::migrate_v40(v40) {
+        Ok(document::Loaded::Ok {
+            document,
+            diagnostics,
+        }) => {
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            document
+        }
+        other => panic!("the migration refused the endpoint: {other:?}"),
+    };
+    let settings = document::linux_view(&document).unwrap();
+    assert_eq!(settings.ai.metrics_url, "http://127.0.0.1:080/metrics");
 }
 
 /// The same combinations are refused before save through the shared core:

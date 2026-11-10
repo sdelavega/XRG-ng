@@ -162,9 +162,13 @@ int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *ou
  * {"error":{"kind":"unparsable-request",...}} for a section name that is
  * not UTF-8 — leaving unknown
  * keys and other sections untouched. xrg_settings_apply (round 3, ruling
- * R37) takes a UTF-8 JSON object mapping entry ids to values, or null to
- * remove an entry (it reverts to its default), applies the WHOLE batch to
- * a copy and validates the FINAL document once: it writes
+ * R37) takes a UTF-8 JSON object with two members: "set", an object
+ * mapping entry ids to the values to store — a value that is itself null
+ * is a REAL value the control accepts (for example the weather units'
+ * "inherit"), stored explicitly — and "remove", an array of entry ids
+ * that revert to their catalog defaults (a removal is not the same as
+ * setting null). The WHOLE batch is applied to a copy and the FINAL
+ * document is validated once: it writes
  * {"document":...,"diagnostics":[],"error":null} on success — never a
  * partial application — or {"document":null,"diagnostics":[{"id":...,
  * "problem":...}...],"error":{"kind":...,"min":...,"max":...}} on a
@@ -196,10 +200,10 @@ int32_t xrg_settings_set(const uint8_t *doc, uint32_t len,
 int32_t xrg_settings_reset_section(const uint8_t *doc, uint32_t len,
     const uint8_t *section, uint32_t sectionLen, uint8_t *out, uint32_t cap, uint32_t *needed);
 /* Round 3 (ruling R37): apply one batch of entry changes — a UTF-8 JSON
- * object mapping ids to values, or null to remove the entry (it reverts to
- * its default) — validating the final document once; never a partial
- * application. Ruling R38: refused only for a combination the final
- * document breaks that the starting document did not. */
+ * object with "set" (ids to values, null a real value) and "remove" (ids
+ * reverting to their defaults) — validating the final document once; never
+ * a partial application. Ruling R38: refused only for a combination the
+ * final document breaks that the starting document did not. */
 int32_t xrg_settings_apply(const uint8_t *doc, uint32_t len,
     const uint8_t *changes, uint32_t changesLen, uint8_t *out, uint32_t cap, uint32_t *needed);
 /* Round 3 (ruling R38): the document with every cross-setting combination's
