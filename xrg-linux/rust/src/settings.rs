@@ -761,11 +761,11 @@ impl Settings {
             repaired.window_opacity = default.window_opacity;
             replaced.push("the window opacity");
         }
-        if let Some(size) = self.window_size {
-            if size.validate().is_err() {
-                repaired.window_size = None;
-                replaced.push("the window size");
-            }
+        if let Some(size) = self.window_size
+            && size.validate().is_err()
+        {
+            repaired.window_size = None;
+            replaced.push("the window size");
         }
         if repaired.validate().is_ok() {
             return (repaired, replaced);

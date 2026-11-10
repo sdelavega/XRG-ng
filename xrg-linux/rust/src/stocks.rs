@@ -325,16 +325,20 @@ fn fetch_ticker(fetch: &dyn Fn(&str) -> Result<Vec<u8>, String>, ticker: &str) -
         // not UTF-8) is the same "no data" state macOS shows for it.
         return reading(StockStatus::BadResponse, None, None, Vec::new());
     };
-    let history = match fetch(&history_url) {
-        Ok(bytes) => bytes,
-        Err(_) => return reading(StockStatus::NetworkError, None, None, Vec::new()),
-    };
-    let quote = match fetch(&quote_url) {
-        Ok(bytes) => bytes,
-        Err(_) => return reading(StockStatus::NetworkError, None, None, Vec::new()),
-    };
-    let history_chart = shared::stock_history(&history).filter(|_| history.len() <= RESPONSE_LIMIT);
-    let quote_chart = shared::stock_quote(&quote).filter(|_| quote.len() <= RESPONSE_LIMIT);
+    // Final review, finding 8: attempt BOTH endpoints and keep whatever
+    // succeeded — macOS accepts either response, so one transport failure
+    // must not discard the other side's usable data. A first refresh can
+    // show the quote or the history curve alone.
+    let history = fetch(&history_url).ok();
+    let quote = fetch(&quote_url).ok();
+    let history_chart = history
+        .as_deref()
+        .filter(|bytes| bytes.len() <= RESPONSE_LIMIT)
+        .and_then(shared::stock_history);
+    let quote_chart = quote
+        .as_deref()
+        .filter(|bytes| bytes.len() <= RESPONSE_LIMIT)
+        .and_then(shared::stock_quote);
     let closes = history_chart
         .as_ref()
         .and_then(|chart| chart.closes.clone())
@@ -345,8 +349,15 @@ fn fetch_ticker(fetch: &dyn Fn(&str) -> Result<Vec<u8>, String>, ticker: &str) -
             .is_some_and(|chart| chart.price.is_some() && chart.change.is_some())
     {
         StockStatus::Ok
-    } else if refused_not_found(&history) || refused_not_found(&quote) {
+    } else if history.as_deref().is_some_and(refused_not_found)
+        || quote.as_deref().is_some_and(refused_not_found)
+    {
         StockStatus::NotFound
+    } else if history.is_none() || quote.is_none() {
+        // Only a total failure reports the network-error state, which keeps
+        // the previously retained curve on screen (the unchanged macOS
+        // behaviour for failures).
+        StockStatus::NetworkError
     } else {
         StockStatus::BadResponse
     };

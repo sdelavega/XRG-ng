@@ -439,6 +439,65 @@ fn fallback_price_is_the_final_close_and_change_is_final_minus_previous() {
     assert_eq!(readings[0].change, Some(10.));
 }
 
+// --- Final review, finding 8: one endpoint's failure keeps the other's
+// --- usable result, exactly as macOS accepts either response.
+
+#[test]
+fn a_quote_transport_error_keeps_the_fetched_history() {
+    // The history answers with the recorded one-year curve; the quote
+    // request fails at transport. The first refresh shows the history with
+    // the macOS fallback price, not the empty network-error state.
+    let fixtures = fixtures();
+    let fetch: Fetch = Box::new(move |url: &str| {
+        if url.contains("/v8/") {
+            Err("connection reset by peer".into())
+        } else {
+            fs::read(fixtures.join("history-1y.json")).map_err(|e| e.to_string())
+        }
+    });
+    let mut collector = StockCollector::new(fetch);
+    let start = Instant::now();
+    let readings = settle(&mut collector, &settings(), start, |readings| {
+        readings.iter().any(|r| r.status == StockStatus::Ok)
+    });
+    let reading = &readings[0];
+    assert_eq!(reading.status, StockStatus::Ok);
+    assert_eq!(reading.closes.len(), 251);
+    // The fallback price: the final close, and the change final minus the
+    // previous close — the same values the recorded happy path's quote
+    // carries, derived from the curve.
+    assert_eq!(reading.price, Some(342.3699951171875));
+    assert_eq!(
+        reading.change,
+        Some(342.3699951171875 - reading.closes[reading.closes.len() - 2])
+    );
+}
+
+#[test]
+fn a_history_transport_error_keeps_the_quote() {
+    // The quote answers with the recorded 15-minute price; the history
+    // request fails at transport. The first refresh shows the quote, with
+    // no curve to draw — what macOS displays for the same responses.
+    let fixtures = fixtures();
+    let fetch: Fetch = Box::new(move |url: &str| {
+        if url.contains("/v7/") {
+            Err("connection timed out".into())
+        } else {
+            fs::read(fixtures.join("quote-15m.json")).map_err(|e| e.to_string())
+        }
+    });
+    let mut collector = StockCollector::new(fetch);
+    let start = Instant::now();
+    let readings = settle(&mut collector, &settings(), start, |readings| {
+        readings.iter().any(|r| r.status == StockStatus::Ok)
+    });
+    let reading = &readings[0];
+    assert_eq!(reading.status, StockStatus::Ok);
+    assert_eq!(reading.price, Some(342.37));
+    assert_eq!(reading.change, Some(342.37 - 344.17));
+    assert!(reading.closes.is_empty(), "no history arrived to draw");
+}
+
 #[test]
 fn network_failure_keeps_the_retained_curve_in_the_panel() {
     use xrg_ng_linux::stocks::{Graph, StockReading, StockStatus, Update};

@@ -663,14 +663,8 @@ fn constraint_failures_are_refused_before_saving() {
     for (id, value) in [
         ("weather.station", serde_json::json!("K")),
         ("weather.station", serde_json::json!("KSEAA")),
-        (
-            "ai.claude.logs_path",
-            serde_json::json!("relative/path"),
-        ),
-        (
-            "ai.ollama.url",
-            serde_json::json!("http://10.0.0.1:11434"),
-        ),
+        ("ai.claude.logs_path", serde_json::json!("relative/path")),
+        ("ai.ollama.url", serde_json::json!("http://10.0.0.1:11434")),
         ("graphs.processes.filter", serde_json::json!(long_filter)),
         ("graphs.cpu.time_window", serde_json::json!(1.5)),
         ("weather.refresh", serde_json::json!(5.5)),
@@ -689,7 +683,9 @@ fn constraint_failures_are_refused_before_saving() {
     store
         .set("weather.station", serde_json::json!(" ksea "))
         .unwrap();
-    store.set("graphs.refresh", serde_json::json!(0.25)).unwrap();
+    store
+        .set("graphs.refresh", serde_json::json!(0.25))
+        .unwrap();
     let reopened = Store::open(f.root());
     assert_eq!(reopened.settings().weather.station, " ksea ");
     assert_eq!(reopened.settings().sampling_interval_ms, 250);
@@ -740,7 +736,10 @@ fn a_document_the_workers_would_refuse_starts_on_repaired_settings() {
     // their defaults, and the workers start on the repaired view.
     assert_eq!(store.settings().weather.station, "KMOP");
     assert_eq!(store.settings().metrics.cpu_history_minutes, 0);
-    store.settings().validate().expect("repaired settings validate");
+    store
+        .settings()
+        .validate()
+        .expect("repaired settings validate");
     let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, store.settings());
     drop(worker);
 }
