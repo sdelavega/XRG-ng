@@ -151,10 +151,11 @@ struct XRGSettingsStoreTests {
         let bytes = try #require(documentBytes(fixture.documentURL))
                 let loaded = try #require(try? JSONSerialization.jsonObject(with: bytes) as? [String: Any])
         #expect((loaded["settings"] as? [String: Any])?["general.window.title"] as? String == "Notified")
-        // No temporary sibling files are left in the document's directory.
+        // No temporary sibling files are left in the document's directory;
+        // the transaction's lock file stays (it is never deleted, R32).
         let siblings = try #require(try? FileManager.default.contentsOfDirectory(
             atPath: fixture.documentURL.deletingLastPathComponent().path))
-        #expect(siblings == ["settings.json"])
+        #expect(siblings.sorted() == ["settings.json", "settings.json.lock"])
 
         // Storing the entry's catalog default removes the key again.
         try store.set("general.window.title", .string(""))
@@ -482,7 +483,109 @@ struct XRGSettingsStoreTests {
         #expect(store.value("graphs.cpu.time_window") == .int(5))
     }
 
-    // MARK: The isolated factory for non-production tools (final review, finding 6 / R31)
+    // MARK: The locked write transaction (final review round 2, issue 1 / R32)
+
+    /// Two stores over one document, interleaved: while store A holds its
+    /// staged temporary file, store B's edit of an unrelated key lands on
+    /// disk — a writer that bypasses the advisory lock exactly where a
+    /// concurrent store would. A's last-moment identity re-check catches
+    /// it, the transaction loops once through compare/re-apply over B's
+    /// content, and both edits survive; B, a store with independent file
+    /// handles, then reads and extends the merged document.
+    @Test func interleavedStoresDoNotLoseEdits() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let a = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                 catalog: catalog, legacyDomain: [:])
+        let b = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                 catalog: catalog, legacyDomain: [:])
+        try a.set("general.window.title", .string("From A"))
+        a.stageInterleave = {
+            // B's concurrent write of an unrelated key, applied to the file
+            // while A is between staging and the atomic replace: the
+            // bytes B's own transaction would have written.
+            let current = (try? Data(contentsOf: fixture.documentURL)) ?? Data()
+            switch XRGSettingsDocument.load(current, catalog: catalog) {
+            case .ok(var document, _):
+                try? document.set("graphs.refresh", .double(2), catalog: catalog)
+                try? document.serialized().write(to: fixture.documentURL)
+            case .unreadable:
+                Issue.record("B's concurrent write must be a loadable document")
+            }
+        }
+        try a.set("general.window.border_width", .int(8))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.title", in: bytes) as? String == "From A")
+        #expect(try storedValue("general.window.border_width", in: bytes) as? Int == 8)
+        #expect(try storedValue("graphs.refresh", in: bytes) as? Double == 2,
+                "the interleaved store's edit must survive")
+        // B, the second store, adopts the merged content on its own write
+        // and extends it: the merged document is everyone's base now.
+        try b.set("graphs.refresh", .double(3))
+        let merged = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.title", in: merged) as? String == "From A")
+        #expect(try storedValue("general.window.border_width", in: merged) as? Int == 8)
+        #expect(try storedValue("graphs.refresh", in: merged) as? Double == 3)
+    }
+
+    /// A late external replacement during staging — malformed content the
+    /// app cannot adopt, written between the staging and the replace — is
+    /// never overwritten: the re-check catches it, the transaction loops
+    /// into the compare, the load refuses it, the write stops and the same
+    /// confirmation a load would surface appears.
+    @Test func lateExternalMalformedReplacementDuringStagingIsNeverOverwritten() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("Mine"))
+        store.stageInterleave = {
+            try? Data("definitely not a settings document".utf8).write(to: fixture.documentURL)
+        }
+        try store.set("general.window.border_width", .int(8))
+        #expect(store.loadProblem?.problem == XRGSettingsDiagnostic.malformed)
+        let garbage = Data("definitely not a settings document".utf8)
+        #expect(try #require(documentBytes(fixture.documentURL)) == garbage,
+                "the late replacement is kept byte for byte")
+        #expect(store.value("general.window.border_width") == .int(8), "the pending edit is kept in memory")
+        // The user's confirmed replacement writes the in-memory document.
+        store.replaceUnreadableFile()
+        #expect(store.loadProblem == nil)
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.border_width", in: bytes) as? Int == 8)
+    }
+
+    /// Another writer holding the lock past the bounded wait: the edit stays
+    /// pending in memory, nothing is written, the persistence banner
+    /// reports it, and the user's confirmation still writes the pending
+    /// document once the other writer is gone (ruling R32).
+    @Test func lockWaitExpiryKeepsTheEditPendingWithABanner() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        try store.set("general.window.title", .string("First"))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        // Hold the lock file the way another process would.
+        let lockURL = fixture.documentURL.deletingLastPathComponent()
+            .appendingPathComponent("settings.json.lock")
+        let holder = open(lockURL.path, O_RDWR | O_CREAT, 0o600)
+        #expect(holder >= 0)
+        defer { close(holder) }
+        #expect(flock(holder, LOCK_EX) == 0)
+        defer { flock(holder, LOCK_UN) }
+        try store.set("graphs.refresh", .double(2))
+        #expect(store.loadProblem != nil, "the bounded wait expired and the banner reports it")
+        #expect(documentBytes(fixture.documentURL) == bytes, "nothing was written")
+        #expect(XRGSettingsValue.sameValue(store.value("graphs.refresh"), .double(2)),
+                "the edit stays pending in memory")
+        flock(holder, LOCK_UN)
+        store.replaceUnreadableFile()
+        #expect(store.loadProblem == nil)
+        let written = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.title", in: written) as? String == "First")
+        #expect(try storedValue("graphs.refresh", in: written) as? Double == 2)
+    }
 
     /// The isolated factory migrates exactly the domain it is given: fixture
     /// data seeded into a disposable suite travels the real first-launch
@@ -1060,7 +1163,8 @@ struct XRGSettingsStoreTests {
         #expect(documentBytes(fixture.documentURL) == bytes)
         #expect(try modificationDate(fixture.documentURL) == stamp)
         #expect(try FileManager.default.contentsOfDirectory(
-            atPath: fixture.documentURL.deletingLastPathComponent().path) == ["settings.json"])
+            atPath: fixture.documentURL.deletingLastPathComponent().path).sorted()
+            == ["settings.json", "settings.json.lock"])
 
         // A failure after the bytes are written but before the sync completes.
         store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults, catalog: catalog, legacyDomain: [:])
@@ -1075,7 +1179,8 @@ struct XRGSettingsStoreTests {
         #expect(documentBytes(fixture.documentURL) == bytes)
         #expect(try modificationDate(fixture.documentURL) == stamp)
         #expect(try FileManager.default.contentsOfDirectory(
-            atPath: fixture.documentURL.deletingLastPathComponent().path) == ["settings.json"])
+            atPath: fixture.documentURL.deletingLastPathComponent().path).sorted()
+            == ["settings.json", "settings.json.lock"])
     }
 
     // MARK: Fresh installs are not upgrades (fix round 2, finding 5)

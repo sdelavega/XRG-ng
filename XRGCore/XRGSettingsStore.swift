@@ -600,10 +600,54 @@ import Foundation
         case conflict(XRGSettingsError)
     }
 
+    /// An advisory exclusive lock over one settings file, taken on a sibling
+    /// lock file (`settings.json.lock`, created with mode 0600 and never
+    /// deleted while held) for the duration of one read → compare →
+    /// re-apply → stage → replace transaction (final review round 2,
+    /// issue 1 / ruling R32): two stores in one process — or two
+    /// processes — cannot both pass the comparison and then each replace
+    /// the file, losing the other's edit. External editors that ignore the
+    /// lock are covered by the last-moment identity re-check
+    /// `persist(reapplying:)` makes before the atomic replace.
+    private final class SettingsFileLock: @unchecked Sendable {
+        private let descriptor: Int32
+        private init(descriptor: Int32) { self.descriptor = descriptor }
+
+        /// Acquire the lock, waiting at most `wait` seconds; nil means the
+        /// bounded wait expired and the edit stays pending (ruling R32).
+        static func acquire(url: URL, wait: TimeInterval) -> SettingsFileLock? {
+            let descriptor = open(url.path, O_RDWR | O_CREAT, 0o600)
+            guard descriptor >= 0 else { return nil }
+            fchmod(descriptor, 0o600)
+            let deadline = Date().addingTimeInterval(wait)
+            repeat {
+                if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+                    return SettingsFileLock(descriptor: descriptor)
+                }
+                usleep(20_000)
+            } while Date() < deadline
+            close(descriptor)
+            return nil
+        }
+
+        func release() {
+            flock(descriptor, LOCK_UN)
+            close(descriptor)
+        }
+
+        deinit { close(descriptor) }
+    }
+
+    /// A test seam for ruling R32: called between staging the temporary file
+    /// and the last-moment identity re-check, while the transaction lock is
+    /// held, so tests can interleave another writer exactly there.
+    var stageInterleave: (() -> Void)?
+
     /// Write the document atomically, coordinating with everyone else who
-    /// may touch the file (final review, finding 2 / ruling R28): a
-    /// temporary file in the same directory, fsync, then rename over the
-    /// settings file (spec §2). Mode 0600.
+    /// may touch the file (final review, finding 2 / rulings R28 and R32):
+    /// the whole read → compare → re-apply → stage → replace transaction
+    /// runs under the advisory exclusive lock, and the destination's
+    /// identity is re-checked immediately before the atomic replace.
     ///
     /// Before anything is replaced, the file is compared with the bytes this
     /// store last observed. Unchanged, the write proceeds. Changed, the new
@@ -614,31 +658,48 @@ import Foundation
     /// content stops the write with `.unreadable`. A pending edit the
     /// adopted document refuses stops it with `.conflict`.
     ///
-    /// A destination that cannot be written — a settings file whose mode
-    /// lacks owner write, or a directory that is not writable — is never
-    /// replaced: the write is refused before any temporary file exists, the
-    /// change stays in memory and `loadProblem` reports it, exactly like an
-    /// unreadable file (review issue 1). The owner-write MODE BIT is checked
-    /// explicitly, in addition to `access(W_OK)`: an ACL can grant write
-    /// access while the bit is absent, and the bit is what the ruling
-    /// requires (fix round 2, finding 1). Durability is checked too: a
-    /// temporary file that cannot be opened or synced stops the write
-    /// instead of proceeding to the replacement (review issue 10).
+    /// A destination that changed AGAIN during staging — a writer that
+    /// ignored the lock — makes the transaction loop once through
+    /// compare/re-apply over the new content; a second change stops the
+    /// write and surfaces it. A destination that cannot be written — a
+    /// settings file whose mode lacks owner write, or a directory that is
+    /// not writable — is never replaced: the write is refused before any
+    /// temporary file exists, the change stays in memory and `loadProblem`
+    /// reports it, exactly like an unreadable file (review issue 1). The
+    /// owner-write MODE BIT is checked explicitly, in addition to
+    /// `access(W_OK)`: an ACL can grant write access while the bit is
+    /// absent, and the bit is what the ruling requires (fix round 2,
+    /// finding 1). Durability is checked too: a temporary file that cannot
+    /// be opened or synced stops the write instead of proceeding to the
+    /// replacement (review issue 10).
     private func persist(reapplying reapply: (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void)
         -> PersistOutcome? {
         guard case .document(let fileURL) = backend else { return nil }
+        if let error = Self.writePermissionError(fileURL) { return .failure(error) }
+        guard let lock = SettingsFileLock.acquire(
+            url: fileURL.deletingLastPathComponent()
+                .appendingPathComponent(fileURL.lastPathComponent + ".lock"), wait: 2) else {
+            // The bounded wait expired: another writer holds the file. The
+            // edit stays pending in memory and the banner reports it,
+            // exactly like a refused write (ruling R32).
+            return .failure(NSError(domain: NSPOSIXErrorDomain, code: Int(EWOULDBLOCK),
+                userInfo: [NSLocalizedDescriptionKey: "Another settings writer holds \(fileURL.path)"]))
+        }
+        defer { lock.release() }
         var document = locked.document
-        // Coordinate before the write: compare the file with the bytes this
-        // store last saw (R28). A file that is gone has no content left to
-        // preserve; a file that changed is adopted first.
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            let current: Data
-            do {
-                current = try Data(contentsOf: fileURL)
-            } catch {
-                return .failure(error as NSError)
+        for attempt in 0..<2 {
+            // Read and compare: the file against the bytes this store last
+            // saw (R28). A file that is gone has no content left to
+            // preserve; a file that changed is adopted first.
+            var onDisk: Data?
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                do {
+                    onDisk = try Data(contentsOf: fileURL)
+                } catch {
+                    return .failure(error as NSError)
+                }
             }
-            if current != observedBytes {
+            if let current = onDisk, current != observedBytes {
                 switch XRGSettingsDocument.load(current, catalog: catalog) {
                 case .ok(let adopted, let diagnostics):
                     Self.note(diagnostics)
@@ -663,28 +724,56 @@ import Foundation
                     return .unreadable(diagnostic)
                 }
             }
+            // Stage: the durable temporary file, still under the lock.
+            let bytes = document.serialized()
+            let temporary = fileURL.deletingLastPathComponent()
+                .appendingPathComponent(".settings-\(UUID().uuidString).tmp")
+            do {
+                try durableWrite(temporary, bytes)
+            } catch {
+                try? FileManager.default.removeItem(at: temporary)
+                return .failure(error as NSError)
+            }
+            stageInterleave?()
+            // Re-check the destination's identity immediately before the
+            // atomic replace, still under the lock (R32): a writer that
+            // ignored the lock cannot be overwritten unnoticed.
+            var recheck: Data?
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                recheck = try? Data(contentsOf: fileURL)
+            }
+            if recheck != onDisk {
+                try? FileManager.default.removeItem(at: temporary)
+                if attempt == 0 {
+                    // The destination changed during staging: loop once
+                    // through compare/re-apply over the new content.
+                    continue
+                }
+                // It changed again: stop writing and surface it.
+                return .failure(NSError(domain: NSPOSIXErrorDomain, code: Int(EAGAIN),
+                    userInfo: [NSLocalizedDescriptionKey: "The settings file changed during staging"]))
+            }
+            do {
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+            } catch {
+                try? FileManager.default.removeItem(at: temporary)
+                return .failure(error as NSError)
+            }
+            // These are the bytes this store now observes on disk; the next
+            // write compares against them (R28).
+            observedBytes = bytes
+            return nil
         }
-        if let error = writeBytes(document.serialized()) {
-            return .failure(error)
-        }
-        return nil
+        return .failure(NSError(domain: NSPOSIXErrorDomain, code: Int(EAGAIN),
+            userInfo: [NSLocalizedDescriptionKey: "The settings file kept changing during staging"]))
     }
 
-    /// The plain write of bytes over the settings file, used by the
-    /// confirmed replacement of an unreadable file: the user has already
-    /// decided the destination's fate, so no comparison happens, but the
-    /// observed bytes still follow what was written.
-    private func persistError() -> NSError? {
-        guard case .document(let fileURL) = backend else { return nil }
-        if let error = writeBytes(locked.document.serialized()) { return error }
-        return nil
-    }
-
-    /// The file write both persistence paths share: the guard checks, the
-    /// atomic replacement and the observed-bytes bookkeeping. Returns the
-    /// error that stopped the write, nil on success.
-    private func writeBytes(_ bytes: Data) -> NSError? {
-        guard case .document(let fileURL) = backend else { return nil }
+    /// The guard checks both persistence paths share: the directories must
+    /// exist, the destination — when present — must be owner-writable by
+    /// both `access(W_OK)` and its owner-write mode bit, and the directory
+    /// must be writable. Returns the error that stops the write, nil when
+    /// the destination may be replaced.
+    private static func writePermissionError(_ fileURL: URL) -> NSError? {
         let directory = fileURL.deletingLastPathComponent()
         func denied(_ path: String) -> NSError {
             NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES),
@@ -704,23 +793,43 @@ import Foundation
             if access(directory.path, W_OK) != 0 {
                 throw denied(directory.path)
             }
-            let temporary = directory.appendingPathComponent(".settings-\(UUID().uuidString).tmp")
-            do {
-                try durableWrite(temporary, bytes)
-                // A rename within the directory cannot leave a half-written
-                // file, and replaces the settings file if it already exists.
-                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
-            } catch {
-                try? FileManager.default.removeItem(at: temporary)
-                return error as NSError
-            }
-            // These are the bytes this store now observes on disk; the next
-            // write compares against them (R28).
-            observedBytes = bytes
             return nil
         } catch {
+            return (error as? NSError) ?? denied(fileURL.path)
+        }
+    }
+
+    /// The plain write of bytes over the settings file, used by the
+    /// confirmed replacement of an unreadable file: the user has already
+    /// decided the destination's fate, so no comparison or lock happens,
+    /// but the observed bytes still follow what was written.
+    private func persistError() -> NSError? {
+        guard case .document(let fileURL) = backend else { return nil }
+        if let error = writeBytes(locked.document.serialized()) { return error }
+        return nil
+    }
+
+    /// The file write `persistError` uses: the guard checks, the atomic
+    /// replacement and the observed-bytes bookkeeping. Returns the error
+    /// that stopped the write, nil on success.
+    private func writeBytes(_ bytes: Data) -> NSError? {
+        guard case .document(let fileURL) = backend else { return nil }
+        if let error = Self.writePermissionError(fileURL) { return error }
+        let temporary = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(".settings-\(UUID().uuidString).tmp")
+        do {
+            try durableWrite(temporary, bytes)
+            // A rename within the directory cannot leave a half-written
+            // file, and replaces the settings file if it already exists.
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
             return error as NSError
         }
+        // These are the bytes this store now observes on disk; the next
+        // write compares against them (R28).
+        observedBytes = bytes
+        return nil
     }
 
     // MARK: Legacy keys
