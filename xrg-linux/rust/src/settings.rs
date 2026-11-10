@@ -742,7 +742,10 @@ impl Settings {
                     module.colors = GraphColors::default();
                     replaced.push("a graph's colours");
                 }
-                if module.height.is_some_and(|height| !(64..=240).contains(&height)) {
+                if module
+                    .height
+                    .is_some_and(|height| !(64..=240).contains(&height))
+                {
                     module.height = None;
                     replaced.push("a graph's height");
                 }
@@ -800,10 +803,16 @@ impl Settings {
         }
         for (field, path) in [
             (&mut repaired.ai.claude_logs, self.ai.claude_logs.as_deref()),
-            (&mut repaired.ai.claude_database, self.ai.claude_database.as_deref()),
+            (
+                &mut repaired.ai.claude_database,
+                self.ai.claude_database.as_deref(),
+            ),
             (&mut repaired.ai.codex_logs, self.ai.codex_logs.as_deref()),
             (&mut repaired.ai.gemini_logs, self.ai.gemini_logs.as_deref()),
-            (&mut repaired.ai.hermes_database, self.ai.hermes_database.as_deref()),
+            (
+                &mut repaired.ai.hermes_database,
+                self.ai.hermes_database.as_deref(),
+            ),
         ] {
             let invalid = path.is_some_and(|path| {
                 let value = path.to_str().unwrap_or("");
@@ -859,18 +868,15 @@ impl Settings {
             ("the network device", &mut repaired.metrics.network),
             ("the disk device", &mut repaired.metrics.disk),
         ] {
-            if field
-                .as_deref()
-                .is_some_and(|name| {
-                    name.is_empty()
-                        || name == "."
-                        || name == ".."
-                        || name.len() > 255
-                        || name
-                            .chars()
-                            .any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == ':')
-                })
-            {
+            if field.as_deref().is_some_and(|name| {
+                name.is_empty()
+                    || name == "."
+                    || name == ".."
+                    || name.len() > 255
+                    || name
+                        .chars()
+                        .any(|c| c.is_control() || c.is_whitespace() || c == '/' || c == ':')
+            }) {
                 *field = None;
                 replaced.push(offender);
             }
@@ -957,13 +963,12 @@ impl Settings {
                 &mut repaired.metrics.fan_extra,
             ),
         ] {
-            let mut seen: Vec<&str> = primary.into_iter().collect();
+            let mut seen: Vec<String> = primary.map(str::to_owned).into_iter().collect();
             for slot in 0..2 {
-                if let Some(id) = extra[slot].as_deref() {
-                    if primary.is_none() {
-                        extra[slot] = None;
-                        replaced.push(offenders[slot]);
-                    } else if seen.contains(&id) {
+                if let Some(id) = extra[slot].clone() {
+                    // A secondary without a primary, or a duplicate of an
+                    // earlier curve: the offending slot alone steps back.
+                    if primary.is_none() || seen.contains(&id) {
                         extra[slot] = None;
                         replaced.push(offenders[slot]);
                     } else {
@@ -1523,28 +1528,52 @@ impl Store {
             )),
         }
     }
+    /// The order the commit path applies entries through the core (ruling
+    /// R33): the station an enabled collector needs comes before the
+    /// enable, and a primary sensor curve before its secondaries, so a
+    /// multi-entry save never passes through a cross-setting combination
+    /// the core's per-edit refusal would reject on the way to a valid
+    /// final view.
+    fn application_rank(id: &str) -> (u8, &str) {
+        match id {
+            "weather.enabled" => (1, id),
+            "sources.temperature.sensor2" => (1, id),
+            "sources.temperature.sensor3" => (2, id),
+            "sources.fans.sensor2" => (1, id),
+            "sources.fans.sensor3" => (2, id),
+            _ => (0, id),
+        }
+    }
     /// The current document with the desired view's changed entries stored
     /// through the core: every entry whose value differs from the baseline
     /// view is `set`, every entry the desired view reverted to its default
     /// is `set` to that default, which removes it again. Entries neither
     /// map names — the Stocks settings, other platforms' keys, unknown keys
-    /// — are left exactly as they are.
+    /// — are left exactly as they are. The entries are applied in the
+    /// dependency order `application_rank` prescribes, so no intermediate
+    /// document breaks a cross-setting combination. Any value the core
+    /// refuses aborts the save before anything is written.
     fn changed_document(
         &self,
         desired: &serde_json::Map<String, serde_json::Value>,
         baseline: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<Vec<u8>, String> {
         let mut document = self.document.clone();
-        for (id, value) in desired {
+        let mut desired_entries: Vec<(&String, &serde_json::Value)> = desired.iter().collect();
+        desired_entries.sort_by_key(|(id, _)| Self::application_rank(id));
+        for (id, value) in desired_entries {
             if baseline.get(id) != Some(value) {
                 document = document::set(&document, id, value)
                     .map_err(|_| format!("the settings did not convert: {id}"))?;
             }
         }
-        for id in baseline.keys() {
-            if desired.contains_key(id) {
-                continue;
-            }
+        let mut removals: Vec<&String> = baseline
+            .keys()
+            .filter(|id| !desired.contains_key(*id))
+            .collect();
+        // Reverting to defaults clears the dependent entries first.
+        removals.sort_by_key(|id| std::cmp::Reverse(Self::application_rank(id)));
+        for id in removals {
             let Some((_, default)) = catalog_defaults().iter().find(|(entry, _)| entry == id)
             else {
                 continue;

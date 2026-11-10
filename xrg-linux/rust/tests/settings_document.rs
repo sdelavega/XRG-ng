@@ -746,9 +746,9 @@ fn a_document_the_workers_would_refuse_starts_on_repaired_settings() {
 
 /// A document that is valid entry by entry but breaks a cross-setting
 /// combination the workers reject — the core's per-entry load repair
-/// touches nothing here — reaches the defensive startup repair, which
-/// resets ONLY the offending settings and reports each; the unrelated
-/// choices survive (final review round 2, issue 2 / ruling R33).
+/// touches nothing here — reaches the startup repair, which resets ONLY
+/// the offending settings and reports each; the unrelated choices survive
+/// (final review round 2, issue 2 / ruling R33).
 #[test]
 fn combination_repairs_reset_only_the_offending_settings() {
     let f = Fixture::new();
@@ -761,10 +761,11 @@ fn combination_repairs_reset_only_the_offending_settings() {
             "sources.temperature.sensor2": "coretemp-isa-0000",
             "graphs.cpu.time_window": 30}}"#,
     );
-    let store = Store::open(f.root());
-    // Every entry is valid on its own: the load reports nothing.
-    assert!(store.load_problem().is_none());
-    let (repaired, replaced) = store.settings().repaired();
+    // The raw view the document renders: valid entry by entry, refused by
+    // the workers only through its combinations.
+    let raw = document::linux_view(&fs::read(f.json()).unwrap()).unwrap();
+    assert!(raw.validate().is_err());
+    let (repaired, replaced) = raw.repaired();
     assert!(repaired.validate().is_ok());
     // Only the offending settings were reset: the fan primary and its
     // distinct third curve survive, the duplicate second curve does not;
@@ -786,6 +787,22 @@ fn combination_repairs_reset_only_the_offending_settings() {
     assert!(replaced.contains(&"the temperature curve 2"));
     assert!(replaced.contains(&"the weather station toggle"));
     assert!(!replaced.contains(&"settings that failed validation"));
+    // The startup path runs the same per-setting repair and reports every
+    // replacement, exactly like a malformed entry.
+    let store = Store::open(f.root());
+    let problem = store.load_problem().expect("the replacements are reported");
+    assert!(problem.contains("the weather station toggle"), "{problem}");
+    assert!(problem.contains("the fan curve 2"), "{problem}");
+    assert!(problem.contains("the temperature curve 2"), "{problem}");
+    assert!(!problem.contains("the fan curve 3"), "{problem}");
+    let started = store.settings();
+    assert!(started.validate().is_ok());
+    assert_eq!(
+        started.metrics.fan_extra,
+        [None, Some("applesmc-fan2".into())]
+    );
+    assert_eq!(started.metrics.cpu_history_minutes, 30);
+    assert!(!started.weather.enabled);
     // The workers start on the repaired view without panicking.
     let worker = xrg_ng_linux::engine::Worker::start_with_settings(false, store.settings());
     drop(worker);
