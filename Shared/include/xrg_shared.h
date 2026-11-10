@@ -157,10 +157,31 @@ int32_t xrg_model_names_parse(const uint8_t *bytes, uint32_t length, uint8_t *ou
  * constraint into the user-facing reason. -1 stays
  * reserved for invalid arguments and a document that does not load.
  * xrg_settings_reset_section writes {"document":...} after
- * restoring both platforms' entries of one catalog section — or the same
- * {"error":{"kind":"unparsable-request",...}} for a section name that is not
- * UTF-8 — leaving unknown
- * keys and other sections untouched. xrg_settings_migrate_linux_v40 writes
+ * restoring both platforms' entries of one catalog section — as ONE batch
+ * of removals (ruling R37) — or the same
+ * {"error":{"kind":"unparsable-request",...}} for a section name that is
+ * not UTF-8 — leaving unknown
+ * keys and other sections untouched. xrg_settings_apply (round 3, ruling
+ * R37) takes a UTF-8 JSON object mapping entry ids to values, or null to
+ * remove an entry (it reverts to its default), applies the WHOLE batch to
+ * a copy and validates the FINAL document once: it writes
+ * {"document":...,"diagnostics":[],"error":null} on success — never a
+ * partial application — or {"document":null,"diagnostics":[{"id":...,
+ * "problem":...}...],"error":{"kind":...,"min":...,"max":...}} on a
+ * refusal, where the diagnostics name every offending entry, the problem
+ * strings are the same kinds the error carries, and the error is the
+ * FIRST refusal's own kind with its bounds (so a batch of one reports
+ * exactly what xrg_settings_set reports). A batch is refused only for a
+ * cross-setting combination the final document breaks that the starting
+ * document did not (ruling R38): a document that already carries
+ * violations stays editable, and fixing one of two is allowed. Request
+ * problems ride the wire as request-too-large (an id over 256 bytes),
+ * unparsable-request (a changes object that is not UTF-8 JSON) or
+ * wrong-type (a value no control can hold). xrg_settings_repair (ruling
+ * R38) writes the document with every cross-setting combination's own
+ * offenders reverted to their defaults plus a diagnostic naming each
+ * repaired entry id — {"document":...,"diagnostics":[...]} — leaving the
+ * caller's file untouched. xrg_settings_migrate_linux_v40 writes
  * {"document":...,"diagnostics":[...]}, refusing bytes that are not a JSON
  * object. xrg_settings_linux_view writes the version-40-shaped view the Rust
  * serde model deserialises. xrg_stock_chart_parse (kind 0 history, 1 quote)
@@ -174,6 +195,18 @@ int32_t xrg_settings_set(const uint8_t *doc, uint32_t len,
     uint8_t *out, uint32_t cap, uint32_t *needed);
 int32_t xrg_settings_reset_section(const uint8_t *doc, uint32_t len,
     const uint8_t *section, uint32_t sectionLen, uint8_t *out, uint32_t cap, uint32_t *needed);
+/* Round 3 (ruling R37): apply one batch of entry changes — a UTF-8 JSON
+ * object mapping ids to values, or null to remove the entry (it reverts to
+ * its default) — validating the final document once; never a partial
+ * application. Ruling R38: refused only for a combination the final
+ * document breaks that the starting document did not. */
+int32_t xrg_settings_apply(const uint8_t *doc, uint32_t len,
+    const uint8_t *changes, uint32_t changesLen, uint8_t *out, uint32_t cap, uint32_t *needed);
+/* Round 3 (ruling R38): the document with every cross-setting combination's
+ * own offenders reverted to their defaults, plus a diagnostic naming each
+ * repaired entry id. The caller's file is never touched. */
+int32_t xrg_settings_repair(const uint8_t *doc, uint32_t len,
+    uint8_t *out, uint32_t cap, uint32_t *needed);
 int32_t xrg_settings_migrate_linux_v40(const uint8_t *v40, uint32_t len,
     uint8_t *out, uint32_t cap, uint32_t *needed);
 int32_t xrg_settings_linux_view(const uint8_t *doc, uint32_t len,

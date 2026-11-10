@@ -317,6 +317,29 @@ public enum XRGSettingsLoad: Equatable, Sendable {
     case unreadable(XRGSettingsDiagnostic)
 }
 
+/// One entry change in a batch write (round 3 redesign, ruling R37): the
+/// value to store, or no value to remove the entry — it reverts to its
+/// catalog default.
+public struct XRGSettingsChange: Equatable, Sendable {
+    public let id: String
+    /// The value to store; nil removes the entry (it reverts to its default).
+    public let value: XRGSettingsValue?
+
+    public init(id: String, value: XRGSettingsValue?) {
+        self.id = id
+        self.value = value
+    }
+}
+
+/// The outcome of one validated batch write: the new document when the final
+/// document satisfies every rule, or the per-entry refusals — with the
+/// offending entry's id and error — when it does not. Nothing is applied on a
+/// refusal (ruling R37).
+public enum XRGSettingsBatchOutcome: Sendable {
+    case applied(XRGSettingsDocument)
+    case refused([(id: String, error: XRGSettingsError)])
+}
+
 /// One settings document: the values of the catalog ids the file stored, plus
 /// every unknown key preserved verbatim, at the level it came from.
 ///
@@ -433,7 +456,17 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         return catalog.entry(id)?.defaultValue ?? .null
     }
 
-    // MARK: Cross-setting combinations (final review round 2, issue 2 / ruling R33)
+    // MARK: Cross-setting combinations (final review round 2, issue 2 / ruling R33;
+    // round 3 redesign, rulings R37/R38)
+
+    /// One cross-setting rule the document breaks. `key` names the rule —
+    /// the invariant a save must not make worse (ruling R38) — and `ids`
+    /// names the entry ids that break it: the settings a repair resets and
+    /// a refusal reports.
+    struct CombinationViolation: Equatable, Sendable {
+        let key: String
+        let ids: [String]
+    }
 
     /// The cross-setting combinations the workers enforce that no single
     /// entry can express (ruling R33) — the rules the Linux `validate()`
@@ -453,16 +486,14 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// module list's membership — are the entries' own `constraint`,
     /// `range` and `order` rules above.
     ///
-    /// Returns the offending entry ids, in deterministic order, for the
-    /// prospective value map of a document: an edit whose result appears
-    /// here is refused before save on both platforms (the Linux store and
-    /// the commit path go through this same `set`), and nothing is written.
-    static func combinationOffenders(_ values: [String: XRGSettingsValue],
-                                      catalog: XRGSettingsCatalog) -> [String] {
+    /// Deterministic order: weather first, then each family in turn with its
+    /// per-slot rules before its uniqueness rule.
+    static func combinationViolations(_ values: [String: XRGSettingsValue],
+                                      catalog: XRGSettingsCatalog) -> [CombinationViolation] {
         func effective(_ id: String) -> XRGSettingsValue {
             values[id] ?? catalog.entry(id)?.defaultValue ?? .null
         }
-        var offenders: [String] = []
+        var violations: [CombinationViolation] = []
         // Weather: an enabled collector needs a station the worker can
         // address (settings.rs weather validate()).
         if case .bool(true) = effective("weather.enabled") {
@@ -471,28 +502,56 @@ public struct XRGSettingsDocument: Equatable, Sendable {
                 addressable = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     && XRGWeatherReport.station(text) != nil
             }
-            if !addressable { offenders.append("weather.enabled") }
+            if !addressable {
+                violations.append(CombinationViolation(key: "weather.enabled", ids: ["weather.enabled"]))
+            }
         }
         // Sensor curves: a secondary requires a primary, and each curve
         // uses a different sensor (settings.rs metrics validate()).
         for family in ["sources.temperature", "sources.fans"] {
-            var seen: [String] = []
-            var hasPrimary = false
-            if case .string = effective("\(family).sensor1") { hasPrimary = true }
+            var drawn: [Int: String] = [:]
             for slot in 1...3 {
-                let id = "\(family).sensor\(slot)"
-                if case .string(let source) = effective(id) {
-                    if slot > 1 && !hasPrimary {
-                        offenders.append(id)
-                    } else if seen.contains(source) {
-                        offenders.append(id)
-                    } else {
-                        seen.append(source)
-                    }
+                if case .string(let source) = effective("\(family).sensor\(slot)") {
+                    drawn[slot] = source
                 }
             }
+            let hasPrimary = drawn[1] != nil
+            // Each secondary slot that is drawn without a primary breaks its
+            // own rule: fixing one of two broken slots is allowed (R38).
+            for slot in 2...3 {
+                if drawn[slot] != nil, !hasPrimary {
+                    violations.append(CombinationViolation(key: "\(family).sensor\(slot)",
+                                                           ids: ["\(family).sensor\(slot)"]))
+                }
+            }
+            // A duplicate sensor breaks the family's uniqueness rule once,
+            // whichever slots hold it; the later copies are the ids reported.
+            var seen: [String] = []
+            var duplicates: [String] = []
+            for slot in 1...3 {
+                let id = "\(family).sensor\(slot)"
+                if let source = drawn[slot] {
+                    if seen.contains(source) { duplicates.append(id) } else { seen.append(source) }
+                }
+            }
+            if !duplicates.isEmpty {
+                violations.append(CombinationViolation(key: "\(family).unique", ids: duplicates))
+            }
         }
-        return offenders
+        return violations
+    }
+
+    /// The wire name of one refusal, the same string both platforms'
+    /// windows render: the diagnostic `problem` a batch refusal carries.
+    static func problemKind(of error: XRGSettingsError) -> String {
+        switch error {
+        case .unknownId: return "unknown-id"
+        case .wrongType: return "wrong-type"
+        case .outOfRange: return "out-of-range"
+        case .notAnOption: return "not-an-option"
+        case .dependencyNotMet: return "dependency-not-met"
+        case .constraint: return "constraint-failed"
+        }
     }
 
     /// Store a value for a setting, enforcing the entry's rules. Storing the
@@ -501,10 +560,13 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// disabled in the window otherwise); the dependency is checked against
     /// the effective value, so setting it to its default counts.
     ///
-    /// The resulting document must also satisfy the cross-setting
-    /// combinations the workers enforce (ruling R33): an edit that leaves a
-    /// combination broken — from either side of it — is refused with the
-    /// core's constraint error before anything is saved, on both platforms.
+    /// The resulting document must not break a cross-setting combination the
+    /// starting document did not already break (rulings R33/R38): an edit
+    /// that makes the document worse — from either side of a combination —
+    /// is refused with the core's constraint error before anything is saved,
+    /// on both platforms. A document that already carries a violation (saved
+    /// by an older build, or hand-edited) stays editable, and fixing one of
+    /// two violations is allowed.
     public mutating func set(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) throws(XRGSettingsError) {
         guard let entry = catalog.entry(id) else { throw .unknownId }
         if let depends = entry.depends {
@@ -519,7 +581,9 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         } else {
             prospective[id] = value
         }
-        if !Self.combinationOffenders(prospective, catalog: catalog).isEmpty {
+        let existing = Set(Self.combinationViolations(values, catalog: catalog).map(\.key))
+        if Self.combinationViolations(prospective, catalog: catalog)
+            .contains(where: { !existing.contains($0.key) }) {
             throw .constraint
         }
         values = prospective
@@ -530,7 +594,9 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// legacy state, whose entries may legitimately have been saved in any
     /// order, so a control that depends on another is stored with its own
     /// value and the settings windows render the disabled combination. Used
-    /// by `XRGSettingsMigration`; interactive changes go through `set`.
+    /// by `XRGSettingsMigration`; interactive changes go through `set` and
+    /// `apply` (ruling R37: a migration helper is never reachable from an
+    /// interactive edit).
     mutating func storeMigrated(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) throws(XRGSettingsError) {
         guard let entry = catalog.entry(id) else { throw .unknownId }
         if let error = Self.validate(value, for: entry) { throw error }
@@ -541,12 +607,94 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         }
     }
 
-    /// Restore every entry of one section to its default for `platform`.
-    /// Other sections, and unknown keys at either level, are not touched.
-    public mutating func resetSection(_ section: String, catalog: XRGSettingsCatalog, platform: XRGSettingsPlatform) {
-        for entry in catalog.entries(section: section, platform: platform) {
-            values.removeValue(forKey: entry.id)
+    // MARK: Batch writes (round 3 redesign, ruling R37)
+
+    /// Apply one batch of entry changes — every set and every removal an
+    /// interactive write carries — to a copy of one document, and validate
+    /// the FINAL document once: per-entry rules for every changed entry
+    /// (type, range, options, `depends` against the final values, the
+    /// entry's named semantic constraint) plus the cross-setting
+    /// combinations. Either the batch is applied whole and the new document
+    /// is returned, or nothing is applied and the refusal reports every
+    /// offending entry (ruling R37: a single-entry `set` is a batch of one,
+    /// and the multi-entry paths on both platforms are one batch each).
+    ///
+    /// The cross-setting check is "don't make it worse" (ruling R38): a
+    /// batch is refused only for a combination violation the final document
+    /// has that the starting document did not. A loaded document that
+    /// already carries violations (an older build's or a hand edit's)
+    /// stays editable — an unrelated change and fixing one of two
+    /// violations are both allowed — and only ever adding a violation is
+    /// refused, with a diagnostic per offending entry.
+    static func apply(_ changes: [XRGSettingsChange], to document: XRGSettingsDocument,
+                      catalog: XRGSettingsCatalog) -> XRGSettingsBatchOutcome {
+        var refusals: [(id: String, error: XRGSettingsError)] = []
+        var prospective = document.values
+        for change in changes {
+            guard let entry = catalog.entry(change.id) else {
+                refusals.append((change.id, .unknownId))
+                continue
+            }
+            if let value = change.value {
+                if let error = Self.validate(value, for: entry) {
+                    refusals.append((change.id, error))
+                    continue
+                }
+                if XRGSettingsValue.sameValue(value, entry.defaultValue) {
+                    prospective.removeValue(forKey: change.id)
+                } else {
+                    prospective[change.id] = value
+                }
+            } else {
+                // A removal reverts the entry to its default.
+                prospective.removeValue(forKey: change.id)
+            }
         }
+        // `depends` against the FINAL document: a batch may set a dependency
+        // and its dependent in either order (ruling R37).
+        for change in changes {
+            guard change.value != nil, let entry = catalog.entry(change.id),
+                  let depends = entry.depends else { continue }
+            let effective = prospective[depends.id] ?? catalog.entry(depends.id)?.defaultValue ?? .null
+            if !XRGSettingsValue.sameValue(effective, depends.equals) {
+                refusals.append((change.id, .dependencyNotMet))
+            }
+        }
+        let existing = Set(Self.combinationViolations(document.values, catalog: catalog).map(\.key))
+        for violation in Self.combinationViolations(prospective, catalog: catalog)
+        where !existing.contains(violation.key) {
+            for id in violation.ids { refusals.append((id, .constraint)) }
+        }
+        if !refusals.isEmpty { return .refused(refusals) }
+        return .applied(XRGSettingsDocument(values: prospective, unknown: document.unknown,
+                                            rootUnknown: document.rootUnknown))
+    }
+
+    /// Restore every entry of one catalog section to its default — one
+    /// batch of removals, whatever the entry's platform. Other sections and
+    /// unknown keys at either level are not touched.
+    static func resettingSection(_ section: String, in document: XRGSettingsDocument,
+                                 catalog: XRGSettingsCatalog) -> XRGSettingsBatchOutcome {
+        let changes = catalog.entries.filter { $0.section == section }
+            .map { XRGSettingsChange(id: $0.id, value: nil) }
+        return apply(changes, to: document, catalog: catalog)
+    }
+
+    /// Reset the settings that break a cross-setting combination — the
+    /// in-memory repair a load applies without touching the file (ruling
+    /// R38): each combination's own offenders revert to their defaults,
+    /// which always resolves it, and the entry ids are returned so the
+    /// platform can report each repaired setting.
+    public func repairingCombinations(catalog: XRGSettingsCatalog) -> (XRGSettingsDocument, [String]) {
+        var repaired = values
+        var ids: [String] = []
+        for violation in Self.combinationViolations(values, catalog: catalog) {
+            for id in violation.ids {
+                repaired.removeValue(forKey: id)
+                ids.append(id)
+            }
+        }
+        return (XRGSettingsDocument(values: repaired, unknown: unknown, rootUnknown: rootUnknown), ids)
     }
 
     /// The canonical bytes of the document: UTF-8, LF, sorted keys, two-space

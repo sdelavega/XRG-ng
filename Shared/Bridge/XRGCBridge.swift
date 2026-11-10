@@ -420,6 +420,34 @@ private struct SettingsMigrateJSON: Encodable {
     let document: String
     let diagnostics: [XRGSettingsDiagnostic]
 }
+/// One validated batch write's response (additive ABI v2, round 3 redesign,
+/// ruling R37): the new document, or — on a refusal — per-entry diagnostics
+/// and the first refusal's own error kind (with the bounds an out-of-range
+/// value carries).
+private struct SettingsApplyJSON: Encodable {
+    let document: String?
+    let diagnostics: [XRGSettingsDiagnostic]
+    let error: SettingsErrorJSON?
+
+    private enum CodingKeys: String, CodingKey { case document, diagnostics, error }
+
+    /// The published contract (xrg_shared.h) writes explicit `null`s for the
+    /// members a refusal leaves empty, never omitted ones.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let document {
+            try container.encode(document, forKey: .document)
+        } else {
+            try container.encodeNil(forKey: .document)
+        }
+        try container.encode(diagnostics, forKey: .diagnostics)
+        if let error {
+            try container.encode(error, forKey: .error)
+        } else {
+            try container.encodeNil(forKey: .error)
+        }
+    }
+}
 private struct SettingsMutationJSON: Encodable {
     let document: String?
     let error: SettingsErrorJSON?
@@ -575,17 +603,117 @@ private func settingsRefusal(_ error: SettingsErrorJSON,
     }
 }
 
-/// Restore one section to its defaults; unknown keys at either level, and
-/// every other section, are untouched. The section must be one of the
-/// catalog's, and the document must load; a section name that cannot be
-/// parsed (invalid UTF-8) rides the wire as unparsable-request.
+/// Write one validated batch outcome (`XRGSettingsBatchOutcome`) as its wire
+/// response: the new document on success, or the per-entry diagnostics plus
+/// the first refusal's own error kind (and bounds) on a refusal — never a
+/// partial application (ruling R37).
+private func settingsApplyResponse(_ outcome: XRGSettingsBatchOutcome,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    switch outcome {
+    case .applied(let document):
+        guard let bytes = String(data: document.serialized(), encoding: .utf8),
+              let data = settingsJSON(SettingsApplyJSON(document: bytes, diagnostics: [], error: nil))
+        else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    case .refused(let refusals):
+        let diagnostics = refusals.map {
+            XRGSettingsDiagnostic(id: $0.id, problem: XRGSettingsDocument.problemKind(of: $0.error))
+        }
+        // The first refusal's own kind (and bounds), so a batch of one is
+        // reported exactly the single-entry `set` reports it.
+        let error = refusals.first.map { SettingsErrorJSON($0.error) }
+        guard let data = settingsJSON(SettingsApplyJSON(document: nil, diagnostics: diagnostics,
+                                                        error: error)) else { return -1 }
+        return settingsWrite(data, output, capacity, needed)
+    }
+}
+
+/// Apply one batch of entry changes to a document — every set and every
+/// removal an interactive write carries, validated as one final document
+/// (round 3 redesign, ruling R37/R38). `changes` is a UTF-8 JSON object
+/// mapping each entry id to the value to store, or `null` to remove the
+/// entry (it reverts to its default). Writes
+/// `{"document":...,"diagnostics":[],"error":null}` on success — never a
+/// partial application — or `{"document":null,"diagnostics":[{"id":...,
+/// "problem":...}...],"error":{"kind":...}}` for a refusal, where the
+/// diagnostics name every offending entry and the error is the first
+/// refusal's own kind (with the bounds an out-of-range value carries). A
+/// batch is refused only for a rule the final document breaks that the
+/// starting document did not (ruling R38). Request-level problems — an id
+/// over 256 bytes, a value over 8 KiB, a changes object that is not UTF-8
+/// JSON, or a value no control can hold — ride the wire as
+/// request-too-large, unparsable-request or wrong-type like `xrg_settings_set`.
+@c(xrg_settings_apply) public func settingsApply(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ changes: UnsafePointer<UInt8>?, _ changesLen: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, changesLen <= 1_048_576, let doc, let changes,
+          let catalog = try? XRGSettingsCatalog.load(),
+          case .ok(let document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+    else { return -1 }
+    guard let text = String(bytes: UnsafeBufferPointer(start: changes, count: Int(changesLen)), encoding: .utf8),
+          let parsed = JSONValue.parse(text), case .object(let fields) = parsed else {
+        return settingsRefusal(SettingsErrorJSON(kind: "unparsable-request", min: nil, max: nil),
+                              output, capacity, needed)
+    }
+    var batch: [XRGSettingsChange] = []
+    for key in fields.keys.sorted(by: XRGSettingsDocument.precedes) {
+        guard key.utf8.count <= 256 else {
+            return settingsRefusal(SettingsErrorJSON(kind: "request-too-large", min: nil, max: nil),
+                                   output, capacity, needed)
+        }
+        let json = fields[key]!
+        let value: XRGSettingsValue?
+        if case .null = json {
+            value = nil
+        } else {
+            guard let settingsValue = XRGSettingsValue(json: json) else {
+                return settingsRefusal(SettingsErrorJSON(kind: "wrong-type", min: nil, max: nil),
+                                       output, capacity, needed)
+            }
+            value = settingsValue
+        }
+        batch.append(XRGSettingsChange(id: key, value: value))
+    }
+    return settingsApplyResponse(XRGSettingsDocument.apply(batch, to: document, catalog: catalog),
+                                 output, capacity, needed)
+}
+
+/// Repair the settings that break a cross-setting combination, in memory:
+/// the document with each combination's own offenders reverted to their
+/// defaults, and a diagnostic naming every repaired entry id. The caller's
+/// file is never touched by this entry point (ruling R38).
+@c(xrg_settings_repair) public func settingsRepair(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
+    _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
+    _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    guard len <= 1_048_576, let doc, let catalog = try? XRGSettingsCatalog.load(),
+          case .ok(let document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+    else { return -1 }
+    let (repaired, ids) = document.repairingCombinations(catalog: catalog)
+    let diagnostics = ids.map { XRGSettingsDiagnostic(id: $0, problem: XRGSettingsDiagnostic.invalidValue) }
+    guard let bytes = String(data: repaired.serialized(), encoding: .utf8),
+          let data = settingsJSON(SettingsMigrateJSON(document: bytes, diagnostics: diagnostics))
+    else { return -1 }
+    return settingsWrite(data, output, capacity, needed)
+}
+
+/// Restore one section to its defaults — one batch of removals for every
+/// entry of the section, whichever platform it belongs to (round 3
+/// redesign, ruling R37); unknown keys at either level, and every other
+/// section, are untouched. The response is the batch outcome's:
+/// `{"document":...,...}` on success, or the per-entry refusal wire on a
+/// reset that would break a combination the document did not already break
+/// (ruling R38). The section must be one of the catalog's, and the document
+/// must load; a section name that cannot be parsed (invalid UTF-8) rides
+/// the wire as unparsable-request.
 @c(xrg_settings_reset_section) public func settingsResetSection(_ doc: UnsafePointer<UInt8>?, _ len: UInt32,
     _ section: UnsafePointer<UInt8>?, _ sectionLen: UInt32,
     _ output: UnsafeMutablePointer<UInt8>?, _ capacity: UInt32,
     _ needed: UnsafeMutablePointer<UInt32>?) -> Int32 {
     guard len <= 1_048_576, sectionLen <= 256, let doc, let section,
           let catalog = try? XRGSettingsCatalog.load(),
-          case .ok(var document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
+          case .ok(let document, _) = XRGSettingsDocument.load(Data(bytes: doc, count: Int(len)), catalog: catalog)
     else { return -1 }
     // A section name that cannot be parsed — invalid UTF-8 — is a request
     // problem while the document is fine, so it rides the wire like the
@@ -595,13 +723,8 @@ private func settingsRefusal(_ error: SettingsErrorJSON,
                                output, capacity, needed)
     }
     guard XRGSettingsCatalog.sections.contains(name) else { return -1 }
-    // The ABI names no platform, so both platforms' entries of the section
-    // return to their default: a stored value of either survives neither.
-    document.resetSection(name, catalog: catalog, platform: .macos)
-    document.resetSection(name, catalog: catalog, platform: .linux)
-    guard let bytes = String(data: document.serialized(), encoding: .utf8),
-          let data = settingsJSON(SettingsMutationJSON(document: bytes, error: nil)) else { return -1 }
-    return settingsWrite(data, output, capacity, needed)
+    return settingsApplyResponse(XRGSettingsDocument.resettingSection(name, in: document, catalog: catalog),
+                                output, capacity, needed)
 }
 
 /// A version-40 Linux settings file in: the migrated document and its

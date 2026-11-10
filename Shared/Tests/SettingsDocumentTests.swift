@@ -413,6 +413,154 @@ struct SettingsDocumentTests {
         #expect(document.value("graphs.refresh", catalog: catalog) == .double(0.25))
     }
 
+    // MARK: batch writes (round 3 redesign, rulings R37/R38)
+
+    /// One batch applies every set and every removal together and validates
+    /// the FINAL document once (ruling R37): the two transitions a
+    /// dependency-ordered application used to reject — disabling the weather
+    /// collector together with clearing its station, and swapping the sensor
+    /// curves so the duplicate secondary disappears — are one valid batch.
+    @Test func batchApplyValidatesTheFinalDocumentOnce() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        // Weather enabled with a station: a valid starting document.
+        var weather = XRGSettingsDocument.defaults(catalog: catalog, platform: .linux)
+        try weather.set("weather.station", .string("KSEA"), catalog: catalog)
+        try weather.set("weather.enabled", .bool(true), catalog: catalog)
+        // Disabling the collector and clearing its station in ONE batch: the
+        // final document is valid, so the batch applies whole.
+        guard case .applied(let disabled) = XRGSettingsDocument.apply([
+            XRGSettingsChange(id: "weather.enabled", value: .bool(false)),
+            XRGSettingsChange(id: "weather.station", value: nil),
+        ], to: weather, catalog: catalog) else {
+            Issue.record("the whole-view transition must apply as one batch")
+            return
+        }
+        #expect(disabled.values["weather.enabled"] == nil)
+        #expect(disabled.values["weather.station"] == nil)
+
+        // Sensors [A, B, nil] → [B, nil, nil]: the primary moves into the
+        // duplicate's place and the duplicate clears, in ONE batch.
+        var sensors = XRGSettingsDocument.defaults(catalog: catalog, platform: .linux)
+        try sensors.set("sources.fans.sensor1", .string("applesmc-fan1"), catalog: catalog)
+        try sensors.set("sources.fans.sensor2", .string("applesmc-fan2"), catalog: catalog)
+        // A single edit through that transition is refused: the primary
+        // would duplicate the secondary (the old dependency-ordering trap).
+        #expect(throws: XRGSettingsError.constraint) {
+            try sensors.set("sources.fans.sensor1", .string("applesmc-fan2"), catalog: catalog)
+        }
+        guard case .applied(let swapped) = XRGSettingsDocument.apply([
+            XRGSettingsChange(id: "sources.fans.sensor1", value: .string("applesmc-fan2")),
+            XRGSettingsChange(id: "sources.fans.sensor2", value: nil),
+        ], to: sensors, catalog: catalog) else {
+            Issue.record("the sensor swap must apply as one batch")
+            return
+        }
+        #expect(swapped.values["sources.fans.sensor1"] == .string("applesmc-fan2"))
+        #expect(swapped.values["sources.fans.sensor2"] == nil)
+        #expect(XRGSettingsDocument.combinationViolations(swapped.values, catalog: catalog).isEmpty)
+
+        // A batch whose final document is refused: enabling the collector
+        // with no addressable station, from a clean document, reports the
+        // offending entry and applies nothing.
+        guard case .refused(let refusals) = XRGSettingsDocument.apply([
+            XRGSettingsChange(id: "weather.station", value: .string("")),
+            XRGSettingsChange(id: "weather.enabled", value: .bool(true)),
+        ], to: XRGSettingsDocument.defaults(catalog: catalog, platform: .linux), catalog: catalog) else {
+            Issue.record("the combination-breaking batch must be refused")
+            return
+        }
+        #expect(refusals.count == 1, "one cross-setting offender: \(refusals)")
+        #expect(refusals.first?.id == "weather.enabled")
+        #expect(refusals.first?.error == .constraint)
+        // A per-entry refusal in a batch: the out-of-range value is
+        // reported with its own entry and bounds, and nothing is applied.
+        guard case .refused(let entryRefusals) = XRGSettingsDocument.apply([
+            XRGSettingsChange(id: "general.window.title", value: .string("Kept")),
+            XRGSettingsChange(id: "general.window.border_width", value: .int(99)),
+        ], to: XRGSettingsDocument.defaults(catalog: catalog, platform: .linux), catalog: catalog) else {
+            Issue.record("the per-entry refusal must be refused")
+            return
+        }
+        #expect(entryRefusals.count == 1, "one per-entry refusal: \(entryRefusals)")
+        #expect(entryRefusals.first?.id == "general.window.border_width")
+        #expect(entryRefusals.first?.error == .outOfRange(min: 1, max: 16))
+    }
+
+    /// The "don't make it worse" rule (ruling R38): a document that already
+    /// carries cross-setting violations — an older build's or a hand edit's,
+    /// each entry valid on its own — loads, an unrelated edit still applies,
+    /// fixing either violation alone applies, and only ever ADDING a
+    /// violation is refused.
+    @Test func existingViolationsStayEditableAndFixableOneAtATime() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let input = Data("""
+        {
+          "format": "xrg-ng-settings",
+          "version": 1,
+          "settings": {
+            "general.window.title": "Hand edited",
+            "weather.enabled": true,
+            "weather.station": "",
+            "sources.fans.sensor2": "applesmc-fan2"
+          }
+        }
+        """.utf8)
+        var loaded = try #require(loadOK(input, catalog)).0
+        #expect(loadOK(input, catalog)?.1.isEmpty == true, "each entry is valid on its own")
+        // Two independent violations: the enabled collector without a
+        // station, and the secondary fan curve without a primary.
+        #expect(!XRGSettingsDocument.combinationViolations(loaded.values, catalog: catalog).isEmpty)
+        // An unrelated edit succeeds: nothing gets worse (ruling R38).
+        try loaded.set("general.window.border_width", .int(8), catalog: catalog)
+        // Fixing EITHER violation alone succeeds: the other one is
+        // pre-existing, not made worse.
+        try loaded.set("weather.station", .string("KSEA"), catalog: catalog)
+        try loaded.set("sources.fans.sensor1", .string("applesmc-fan1"), catalog: catalog)
+        #expect(loaded.value("general.window.title", catalog: catalog) == .string("Hand edited"))
+        #expect(loaded.value("sources.fans.sensor2", catalog: catalog) == .string("applesmc-fan2"))
+        #expect(XRGSettingsDocument.combinationViolations(loaded.values, catalog: catalog).isEmpty)
+        // From the violated document, ADDING a violation is still refused.
+        var stillViolated = try #require(loadOK(input, catalog)).0
+        #expect(throws: XRGSettingsError.constraint) {
+            try stillViolated.set("sources.fans.sensor3", .string("applesmc-fan2"), catalog: catalog)
+        }
+    }
+
+    /// The in-memory repair a load applies on Linux (ruling R38): each
+    /// combination's own offenders revert to their defaults — nothing else
+    /// moves — and the repaired document satisfies every combination.
+    @Test func combinationRepairResetsOnlyTheOffenders() throws {
+        let catalog = try XRGSettingsCatalog.load()
+        let input = Data("""
+        {
+          "format": "xrg-ng-settings",
+          "version": 1,
+          "settings": {
+            "general.window.title": "Hand edited",
+            "weather.enabled": true,
+            "weather.station": "",
+            "sources.fans.sensor1": "applesmc-fan1",
+            "sources.fans.sensor2": "applesmc-fan1",
+            "sources.fans.sensor3": "applesmc-fan2",
+            "sources.temperature.sensor2": "coretemp-isa-0000"
+          }
+        }
+        """.utf8)
+        let loaded = try #require(loadOK(input, catalog)).0
+        let (repaired, ids) = loaded.repairingCombinations(catalog: catalog)
+        #expect(ids == ["weather.enabled", "sources.temperature.sensor2", "sources.fans.sensor2"])
+        #expect(repaired.values["weather.enabled"] == nil, "the collector alone steps back")
+        #expect(repaired.values["weather.station"] == .string(""),
+                "the empty station is entry-valid 'not set': it stays")
+        #expect(repaired.values["sources.fans.sensor1"] == .string("applesmc-fan1"), "the primary survives")
+        #expect(repaired.values["sources.fans.sensor2"] == nil, "the later duplicate clears")
+        #expect(repaired.values["sources.fans.sensor3"] == .string("applesmc-fan2"),
+                "the distinct third curve survives")
+        #expect(repaired.values["sources.temperature.sensor2"] == nil, "the secondary without a primary clears")
+        #expect(repaired.values["general.window.title"] == .string("Hand edited"))
+        #expect(XRGSettingsDocument.combinationViolations(repaired.values, catalog: catalog).isEmpty)
+    }
+
     /// An old document that already holds worker-refusing values loads with
     /// per-key fallbacks and reports them, exactly like any other invalid
     /// value — the file is not unreadable and the rest still loads.
@@ -498,21 +646,31 @@ struct SettingsDocumentTests {
         // Linux-only, but a member of the general section.
         try document.set("general.window.opacity", .double(0.5), catalog: catalog)
 
-        // A macOS reset sees only the macOS entries of the section.
-        document.resetSection("general", catalog: catalog, platform: .macos)
+        // A reset is one batch of removals for the WHOLE section — every
+        // entry, whichever platform it belongs to (round 3, ruling R37).
+        document = try applyReset("general", document, catalog)
         #expect(document.value("general.window.border_width", catalog: catalog) == .int(4))
-        #expect(document.value("general.window.opacity", catalog: catalog) == .double(0.5))
+        #expect(document.value("general.window.opacity", catalog: catalog) == .int(1))
         #expect(document.value("appearance.font", catalog: catalog) == .string("Menlo 12"))
         #expect(document.value("graphs.refresh", catalog: catalog) == .int(5))
         // Unknown keys, at either level, are never touched by a reset.
         #expect(document.rootUnknown["toplevel.extra"] == .string("kept"))
         #expect(document.unknown["future.widget.config"] != nil)
 
-        // The Linux reset also reaches the Linux-only entries of the section.
-        document.resetSection("general", catalog: catalog, platform: .linux)
-        #expect(document.value("general.window.opacity", catalog: catalog) == .int(1))
-        #expect(document.value("graphs.refresh", catalog: catalog) == .int(5))
-        #expect(document.rootUnknown["toplevel.extra"] == .string("kept"))
+        // Other sections are untouched: resetting sources changes nothing.
+        #expect(try applyReset("sources", document, catalog).serialized() == document.serialized())
+    }
+
+    /// `resettingSection` applied, or the original document with the
+    /// refusal recorded.
+    private func applyReset(_ section: String, _ document: XRGSettingsDocument,
+                             _ catalog: XRGSettingsCatalog) throws -> XRGSettingsDocument {
+        switch XRGSettingsDocument.resettingSection(section, in: document, catalog: catalog) {
+        case .applied(let reset): return reset
+        case .refused(let refusals):
+            Issue.record("the reset was refused: \(refusals)")
+            return document
+        }
     }
 
     // MARK: serialise

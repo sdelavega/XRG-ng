@@ -466,29 +466,35 @@ import Foundation
                 .sorted(by: XRGSettingsDocument.precedes)
             if !named.isEmpty {
                 let (migrated, _) = XRGSettingsMigration.fromMacDefaults(raw, catalog: catalog)
-                locked.mutate { document in
-                    for id in named {
-                        if let value = migrated.values[id] {
-                            try? document.storeMigrated(id, value, catalog: catalog)
-                        } else if let entry = catalog.entry(id) {
-                            // The value converted to the entry's default (or the
-                            // blob carries no such field): clear what was stored.
-                            try? document.storeMigrated(id, entry.defaultValue, catalog: catalog)
-                        }
-                    }
-                }
-                if loadProblem == nil {
-                    persistAndReport { document in
-                        for id in named {
-                            if let value = migrated.values[id] {
-                                try? document.storeMigrated(id, value, catalog: self.catalog)
-                            } else if let entry = self.catalog.entry(id) {
-                                try? document.storeMigrated(id, entry.defaultValue, catalog: self.catalog)
+                // One batch (round 3 redesign, ruling R37): every entry the
+                // keys map is set or removed together — a value that converts
+                // to the entry's default, or a blob field the snapshot omits,
+                // is a REMOVAL — and the core validates the final document
+                // once, combinations included, so no multi-key path can
+                // bypass the cross-setting rules (round 2, issue 3).
+                let changes = named.map { XRGSettingsChange(id: $0, value: migrated.values[$0]) }
+                switch XRGSettingsDocument.apply(changes, to: locked.document, catalog: catalog) {
+                case .applied(let applied):
+                    locked.mutate { $0 = applied }
+                    if loadProblem == nil {
+                        persistAndReport { document in
+                            guard case .applied(let next) = XRGSettingsDocument.apply(
+                                changes, to: document, catalog: self.catalog) else {
+                                throw .constraint
                             }
+                            document = next
                         }
                     }
+                    for id in named { post(id) }
+                case .refused(let refusals):
+                    // The batch was refused whole: the document keeps its
+                    // values, nothing is written, and every refusal is
+                    // reported like a single-entry refusal is.
+                    for refusal in refusals {
+                        NSLog("XRG-ng settings: refusing \(refusal.id): " +
+                              XRGSettingsDocument.problemKind(of: refusal.error))
+                    }
                 }
-                for id in named { post(id) }
             }
             return refused.sorted()
         }
@@ -500,6 +506,11 @@ import Foundation
     /// Every backend posts per entry, so the live consumers (the settings
     /// window's controls, the app delegate's presentation sync) reconcile
     /// after a reset on either path (review issue 1).
+    ///
+    /// The reset is one batch of removals validated by the core (round 3
+    /// redesign, ruling R37): a reset that would break a combination the
+    /// document did not already break is refused whole (ruling R38) and the
+    /// file keeps its bytes.
     public func resetSection(_ section: String) {
         let entries = catalog.entries(section: section, platform: .macos)
         switch backend {
@@ -509,10 +520,25 @@ import Foundation
             }
         case .document:
             let storedSomething = entries.contains { locked.document.values[$0.id] != nil }
-            locked.mutate { $0.resetSection(section, catalog: catalog, platform: .macos) }
-            if storedSomething, loadProblem == nil {
-                persistAndReport { document in
-                    document.resetSection(section, catalog: self.catalog, platform: .macos)
+            if storedSomething {
+                let removals = entries.map { XRGSettingsChange(id: $0.id, value: nil) }
+                switch XRGSettingsDocument.apply(removals, to: locked.document, catalog: catalog) {
+                case .applied(let applied):
+                    locked.mutate { $0 = applied }
+                    if loadProblem == nil {
+                        persistAndReport { document in
+                            guard case .applied(let next) = XRGSettingsDocument.apply(
+                                removals, to: document, catalog: self.catalog) else {
+                                throw .constraint
+                            }
+                            document = next
+                        }
+                    }
+                case .refused(let refusals):
+                    for refusal in refusals {
+                        NSLog("XRG-ng settings: refusing to reset \(refusal.id): " +
+                              XRGSettingsDocument.problemKind(of: refusal.error))
+                    }
                 }
             }
         }
@@ -535,17 +561,18 @@ import Foundation
     /// Persist the current document, re-applying `reapply` over a file that
     /// changed on disk, and surface the outcome through `loadProblem` (final
     /// review, findings 2 and 3). A plain failure keeps the pending change
-    /// in memory and reports the write problem like an unreadable file.
-    private func persistAndReport(_ reapply: @escaping (inout XRGSettingsDocument) -> Void) {
+    /// in memory and reports the write problem like an unreadable file. A
+    /// refusal from `reapply` (the reloaded document refuses the pending
+    /// batch) keeps the adopted document and reports the refusal: nothing
+    /// was written.
+    private func persistAndReport(_ reapply: @escaping (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void) {
         switch persist(reapplying: reapply) {
         case nil:
             break
         case .failure(let error):
             loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
-        case .conflict:
-            // Unreachable for the callers that share this helper: their
-            // re-applyments cannot be refused (no `depends` is checked).
-            break
+        case .conflict(let error):
+            NSLog("XRG-ng settings: a concurrent change refused a pending edit: \(error)")
         case .unreadable(let diagnostic):
             loadProblem = diagnostic
         }
