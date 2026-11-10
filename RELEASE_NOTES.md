@@ -1,22 +1,23 @@
-# XRG-ng 0.2.2
+# XRG-ng 0.2.3
 
-The complete release notes for 0.2.2 live in
-[releases/0.2.2.md](releases/0.2.2.md).
+The complete release notes for 0.2.3 live in
+[releases/0.2.3.md](releases/0.2.3.md).
 
-A fix release. On macOS, 0.2.1 could use a full CPU core continuously: the
-Temperature graph re-sorted every sensor once per reading, and one AI log
-over the size limit made every AI scan start over. 0.2.2 sorts once per
-update, keeps per-file scan results when another file fails, and reads
-growing Claude Code and Codex logs incrementally after verifying their
-earlier bytes. With the same sensors, settings and logs it measured 3.1% of
-one core, against 89.3% for 0.2.1.
+A settings release. macOS and Linux now share one settings window, backed by a
+single settings catalog and one settings document, drawn with the Aether7b
+design language. Its sections are General, Appearance, Graphs, Sources, AI,
+Weather, Stocks, Themes & import, and changes apply and save instantly on both
+platforms. The document lives at `~/Library/Application Support/XRG-ng/settings.json`
+on macOS and `$XDG_CONFIG_HOME/xrg-ng/settings.json` on Linux. On first launch,
+0.2.3 migrates your 0.2.2 settings once and leaves the old preferences
+untouched, so downgrading to 0.2.2 still works.
 
-On both platforms, AI usage logs up to 1 GiB per file now count (previously
-64 MiB), and a log rewritten to the same size is re-read instead of keeping
-stale totals.
+Linux gains a Stocks graph (off by default) using the same Yahoo chart data as
+macOS, and the sensor-naming work lands on macOS: temperature sensors get real
+names, the Temperature settings group them, missing readings stay gaps rather
+than zeros, and battery and NPU readings are more reliable.
 
 macOS 26 or newer, universal (Apple silicon and Intel). Existing installs get
 the update through **Check for Updates…**; Homebrew users can run
-`brew upgrade --cask xrg-ng`. Linux ships signed packages for x86-64 and
-ARM64. Copyright and third-party license notices are included in the app and
-source.
+`brew upgrade --cask xrg-ng`. Linux ships packages for x86-64 and ARM64.
+Copyright and third-party license notices are included in the app and source.

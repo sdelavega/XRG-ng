@@ -4,6 +4,21 @@ Baseline audit: `50ca1e5`. Target equivalent workflows while retaining AppKit on
 macOS and egui/Rust on Linux. Preserve existing settings and XTF files. Do not
 invent readings to make different kernel/hardware interfaces look identical.
 
+## 0.2.3: settings are shared, not platform-local
+
+Since 0.2.3, preferences are no longer platform-local. Both platforms use one
+settings catalog and one settings document, shown through the same
+catalog-driven settings window (General, Appearance, Graphs, Sources, AI,
+Weather, Stocks, Themes & import). The document is
+`~/Library/Application Support/XRG-ng/settings.json` on macOS and
+`$XDG_CONFIG_HOME/xrg-ng/settings.json` on Linux. On first launch, 0.2.3
+migrates 0.2.2 settings once (from the macOS `NSUserDefaults` domain or the
+Linux version-40 `settings.conf`) and leaves the old settings untouched, so
+downgrading to 0.2.2 still works. Framework-owned state — Sparkle keys and
+AppKit window frames — stays in `NSUserDefaults`, and source IDs (sensors,
+network interfaces, disks, GPUs) remain platform-local as before. Stocks is now
+a shared catalog setting on both platforms.
+
 ## First pass: theme exchange and presentation
 
 - Implemented in development: macOS loads portable Linux JSON themes, exports
@@ -117,7 +132,9 @@ Implemented in development for monitoring tools:
   resizing. Nominal spans describe point spacing at the current target, not a
   measured time axis. Shared Swift owns bounds and history resizing, exposed to
   Rust by additive ABI v1 functions. Linux settings migrate read-only to version 28
-  and write the new version only on save. Preferences remain platform-local.
+  and write the new version only on save. Preferences remain platform-local for
+   this pass; 0.2.3 later unifies them into one shared document (see the 0.2.3
+   section above).
   Both normal sampling controls cover 200 ms–10 s, with millisecond precision;
   valid legacy Mac values outside that range survive opening/saving. Mac restarts
   its graph timer on edits; Linux retimes from the worker's last sample start.
@@ -331,7 +348,8 @@ Remaining monitoring work:
    weather-history behavior/provider coverage, battery presentation/cadence and
    multiple-battery behavior. Both have explicit weather time windows/secondary
    curves; Linux now has charge/power modes and independent weather units.
-   Port Stocks if retained in the common set.
+   Stocks is now on both platforms (off by default on Linux), sharing the
+   Yahoo chart data and the shared Stocks settings with macOS.
 4. Desktop behavior: align other supported window controls and preserve explicit
    compositor limitations. Linux now supports collapse/hover expansion. The
    core CPU/memory/I/O/GPU/NPU/VRAM/sensor/battery time-window modes are now present;

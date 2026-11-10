@@ -10,7 +10,9 @@ A real-time system resource monitor for **macOS and Linux** with customizable fl
 🐧 **Linux**: Swift/Rust + egui application; the C/GTK implementation has been retired.
 See the [new Linux build and migration status](xrg-linux/rust/README.md).
 The Linux build includes an opt-in [station weather window](xrg-linux/rust/README.md#weather-observations)
-using the same Swift METAR decoder as macOS.
+using the same Swift METAR decoder as macOS. It also includes a **Stocks** graph
+(off by default), using the same Yahoo chart data and one-year/intraday history
+as macOS.
 
 ## Windows is coming
 
@@ -128,7 +130,7 @@ XRG-ng displays real-time graphs for:
 - **Battery** - Charge level, time remaining, health
 - **Temperature** - CPU, GPU, and system sensors
 - **Weather** - METAR station observations with optional 6/12/24-hour history and a secondary curve
-- **Stock Prices** - Real-time market data
+- **Stock Prices** - Real-time market data (macOS and Linux; off by default on Linux)
 - **AI Token Usage** - Live token consumption and cost tracking for Claude, Codex, Gemini, Ollama, and Hermes agents
 
 ## AI Token Monitoring
