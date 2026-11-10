@@ -846,6 +846,39 @@ struct XRGSettingsStoreTests {
 
     // MARK: Snapshots replace removed values (review issue 3)
 
+    /// Round 2's issue 3, closed by the batch (ruling R37): the fan-source
+    /// editor's multi-key write — `[nil, "fanA", nil]` passes the editor's
+    /// own validity check — reaches the document only through one validated
+    /// batch, so a secondary curve without a primary is refused whole:
+    /// nothing is stored, nothing is written, the file keeps its bytes.
+    @Test func fanSourceEditWithoutAPrimaryIsRefusedByTheValidatedBatch() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        try store.set("sources.fans.sensor1", .string("applesmc-fan1"))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        let stamp = try modificationDate(fixture.documentURL)
+        // The editor's own `validate()` accepts this shape; the core's
+        // combination rule does not, and the batch refuses it.
+        store.storeHardwareSources(XRGHardwareSources(sources: [nil, "applesmc-fan1", "applesmc-fan2"]),
+                                   legacyKey: "fanGraphSourcesV1")
+        #expect(store.value("sources.fans.sensor1") == .string("applesmc-fan1"),
+                "the primary the batch did not change survives")
+        #expect(store.value("sources.fans.sensor2") == .null, "the refused secondary is not stored")
+        #expect(store.value("sources.fans.sensor3") == .null, "the refused third curve is not stored")
+        #expect(try documentBytes(fixture.documentURL) == bytes,
+                "the refused batch writes nothing")
+        #expect(try modificationDate(fixture.documentURL) == stamp)
+        // The same slots with their primary are one batch and apply whole.
+        store.storeHardwareSources(XRGHardwareSources(sources: ["applesmc-fan1", "applesmc-fan2", nil]),
+                                   legacyKey: "fanGraphSourcesV1")
+        #expect(store.value("sources.fans.sensor1") == .string("applesmc-fan1"))
+        #expect(store.value("sources.fans.sensor2") == .string("applesmc-fan2"))
+        #expect(try storedValue("sources.fans.sensor2",
+                                in: try #require(documentBytes(fixture.documentURL))) as? String == "applesmc-fan2")
+    }
+
     /// A preferences snapshot that clears a selection or drops a graph
     /// override removes what was stored: it does not silently revert.
     @Test func snapshotValuesReplaceRemovedOnes() throws {
