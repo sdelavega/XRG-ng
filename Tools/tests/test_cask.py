@@ -308,7 +308,35 @@ class PublishScriptTests(unittest.TestCase):
         (signing / "fingerprint.txt").write_text(f"{self.release_key}\n")
         appcast = self.repo / "docs" / "appcast.xml"
         appcast.parent.mkdir(parents=True)
-        shutil.copyfile(REPO_ROOT / "docs" / "appcast.xml", appcast)
+        # Final review round 2 (ruling R36): the committed feed must
+        # genuinely lack this release's item. Copying the real feed brought
+        # build 2 along, so the missing-item refusal was never exercised —
+        # reverting to that feed produced an enclosure/signature mismatch
+        # instead. A feed whose newest item is an older build keeps the
+        # refusal meaningful.
+        appcast.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">\n'
+            '    <channel>\n'
+            '        <title>XRG-ng</title>\n'
+            '        <link>https://github.com/sdelavega/XRG-ng</link>\n'
+            '        <description>XRG-ng release feed</description>\n'
+            '    <item>\n'
+            '        <title>XRG-ng 0.2.0</title>\n'
+            '        <pubDate>Fri, 30 Oct 2026 12:00:00 +0000</pubDate>\n'
+            '        <sparkle:version>1</sparkle:version>\n'
+            '        <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>\n'
+            '        <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>\n'
+            '        <sparkle:releaseNotesLink>'
+            'https://github.com/sdelavega/XRG-ng/releases/tag/v0.2.0'
+            '</sparkle:releaseNotesLink>\n'
+            '        <enclosure url="https://github.com/sdelavega/XRG-ng/releases/'
+            'download/v0.2.0/XRG-ng-0.2.0-macOS-universal.dmg" length="27" '
+            'type="application/octet-stream" '
+            'sparkle:edSignature="older-item-fixture-signature=="/>\n'
+            '    </item>\n'
+            '    </channel>\n'
+            '</rss>\n', encoding="utf-8")
         notes = self.repo / "releases" / f"{VERSION}.md"
         notes.parent.mkdir(parents=True)
         notes.write_text(f"# XRG-ng {VERSION}\n")
