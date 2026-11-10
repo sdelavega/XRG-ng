@@ -9,8 +9,16 @@ import AppKit
         let count = store.intSetting(legacyKey: key)
         return XRGSamplingSettings.validHistorySamples(count) ? count : 0
     }
-    static func store(_ sender: Any?, store: XRGSettingsStore, key: String) -> Bool {
+    /// Store one capacity choice. `clearingWindow` is the same graph's time
+    /// window key: the samples entry requires the window to follow the
+    /// sample count (its catalog `depends`), so the window must be cleared
+    /// BEFORE the samples count is written — writing the count first was
+    /// silently refused and the menu action kept the previous count (final
+    /// review, finding 4).
+    static func store(_ sender: Any?, store: XRGSettingsStore, key: String,
+                      clearingWindow windowKey: String) -> Bool {
         guard let item = sender as? NSMenuItem, XRGSamplingSettings.validHistorySamples(item.tag) else { return false }
+        store.storeSetting(0, legacyKey: windowKey)
         store.storeSetting(item.tag, legacyKey: key)
         return true
     }

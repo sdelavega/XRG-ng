@@ -78,6 +78,46 @@ struct XRGMemoryViewTests {
             #expect(miner.faultData().numValues == 181)
         }
     }
+
+    /// Final review, finding 4, against the document backend: the history
+    /// menu's switch from a time window to a sample count goes through the
+    /// shared retention helper, which must clear the window BEFORE the
+    /// count (the catalog forbids a count while a window is set).
+    @Test func historyMenuActionOnTheDocumentClearsTheWindowBeforeTheSampleCount() async throws {
+        _ = NSApplication.shared
+        let domain = "XRG.memoryView.document.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("xrg-0.2.3-final", isDirectory: true)
+            .appendingPathComponent(domain, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documentURL = root.appendingPathComponent("settings.json")
+        let catalog = try #require(try? XRGSettingsCatalog.load())
+        let store = XRGSettingsStore(fileURL: documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
+        let settings = XRGSettings(store: store)
+        settings.graphFont = NSFont.systemFont(ofSize: 10)
+        settings.textTransparency = 1; settings.textColor = .black
+        settings.graphBGTransparency = 1; settings.graphBGColor = .white
+        settings.graphFG1Transparency = 1; settings.graphFG1Color = .red
+        settings.graphFG2Transparency = 1; settings.graphFG2Color = .blue
+        settings.graphFG3Transparency = 1; settings.graphFG3Color = .green
+        // A five-minute window, then the menu's sample-count choice.
+        try store.set("graphs.memory.time_window", .int(5))
+        var reading = sample()
+        let miner = XRGMemoryMiner(pageSize: 4096, source: { reading })
+        let view = panel(miner, settings: settings, defaults: defaults)
+        #expect(view.historyMinutes == 5)
+        let option = NSMenuItem(); option.tag = 300
+        view.selectHistory(option)
+        #expect(view.historyMinutes == 0, "the time window must clear")
+        #expect(view.retainedSamples == 300, "the sample count must take")
+        #expect(store.value("graphs.memory.samples") == .int(300))
+        let bytes = try String(contentsOf: documentURL, encoding: .utf8)
+        #expect(bytes.contains("\"graphs.memory.samples\": 300"))
+        #expect(!bytes.contains("graphs.memory.time_window"))
+    }
     @Test func memoryWindowsPreservePagingMeaningBaselinesAndRetainedPeaksWithoutPolling() async throws {
         try await withFixture { settings, defaults in
             settings.graphRefresh = 1

@@ -262,8 +262,8 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
     private var retentionKey: String { kind == .vram ? Self.historyKey : Self.fanHistoryKey }
     var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: retentionKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, store: settingsStore, key: retentionKey) else { return }
-        settingsStore.storeSetting(0, legacyKey: timeKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: retentionKey,
+                                        clearingWindow: timeKey) else { return }
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     @objc func emptyEvent(_ sender: Any?) {}

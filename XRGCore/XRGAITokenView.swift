@@ -502,8 +502,8 @@ public final class XRGAITokenView: NSView, XRGModuleView {
         return String(format: "AI history: %d samples; nominal %.0f seconds at 5 s cadence", count, span)
     }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
-        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey,
+                                       clearingWindow: Self.windowKey) else { return }
         setGraphSize(bounds.size); updateLabels(); needsDisplay = true
     }
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }

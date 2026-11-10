@@ -374,7 +374,12 @@ public final class XRGCPUView: NSView, XRGModuleView {
     public override func menu(for event: NSEvent) -> NSMenu? { makeMenu() }
     @objc func selectHistory(_ sender: Any?) {
         guard let item = sender as? NSMenuItem, XRGSamplingSettings.validCPUHistorySamples(item.tag) else { return }
-        settingsStore.storeSetting(item.tag, legacyKey: Self.historyKey); settingsStore.storeSetting(0, legacyKey: Self.windowKey)
+        // Clear the time window first: the samples entry requires the window
+        // to follow the sample count (its catalog `depends`), so writing the
+        // count first was silently refused and the menu action kept the
+        // previous count (final review, finding 4).
+        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
+        settingsStore.storeSetting(item.tag, legacyKey: Self.historyKey)
         setGraphSize(bounds.size); needsDisplay = true
     }
     @objc func selectHistoryWindow(_ sender: Any?) {

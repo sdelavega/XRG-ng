@@ -291,8 +291,8 @@ public final class XRGDiskView: NSView, XRGModuleView {
     @nonobjc static let historyKey = "XRGDiskView.HistorySamples.v1"
     @nonobjc var retainedSamples: Int { XRGHistoryRetention.saved(settingsStore, key: Self.historyKey) }
     @objc func selectHistory(_ sender: Any?) {
-        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey) else { return }
-        settingsStore.storeSetting(0, legacyKey: Self.windowKey)
+        guard XRGHistoryRetention.store(sender, store: settingsStore, key: Self.historyKey,
+                                       clearingWindow: Self.windowKey) else { return }
         setGraphSize(bounds.size); needsDisplay = true
     }
     public func openDiskUtility(_ sender: Any?) { _ = openURL(Self.diskUtilityURL) }

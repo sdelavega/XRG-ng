@@ -126,6 +126,53 @@ struct XRGCPUViewTests {
             #expect(aggregate.historyMinutes == 0 && aggregate.retainedSamples == 300)
         }
     }
+
+    /// Final review, finding 4, against the document backend: the history
+    /// menu's switch from a time window to a sample count must clear the
+    /// window BEFORE writing the count (the catalog forbids a count while
+    /// a window is set), or the count is silently refused and keeps its
+    /// previous value. The review's exact case: a five-minute window, then
+    /// a 300-sample choice.
+    @Test func historyMenuActionOnTheDocumentClearsTheWindowBeforeTheSampleCount() async throws {
+        _ = NSApplication.shared
+        let domain = "XRG.cpuView.document.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("xrg-0.2.3-final", isDirectory: true)
+            .appendingPathComponent(domain, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documentURL = root.appendingPathComponent("settings.json")
+        let catalog = try #require(try? XRGSettingsCatalog.load())
+        let store = XRGSettingsStore(fileURL: documentURL, defaults: defaults, catalog: catalog, legacyDomain: [:])
+        let settings = XRGSettings(store: store)
+        settings.graphFont = NSFont.systemFont(ofSize: 10)
+        settings.textTransparency = 1; settings.textColor = .black
+        settings.graphBGTransparency = 1; settings.graphBGColor = .white
+        settings.graphFG1Transparency = 1; settings.graphFG1Color = .red
+        settings.graphFG2Transparency = 1; settings.graphFG2Color = .blue
+        settings.graphFG3Transparency = 1; settings.graphFG3Color = .green
+        // Start from a five-minute time window.
+        try store.set("graphs.cpu.time_window", .int(5))
+        #expect(store.value("graphs.cpu.time_window") == .int(5))
+        let source = CPUSource()
+        let miner = source.miner()
+        let view = panel(miner, settings, defaults)
+        view.setGraphSize(view.bounds.size)
+        #expect(view.historyMinutes == 5)
+        // The actual menu action: choose 300 samples.
+        let option = NSMenuItem(); option.tag = 300
+        view.selectHistory(option)
+        #expect(view.historyMinutes == 0, "the time window must clear")
+        #expect(view.retainedSamples == 300, "the sample count must take")
+        // The document — and the file it persists to — hold both results.
+        #expect(store.value("graphs.cpu.samples") == .int(300))
+        let bytes = try String(contentsOf: documentURL, encoding: .utf8)
+        #expect(bytes.contains("\"graphs.cpu.samples\": 300"))
+        #expect(!bytes.contains("graphs.cpu.time_window"), "the cleared window returns to its default")
+    }
+
     @Test func cpuTimestampWindowsRestoreAndWallClockRollbackLeavesRateTimingIntact() async throws {
         try await withFixture { settings, defaults, source in
             settings.graphRefresh = 1
