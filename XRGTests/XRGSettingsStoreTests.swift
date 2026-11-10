@@ -604,12 +604,17 @@ struct XRGSettingsStoreTests {
         try a.set("general.window.title", .string("From A"))
         let group = DispatchGroup()
         let queue = DispatchQueue(label: "XRG.concurrentTransactions", attributes: .concurrent)
+        // Each transaction is the same sequence `set` itself runs: mutate the
+        // document, then persist with the re-apply closure — driven from two
+        // threads so they genuinely race for the `settings.json.lock`.
         queue.async(group: group) {
+            _ = a.locked.set("general.window.border_width", .int(8), catalog: catalog)
             _ = a.persist { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
                 try document.set("general.window.border_width", .int(8), catalog: catalog)
             }
         }
         queue.async(group: group) {
+            _ = b.locked.set("graphs.refresh", .double(2), catalog: catalog)
             _ = b.persist { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
                 try document.set("graphs.refresh", .double(2), catalog: catalog)
             }
