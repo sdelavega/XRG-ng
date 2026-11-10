@@ -74,17 +74,24 @@ def resolve(tokens, path):
 
 
 def rgba(value):
-    """Return an (r, g, b, a) tuple of 0-255 ints from a DTCG colour value."""
+    """Return an (r, g, b, a) tuple from a DTCG colour value.
+
+    The components are 0-255 ints; the alpha keeps its exact 0-255 float
+    (final review, minor T7), so the generated Swift code divides back to
+    the token's own value instead of an eight-bit quantisation — 0.55 is
+    140.25/255, not 140/255. Consumers that need whole bytes (the Rust
+    egui colour) round where they use them.
+    """
     if isinstance(value, str):
         hex_ = value.lstrip("#")
         return (
             int(hex_[0:2], 16),
             int(hex_[2:4], 16),
             int(hex_[4:6], 16),
-            255,
+            255.0,
         )
     components = [round(float(component) * 255) for component in value["components"]]
-    return (*components[:3], round(float(value["alpha"]) * 255))
+    return (*components[:3], float(value["alpha"]) * 255)
 
 
 def hex_note(value):
@@ -99,7 +106,7 @@ def swift_color_expr(rgba_value):
     r, g, b, a = rgba_value
     return (
         f"NSColor(srgbRed: {r}.0 / 255.0, green: {g}.0 / 255.0, "
-        f"blue: {b}.0 / 255.0, alpha: {a}.0 / 255.0)"
+        f"blue: {b}.0 / 255.0, alpha: {float_literal(a)} / 255.0)"
     )
 
 
@@ -252,7 +259,9 @@ def type_entries(tokens):
 
 def rust_color_expr(rgba_value):
     r, g, b, a = rgba_value
-    return f"Color32::from_rgba_unmultiplied({r}, {g}, {b}, {a})"
+    # egui takes whole bytes, so the exact float alpha rounds here — where
+    # it is used, not where it is read (final review, minor T7).
+    return f"Color32::from_rgba_unmultiplied({r}, {g}, {b}, {round(a)})"
 
 
 def generate_rust(tokens):

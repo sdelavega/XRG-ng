@@ -49,6 +49,14 @@ unsafe extern "C" {
         cap: u32,
         needed: *mut u32,
     ) -> i32;
+    fn xrg_stock_chart_parse(
+        kind: u32,
+        bytes: *const u8,
+        len: u32,
+        out: *mut u8,
+        cap: u32,
+        needed: *mut u32,
+    ) -> i32;
 }
 
 /// The status and decoded body of one raw `xrg_settings_set` call, so the
@@ -107,6 +115,61 @@ fn raw_reset_section(doc: &[u8], section: &[u8]) -> (i32, Option<serde_json::Val
 /// error object at all.
 fn error_kind(response: &serde_json::Value) -> Option<&str> {
     response.get("error")?.get("kind")?.as_str()
+}
+
+/// The raw `xrg_settings_load` response bytes for one document.
+fn raw_load(doc: &[u8]) -> Vec<u8> {
+    let mut needed = 0;
+    let mut output = vec![0u8; 8192];
+    let status = unsafe {
+        xrg_settings_load(
+            doc.as_ptr(),
+            u32::try_from(doc.len()).expect("the document fits the ABI"),
+            output.as_mut_ptr(),
+            output.len() as u32,
+            &mut needed,
+        )
+    };
+    assert!(status > 0, "a malformed document is reported, not refused");
+    output[..status as usize].to_vec()
+}
+
+#[test]
+fn the_abi_writes_the_documented_explicit_nulls() {
+    shared::check_abi();
+    // xrg_settings_load's published shape (xrg_shared.h) writes an explicit
+    // null document for an unreadable load, and xrg_stock_chart_parse writes
+    // explicit nulls on the side a parse does not fill — never omitted
+    // members (final review, minor T5).
+    let unreadable = raw_load(b"certainly not json");
+    assert!(
+        String::from_utf8_lossy(&unreadable).contains("\"document\":null"),
+        "the unreadable load must carry an explicit null document: {unreadable:?}"
+    );
+    let history = fs::read(fixtures().parent().unwrap().join("stocks/history-1y.json"))
+        .expect("the recorded history fixture is checked out");
+    let mut needed = 0;
+    let mut output = vec![0u8; 8192];
+    let status = unsafe {
+        xrg_stock_chart_parse(
+            0,
+            history.as_ptr(),
+            u32::try_from(history.len()).expect("the fixture fits the ABI"),
+            output.as_mut_ptr(),
+            output.len() as u32,
+            &mut needed,
+        )
+    };
+    assert!(status > 0, "the recorded history must parse");
+    let response = String::from_utf8_lossy(&output[..status as usize]).to_string();
+    assert!(
+        response.contains("\"price\":null") && response.contains("\"change\":null"),
+        "the unfilled quote side must be explicit nulls: {response}"
+    );
+    assert!(
+        response.contains("\"closes\":["),
+        "the filled side stays: {response}"
+    );
 }
 
 /// Shared/Tests/Fixtures/settings, the same files the Swift corpus reads.

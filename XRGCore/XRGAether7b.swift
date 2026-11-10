@@ -11,109 +11,109 @@ public enum XRGAether7b {
     public enum Color {
         /// bgCanvas: light #EDF3F8, dark #0A1320.
         public static func bgCanvas(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (10, 19, 32, 255) : (237, 243, 248, 255)
+            let (r, g, b, a) = dark ? (10, 19, 32, 255.0) : (237, 243, 248, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// surfaceChrome: light rgba(255, 255, 255, 0.72), dark rgba(19, 41, 75, 0.55).
         public static func surfaceChrome(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (19, 41, 75, 140) : (255, 255, 255, 184)
+            let (r, g, b, a) = dark ? (19, 41, 75, 140.25) : (255, 255, 255, 183.6)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// surfaceChromeFallback: light #F5F9FC, dark #101E33.
         public static func surfaceChromeFallback(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (16, 30, 51, 255) : (245, 249, 252, 255)
+            let (r, g, b, a) = dark ? (16, 30, 51, 255.0) : (245, 249, 252, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// surfaceCard: light #FFFFFF, dark #0E1A2B.
         public static func surfaceCard(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (14, 26, 43, 255) : (255, 255, 255, 255)
+            let (r, g, b, a) = dark ? (14, 26, 43, 255.0) : (255, 255, 255, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// surfaceCode: light #E3EEF7, dark rgba(19, 41, 75, 0.45).
         public static func surfaceCode(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (19, 41, 75, 115) : (227, 238, 247, 255)
+            let (r, g, b, a) = dark ? (19, 41, 75, 114.75) : (227, 238, 247, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// textMain: light #13294B, dark #E6F0F8.
         public static func textMain(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (230, 240, 248, 255) : (19, 41, 75, 255)
+            let (r, g, b, a) = dark ? (230, 240, 248, 255.0) : (19, 41, 75, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// textMuted: light #4A6583, dark #8CA7C0.
         public static func textMuted(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (140, 167, 192, 255) : (74, 101, 131, 255)
+            let (r, g, b, a) = dark ? (140, 167, 192, 255.0) : (74, 101, 131, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// accentActive: light #2B72A6, dark #7BAFD4.
         public static func accentActive(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (123, 175, 212, 255) : (43, 114, 166, 255)
+            let (r, g, b, a) = dark ? (123, 175, 212, 255.0) : (43, 114, 166, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// accentFill: light #4B9CD3, dark #7BAFD4.
         public static func accentFill(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (123, 175, 212, 255) : (75, 156, 211, 255)
+            let (r, g, b, a) = dark ? (123, 175, 212, 255.0) : (75, 156, 211, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// accentTint: light rgba(75, 156, 211, 0.12), dark rgba(123, 175, 212, 0.15).
         public static func accentTint(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (123, 175, 212, 38) : (75, 156, 211, 31)
+            let (r, g, b, a) = dark ? (123, 175, 212, 38.25) : (75, 156, 211, 30.599999999999998)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// border: light rgba(19, 41, 75, 0.12), dark rgba(123, 175, 212, 0.22).
         public static func border(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (123, 175, 212, 56) : (19, 41, 75, 31)
+            let (r, g, b, a) = dark ? (123, 175, 212, 56.1) : (19, 41, 75, 30.599999999999998)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// borderStrong: light rgba(19, 41, 75, 0.55), dark rgba(123, 175, 212, 0.55).
         public static func borderStrong(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (123, 175, 212, 140) : (19, 41, 75, 140)
+            let (r, g, b, a) = dark ? (123, 175, 212, 140.25) : (19, 41, 75, 140.25)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// specular: light rgba(255, 255, 255, 0.95), dark rgba(255, 255, 255, 0.16).
         public static func specular(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (255, 255, 255, 41) : (255, 255, 255, 242)
+            let (r, g, b, a) = dark ? (255, 255, 255, 40.800000000000004) : (255, 255, 255, 242.25)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// statusNominal: light #2B72A6, dark #7BAFD4.
         public static func statusNominal(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (123, 175, 212, 255) : (43, 114, 166, 255)
+            let (r, g, b, a) = dark ? (123, 175, 212, 255.0) : (43, 114, 166, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// statusWarning: light #B45309, dark #F59E0B.
         public static func statusWarning(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (245, 158, 11, 255) : (180, 83, 9, 255)
+            let (r, g, b, a) = dark ? (245, 158, 11, 255.0) : (180, 83, 9, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// statusDanger: light #B91C1C, dark #EF4444.
         public static func statusDanger(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (239, 68, 68, 255) : (185, 28, 28, 255)
+            let (r, g, b, a) = dark ? (239, 68, 68, 255.0) : (185, 28, 28, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// statusSuccess: light #047857, dark #10B981.
         public static func statusSuccess(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (16, 185, 129, 255) : (4, 120, 87, 255)
+            let (r, g, b, a) = dark ? (16, 185, 129, 255.0) : (4, 120, 87, 255.0)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 
         /// orb: light rgba(123, 175, 212, 0.22), dark rgba(75, 156, 211, 0.18).
         public static func orb(dark: Bool) -> NSColor {
-            let (r, g, b, a) = dark ? (75, 156, 211, 46) : (123, 175, 212, 56)
+            let (r, g, b, a) = dark ? (75, 156, 211, 45.9) : (123, 175, 212, 56.1)
             return NSColor(srgbRed: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: CGFloat(a) / 255.0)
         }
 

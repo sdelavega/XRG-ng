@@ -39,7 +39,7 @@ struct StockChartTests {
             #expect(XRGStockChart.parse(quote: data) == nil)
         }
         #expect(XRGStockChart.parse(history: Data("{\"chart\":{\"result\":null,\"error\":{\"code\":\"Not Found\"}}}".utf8)) == nil)
-        #expect(XRGStockChart.parse(quote: Data("{\"chart\":{\"result\":[{\"meta\":{\"regularMarketPrice\":342.37}}]}".utf8)) == nil)
+        #expect(XRGStockChart.parse(quote: Data("{\"chart\":{\"result\":[{\"meta\":{\"regularMarketPrice\":342.37}}]}}".utf8)) == nil)
     }
 
     @Test func emptyResultIsNil() throws {

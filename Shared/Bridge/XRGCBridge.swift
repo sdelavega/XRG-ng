@@ -398,6 +398,23 @@ private struct SettingsLoadJSON: Encodable {
     let document: String?
     let diagnostics: [XRGSettingsDiagnostic]
     let unreadable: Bool
+
+    private enum CodingKeys: String, CodingKey { case document, diagnostics, unreadable }
+
+    /// The published contract (xrg_shared.h) writes an explicit `null` for
+    /// the document when the load is unreadable — never an omitted member —
+    /// so the encoding says so itself instead of the synthesized shape's
+    /// silent omission (final review, minor T5).
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let document {
+            try container.encode(document, forKey: .document)
+        } else {
+            try container.encodeNil(forKey: .document)
+        }
+        try container.encode(diagnostics, forKey: .diagnostics)
+        try container.encode(unreadable, forKey: .unreadable)
+    }
 }
 private struct SettingsMigrateJSON: Encodable {
     let document: String
@@ -435,6 +452,30 @@ private struct StockChartJSON: Encodable {
     let price: Double?
     let change: Double?
     let closes: [Double]?
+
+    private enum CodingKeys: String, CodingKey { case price, change, closes }
+
+    /// The published contract writes the side a parse does not fill as an
+    /// explicit `null`, never an omitted member (final review, minor T5):
+    /// the header's documented shape and the bytes now agree.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let price {
+            try container.encode(price, forKey: .price)
+        } else {
+            try container.encodeNil(forKey: .price)
+        }
+        if let change {
+            try container.encode(change, forKey: .change)
+        } else {
+            try container.encodeNil(forKey: .change)
+        }
+        if let closes {
+            try container.encode(closes, forKey: .closes)
+        } else {
+            try container.encodeNil(forKey: .closes)
+        }
+    }
 }
 private struct StockURLsJSON: Encodable {
     let history: String
