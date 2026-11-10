@@ -59,39 +59,38 @@ chmod a+rx "$permission_bin"
 for test_name in read_only_config_dir_reports_and_runs read_only_document_reports_and_runs; do
     setpriv --reuid=65534 --regid=65534 --clear-groups env HOME=/tmp "$permission_bin" "$test_name"
 done
-# Final review, finding 7: the headless launch uses production startup — it
-# opens the real settings store, which would migrate an inherited legacy
-# settings.conf on first run. Give the launch an explicit scratch
-# configuration root, so it never sees whatever the environment inherited,
-# and prove the isolation with a sentinel legacy configuration at the
-# location an inherited environment resolves to: the launch must leave it
-# byte-identical and must not migrate it. (The smoke launches are already
-# isolated: their harness runs against its own scratch configuration root.)
+# Final review, finding 7 / round 2, issue 4 (ruling R35): the headless
+# launch uses production startup — it opens the real settings store, which
+# resolves its configuration root from the environment. Prove the isolation
+# entirely under scratch: the launch configuration AND a simulated inherited
+# configuration (a sentinel legacy settings.conf at the relative location an
+# inherited environment would resolve to) both live under scratch, are
+# compared before and after there, and the REAL inherited
+# HOME/XDG_CONFIG_HOME tree is never read, created or inspected. The launch
+# must use its own scratch root — writing its document there — and must
+# leave the simulated inherited tree untouched, byte for byte, without
+# migrating it. (The smoke launches are already isolated: their harness runs
+# against its own scratch configuration root.)
 headless_config="$output/headless-config"
 mkdir -p "$headless_config"
-inherited_root="${XDG_CONFIG_HOME:-${HOME:-/root}/.config}"
-sentinel_dir="$inherited_root/xrg-ng"
+inherited_config="$output/inherited-config"
+sentinel_dir="$inherited_config/xrg-ng"
+mkdir -p "$sentinel_dir"
 sentinel="$sentinel_dir/settings.conf"
-if [[ -e "$sentinel" ]]; then
-    sentinel_planted=false
-else
-    sentinel_planted=true
-    mkdir -p "$sentinel_dir"
-    printf 'theme=Sentinel\n' > "$sentinel"
-fi
+printf 'theme=Sentinel\n' > "$sentinel"
 sentinel_before=$(sha256sum < "$sentinel")
 XDG_CONFIG_HOME="$headless_config" cargo run "${cargo_options[@]}" -- --headless --samples 3
 if [[ "$(sha256sum < "$sentinel")" != "$sentinel_before" ]]; then
-    echo "The headless launch modified the inherited configuration $sentinel" >&2
+    echo "The headless launch modified the simulated inherited configuration $sentinel" >&2
     exit 1
 fi
 if [[ -e "$sentinel_dir/settings.json" ]]; then
-    echo "The headless launch migrated the inherited configuration $sentinel_dir" >&2
+    echo "The headless launch migrated the simulated inherited configuration $sentinel_dir" >&2
     exit 1
 fi
-if [[ "$sentinel_planted" == true ]]; then
-    rm -f "$sentinel"
-    rmdir "$sentinel_dir" 2>/dev/null || true
+if [[ ! -e "$headless_config/xrg-ng/settings.json" ]]; then
+    echo "The headless launch did not use its scratch configuration root $headless_config" >&2
+    exit 1
 fi
 # Fail if the new frontend acquires GTK/GSK/Cairo/GLib through a helper crate.
 python3 Tools/check-linux-ui-deps.py
