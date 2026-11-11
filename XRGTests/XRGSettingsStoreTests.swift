@@ -666,6 +666,120 @@ struct XRGSettingsStoreTests {
         #expect(try modificationDate(fixture.documentURL) == stamp)
     }
 
+    /// Two first launches synchronized AFTER BOTH OBSERVED ABSENCE (round 4,
+    /// ruling R39): the first launch is parked by the store's first-launch
+    /// seam — absence observed, migration computed, nothing written — while
+    /// the second launch performs its own full first launch: it observes the
+    /// SAME absence (the first has written nothing yet) and migrates first.
+    /// Releasing the first puts its migration transaction under contention
+    /// with the second's appeared file: it ADOPTS the file — the identity
+    /// re-apply over the loaded contents — never clobbers it, and both
+    /// launches converge on the one migrated document.
+    @Test func synchronizedFirstLaunchesBothObserveAbsenceAndAdoptUnderContention() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let legacy: [String: Any] = ["windowTitle": "Contended", "borderWidth": 7]
+        fixture.seed(legacy)
+        let box = FirstLaunchBox()
+        XRGSettingsStore.firstLaunchInterleave = {
+            // The second first launch runs INSIDE the first's seam: the first
+            // observed absence and computed its migration but wrote nothing,
+            // so the second observes the same absence and migrates first.
+            XRGSettingsStore.firstLaunchInterleave = nil
+            box.second = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                           catalog: catalog, legacyDomain: legacy)
+            box.observedAbsence = true
+        }
+        defer { XRGSettingsStore.firstLaunchInterleave = nil }
+        let first = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: legacy)
+        #expect(box.observedAbsence, "both launches observed absence before either wrote")
+        let second = try #require(box.second)
+        #expect(first.loadProblem == nil)
+        #expect(second.loadProblem == nil)
+        // The first adopted the second's file: one converged document.
+        #expect(first.locked.document == second.locked.document)
+        #expect(first.value("general.window.title") == .string("Contended"))
+        #expect(first.value("general.window.border_width") == .int(7))
+        #expect(second.value("general.window.title") == .string("Contended"))
+        // The file holds exactly the second's migration, and both stores
+        // observe it as their baseline for the next compare.
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(first.locked.observedBytes == bytes)
+        #expect(second.locked.observedBytes == bytes)
+        // A third reader sees the converged document.
+        let third = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                      catalog: catalog, legacyDomain: [:])
+        #expect(third.value("general.window.title") == .string("Contended"))
+        #expect(third.value("general.window.border_width") == .int(7))
+    }
+
+    /// The seam box: the second store and the absence flag, shared with the
+    /// seam closure without capturing them as mutable locals.
+    private final class FirstLaunchBox: @unchecked Sendable {
+        var second: XRGSettingsStore?
+        var observedAbsence = false
+    }
+
+    /// A destination that appears between the first launch's absence
+    /// observation and its migration transaction (round 4, ruling R39): the
+    /// seam parks the first launch exactly there, the test plants the
+    /// appearing file, and the migration transaction must refuse it — adopt
+    /// nothing, write nothing — leaving the appeared bytes untouched and
+    /// surfacing the same confirmation a load would.
+    @Test func destinationAppearingBeforeTheMigrationTransactionIsNeverOverwritten() throws {
+        for appearing in ["malformed", "future"] {
+            let fixture = try Fixture(); defer { fixture.cleanUp() }
+            let catalog = try self.catalog()
+            let legacy: [String: Any] = ["windowTitle": "Mine", "borderWidth": 7]
+            fixture.seed(legacy)
+            let appeared: Data
+            let expectedProblem: String
+            if appearing == "malformed" {
+                appeared = Data("{\"format\": \"xrg-ng-settings\", \"version\": 1, \"settings\": {".utf8)
+                expectedProblem = XRGSettingsDiagnostic.malformed
+            } else {
+                appeared = Data("""
+                {
+                  "format": "xrg-ng-settings",
+                  "version": 2,
+                  "settings": {
+                    "general.window.title": "From the future"
+                  }
+                }
+                """.utf8)
+                expectedProblem = XRGSettingsDiagnostic.unsupportedVersion
+            }
+            let box = AppearedBox()
+            XRGSettingsStore.firstLaunchInterleave = {
+                XRGSettingsStore.firstLaunchInterleave = nil
+                try? appeared.write(to: fixture.documentURL)
+                box.planted = true
+            }
+            defer { XRGSettingsStore.firstLaunchInterleave = nil }
+            let first = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                         catalog: catalog, legacyDomain: legacy)
+            #expect(box.planted)
+            #expect(first.loadProblem?.problem == expectedProblem,
+                    "the appeared \(appearing) destination is surfaced, never adopted")
+            #expect(try #require(documentBytes(fixture.documentURL)) == appeared,
+                    "the appeared file is kept byte for byte")
+            // The pending migration stays in memory until the user confirms
+            // the replacement.
+            first.replaceUnreadableFile()
+            #expect(first.loadProblem == nil)
+            let written = try #require(documentBytes(fixture.documentURL))
+            #expect(written != appeared)
+            #expect(try storedValue("general.window.title",
+                                    in: written) as? String == "Mine")
+        }
+    }
+
+    /// The seam box for the appearing-destination test.
+    private final class AppearedBox: @unchecked Sendable {
+        var planted = false
+    }
+
     /// A destination that becomes UNREADABLE at the final re-check —
     /// absent and unreadable are different states (ruling R39) — is never
     /// overwritten: the transaction aborts, the problem is surfaced like a
@@ -877,6 +991,40 @@ struct XRGSettingsStoreTests {
         #expect(store.value("sources.fans.sensor2") == .string("applesmc-fan2"))
         #expect(try storedValue("sources.fans.sensor2",
                                 in: try #require(documentBytes(fixture.documentURL))) as? String == "applesmc-fan2")
+    }
+
+    /// Round 4's test-preservation note: a Linux-only entry SURVIVES a macOS
+    /// reset (review rr3): the macOS store's reset removes only the section's
+    /// macOS entries — its own platform filter — so a Linux-only value the
+    /// document carries (migration, a hand edit, another platform's write)
+    /// is preserved in the file, exactly as the shared core's whole-section
+    /// reset (SettingsDocumentTests) preserves nothing.
+    @Test func linuxOnlyEntrySurvivesAMacOSReset() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        #expect(store.loadProblem == nil)
+        // The general section's macOS entry, its Linux-only opacity, and an
+        // unrelated section's entry, all stored through the same store.
+        try store.set("general.window.border_width", .int(8))
+        try store.set("general.window.opacity", .double(0.5))
+        try store.set("graphs.refresh", .double(2))
+        store.resetSection("general")
+        #expect(store.value("general.window.border_width") == .int(4),
+                "the macOS entry returns to its default")
+        #expect(store.value("general.window.opacity") == .double(0.5),
+                "the Linux-only entry survives the macOS reset")
+        #expect(store.value("graphs.refresh") == .double(2),
+                "other sections are untouched")
+        // It survives a reopen: the file keeps it.
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("general.window.opacity", in: bytes) as? Double == 0.5)
+        #expect(try storedValue("general.window.border_width", in: bytes) == nil)
+        let reopened = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                         catalog: catalog, legacyDomain: [:])
+        #expect(reopened.value("general.window.opacity") == .double(0.5))
+        #expect(reopened.value("general.window.border_width") == .int(4))
     }
 
     /// A preferences snapshot that clears a selection or drops a graph
@@ -1165,7 +1313,7 @@ struct XRGSettingsStoreTests {
             "windowTitle": "Converted",  // mapped: goes to the document only
             "completelyMadeUpKey": "refused",
             "anotherUnknownLatch": 3,
-        ])
+        ]).refusedKeys
 
         // The refused keys are reported back and never reach the domain...
         #expect(refused.sorted() == ["anotherUnknownLatch", "completelyMadeUpKey"])
@@ -1218,7 +1366,7 @@ struct XRGSettingsStoreTests {
             "aiTokensDailyDate": Date(timeIntervalSince1970: 100),
             "aiTokensLastNotifyDate": Date(timeIntervalSince1970: 200),
             "aiTokensMadeUpSetting": "shares the prefix but is not recorded usage",
-        ])
+        ]).refusedKeys
 
         // The made-up key sharing the prefix is refused and absent from the
         // persistent domain; every recorded key is still allowed and lands.

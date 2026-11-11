@@ -300,6 +300,10 @@ import Foundation
                 legacyDomain, registered: registered, catalog: catalog)
             locked.mutate { $0 = migrated }
             Self.note(diagnostics)
+            // The test seam (round 4, ruling R39): absence has been
+            // observed and the migration is computed, but no file exists
+            // and no lock is held yet.
+            Self.firstLaunchInterleave?()
             // The migration write is the same locked transaction every
             // other write runs (round 3, ruling R39): under the lock, an
             // absent destination is created only if it is still absent, and
@@ -452,25 +456,55 @@ import Foundation
         excludedLegacyKeys.contains(key) || excludedLegacyPrefixes.contains { key.hasPrefix($0) }
     }
 
+    /// One refused entry of a validated batch (round 4, ruling R37): the
+    /// offending entry's id and the core's own error for it, so a caller
+    /// can show the refusal the single-entry `set` path would show.
+    public struct XRGSettingsBatchRefusal: Equatable, Sendable {
+        public let id: String
+        public let error: XRGSettingsError
+    }
+
+    /// Everything one `setLegacyValues` call concluded (round 4, ruling R37):
+    /// the unmapped keys that were refused outright, and the per-entry
+    /// refusals of the validated batch when the core refused it whole.
+    /// Both are empty when every value landed.
+    public struct XRGSettingsLegacyWrite: Sendable {
+        public let refusedKeys: [String]
+        public let refusals: [XRGSettingsBatchRefusal]
+        /// Both lists empty: every value landed.
+        public var isEmpty: Bool { refusedKeys.isEmpty && refusals.isEmpty }
+    }
+
     /// Store raw 0.2.2-style defaults values (a preferences snapshot, a theme,
-    /// a graph presentation or process options blob). The legacy backend
-    /// writes them to its domain verbatim, as 0.2.2 did; the document backend
-    /// converts them through the migration into the document, and the
-    /// conversion REPLACES what the keys' entries held: a snapshot whose
-    /// value converts to the entry's default — or whose blob omits a field —
-    /// clears the stored value, so restoring defaults cannot silently revert
-    /// (review issue 3). On the document backend, keys the catalog maps with
-    /// one entry or a whole blob never touch the domain; unmapped keys keep
-    /// their `NSUserDefaults` home ONLY when they are allowlisted excluded
-    /// state (`isExcludedLegacyKey`); every other unmapped key is refused —
+    /// a graph presentation or process options blob) — ONE validated batch
+    /// and ONE commit (round 4, ruling R37). The legacy backend writes them
+    /// to its domain verbatim, as 0.2.2 did; the document backend converts
+    /// them through the migration into the document, and the conversion
+    /// REPLACES what the keys' entries held: a value that converts to the
+    /// entry's default — or a blob field the snapshot omits — clears the
+    /// stored value, so restoring defaults cannot silently revert (review
+    /// issue 3). `extraChanges` ride the same batch (the preset selection
+    /// travels with its palette, ruling R37). On the document backend, keys
+    /// the catalog maps never touch the domain; unmapped keys keep their
+    /// `NSUserDefaults` home ONLY when they are allowlisted excluded state
+    /// (`isExcludedLegacyKey`); every other unmapped key is refused —
     /// returned, logged, and never written anywhere (fix round 2,
-    /// finding 2). Returns the refused keys (empty on the legacy backend).
+    /// finding 2). A batch the core refuses whole is reported in full:
+    /// nothing is stored, nothing is written, every refusal is returned (the
+    /// fan-source editor adopts a selection only after acceptance, round 4).
     @discardableResult
-    public func setLegacyValues(_ raw: [String: Any]) -> [String] {
+    public func setLegacyValues(_ raw: [String: Any], extraChanges: [XRGSettingsChange] = []) -> XRGSettingsLegacyWrite {
         switch backend {
         case .legacy:
             for (key, value) in raw { defaults.set(value, forKey: key) }
-            return []
+            for change in extraChanges {
+                guard let value = change.value,
+                      let entry = catalog.entry(change.id),
+                      let key = Self.legacyKey(of: entry),
+                      let stored = reverseLegacy(value, for: entry) else { continue }
+                defaults.set(stored, forKey: key)
+            }
+            return XRGSettingsLegacyWrite(refusedKeys: [], refusals: [])
         case .document:
             var refused: [String] = []
             for (key, value) in raw where ids(legacyKey: key).isEmpty {
@@ -494,32 +528,40 @@ import Foundation
                 // to the entry's default, or a blob field the snapshot omits,
                 // is a REMOVAL — and the core validates the final document
                 // once, combinations included, so no multi-key path can
-                // bypass the cross-setting rules (round 2, issue 3).
-                let changes = named.map { XRGSettingsChange(id: $0, value: migrated.values[$0]) }
+                // bypass the cross-setting rules (round 2, issue 3). The
+                // refusal is returned whole (round 4): the caller adopts
+                // only after acceptance.
+                let changes = named.map { XRGSettingsChange(id: $0, value: migrated.values[$0]) } + extraChanges
                 switch XRGSettingsDocument.apply(changes, to: locked.document, catalog: catalog) {
                 case .applied(let applied):
                     locked.mutate { $0 = applied }
                     if loadProblem == nil {
+                        let batch = changes
                         persistAndReport { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
                             guard case .applied(let next) = XRGSettingsDocument.apply(
-                                changes, to: document, catalog: self.catalog) else {
+                                batch, to: document, catalog: self.catalog) else {
                                 throw XRGSettingsError.constraint
                             }
                             document = next
                         }
                     }
-                    for id in named { post(id) }
+                    for change in changes { post(change.id) }
                 case .refused(let refusals):
                     // The batch was refused whole: the document keeps its
                     // values, nothing is written, and every refusal is
-                    // reported like a single-entry refusal is.
+                    // returned to the caller — reported like a
+                    // single-entry refusal is, never adopted (round 4,
+                    // review issue 5).
                     for refusal in refusals {
                         NSLog("XRG-ng settings: refusing \(refusal.id): " +
                               XRGSettingsDocument.problemKind(of: refusal.error))
                     }
+                    return XRGSettingsLegacyWrite(
+                        refusedKeys: refused.sorted(),
+                        refusals: refusals.map(XRGSettingsBatchRefusal.init))
                 }
             }
-            return refused.sorted()
+            return XRGSettingsLegacyWrite(refusedKeys: refused.sorted(), refusals: [])
         }
     }
 
@@ -570,14 +612,24 @@ import Foundation
 
     /// The user confirmed replacing an unreadable settings file: write the
     /// current in-memory document over it and clear the problem. The user's
-    /// confirmation is the point, so this write does not compare with what
-    /// anyone else put on disk in the meantime.
+    /// confirmation decides the destination's fate, so nothing is compared
+    /// or adopted — but the write is the SAME locked transaction every
+    /// other write runs (round 4, ruling R39): an explicit replacement
+    /// mode of `persist`, holding the advisory lock across stage and
+    /// replace, so a cooperating writer can never interleave with it. No
+    /// unlocked writer remains.
     public func replaceUnreadableFile() {
         guard case .document = backend else { return }
-        if let error = persistError() {
-            loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
-        } else {
+        switch persist(reapplying: { _ in }, replacing: true) {
+        case nil:
             loadProblem = nil
+        case .failure(let error):
+            loadProblem = XRGSettingsDiagnostic(id: nil, problem: "unreadable:\(error.domain)")
+        case .conflict:
+            // The identity re-apply cannot be refused.
+            loadProblem = nil
+        case .unreadable(let diagnostic):
+            loadProblem = diagnostic
         }
     }
 
@@ -627,9 +679,11 @@ import Foundation
                           userInfo: [NSLocalizedDescriptionKey: "Could not sync \(temporary.path)"])
         }
     }
-    /// The write `persistError()` uses. Injectable (internal) so tests can
-    /// force the `open` and `fsync` failures the default checks. The default
-    /// closure is stateless, so the unchecked isolation is sound.
+    /// The durable file write every transaction uses — the ordinary
+    /// coordinate mode and the confirmed replacement mode alike.
+    /// Injectable (internal) so tests can force the `open` and `fsync`
+    /// failures the default checks. The default closure is stateless, so
+    /// the unchecked isolation is sound.
     nonisolated(unsafe) var durableWrite: DurableFileWrite = XRGSettingsStore.defaultDurableWrite
 
     /// What a persistence attempt concluded (final review, findings 2 and 3):
@@ -746,12 +800,26 @@ import Foundation
         set { locked.stageInterleave = newValue }
     }
 
+    /// A test seam (round 4, ruling R39): called in the first-launch branch
+    /// after absence is observed and the migration is computed, BEFORE the
+    /// migration write — no lock held, no file created — so a test can
+    /// synchronize two first launches after BOTH observed absence, or
+    /// plant a competing destination before the migration transaction, and
+    /// prove the adoption (or the refusal) under contention.
+    nonisolated(unsafe) static var firstLaunchInterleave: (() -> Void)?
+
     /// Write the document atomically, coordinating with everyone else who
     /// may touch the file (final review, finding 2 / rulings R28, R32 and
     /// R39): the whole read → compare → stage → re-check → replace
     /// transaction runs under the advisory exclusive lock — the migration
     /// write of a first launch included — and the destination's identity is
     /// re-checked immediately before the atomic replace.
+    ///
+    /// `replacing: true` is the user's CONFIRMED replacement of an
+    /// unreadable file (round 4, ruling R39): an explicit mode of this same
+    /// locked transaction — nothing is read, compared or adopted, but the
+    /// stage and the atomic replace still hold the lock — so no unlocked
+    /// writer exists anywhere in the store.
     ///
     /// ABSENT and UNREADABLE are separate states everywhere (ruling R39):
     /// a destination that exists but cannot be read is never overwritten —
@@ -790,7 +858,8 @@ import Foundation
     /// lets, so two real competing transactions — the same code path `set`
     /// and the first-launch migration run — can race for the lock (ruling
     /// R39's concurrency test).
-    nonisolated func persist(reapplying reapply: (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void)
+    nonisolated func persist(reapplying reapply: (inout XRGSettingsDocument) throws(XRGSettingsError) -> Void,
+                             replacing: Bool = false)
         -> PersistOutcome? {
         guard case .document(let fileURL) = backend else { return nil }
         if let error = Self.writePermissionError(fileURL) { return .failure(error) }
@@ -812,6 +881,28 @@ import Foundation
             lock = acquired
         }
         defer { lock.release() }
+        if replacing {
+            // The user's explicit confirmation (round 4, ruling R39): the
+            // destination's fate is decided, so nothing is read, compared
+            // or adopted — but the stage and the atomic replace still run
+            // under the same advisory lock every other write holds, so a
+            // cooperating writer can never interleave with a confirmed
+            // replacement.
+            let bytes = locked.document.serialized()
+            let temporary = fileURL.deletingLastPathComponent()
+                .appendingPathComponent(".settings-\(UUID().uuidString).tmp")
+            do {
+                try durableWrite(temporary, bytes)
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+            } catch {
+                try? FileManager.default.removeItem(at: temporary)
+                return .failure(error as NSError)
+            }
+            // These are the bytes this store now observes on disk; the next
+            // write compares against them (R28).
+            locked.setObserved(bytes)
+            return nil
+        }
         for attempt in 0..<2 {
             // Read: absent, unreadable, or the current bytes — never a
             // conflated nil (ruling R39).
@@ -945,39 +1036,6 @@ import Foundation
         } catch {
             return (error as? NSError) ?? denied(fileURL.path)
         }
-    }
-
-    /// The plain write of bytes over the settings file, used by the
-    /// confirmed replacement of an unreadable file: the user has already
-    /// decided the destination's fate, so no comparison or lock happens,
-    /// but the observed bytes still follow what was written.
-    private func persistError() -> NSError? {
-        guard case .document(let fileURL) = backend else { return nil }
-        if let error = writeBytes(locked.document.serialized()) { return error }
-        return nil
-    }
-
-    /// The file write `persistError` uses: the guard checks, the atomic
-    /// replacement and the observed-bytes bookkeeping. Returns the error
-    /// that stopped the write, nil on success.
-    private func writeBytes(_ bytes: Data) -> NSError? {
-        guard case .document(let fileURL) = backend else { return nil }
-        if let error = Self.writePermissionError(fileURL) { return error }
-        let temporary = fileURL.deletingLastPathComponent()
-            .appendingPathComponent(".settings-\(UUID().uuidString).tmp")
-        do {
-            try durableWrite(temporary, bytes)
-            // A rename within the directory cannot leave a half-written
-            // file, and replaces the settings file if it already exists.
-            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
-        } catch {
-            try? FileManager.default.removeItem(at: temporary)
-            return error as NSError
-        }
-        // These are the bytes this store now observes on disk; the next
-        // write compares against them (R28).
-        locked.setObserved(bytes)
-        return nil
     }
 
     // MARK: Legacy keys
