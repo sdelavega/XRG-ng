@@ -339,22 +339,27 @@ impl SettingsWindow {
         }
     }
 
-    /// A loaded theme file becomes the current theme: its palette and name
-    /// are written through the store as ONE validated batch — ONE commit
-    /// (round 4, ruling R37) — and the preset is marked Custom when the
-    /// palette no longer matches the selected built-in (lesson f). A
-    /// refused batch (an over-long name, a colour no entry accepts) aborts
-    /// whole: nothing is written and the refusal's reason is shown.
+    /// A loaded theme file becomes the current theme: its palette, its name
+    /// AND the `themes.preset` designation the resulting colours produce —
+    /// the built-in they exactly match, or Custom — are written through the
+    /// store as ONE validated batch, ONE commit (round 5, ruling R37: the
+    /// designation is computed BEFORE persisting and rides the same batch,
+    /// so a later failure can never leave a saved palette designated after
+    /// a stale preset). A refused batch (an over-long name, a colour no
+    /// entry accepts) aborts whole: nothing is written and the refusal's
+    /// reason is shown — never "Theme imported."
     fn store_theme(&mut self, store: &mut Store, theme: ThemeDocument) {
-        let changes: Vec<Change> = settings_controls::PALETTE_IDS
-            .iter()
-            .enumerate()
-            .map(|(index, id)| Change::Set((*id).into(), json!(theme.colors[index])))
-            .chain([Change::Set("themes.name".into(), json!(theme.name))])
+        let designation = imported_designation(&theme.colors);
+        let changes: Vec<Change> = palette_changes(&theme.colors)
+            .into_iter()
+            .map(|(id, value)| Change::Set(id, value))
+            .chain([
+                Change::Set("themes.name".into(), json!(theme.name)),
+                Change::Set("themes.preset".into(), json!(designation)),
+            ])
             .collect();
         match store.apply_batch(&changes) {
             Ok(()) => {
-                mark_custom_preset(store, &self.catalog);
                 self.dirty = true;
                 for id in settings_controls::PALETTE_IDS {
                     self.fields.bump(id);
@@ -578,57 +583,113 @@ impl SettingsWindow {
             // failure from a previous frame offers Retry. This frame's own
             // saves only remove entries, so the flag cannot go stale.
             let show_retry = !blocked && !held.is_empty();
+            // The ids a successful multi-entry batch re-presents (the
+            // palette and the name a preset selection changes under the
+            // fields' buffers).
+            let mut bumps: Vec<String> = Vec::new();
             let mut set = |id: &str, value: Value| -> Result<(), SetError> {
-                if store.blocked() {
-                    // The document cannot take the change, so the window
-                    // holds it in memory — the banner's promise, kept
-                    // until the user replaces the file — but only once
-                    // the shared core has validated it (the only
-                    // validator, review issue 2): a refused edit shows
-                    // its reason and is held for nothing.
-                    return match store.validate_held(&held, id, &value) {
-                        Ok(()) => {
-                            held.insert(id.to_owned(), value);
-                            Ok(())
-                        }
-                        Err(error) => Err(error),
-                    };
-                }
-                // Selecting a built-in preset is ONE batch — the palette,
-                // the theme name and the preset selection itself — ONE
-                // commit (round 4, ruling R37): it cannot land half-applied.
-                let result = if id == "themes.preset"
+                // The COMPLETE logical batch behind one control action
+                // (round 5, rulings R37/R41): a built-in preset selection
+                // is the palette, the name and the selection itself; a
+                // palette colour edit carries the `themes.preset`
+                // designation its RESULTING colours produce; everything
+                // else is the entry alone. One batch, one commit — a
+                // failed part can never leave the others applied.
+                let batch: Vec<(String, Value)> = if id == "themes.preset"
                     && value.as_str().is_some_and(|name| {
                         crate::shared::themes()
                             .into_iter()
                             .any(|theme| theme.name == name)
                     }) {
-                    let name = value.as_str().expect("just checked").to_owned();
-                    apply_preset(store, &name)
+                    let theme = crate::shared::themes()
+                        .into_iter()
+                        .find(|theme| theme.name == value.as_str().expect("just checked"))
+                        .expect("the name was just checked");
+                    preset_changes(&theme)
+                } else if id.starts_with("appearance.") && id.ends_with(".color") {
+                    let designation =
+                        palette_designation_after(&store.values(), &catalog, id, &value);
+                    vec![
+                        (id.to_owned(), value.clone()),
+                        ("themes.preset".into(), json!(designation)),
+                    ]
                 } else {
-                    store.set(id, value.clone())
+                    vec![(id.to_owned(), value.clone())]
+                };
+                if store.blocked() {
+                    // The document cannot take the change, so the window
+                    // holds the WHOLE logical batch in memory — the
+                    // banner's promise, kept until the user replaces the
+                    // file — but only once the shared core has validated
+                    // it together with every edit already held (the only
+                    // validator, review issue 2): a refused batch shows
+                    // its reason and is held for nothing.
+                    let changes: Vec<Change> = batch
+                        .iter()
+                        .map(|(batch_id, batch_value)| {
+                            Change::Set(batch_id.clone(), batch_value.clone())
+                        })
+                        .collect();
+                    return match store.validate_held(&held, &changes) {
+                        Ok(()) => {
+                            for (batch_id, batch_value) in batch {
+                                held.insert(batch_id, batch_value);
+                            }
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    };
+                }
+                let changes: Vec<Change> = batch
+                    .iter()
+                    .map(|(batch_id, batch_value)| {
+                        Change::Set(batch_id.clone(), batch_value.clone())
+                    })
+                    .collect();
+                let result = match store.apply_batch(&changes) {
+                    Ok(()) => Ok(()),
+                    Err(refusals) => {
+                        if refusals
+                            .iter()
+                            .any(|(_, error)| matches!(error, SetError::Transport))
+                        {
+                            // The batch validated but the commit failed:
+                            // nothing was written, so the WHOLE logical
+                            // batch is retained for Retry — a preset's
+                            // palette and name included, never just its
+                            // selection (round 5, review rr4 issue 5) —
+                            // each entry keeping the latest failed value
+                            // (fix round 3, review rr2 finding 1).
+                            for (batch_id, batch_value) in &batch {
+                                held.insert(batch_id.clone(), batch_value.clone());
+                            }
+                            Err(SetError::Transport)
+                        } else {
+                            Err(refusals
+                                .iter()
+                                .find(|(refused_id, _)| refused_id == id)
+                                .or_else(|| refusals.first())
+                                .map(|(_, error)| *error)
+                                .unwrap_or(SetError::Transport))
+                        }
+                    }
                 };
                 if result.is_ok() {
-                    // A successful save clears any retained failure for this
-                    // entry. Otherwise a width held from a failed repair
-                    // keeps overlaying the value that just saved (review
-                    // round 2, retained failures).
-                    held.remove(id);
-                    dirty = true;
-                    if id.starts_with("appearance.") && id.ends_with(".color") {
-                        mark_custom_preset(store, &catalog);
+                    // A successful save clears any retained failure for the
+                    // batch's entries. Otherwise a width held from a failed
+                    // repair keeps overlaying the value that just saved
+                    // (review round 2, retained failures).
+                    for (batch_id, _) in &batch {
+                        held.remove(batch_id);
                     }
-                } else if matches!(result, Err(SetError::Transport)) {
-                    // The value did not persist: the commit failed — here,
-                    // while the frame renders the save, or later in a retry,
-                    // which can hit the same refusal — or the pinned core
-                    // binding answered in a shape it never produces. What is
-                    // certain is only that nothing was written, so retain the
-                    // latest failed value for Retry, replacing any older
-                    // retained one — a retry must never save a value older
-                    // than the newest edit (fix round 3, review rr2
-                    // finding 1).
-                    held.insert(id.to_owned(), value);
+                    dirty = true;
+                    if batch.len() > 1 {
+                        // A multi-entry action changed other controls'
+                        // values under their buffers (the palette and the
+                        // name a preset carries): re-present everything it
+                        // landed.
+                        bumps.extend(batch.iter().map(|(batch_id, _)| batch_id.clone()));
+                    }
                 }
                 result
             };
@@ -806,6 +867,9 @@ impl SettingsWindow {
             drop(set);
             if dirty {
                 self.dirty = true;
+            }
+            for id in &bumps {
+                self.fields.bump(id);
             }
             self.held = held;
         }
@@ -1329,13 +1393,10 @@ pub(super) fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError
     else {
         return Err(SetError::NotAnOption);
     };
-    let mut changes: Vec<Change> = settings_controls::PALETTE_IDS
-        .iter()
-        .enumerate()
-        .map(|(index, id)| Change::Set((*id).into(), json!(theme.colors[index])))
+    let changes: Vec<Change> = preset_changes(&theme)
+        .into_iter()
+        .map(|(id, value)| Change::Set(id, value))
         .collect();
-    changes.push(Change::Set("themes.name".into(), json!(name)));
-    changes.push(Change::Set("themes.preset".into(), json!(name)));
     store.apply_batch(&changes).map_err(|refusals| {
         refusals
             .first()
@@ -1344,60 +1405,96 @@ pub(super) fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError
     })
 }
 
-/// The catalog's documented rule: a palette that no longer matches the
-/// selected built-in preset marks the theme Custom. An unset colour
-/// inherits its catalog default, so the comparison reads the effective
-/// colour either way. Returns whether the theme was marked.
-fn mark_custom_preset(store: &mut Store, catalog: &Catalog) -> bool {
-    let values = store.values();
-    let preset = values
-        .get("themes.preset")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            catalog
-                .entries
-                .iter()
-                .find(|entry| entry.id == "themes.preset")
-                .and_then(|entry| entry.default.as_str())
-                .map(str::to_owned)
-        });
-    let Some(preset) = preset else {
-        return false;
-    };
-    let Some(theme) = crate::shared::themes()
+/// The complete logical batch of one built-in preset selection (round 5,
+/// ruling R37): the preset's palette, its theme name and the selection
+/// itself — the batch one commit persists, and the batch a transport
+/// failure retains WHOLE for Retry (round 5, review rr4 issue 5).
+fn preset_changes(theme: &crate::shared::Theme) -> Vec<(String, Value)> {
+    palette_changes(&theme.colors)
         .into_iter()
-        .find(|theme| theme.name == preset)
-    else {
-        return false;
-    };
-    let differs = settings_controls::PALETTE_IDS
+        .chain([
+            ("themes.name".into(), json!(theme.name)),
+            ("themes.preset".into(), json!(theme.name)),
+        ])
+        .collect()
+}
+
+/// One palette's entry changes, in the shared ABI's theme order.
+fn palette_changes(colors: &[[f64; 4]; 7]) -> Vec<(String, Value)> {
+    settings_controls::PALETTE_IDS
         .iter()
         .enumerate()
-        .any(|(index, id)| {
-            let effective = values
-                .get(*id)
-                .cloned()
-                .or_else(|| {
+        .map(|(index, id)| ((*id).into(), json!(colors[index])))
+        .collect()
+}
+
+/// The `themes.preset` designation one imported palette produces, computed
+/// BEFORE it persists (round 5, ruling R37): the built-in whose palette the
+/// resulting colours exactly match, or Custom — the catalog's own rule
+/// ("The built-in palette in use, or Custom when the colors were edited"),
+/// evaluated on the result rather than after the fact.
+fn imported_designation(colors: &[[f64; 4]; 7]) -> String {
+    for theme in crate::shared::themes() {
+        if theme.colors == *colors {
+            return theme.name;
+        }
+    }
+    "Custom".into()
+}
+
+/// The `themes.preset` designation one palette colour edit produces,
+/// computed BEFORE the edit persists (round 5, ruling R37): the resulting
+/// palette — the document's effective colours with the edited entry
+/// replaced, an unset colour inheriting its catalog default — is compared
+/// against every built-in exactly; the one it matches names the
+/// designation, and anything else is Custom.
+fn palette_designation_after(
+    values: &serde_json::Map<String, Value>,
+    catalog: &Catalog,
+    edit_id: &str,
+    edit_value: &Value,
+) -> String {
+    let resulting: Vec<Option<Vec<f64>>> = settings_controls::PALETTE_IDS
+        .iter()
+        .map(|id| {
+            let value = if *id == edit_id {
+                edit_value.clone()
+            } else {
+                values.get(*id).cloned().unwrap_or_else(|| {
                     catalog
                         .entries
                         .iter()
                         .find(|entry| &entry.id == id)
                         .map(|entry| entry.default.clone())
+                        .unwrap_or(Value::Null)
                 })
-                .and_then(|value| {
-                    value.as_array().map(|rgba| {
-                        rgba.iter()
-                            .filter_map(|part| part.as_f64())
-                            .collect::<Vec<f64>>()
-                    })
-                });
-            effective != Some(theme.colors[index].to_vec())
-        });
-    if differs {
-        return store.set("themes.preset", json!("Custom")).is_ok();
+            };
+            // Inherit (`null`) means the entry's catalog default is the
+            // effective colour; the comparison reads it either way.
+            if value.is_null() {
+                return catalog
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.id == id)
+                    .and_then(|entry| entry.default.as_array())
+                    .map(|rgba| rgba.iter().filter_map(|part| part.as_f64()).collect());
+            }
+            value
+                .as_array()
+                .map(|rgba| rgba.iter().filter_map(|part| part.as_f64()).collect())
+        })
+        .collect();
+    for theme in crate::shared::themes() {
+        if theme
+            .colors
+            .iter()
+            .zip(&resulting)
+            .all(|(builtin, edited)| edited.as_ref().is_some_and(|edited| edited == builtin))
+        {
+            return theme.name;
+        }
     }
-    false
+    "Custom".into()
 }
 
 /// The App-facing host: renders the window's viewport for one frame, keeps

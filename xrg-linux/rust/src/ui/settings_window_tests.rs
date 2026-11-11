@@ -3239,10 +3239,13 @@ fn colour_editor_tab_exits_at_both_boundaries_and_continues() {
     fs::remove_dir_all(&harness.root).unwrap();
 }
 
-/// Round 4, ruling R37 — the theme import is ONE validated batch and ONE
+/// Round 5, rulings R37 — the theme import is ONE validated batch and ONE
 /// commit: a theme whose name breaks the theme-name constraint is refused
-/// WHOLE — the palette is not written either, the file keeps its bytes and
-/// the refusal's reason is shown — and a valid theme lands whole.
+/// WHOLE — the palette, the name AND the preset designation are not
+/// written, the file keeps its bytes and the refusal's reason is shown —
+/// a commit failure aborts the whole import the same way (all-or-nothing),
+/// and a valid theme lands whole: palette, name and the Custom designation
+/// its resulting colours produce, one commit.
 #[test]
 fn theme_import_is_one_batch_and_a_refusal_writes_nothing() {
     let mut harness = Harness::new();
@@ -3275,7 +3278,37 @@ fn theme_import_is_one_batch_and_a_refusal_writes_nothing() {
             || harness.values()["themes.name"] == json!("xrg"),
         "the refused name never landed"
     );
-    // A valid theme lands whole: palette AND name, one commit.
+    // A failed commit is all-or-nothing too: the palette, the name and the
+    // designation ride ONE batch, so nothing lands and the failure is
+    // surfaced — never "Theme imported." with a stale designation behind.
+    harness.store.fail_next_commits(1);
+    let failed = crate::settings::ThemeDocument {
+        format: "xrg-ng-theme".into(),
+        version: 1,
+        name: "Transport".into(),
+        colors: [[0.03, 0.04, 0.05, 0.7]; 7],
+    };
+    let landed = fs::read(harness.document()).unwrap_or_default();
+    harness.window.store_theme(&mut harness.store, failed);
+    assert_ne!(
+        harness.window.message(),
+        Some("Theme imported."),
+        "the failed commit reported success"
+    );
+    assert_eq!(
+        fs::read(harness.document()).unwrap_or_default(),
+        landed,
+        "the failed commit wrote the palette (or anything) to the file"
+    );
+    assert!(harness.values().get("appearance.window.color").is_none());
+    assert!(
+        harness.values().get("themes.preset").is_none(),
+        "the failed commit wrote the designation"
+    );
+    // A valid theme lands whole: palette, name AND the Custom designation
+    // its resulting colours produce — ONE commit (round 5: the designation
+    // is computed before persisting and rides the same batch).
+    let commits = harness.store.commit_count();
     let valid = crate::settings::ThemeDocument {
         format: "xrg-ng-theme".into(),
         version: 1,
@@ -3284,10 +3317,265 @@ fn theme_import_is_one_batch_and_a_refusal_writes_nothing() {
     };
     harness.window.store_theme(&mut harness.store, valid);
     assert_eq!(harness.window.message(), Some("Theme imported."));
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the palette, the name and the designation took more than one commit"
+    );
     assert_eq!(harness.values()["themes.name"], json!("Imported"));
     assert_eq!(
         harness.values()["appearance.window.color"],
         json!([0.02, 0.03, 0.04, 0.6])
+    );
+    assert_eq!(
+        harness.values()["themes.preset"],
+        json!("Custom"),
+        "the imported palette's designation never landed"
+    );
+    // The designation names the built-in an imported palette exactly
+    // matches: importing Midnight's palette designates Midnight — one
+    // commit, in the same batch as the palette and the name.
+    let midnight = crate::shared::themes()
+        .into_iter()
+        .find(|theme| theme.name == "Midnight")
+        .expect("Midnight is a built-in theme");
+    let commits = harness.store.commit_count();
+    let builtin = crate::settings::ThemeDocument {
+        format: "xrg-ng-theme".into(),
+        version: 1,
+        name: "Reverted".into(),
+        colors: midnight.colors,
+    };
+    harness.window.store_theme(&mut harness.store, builtin);
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the matched designation took more than one commit"
+    );
+    assert_eq!(harness.values()["themes.preset"], json!("Midnight"));
+    assert_eq!(harness.values()["themes.name"], json!("Reverted"));
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
+/// Round 5, review rr4 issue 5 — a failed preset selection retains the
+/// COMPLETE logical batch and Retry submits it whole: selection → injected
+/// commit failure → Retry, through the editor's own Themes picker. The
+/// retained batch is the palette, the theme name and the selection itself
+/// (never just the selection — that reported success with the new preset
+/// selected and the old palette still saved); Retry lands all of it in ONE
+/// commit.
+#[test]
+fn preset_selection_retry_resubmits_the_whole_batch() {
+    let mut harness = Harness::new();
+    harness.window.select_section("themes");
+    let _ = harness.quiet();
+    let midnight = crate::shared::themes()
+        .into_iter()
+        .find(|theme| theme.name == "Midnight")
+        .expect("Midnight is a built-in theme");
+    // The injected commit failure: the selection's batch validates but
+    // nothing is written.
+    harness.store.fail_next_commits(1);
+    let before = fs::read(harness.document()).unwrap_or_default();
+    harness.click_labelled("Color theme");
+    harness.click_labelled("Midnight");
+    let _ = harness.quiet();
+    assert_eq!(
+        fs::read(harness.document()).unwrap_or_default(),
+        before,
+        "the failed preset selection wrote anything"
+    );
+    assert!(
+        harness.values().get("themes.preset").is_none(),
+        "the failed selection landed its designation"
+    );
+    assert!(
+        harness.values().get("themes.name").is_none(),
+        "the failed selection landed its name"
+    );
+    for id in super::super::settings_controls::PALETTE_IDS {
+        assert!(
+            harness.values().get(id).is_none(),
+            "the failed selection landed the palette ({id})"
+        );
+    }
+    // The COMPLETE logical batch is retained for Retry — the palette and
+    // the name included, never just the selection.
+    assert_eq!(
+        harness.window.held.len(),
+        super::super::settings_controls::PALETTE_IDS.len() + 2,
+        "the retained batch is not the complete preset (palette, name and selection)"
+    );
+    assert_eq!(harness.window.held["themes.preset"], json!("Midnight"));
+    assert_eq!(harness.window.held["themes.name"], json!("Midnight"));
+    assert_eq!(
+        harness.window.error("themes.preset"),
+        Some("The value could not be saved."),
+        "the failed selection did not show its reason"
+    );
+    // Retry submits the WHOLE retained batch: palette, name and selection
+    // land together in ONE commit.
+    let commits = harness.store.commit_count();
+    harness.click_labelled("Retry saving changes that did not persist");
+    let _ = harness.quiet();
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the retried preset batch took more than one commit"
+    );
+    assert!(
+        harness.window.held.is_empty(),
+        "the retry kept a held entry"
+    );
+    let values = harness.values();
+    assert_eq!(values["themes.preset"], json!("Midnight"));
+    assert_eq!(values["themes.name"], json!("Midnight"));
+    for (index, id) in super::super::settings_controls::PALETTE_IDS
+        .iter()
+        .enumerate()
+    {
+        let stored = values[*id].as_array().unwrap();
+        for (component, expected) in stored.iter().zip(&midnight.colors[index]) {
+            assert!(
+                (component.as_f64().unwrap() - expected).abs() < 1e-9,
+                "the retried preset colour {id} did not apply"
+            );
+        }
+    }
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
+/// Round 5, ruling R37 — a palette colour edit is ONE batch and ONE commit:
+/// the colour and the `themes.preset` designation its resulting colours
+/// produce ride the same validated batch, so a failed commit leaves
+/// NEITHER behind (all-or-nothing), and a successful one lands both
+/// together — the designation never trails the palette in a second
+/// commit.
+#[test]
+fn palette_edit_carries_its_designation_in_one_batch() {
+    let mut harness = Harness::new();
+    harness.window.select_section("themes");
+    let _ = harness.quiet();
+    // Select Midnight first, so the palette edit's designation is Custom.
+    harness
+        .window
+        .choose_preset("Midnight", &mut harness.store)
+        .expect("the preset applies");
+    harness.window.select_section("appearance");
+    let _ = harness.quiet();
+    // The edit and its designation are one commit: editing one colour under
+    // the preset marks the theme Custom in the SAME write.
+    let commits = harness.store.commit_count();
+    harness.click_labelled("Inherit the default Series 2 color");
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the palette edit and its designation took more than one commit"
+    );
+    assert_eq!(
+        harness.values()["themes.preset"],
+        json!("Custom"),
+        "an edited palette did not become Custom"
+    );
+    // All-or-nothing: a commit failure leaves NEITHER the colour NOR the
+    // designation behind, and the complete batch (colour + designation)
+    // is retained for Retry.
+    harness.store.fail_next_commits(1);
+    let before = fs::read(harness.document()).unwrap();
+    let series3 = harness.values()["appearance.series3.color"].clone();
+    harness.click_labelled("Inherit the default Series 3 color");
+    let _ = harness.quiet();
+    assert_eq!(
+        fs::read(harness.document()).unwrap(),
+        before,
+        "the failed palette edit wrote anything"
+    );
+    assert_eq!(
+        harness.values()["appearance.series3.color"],
+        series3,
+        "the failed palette edit landed the colour"
+    );
+    assert_eq!(
+        harness.values()["themes.preset"],
+        json!("Custom"),
+        "the failed palette edit changed the designation"
+    );
+    assert_eq!(
+        harness.window.held.len(),
+        2,
+        "the retained batch is not the colour and its designation"
+    );
+    // Retry lands the colour and the designation together — one commit
+    // (the inherited entry stores its explicit "not set").
+    let commits = harness.store.commit_count();
+    harness.click_labelled("Retry saving changes that did not persist");
+    let _ = harness.quiet();
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the retried palette batch took more than one commit"
+    );
+    assert!(harness.window.held.is_empty());
+    assert_eq!(
+        harness.values()["appearance.series3.color"],
+        json!(null),
+        "the retried colour did not inherit"
+    );
+    assert_eq!(harness.values()["themes.preset"], json!("Custom"));
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
+/// Round 5, ruling R41 completed — the whole-view save behind the legacy
+/// import's accept is never refused for a dormant dependent: an accepted
+/// import whose view moves the CPU window 5→10 while its sample count
+/// moves 100→200 lands both, one batch, one commit — the count stays
+/// dormant beneath the window exactly as it began.
+#[test]
+fn dormant_to_dormant_view_save_through_the_import_accept() {
+    let mut harness = Harness::new();
+    // The starting document holds the dormant pair.
+    harness
+        .store
+        .set("graphs.cpu.time_window", json!(5))
+        .expect("the window saves");
+    harness
+        .store
+        .set("graphs.cpu.samples", json!(100))
+        .expect("a dormant dependent is stored, never refused");
+    // The reviewed import the accept button saves: the same view with the
+    // window 5→10 and the count 100→200.
+    let mut imported = harness.store.settings().clone();
+    imported.metrics.cpu_history_minutes = 10;
+    imported.metrics.cpu_history_samples = 200;
+    harness.window.import = Some(crate::legacy::Import {
+        settings: imported,
+        imported: Vec::new(),
+        skipped: Vec::new(),
+        repeated_keys: 0,
+    });
+    let commits = harness.store.commit_count();
+    harness
+        .window
+        .accept_import(&mut harness.store)
+        .expect("the dormant-to-dormant import accepts");
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the import's whole-view save took more than one commit"
+    );
+    assert_eq!(
+        harness.values()["graphs.cpu.time_window"],
+        json!(10),
+        "the dormant-to-dormant save was refused (window)"
+    );
+    assert_eq!(
+        harness.values()["graphs.cpu.samples"],
+        json!(200),
+        "the dormant-to-dormant save was refused (samples)"
+    );
+    assert!(
+        harness.window.import.is_none(),
+        "the import was not consumed"
     );
     fs::remove_dir_all(&harness.root).unwrap();
 }

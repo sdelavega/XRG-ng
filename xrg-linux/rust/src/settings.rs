@@ -1286,6 +1286,11 @@ pub struct Store {
     /// window test can interrupt the replacement's held-edit sequence.
     #[cfg(test)]
     fail_commits: u32,
+    /// How many commits this store has written — a test-only observation of
+    /// the ONE-commit rule (round 5, ruling R37): one logical action is
+    /// one batch and one commit, never a write per entry.
+    #[cfg(test)]
+    commits: u32,
 }
 impl Store {
     /// Open the settings under one configuration root. An existing
@@ -1305,6 +1310,8 @@ impl Store {
             problem: None,
             #[cfg(test)]
             fail_commits: 0,
+            #[cfg(test)]
+            commits: 0,
         };
         match read_optional(&store.path, DOCUMENT_LIMIT) {
             // The document exists but cannot be read (permissions, size,
@@ -1477,25 +1484,27 @@ impl Store {
         })?;
         Ok(())
     }
-    /// Validate one edit through the shared core without writing anything:
-    /// the refusal `set` would report for the same value — a single-entry
-    /// `set` IS a batch of one (round 3, ruling R37). Held edits — the
-    /// in-memory changes a blocked document carries — are applied to the
-    /// validation document as one batch first, exactly as the replacement
-    /// applies them, so dependencies and combinations among them hold as
-    /// they will after the replacement.
+    /// Validate one batch of edits through the shared core without writing
+    /// anything: the refusals `apply_batch` would report for the same
+    /// changes — a single-entry `set` IS a batch of one (round 3, ruling
+    /// R37). Held edits — the in-memory changes a blocked document carries —
+    /// are applied to the validation document as one batch first, exactly as
+    /// the replacement applies them, and the caller's own batch rides the
+    /// same validation together with them (round 5: a preset selection or a
+    /// palette edit is the COMPLETE logical batch — palette, name and
+    /// designation — never its selection alone), so combinations among them
+    /// hold as they will after the replacement.
     pub fn validate_held(
         &self,
         held: &std::collections::BTreeMap<String, serde_json::Value>,
-        id: &str,
-        value: &serde_json::Value,
+        changes: &[document::Change],
     ) -> Result<(), document::SetError> {
-        let mut changes: Vec<document::Change> = held
+        let mut combined: Vec<document::Change> = held
             .iter()
             .map(|(held_id, held_value)| document::Change::Set(held_id.clone(), held_value.clone()))
             .collect();
-        changes.push(document::Change::Set(id.into(), value.clone()));
-        document::apply(&self.document, &changes).map(|_| ())
+        combined.extend(changes.iter().cloned());
+        document::apply(&self.document, &combined).map(|_| ())
     }
     /// Restore every entry of one catalog section to its default, in the
     /// document the core returns; unknown keys and other sections are
@@ -1607,6 +1616,13 @@ impl Store {
     pub fn fail_next_commits(&mut self, count: u32) {
         self.fail_commits = count;
     }
+    /// How many commits this store has written (test-only; see `commits`):
+    /// the ONE-commit rule's own observation — a logical action that took
+    /// more than one commit was never one batch.
+    #[cfg(test)]
+    pub fn commit_count(&self) -> u32 {
+        self.commits
+    }
     /// Write one core-produced document: rendered, guarded against external
     /// edits, written atomically with mode 0600, and only then adopted.
     fn commit(&mut self, document: Vec<u8>) -> Result<(), String> {
@@ -1624,6 +1640,10 @@ impl Store {
         self.settings = settings;
         self.expected = Some(self.document.clone());
         self.problem = None;
+        #[cfg(test)]
+        {
+            self.commits += 1;
+        }
         Ok(())
     }
     /// One-time migration of the legacy `settings.conf`: upgraded by Rust's
