@@ -110,7 +110,14 @@ struct XRGSettingsWindowTests {
     @MainActor private func auditViews(_ window: XRGSettingsWindowController) -> [(view: NSView, draws: Bool)] {
         var visits: [(NSView, Bool)] = []
         func visit(_ view: NSView, parentDraws: Bool) {
-            let draws = parentDraws && !view.isHidden
+            // AppKit's private scroll-pocket views (PocketMask and friends)
+            // are system chrome the window never creates or colours; on
+            // macOS 26 they are not hidden, so treat them as non-drawing
+            // rather than auditing system colours the window cannot set.
+            let viewClass: AnyClass = type(of: view)
+            let appKitPocket = NSStringFromClass(viewClass).contains("Pocket")
+                && Bundle(for: viewClass) == Bundle(for: NSView.self)
+            let draws = parentDraws && !view.isHidden && !appKitPocket
             visits.append((view, draws))
             for sub in view.subviews { visit(sub, parentDraws: draws) }
         }

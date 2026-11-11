@@ -9,3 +9,7 @@ Shared/Sources/XRGSharedCore/XRGSettingsCatalogData.swift text eol=lf
 Shared/Design/aether7b.tokens.json text eol=lf
 XRGCore/XRGAether7b.swift text eol=lf
 xrg-linux/rust/src/ui/aether7b.rs text eol=lf
+# Test fixtures that tests compare byte for byte (e.g. the expected Linux
+# view in SettingsMigrationTests.linuxViewRoundTrips) must keep LF on
+# Windows checkouts too.
+Shared/Tests/Fixtures/**/*.json text eol=lf
