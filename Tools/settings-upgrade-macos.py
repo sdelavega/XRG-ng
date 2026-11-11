@@ -1377,8 +1377,10 @@ print("PROBE_OK")
 
 
 def _require_probe_products(products):
-    if not (products / "XRGSharedCore.swiftmodule").exists() \
-            or not (products / "libXRGSharedCore.dylib").is_file():
+    # SwiftPM puts the module either beside the dylib or, with some
+    # toolchains (e.g. Xcode 26's on the CI runners), under Modules/.
+    module_found = any((d / "XRGSharedCore.swiftmodule").exists() for d in (products, products / "Modules"))
+    if not module_found or not (products / "libXRGSharedCore.dylib").is_file():
         raise RuntimeError(
             f"SETTINGS_UPGRADE_MACOS: --products lacks XRGSharedCore.swiftmodule / "
             f"libXRGSharedCore.dylib: {products}")
@@ -1404,6 +1406,7 @@ def compile_probe(products, results):
     source.write_text(PROBE_SWIFT)
     executable = results / "MigrationProbe"
     subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-I", str(products),
+                    "-I", str(products / "Modules"),
                     "-L", str(products), "-lXRGSharedCore", str(source), "-o", str(executable)],
                    check=True)
     return executable
