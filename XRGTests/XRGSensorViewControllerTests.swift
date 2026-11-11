@@ -26,9 +26,9 @@ private final class SensorNibOwner: NSObject, NSWindowDelegate {
 @Suite(.serialized) @MainActor
 struct XRGSensorViewControllerTests {
     private func withSource(_ body: (SensorWindowSource) throws -> Void) throws {
-        let domain = "XRG.sensorWindow.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.sensorWindow.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let source = SensorWindowSource()
         source.appSettings = XRGSettings(defaults: defaults)
         try body(source)

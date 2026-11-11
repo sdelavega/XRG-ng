@@ -36,8 +36,8 @@ struct XRGProcessInspectorTests {
     }
     @Test func inspectorPersistsFiltersAndStopsRefreshingOnClose() async throws {
         _ = NSApplication.shared
-        let domain = "XRG.process-inspector.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain)); defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.process-inspector.")
+        let defaults = t.defaults; defer { t.cleanUp() }
         let miner = XRGProcessMiner(source: { XRGProcessMiner.parse("10 1 1024 2000 - alice First\n20 2 2048 4000 - bob Second") })
         await miner.refresh()
         let inspector = XRGProcessInspector(miner: miner, defaults: defaults, sort: .memory)

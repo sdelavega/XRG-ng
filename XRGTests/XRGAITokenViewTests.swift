@@ -173,9 +173,9 @@ struct XRGAITokenViewTests {
     }
     private func withFixture(_ body: (XRGSettings, UserDefaults, XRGAITokensObserver, AITokenPanelSource) throws -> Void) throws {
         _ = NSApplication.shared
-        let domain = "XRG.aiTokenView.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.aiTokenView.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "showAITokenGraph"); defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(true, forKey: "aiTokensAggregateByModel"); defaults.set(true, forKey: "aiTokensAggregateByProvider")
         defaults.set(true, forKey: "aiTokensShowRate"); defaults.set(true, forKey: "aiTokensShowBreakdown")
@@ -238,9 +238,9 @@ struct XRGAITokenViewTests {
 
     @Test func hiddenAccountingDeliversBudgetThroughTheInjectedNotificationTransport() async throws {
         _ = NSApplication.shared
-        let suite = "XRG.hidden-budget." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let t = TestDefaults(prefix: "XRG.hidden-budget.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(false, forKey: "showAITokenGraph")
         defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(true, forKey: "aiTokensDailyAutoReset")

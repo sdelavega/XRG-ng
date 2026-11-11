@@ -13,17 +13,20 @@ struct XRGSettingsStoreTests {
     /// One disposable suite per test, removed from both cfprefsd and disk so
     /// no XRG test-domain files accumulate under ~/Library/Preferences.
     private struct Fixture {
+        let t: TestDefaults
         let domain: String
         let defaults: UserDefaults
         let documentURL: URL
 
         init() throws {
-            let domain = "XRG.settingsStore.\(UUID().uuidString)"
-            let defaults = try #require(UserDefaults(suiteName: domain))
+            let t = TestDefaults(prefix: "XRG.settingsStore.")
+            let domain = t.domain
+            let defaults = t.defaults
             let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("xrg-0.2.3-task-8", isDirectory: true)
                 .appendingPathComponent(domain, isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            self.t = t
             self.domain = domain
             self.defaults = defaults
             self.documentURL = root.appendingPathComponent("settings.json")
@@ -47,7 +50,7 @@ struct XRGSettingsStoreTests {
         /// Remove the suite's persistent domain and its plist file, like the
         /// repo's other disposable-domain tests, plus this fixture's directory.
         func cleanUp() {
-            defaults.removePersistentDomain(forName: domain)
+            t.cleanUp()
             try? FileManager.default.removeItem(at: preferencesURL)
             try? FileManager.default.removeItem(at: documentURL.deletingLastPathComponent())
         }

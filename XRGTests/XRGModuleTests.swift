@@ -42,9 +42,9 @@ private final class ModuleWindow: NSObject, XRGModuleWindow {
 @Suite @MainActor
 struct XRGModuleTests {
     private func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
-        let domain = "XRG.modules.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.modules.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         try body(defaults)
     }
 

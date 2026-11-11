@@ -16,21 +16,24 @@ import Testing
 struct XRGUpgradeCheckStartupTests {
     private let production = "com.sdelavega.xrg"
 
-    private func disposableDomain() -> String {
-        XRGSettingsStore.upgradeCheckDomainPrefix + UUID().uuidString
+    private func disposableDomain() -> TestDefaults {
+        TestDefaults(prefix: XRGSettingsStore.upgradeCheckDomainPrefix)
     }
 
     /// One disposable suite + scratch document URL, removed afterwards. The
     /// suite name is a disposable (non-production) domain, so nothing here can
     /// resolve to the real production preferences.
     private struct Fixture {
+        let t: TestDefaults
         let domain: String
         let defaults: UserDefaults
         let documentURL: URL
 
-        init(domain: String) throws {
+        init(t: TestDefaults) throws {
+            let domain = t.domain
+            self.t = t
             self.domain = domain
-            defaults = try #require(UserDefaults(suiteName: domain))
+            defaults = t.defaults
             let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("xrg-0.2.3-task-13-upgradecheck", isDirectory: true)
                 .appendingPathComponent(domain, isDirectory: true)
@@ -51,7 +54,7 @@ struct XRGUpgradeCheckStartupTests {
         }
 
         func cleanUp() {
-            defaults.removePersistentDomain(forName: domain)
+            t.cleanUp()
             // Best-effort: ask cfprefsd to drop the disposable domain too, so a
             // targeted run does not leave an empty {} plist / `defaults domains`
             // tombstone behind. Never production: domain is upgrade-check private.
@@ -77,7 +80,8 @@ struct XRGUpgradeCheckStartupTests {
     /// names a perfectly well-formed disposable domain.
     @Test func productionBundleIdentifierIgnoresTheEnvironmentVariable() {
         let key = XRGSettingsStore.upgradeCheckEnvironmentKey
-        let domain = disposableDomain()
+        let t = disposableDomain()
+        let domain = t.domain
         #expect(XRGSettingsStore.upgradeCheckSourceDomain(
             bundleIdentifier: production, environment: [key: domain]) == nil)
         #expect(XRGSettingsStore.upgradeCheckSourceDomain(
@@ -85,7 +89,7 @@ struct XRGUpgradeCheckStartupTests {
         // The factory is nil too, so the production app can never enter this
         // path (and never read the production domain through the convenience
         // initializer). The document URL is injected so no real path is used.
-        let fixture = try? Fixture(domain: domain)
+        let fixture = try? Fixture(t: t)
         defer { fixture?.cleanUp() }
         if let fixture {
             #expect(XRGSettingsStore.upgradeCheckStore(
@@ -124,7 +128,7 @@ struct XRGUpgradeCheckStartupTests {
         #expect(XRGSettingsStore.upgradeCheckStore(bundleIdentifier: renamed, environment: [key: ""]) == nil)
         let good = disposableDomain()
         #expect(XRGSettingsStore.upgradeCheckSourceDomain(
-            bundleIdentifier: renamed, environment: [key: good]) == good)
+            bundleIdentifier: renamed, environment: [key: good.domain]) == good.domain)
     }
 
     // MARK: A matching prefix runs the real migration into the private path
@@ -136,8 +140,9 @@ struct XRGUpgradeCheckStartupTests {
     /// URL for a renamed bundle resolves under ``XRG-ng-Private``, never the
     /// production settings file.
     @Test func matchingPrefixMigratesDisposableDomainIntoThePrivatePath() throws {
-        let domain = disposableDomain()
-        let fixture = try Fixture(domain: domain); defer { fixture.cleanUp() }
+        let t = disposableDomain()
+        let domain = t.domain
+        let fixture = try Fixture(t: t); defer { fixture.cleanUp() }
         let marker = "UpgradeCheck-" + UUID().uuidString
         fixture.seed(["windowTitle": marker, "borderWidth": 7])
 
@@ -170,8 +175,9 @@ struct XRGUpgradeCheckStartupTests {
     /// the requested name and returns a POISON value for any other domain
     /// proves the upgrade path names just the gated disposable domain.
     @Test func matchingPrefixNeverReadsTheProductionDomain() throws {
-        let domain = disposableDomain()
-        let fixture = try Fixture(domain: domain); defer { fixture.cleanUp() }
+        let t = disposableDomain()
+        let domain = t.domain
+        let fixture = try Fixture(t: t); defer { fixture.cleanUp() }
         let marker = "UpgradeCheck-" + UUID().uuidString
         fixture.seed(["windowTitle": marker])
         var readDomains: [String] = []

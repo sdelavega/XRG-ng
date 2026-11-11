@@ -95,9 +95,9 @@ private final class StockPanelNibOwner: NSObject {}
 struct XRGStockViewTests {
     private func withFixture(_ body: (XRGSettings, UserDefaults, PanelStockFactory) async throws -> Void) async throws {
         _ = NSApplication.shared
-        let domain = "XRG.stockView.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.stockView.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "showStockGraph")
         let settings = XRGSettings(defaults: defaults)
         settings.graphFont = NSFont.systemFont(ofSize: 10)

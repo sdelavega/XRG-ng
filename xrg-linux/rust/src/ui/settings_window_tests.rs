@@ -34,6 +34,18 @@ struct Harness {
     root: PathBuf,
     catalog: Catalog,
 }
+
+/// Every fixture owns a disposable configuration root under `$TMPDIR`
+/// (`xrg-settings-window-*` or `xrg-settings-retain-*`). Removing it here
+/// guarantees cleanup on every exit path — normal return or unwinding panic —
+/// so a long test run never accumulates those directories. `let _ =` keeps
+/// teardown idempotent for tests that already removed the root themselves.
+impl Drop for Harness {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
 impl Harness {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(

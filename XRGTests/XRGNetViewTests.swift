@@ -143,9 +143,9 @@ struct XRGNetViewTests {
     }
     private func withFixture(_ body: (XRGSettings, UserDefaults, NetworkSource) throws -> Void) throws {
         _ = NSApplication.shared
-        let domain = "XRG.networkView.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.networkView.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "showNetworkGraph")
         let settings = XRGSettings(defaults: defaults)
         settings.graphFont = NSFont.systemFont(ofSize: 10)

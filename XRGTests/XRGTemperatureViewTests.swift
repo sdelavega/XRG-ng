@@ -151,9 +151,9 @@ struct XRGTemperatureViewTests {
     }
     private func withFixture(_ body: (XRGSettings, UserDefaults, PanelTemperatureReader) throws -> Void) throws {
         _ = NSApplication.shared
-        let domain = "XRG.temperatureView.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.temperatureView.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "showTemperatureGraph")
         let settings = XRGSettings(defaults: defaults)
         settings.graphFont = NSFont.systemFont(ofSize: 10)

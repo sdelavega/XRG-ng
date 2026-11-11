@@ -15,9 +15,9 @@ struct XRGPortableThemeTests {
     }
     @Test func invalidPortableDocumentsCannotPartiallyChangeColorsOrPreferences() throws {
         struct Case: Decodable { let name: String; let json: String; let valid: Bool }
-        let domain = "XRG.portable-theme.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.portable-theme.")
+        let domain = t.domain, defaults = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings(defaults: defaults)
         try settings.applyThemeData(fixture("portable-theme"), defaults: defaults)
         let original = defaults.persistentDomain(forName: domain) ?? [:]

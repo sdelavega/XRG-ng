@@ -7,8 +7,8 @@ import Testing
 @Suite(.serialized) @MainActor
 struct XRGGraphPreferencesTests {
     private func withSettings(_ body: (XRGSettings, UserDefaults) throws -> Void) throws {
-        let name = "XRG.graph-options.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name)); defer { defaults.removePersistentDomain(forName: name) }
+        let t = TestDefaults(prefix: "XRG.graph-options.")
+        let defaults = t.defaults; defer { t.cleanUp() }
         defaults.set(3, forKey: "graphStyle"); defaults.set(333, forKey: "aiTokensDailyBudget")
         let settings = XRGSettings(defaults: defaults)
         settings.graphFG1Transparency = 1; settings.graphFG1Color = .blue

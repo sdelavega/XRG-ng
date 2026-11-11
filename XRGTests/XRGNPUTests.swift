@@ -98,8 +98,8 @@ import Testing
     }
     @Test func retentionResizesAllQuantitiesWithoutPollingOrRebasingEnergy() throws {
         _ = NSApplication.shared
-        let domain = "XRG.npu-history.\(UUID().uuidString)"
-        let prefs = try #require(UserDefaults(suiteName: domain)); defer { prefs.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.npu-history.")
+        let prefs = t.defaults; defer { t.cleanUp() }
         let settings = XRGSettings(defaults: prefs)
         var now = 1.0, value = reading(1, 1000), calls = 0
         let miner = XRGNPUMiner(source: { calls += 1; return value }, clock: { now })
@@ -118,8 +118,9 @@ import Testing
     }
     @Test func timeWindowsKeepAcceptedSamplesAndQuantitiesIndependentWithoutRebasing() throws {
         _ = NSApplication.shared
-        let domain = "XRG.npu-history.\(UUID().uuidString)", prefs = try #require(UserDefaults(suiteName: domain))
-        defer { prefs.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.npu-history.")
+        let prefs = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings(defaults: prefs); settings.graphRefresh = 1
         var now = 1.0, wall = 100.0, value = reading(1,1000), calls = 0
         let miner = XRGNPUMiner(source: { calls += 1; return value }, clock: { now }, historyClock: { wall })
@@ -216,8 +217,9 @@ import Testing
     }
     @Test(arguments: [true,false]) func newGraphRegistersBetweenGPUAndMemoryAndDetaches(vertical: Bool) throws {
         _ = NSApplication.shared
-        let domain = "XRG.npu.\(UUID().uuidString)", defaults = try #require(UserDefaults(suiteName:domain))
-        defer { defaults.removePersistentDomain(forName:domain) }
+        let t = TestDefaults(prefix: "XRG.npu.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true,forKey:"showNPUGraph")
         let settings = XRGSettings(defaults:defaults), host = NPUHost(settings:settings)
         defer { host.contentView?.subviews.forEach { $0.removeFromSuperview() };host.close() }
@@ -323,8 +325,9 @@ import Testing
         #expect(miner.trafficObserved == nil)
     }
     @Test func trafficMarkerUsesASeparateBandAndDoesNotLabelItAsPercent() throws {
-        let domain="XRG.npu.traffic.\(UUID().uuidString)",defaults=try #require(UserDefaults(suiteName:domain))
-        defer { defaults.removePersistentDomain(forName:domain) }
+        let t = TestDefaults(prefix: "XRG.npu.traffic.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let settings=XRGSettings(defaults:defaults)
         var now=2.0,sample=reading(2,0)
         sample.traffic = .init(start:1,end:2,channels:[.init(id:"a",states:["1GB/s":1])])
@@ -389,9 +392,9 @@ import Testing
         #expect(Array(miner.activityDataSet.orderedValues.suffix(1)) == [50])
     }
     @Test func compactActivityLabelsKeepPercentAndWattsSeparate() throws {
-        let domain="XRG.npu.activity.\(UUID().uuidString)"
-        let defaults=try #require(UserDefaults(suiteName:domain))
-        defer { defaults.removePersistentDomain(forName:domain) }
+        let t = TestDefaults(prefix: "XRG.npu.activity.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let settings=XRGSettings(defaults:defaults)
         var now=2.0,sample=reading(2,0)
         sample.activity = .init(start:1,end:2,clusters:[.init(id:"ANE",states:["ACT":1,"IDLE":199])])

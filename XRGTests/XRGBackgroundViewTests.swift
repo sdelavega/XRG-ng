@@ -59,7 +59,8 @@ import Testing
 }
 
 @MainActor private final class BackgroundFixture {
-    let domain = "XRG.background.\(UUID().uuidString)"
+    let t: TestDefaults
+    let domain: String
     let defaults: UserDefaults
     let settings: XRGSettings
     let host: BackgroundHost
@@ -68,7 +69,9 @@ import Testing
     var actions: [XRGBackgroundAction] = []
     init(vertical: Bool = true, direction: Int = 0, readTheme: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) }) throws {
         _ = NSApplication.shared
-        defaults = try #require(UserDefaults(suiteName: domain))
+        t = TestDefaults(prefix: "XRG.background.")
+        domain = t.domain
+        defaults = t.defaults
         defaults.set(true, forKey: "isDockIconHidden")
         settings = XRGSettings(defaults: defaults)
         settings.graphFont = NSFont.systemFont(ofSize: 10)
@@ -90,7 +93,7 @@ import Testing
         host.contentView?.addSubview(view, positioned: .below, relativeTo: panel)
         view.awakeFromNib()
     }
-    func cleanUp() { view.removeFromSuperview(); host.close(); defaults.removePersistentDomain(forName: domain) }
+    func cleanUp() { view.removeFromSuperview(); host.close(); t.cleanUp() }
     func event(at point: NSPoint, clicks: Int = 2) throws -> NSEvent {
         try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
                                         windowNumber: host.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1))

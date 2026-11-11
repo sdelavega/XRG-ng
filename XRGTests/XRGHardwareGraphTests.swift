@@ -81,8 +81,8 @@ struct XRGHardwareGraphTests {
     }
     private func withSettings(_ body: (UserDefaults, XRGSettings) throws -> Void) throws {
         _ = NSApplication.shared
-        let name = "XRG.hardware-graphs.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name)); defer { defaults.removePersistentDomain(forName: name) }
+        let t = TestDefaults(prefix: "XRG.hardware-graphs.")
+        let defaults = t.defaults; defer { t.cleanUp() }
         let settings = XRGSettings(defaults: defaults)
         settings.graphFG1Transparency = 1; settings.graphFG1Color = .blue
         try body(defaults, settings)
@@ -198,8 +198,8 @@ struct XRGHardwareGraphTests {
         }
     }
     @Test func optionalGraphsRegisterPersistRestoreAndShareGPUReadsThroughTheLiveWindow() throws {
-        let domain = "XRG.hardware-lifecycle.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain)); defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.hardware-lifecycle.")
+        let defaults = t.defaults; defer { t.cleanUp() }
         defaults.set(false, forKey: "checkForUpdates")
         for id in XRGGraphID.allCases where id != .vram && id != .fans { defaults.set(true, forKey: id.visibilityKey) }
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: Bundle(for: XRGAppDelegate.self)); defer { scene.shutdown() }

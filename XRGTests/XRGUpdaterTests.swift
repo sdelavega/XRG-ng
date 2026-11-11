@@ -64,11 +64,12 @@ struct XRGUpdaterTests {
         // The host bundle's identifier names the suite Sparkle binds to a
         // non-main host (SUHost), so the seeded domain below is the one the
         // updater under test actually reads and writes.
-        let domain = "com.sdelavega.xrg.upgradeTest.\(UUID().uuidString)"
+        let t = TestDefaults(prefix: "com.sdelavega.xrg.upgradeTest.")
+        let domain = t.domain
         let host = try makeTestHostBundle(identifier: domain)
-        let defaults = try #require(UserDefaults(suiteName: domain))
+        let defaults = t.defaults
         defer {
-            defaults.removePersistentDomain(forName: domain)
+            t.cleanUp()
             try? FileManager.default.removeItem(at: host.bundleURL)
         }
         // Representative 0.1.0 keys: module order, a theme, module visibility.

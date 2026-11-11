@@ -39,9 +39,10 @@ import Testing
 struct XRGGenericViewLifecycleTests {
     private func fixture(_ body: (UserDefaults) throws -> Void) throws {
         _ = NSApplication.shared
-        let domain = "XRG.genericLifecycle.\(UUID().uuidString)", defaults = try #require(UserDefaults(suiteName: domain))
+        let t = TestDefaults(prefix: "XRG.genericLifecycle.")
+        let defaults = t.defaults
         defaults.set(false, forKey: "checkForUpdates"); defaults.set(true, forKey: "isDockIconHidden")
-        defer { defaults.removePersistentDomain(forName: domain) }
+        defer { t.cleanUp() }
         try body(defaults)
     }
     @Test func attachesToTheCurrentHostAndClearsReferencesOnOrdinaryWindowsAndDetachment() throws {

@@ -30,6 +30,7 @@ struct XRGSettingsWindowTests {
     /// provider. Nothing touches the real com.sdelavega.xrg domain or the
     /// real ~/Library/Application Support/XRG-ng/settings.json.
     private struct Fixture {
+        let t: TestDefaults
         let domain: String
         let defaults: UserDefaults
         let root: URL
@@ -46,12 +47,14 @@ struct XRGSettingsWindowTests {
         private(set) var store: XRGSettingsStore?
 
         init() throws {
-            let domain = "XRG.settingsWindow.\(UUID().uuidString)"
-            let defaults = try #require(UserDefaults(suiteName: domain))
+            let t = TestDefaults(prefix: "XRG.settingsWindow.")
+            let domain = t.domain
+            let defaults = t.defaults
             let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("xrg-0.2.3-task-9", isDirectory: true)
                 .appendingPathComponent(domain, isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            self.t = t
             self.domain = domain
             self.defaults = defaults
             self.root = root
@@ -73,7 +76,7 @@ struct XRGSettingsWindowTests {
         }
 
         func cleanUp() {
-            defaults.removePersistentDomain(forName: domain)
+            t.cleanUp()
             try? FileManager.default.removeItem(at: root)
             let plist = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Preferences/\(domain).plist")

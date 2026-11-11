@@ -130,9 +130,9 @@ struct XRGStatisticsTests {
 @MainActor
 struct XRGSettingsTests {
     @Test func injectedDefaultsRemainIndependent() throws {
-        let domain = "XRGSettingsTests." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRGSettingsTests.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings(defaults: defaults)
         settings.aiTokensTrackingEnabled = true
         settings.aiTokensDailyBudget = 42

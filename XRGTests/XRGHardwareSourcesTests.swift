@@ -8,8 +8,8 @@ import Testing
 struct XRGHardwareSourcesTests {
     private func fixture(_ test: (UserDefaults, XRGSettings) async throws -> Void) async throws {
         _ = NSApplication.shared
-        let domain = "XRG.hardware-sources.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain)); defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.hardware-sources.")
+        let defaults = t.defaults; defer { t.cleanUp() }
         try await test(defaults, XRGSettings(defaults: defaults))
     }
     @Test func strictSettingsAcceptHolesAndRejectMalformedSelections() throws {
@@ -50,10 +50,10 @@ struct XRGHardwareSourcesTests {
     /// is adopted after acceptance. The document backend is the real one.
     @Test func refusedFanSourceBatchIsShownAndNeverAdoptedByTheView() async throws {
         _ = NSApplication.shared
-        let domain = "XRG.hardware-sources.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
+        let t = TestDefaults(prefix: "XRG.hardware-sources.")
+        let domain = t.domain, defaults = t.defaults
         defer {
-            defaults.removePersistentDomain(forName: domain)
+            t.cleanUp()
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("xrg-0.2.3-task-8", isDirectory: true)
                 .appendingPathComponent(domain, isDirectory: true))

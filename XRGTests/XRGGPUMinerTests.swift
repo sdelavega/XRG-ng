@@ -76,9 +76,9 @@ struct XRGGPUMinerTests {
     }
     @Test func sharedAsyncGPUAndVRAMObserveCompletionsOnceAndHonorVisibilityResetAndDetach() async throws {
         _ = NSApplication.shared
-        let domain = "XRG.gpu-worker.\(UUID().uuidString)", gate = GPUReadGate()
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { gate.release(10); defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.gpu-worker.")
+        let gate = GPUReadGate(), defaults = t.defaults
+        defer { gate.release(10); t.cleanUp() }
         defaults.set(true, forKey: "showGPUGraph"); defaults.set(true, forKey: "showVRAMGraph")
         defaults.set(false, forKey: "showFansGraph"); defaults.set(false, forKey: "checkForUpdates")
         let window = XRGGraphWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), defaults: defaults)
@@ -112,9 +112,9 @@ struct XRGGPUMinerTests {
 
     @Test func replacedGPUViewCannotPublishIntoTheNewVRAMConsumer() async throws {
         _ = NSApplication.shared
-        let domain = "XRG.gpu-worker.\(UUID().uuidString)", gate = GPUReadGate()
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { gate.release(10); defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.gpu-worker.")
+        let gate = GPUReadGate(), defaults = t.defaults
+        defer { gate.release(10); t.cleanUp() }
         defaults.set(true, forKey: "showGPUGraph"); defaults.set(true, forKey: "showVRAMGraph")
         defaults.set(false, forKey: "showFansGraph"); defaults.set(false, forKey: "checkForUpdates")
         let window = XRGGraphWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), defaults: defaults)
@@ -140,9 +140,9 @@ struct XRGGPUMinerTests {
     @Test(arguments: [true, false])
     func workspaceWakeRejectsOldReadsAndRestoresOnlyVisibleConsumers(willSleep: Bool) async throws {
         _ = NSApplication.shared
-        let domain = "XRG.gpu-worker.\(UUID().uuidString)", gate = GPUReadGate(), center = NotificationCenter()
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { gate.release(10); defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.gpu-worker.")
+        let gate = GPUReadGate(), center = NotificationCenter(), defaults = t.defaults
+        defer { gate.release(10); t.cleanUp() }
         defaults.set(true, forKey: "showGPUGraph"); defaults.set(true, forKey: "showVRAMGraph")
         defaults.set(false, forKey: "showFansGraph"); defaults.set(false, forKey: "checkForUpdates")
         let window = XRGGraphWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), defaults: defaults, center: center, runtimeEnabled: true)

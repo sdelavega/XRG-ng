@@ -34,8 +34,9 @@ struct XRGWindowPreferencesTests {
     }
     private func settings(_ body: (XRGSettings, UserDefaults) throws -> Void) throws {
         _ = NSApplication.shared
-        let domain = "XRG.windowPreferences.\(UUID().uuidString)", defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.windowPreferences.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         try body(XRGSettings(defaults: defaults), defaults)
     }
     @Test func nonColorDefaultsMatchThePreMigrationObjectiveCSnapshot() throws {

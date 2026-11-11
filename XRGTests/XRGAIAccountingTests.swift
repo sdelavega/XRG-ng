@@ -30,9 +30,9 @@ import Testing
 @Suite @MainActor struct XRGAIAccountingTests {
     @Test func codexRecordedSplitsAndQualifiedModelsFeedObservedCountersWithoutBackfill() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("xrg-codex-accounting-"+UUID().uuidString)
-        let suite = "XRG.codexAccounting."+UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName:suite))
-        defer { try? FileManager.default.removeItem(at:root); defaults.removePersistentDomain(forName:suite) }
+        let t = TestDefaults(prefix: "XRG.codexAccounting.")
+        let defaults = t.defaults
+        defer { try? FileManager.default.removeItem(at:root); t.cleanUp() }
         defaults.set(true,forKey:"aiTokensTrackingEnabled")
         defaults.set(true,forKey:"aiTokensAggregateByProvider")
         defaults.set(true,forKey:"aiTokensAggregateByModel")
@@ -85,9 +85,9 @@ import Testing
 
     @Test func codexInventoryChangesAndFailuresNeverBecomeObservedUsageOrRateSpikes() async throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("xrg-log-continuity-"+UUID().uuidString)
-        let domain="XRG.logContinuity."+UUID().uuidString
-        let prefs=try #require(UserDefaults(suiteName:domain))
-        defer { try? FileManager.default.removeItem(at:root); prefs.removePersistentDomain(forName:domain) }
+        let t = TestDefaults(prefix: "XRG.logContinuity.")
+        let prefs = t.defaults
+        defer { try? FileManager.default.removeItem(at:root); t.cleanUp() }
         prefs.set(true,forKey:"aiTokensTrackingEnabled")
         let observer=XRGAITokensObserver(defaults:prefs,center:NotificationCenter(),calendar:.current,now:Date.init)
         let miner=XRGAITokenMiner(home:root.path,clock:{0},scanInterval:0)
@@ -171,9 +171,9 @@ import Testing
     }
 
     @Test func totalOnlyUsageTriggersOneNativeAlertAndResetCancelsQueuedAlert() async throws {
-        let suite = "XRG.budget." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let t = TestDefaults(prefix: "XRG.budget.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(false, forKey: "aiTokensDailyAutoReset")
         defaults.set(100, forKey: "aiTokensDailyBudget")
@@ -199,9 +199,9 @@ import Testing
 
     @Test func allCollectedProvidersFeedObservedCountersWithoutBackfill() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("xrg-ai-" + UUID().uuidString)
-        let suite = "XRG.accounting." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let t = TestDefaults(prefix: "XRG.accounting.")
+        let defaults = t.defaults
+        defer { try? FileManager.default.removeItem(at: root); t.cleanUp() }
         defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(true, forKey: "aiTokensAggregateByProvider")
         defaults.set(true, forKey: "aiTokensAggregateByModel")

@@ -4,9 +4,9 @@ import Testing
 
 struct XRGAITokensObserverTests {
     private func fixture(_ body: (UserDefaults, NotificationCenter) throws -> Void) throws {
-        let name = "XRG.observer.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let t = TestDefaults(prefix: "XRG.observer.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(true, forKey: "aiTokensAggregateByModel")
         defaults.set(true, forKey: "aiTokensAggregateByProvider")
@@ -84,9 +84,9 @@ struct XRGAITokensObserverTests {
     }
 
     @Test @MainActor func notificationThresholdAndRestartDeduplication() async throws {
-        let name = "XRG.observer.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let t = TestDefaults(prefix: "XRG.observer.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "aiTokensTrackingEnabled")
         defaults.set(100, forKey: "aiTokensDailyBudget")
         let center = NotificationCenter()

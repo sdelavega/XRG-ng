@@ -21,9 +21,9 @@ struct XRGThemeTests {
 
     @Test(arguments: [true, false])
     func importsExistingAndSecureArchives(secure: Bool) throws {
-        let domain = "XRGThemeTests." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRGThemeTests.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings()
         try settings.applyThemeDictionary(theme(secure: secure), defaults: defaults)
         #expect(settings.backgroundTransparency == 0.5)
@@ -40,9 +40,9 @@ struct XRGThemeTests {
                       "negativeAlpha", "largeAlpha", "nanAlpha", "infiniteAlpha", "booleanAlpha",
                       "missingAlpha", "wrongRoot"])
     func rejectsWithoutChangingSettingsOrDefaults(failure: String) throws {
-        let domain = "XRGThemeTests." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRGThemeTests.")
+        let domain = t.domain, defaults = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings()
         settings.backgroundColor = .blue
         settings.backgroundTransparency = 0.75
@@ -77,9 +77,9 @@ struct XRGThemeTests {
 
     @Test(arguments: [0.0, 1.0])
     func acceptsTransparencyBoundaries(alpha: Double) throws {
-        let domain = "XRGThemeTests." + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRGThemeTests.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         var candidate = try theme()
         for key in alphaKeys { candidate[key] = alpha }
         candidate["unknownFutureField"] = "ignored"

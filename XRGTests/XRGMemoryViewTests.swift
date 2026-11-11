@@ -85,9 +85,9 @@ struct XRGMemoryViewTests {
     /// count (the catalog forbids a count while a window is set).
     @Test func historyMenuActionOnTheDocumentClearsTheWindowBeforeTheSampleCount() async throws {
         _ = NSApplication.shared
-        let domain = "XRG.memoryView.document.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.memoryView.document.")
+        let domain = t.domain, defaults = t.defaults
+        defer { t.cleanUp() }
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("xrg-0.2.3-final", isDirectory: true)
             .appendingPathComponent(domain, isDirectory: true)
@@ -185,9 +185,9 @@ struct XRGMemoryViewTests {
     }
     private func withFixture(_ body: (XRGSettings, UserDefaults) async throws -> Void) async throws {
         _ = NSApplication.shared
-        let domain = "XRG.memoryView.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.memoryView.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "showMemoryGraph")
         let settings = XRGSettings(defaults: defaults)
         settings.graphFont = NSFont.systemFont(ofSize: 10)

@@ -43,7 +43,8 @@ import Testing
     func fastUpdate(_ timer: Timer?) { updates[3] += 1 }
 }
 @MainActor private final class GraphWindowFixture {
-    let domain = "XRG.graphWindow.\(UUID().uuidString)"
+    let t: TestDefaults
+    let domain: String
     let defaults: UserDefaults
     let center = NotificationCenter()
     let window: XRGGraphWindow
@@ -53,7 +54,9 @@ import Testing
     let background: XRGBackgroundView
     init(scheduleTimers: Bool = false) throws {
         _ = NSApplication.shared
-        defaults = try #require(UserDefaults(suiteName: domain))
+        t = TestDefaults(prefix: "XRG.graphWindow.")
+        domain = t.domain
+        defaults = t.defaults
         defaults.set(false, forKey: "checkForUpdates"); defaults.set(true, forKey: "isDockIconHidden")
         window = XRGGraphWindow(contentRect: NSRect(x: 100, y: 200, width: 300, height: 400), defaults: defaults, center: center, scheduleTimers: scheduleTimers)
         window.controller = controller
@@ -64,7 +67,7 @@ import Testing
         background = XRGBackgroundView(frame: NSRect(origin: .zero, size: window.frame.size), defaults: defaults)
         window.contentView?.addSubview(background, positioned: .below, relativeTo: graph); background.awakeFromNib()
     }
-    func cleanUp() { window.cleanupBeforeExiting(); background.removeFromSuperview(); window.close(); defaults.removePersistentDomain(forName: domain) }
+    func cleanUp() { window.cleanupBeforeExiting(); background.removeFromSuperview(); window.close(); t.cleanUp() }
     func popup(_ index: Int, count: Int = 6) -> NSPopUpButton {
         let popup = NSPopUpButton(frame: .zero)
         popup.addItems(withTitles: (0..<count).map { "Item \($0)" }); popup.selectItem(at: index); return popup

@@ -29,9 +29,9 @@ import Testing
 @Suite @MainActor
 struct XRGGraphLabelsTests {
     private func withSettings(_ body: (XRGSettings) throws -> Void) throws {
-        let domain = "XRG.labels.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.labels.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings(defaults: defaults)
         settings.textTransparency = 1
         settings.textColor = .black

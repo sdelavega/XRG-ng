@@ -65,7 +65,8 @@ import Testing
     override func mouseUp(with event: NSEvent) { mouseEvents.append("up") }
 }
 @MainActor private final class WeatherFixture {
-    let domain = "XRG.weatherView.\(UUID().uuidString)"
+    let t: TestDefaults
+    let domain: String
     let defaults: UserDefaults
     let settings: XRGSettings
     let sources = [WeatherSource(), WeatherSource()]
@@ -74,7 +75,9 @@ import Testing
     let history = "KSEA 251953Z 21016G24KT 1 1/2SM 20/10 A2992 RMK AO2\nKSEA 251853Z VRB03KT 9999 10/05 Q1013 RMK AO2\nKSEA 251753Z 00000KT 1/2SM 05/00 A3000 RMK AO2"
     init(show: Bool = true, now: @escaping () -> Date = Date.init) throws {
         _ = NSApplication.shared
-        defaults = try #require(UserDefaults(suiteName: domain)); defaults.set(show, forKey: "showWeatherGraph")
+        t = TestDefaults(prefix: "XRG.weatherView.")
+        domain = t.domain
+        defaults = t.defaults; defaults.set(show, forKey: "showWeatherGraph")
         settings = XRGSettings(defaults: defaults); settings.ICAO = "KSEA"
         settings.graphFont = NSFont.systemFont(ofSize: 10); settings.graphRefresh = 0.2
         settings.textTransparency = 1; settings.textColor = .black
@@ -87,7 +90,7 @@ import Testing
         let host = WeatherHost(settings: settings); self.host = host
         host.contentView?.addSubview(view); view.awakeFromNib()
     }
-    func cleanUp() { view.removeFromSuperview(); view.cancelLoading(); host?.close(); defaults.removePersistentDomain(forName: domain) }
+    func cleanUp() { view.removeFromSuperview(); view.cancelLoading(); host?.close(); t.cleanUp() }
     func seed() { view.setMETARFromText(history) }
 }
 private final class WeatherNibOwner: NSObject {}

@@ -218,8 +218,8 @@ struct XRGProcessAccessTests {
         let child = try ProcessChild()
         let live = try #require(XRGProcessMiner.readProcesses()?.first { $0.pid == child.process.processIdentifier })
         let miner = XRGProcessMiner(source: { [live] }); await miner.refresh()
-        let domain = "XRG.process-detail.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain)); defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.process-detail.")
+        let defaults = t.defaults; defer { t.cleanUp() }
         let inspector = XRGProcessInspector(miner: miner, defaults: defaults, sort: .pid)
         inspector.present(); inspector.table.selectRowIndexes([0], byExtendingSelection: false)
         inspector.inspectSelected(nil)

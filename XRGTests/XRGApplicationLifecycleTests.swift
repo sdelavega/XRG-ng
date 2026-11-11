@@ -6,9 +6,9 @@ import Testing
 
 @Suite(.serialized) @MainActor
 struct XRGApplicationLifecycleTests {
-    private func preferences() throws -> (String, UserDefaults) {
-        let domain = "com.sdelavega.XRG-ng.Smoke.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
+    private func preferences() throws -> (String, UserDefaults, TestDefaults) {
+        let t = TestDefaults(prefix: "com.sdelavega.XRG-ng.Smoke.")
+        let domain = t.domain, defaults = t.defaults
         defaults.set(false, forKey: "checkForUpdates")
         defaults.set(true, forKey: "isDockIconHidden")
         for key in ["showCPUGraph", "showGPUGraph", "showNPUGraph", "showMemoryGraph", "showBatteryGraph", "showTemperatureGraph",
@@ -16,13 +16,13 @@ struct XRGApplicationLifecycleTests {
             defaults.set(true, forKey: key)
         }
         defaults.set("KSEA", forKey: "icao"); defaults.set("FIX", forKey: "stockSymbols")
-        return (domain, defaults)
+        return (domain, defaults, t)
     }
     private var resources: Bundle { Bundle(for: XRGAppDelegate.self) }
 
     @Test(arguments: [true, false])
     func launchConnectsAllPanelsAndLazyWindowsWithoutSystemActions(vertical: Bool) throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (_, defaults, t) = try preferences(); defer { t.cleanUp() }
         defaults.set(vertical, forKey: "graphOrientationVertical")
         defaults.set(vertical, forKey: "showSensorWindow")
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
@@ -41,7 +41,7 @@ struct XRGApplicationLifecycleTests {
 
     @Test(arguments: [true, false])
     func collapsedStateSurvivesShutdownAndReconstruction(vertical: Bool) throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (_, defaults, t) = try preferences(); defer { t.cleanUp() }
         defaults.set(vertical, forKey: "graphOrientationVertical")
         var scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources)
         scene.delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
@@ -66,7 +66,7 @@ struct XRGApplicationLifecycleTests {
     }
 
     @Test func themeErrorsAreContainedAndOnlyTheInjectedDefaultsReceiveChanges() throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (_, defaults, t) = try preferences(); defer { t.cleanUp() }
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -86,7 +86,7 @@ struct XRGApplicationLifecycleTests {
     }
 
     @Test func applicationFileOpenAcceptsPortableThemesAndRejectsInvalidJSONAtomically() throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (domain, defaults, t) = try preferences(); defer { t.cleanUp() }
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("XRG-app-theme-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: file) }
@@ -101,7 +101,7 @@ struct XRGApplicationLifecycleTests {
     }
 
     @Test func settingsWindowInstantApplyReplacesTheDraftGraphOptionsEditor() throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (_, defaults, t) = try preferences(); defer { t.cleanUp() }
         let scene = try XRGApplicationSmokeScene(defaults: defaults, resources: resources); defer { scene.shutdown() }
         scene.delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
         try scene.launched()
@@ -146,7 +146,7 @@ struct XRGApplicationLifecycleTests {
     /// on the document-backed production path, and the persisted module
     /// sizes a relayout feeds back never loop.
     @Test func settingsWindowEditsReachTheLiveWindowAndManagerOnTheDocumentPath() throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (domain, defaults, t) = try preferences(); defer { t.cleanUp() }
         // A document store over a fixture document under the task's scratch:
         // never the real com.sdelavega.xrg domain, never the real settings.json.
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -240,7 +240,7 @@ struct XRGApplicationLifecycleTests {
     }
 
     @Test func injectedUnknownSensorPolicyAndLazyNibFailuresDoNotFallBackToGlobalHardware() throws {
-        let (domain, defaults) = try preferences(); defer { defaults.removePersistentDomain(forName: domain) }
+        let (_, defaults, t) = try preferences(); defer { t.cleanUp() }
         var loaded: [String] = [], errors = 0
         let delegate = XRGAppDelegate(defaults: defaults, loadNib: { name, _ in loaded.append(name) },
                                       includeUnknownSensors: { true }, sensorProvider: { _ in [] },

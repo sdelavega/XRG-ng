@@ -135,9 +135,9 @@ struct XRGCPUViewTests {
     /// a 300-sample choice.
     @Test func historyMenuActionOnTheDocumentClearsTheWindowBeforeTheSampleCount() async throws {
         _ = NSApplication.shared
-        let domain = "XRG.cpuView.document.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.cpuView.document.")
+        let domain = t.domain, defaults = t.defaults
+        defer { t.cleanUp() }
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("xrg-0.2.3-final", isDirectory: true)
             .appendingPathComponent(domain, isDirectory: true)
@@ -194,9 +194,9 @@ struct XRGCPUViewTests {
     }
     private func withFixture(_ body: (XRGSettings, UserDefaults, CPUSource) async throws -> Void) async throws {
         _ = NSApplication.shared
-        let domain = "XRG.cpuView.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: domain))
-        defer { defaults.removePersistentDomain(forName: domain) }
+        let t = TestDefaults(prefix: "XRG.cpuView.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "showCPUGraph")
         let settings = XRGSettings(defaults: defaults)
         settings.graphFont = NSFont.systemFont(ofSize: 10)

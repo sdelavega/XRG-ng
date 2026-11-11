@@ -5,9 +5,9 @@ import Testing
 @MainActor
 struct XRGTemperatureSelectionTests {
     @Test func persistenceAndLegacyRepair() throws {
-        let suite = "XRG.selection.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let t = TestDefaults(prefix: "XRG.selection.")
+        let suite = t.domain, defaults = t.defaults
+        defer { t.cleanUp() }
         defaults.set(true, forKey: "tempLocationsAutoconfigured")
         let settings = XRGSettings(defaults: defaults)
         settings.tempFG1Location = "0"
@@ -22,9 +22,9 @@ struct XRGTemperatureSelectionTests {
     }
 
     @Test func waitForDiscoveryAndPreserveSelection() throws {
-        let suite = "XRG.selection.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let t = TestDefaults(prefix: "XRG.selection.")
+        let defaults = t.defaults
+        defer { t.cleanUp() }
         let settings = XRGSettings(defaults: defaults)
         #expect(!settings.configureTemperatureSensors([]))
         #expect(!defaults.bool(forKey: "tempLocationsAutoconfigured"))
