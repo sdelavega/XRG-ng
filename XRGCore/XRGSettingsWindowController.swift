@@ -603,8 +603,12 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     /// reason. Selecting a built-in theme preset applies its selection,
     /// its palette and its name as ONE validated batch — one commit (round
     /// 4, ruling R37), so a preset can never land half-applied; editing a
-    /// theme colour while a built-in is selected marks the theme Custom,
-    /// exactly the catalog documents.
+    /// theme colour or transparency rides the SAME one-batch rule (round
+    /// 5): the `themes.preset` designation the resulting colours produce —
+    /// the built-in they exactly match, or Custom — is computed BEFORE
+    /// persisting and travels the same validated batch, one commit, so a
+    /// failed part can never leave the palette saved under a stale
+    /// designation.
     func apply(control: XRGSettingsEntryControl, value: XRGSettingsValue) {
         if control.entry.id == "themes.preset", case .string(let name) = value,
            XRGBuiltinTheme.allCases.contains(where: { $0.name == name }) {
@@ -612,9 +616,17 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
             return
         }
         do {
-            try store.set(control.entry.id, value)
+            if control.entry.id.hasPrefix("appearance."),
+               control.entry.id.hasSuffix(".color") || control.entry.id.hasSuffix(".transparency") {
+                try store.setBatch([
+                    XRGSettingsChange(id: control.entry.id, value: value),
+                    XRGSettingsChange(id: "themes.preset",
+                                      value: .string(presetDesignation(editing: control.entry.id, value: value))),
+                ])
+            } else {
+                try store.set(control.entry.id, value)
+            }
             control.showError(nil)
-            markCustomPresetAfterPaletteEdit(control: control)
         } catch let error as XRGSettingsError {
             control.showError(Self.reason(for: error, entry: control.entry, catalog: catalog))
         } catch {
@@ -657,18 +669,38 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
                                      "appearance.series1.color", "appearance.series2.color",
                                      "appearance.series3.color", "appearance.border.color",
                                      "appearance.text.color"]
-    private func markCustomPresetAfterPaletteEdit(control: XRGSettingsEntryControl) {
-        guard control.entry.id.hasPrefix("appearance."),
-              control.entry.id.hasSuffix(".color") || control.entry.id.hasSuffix(".transparency") else { return }
-        guard case .string(let presetName) = store.value("themes.preset"),
-              let preset = XRGBuiltinTheme.allCases.first(where: { $0.name == presetName }) else { return }
-        let effective = Self.paletteIds.map { id -> [Double] in
-            if case .color(let rgba) = store.value(id) { return rgba }
-            if let entry = catalog.entry(id), case .color(let fallback) = entry.defaultValue { return fallback }
+
+    /// The `themes.preset` designation one palette edit produces, computed
+    /// BEFORE the edit persists (round 5, ruling R37): the resulting
+    /// palette — the stored colours with the edited entry replaced, an
+    /// inherited (`null`) colour reading its catalog default — is compared
+    /// against every built-in exactly; the one it matches names the
+    /// designation (the catalog's own rule: "The built-in palette in use,
+    /// or Custom when the colors were edited"), and anything else is
+    /// Custom. A transparency edit leaves the colours untouched, so it
+    /// re-evaluates the same designation the palette already carries.
+    private func presetDesignation(editing id: String, value: XRGSettingsValue) -> String {
+        let resulting = Self.paletteIds.map { paletteId -> [Double] in
+            if paletteId == id {
+                switch value {
+                case .color(let rgba): return rgba
+                case .null:
+                    if let entry = catalog.entry(paletteId), case .color(let rgba) = entry.defaultValue {
+                        return rgba
+                    }
+                    return [0, 0, 0, 1]
+                default: return [0, 0, 0, 1]
+                }
+            }
+            if case .color(let rgba) = store.value(paletteId) { return rgba }
+            if let entry = catalog.entry(paletteId), case .color(let rgba) = entry.defaultValue {
+                return rgba
+            }
             return [0, 0, 0, 1]
         }
-        guard effective != preset.rgba else { return }
-        try? store.set("themes.preset", .string("Custom"))
+        return XRGBuiltinTheme.allCases.first { theme in
+            zip(resulting, theme.rgba).allSatisfy { $0 == $1 }
+        }?.name ?? "Custom"
     }
 
     static func reason(for error: XRGSettingsError, entry: XRGSettingsEntry,

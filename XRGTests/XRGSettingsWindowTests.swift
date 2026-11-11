@@ -785,6 +785,57 @@ struct XRGSettingsWindowTests {
         #expect(store.value("themes.preset") == .string("Custom"), "an edited palette did not become Custom")
     }
 
+    /// Round 5, ruling R37 — a palette edit is ONE batch and ONE commit: the
+    /// edited colour and the designation its resulting colours produce ride
+    /// one validated batch, observed through the store's injectable durable
+    /// write. A write that fails leaves NEITHER part on disk — the colour
+    /// saved while its designation trailed in a second, silently ignored
+    /// write was round 4's split — and a successful edit lands both parts
+    /// in the same document on disk.
+    @Test func paletteEditLandsItsDesignationInOneCommit() throws {
+        var fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = try fixture.loadStore()
+        let window = controller(fixture, store: store)
+        window.show(section: "themes")
+        let preset = try #require(try control(window, "themes.preset") as? XRGSettingsChoiceControl)
+        let midnight = try #require(preset.options.firstIndex { $0.label == "Midnight" } ??
+                                    preset.popUp.itemArray.firstIndex { $0.title == "Midnight" })
+        preset.popUp.selectItem(at: midnight)
+        #expect(NSApp.sendAction(try #require(preset.popUp.action), to: preset.popUp.target, from: preset.popUp))
+
+        // The colour edit and its designation: ONE commit, both parts.
+        var writes = 0
+        store.durableWrite = { temporary, bytes in
+            writes += 1
+            try XRGSettingsStore.defaultDurableWrite(temporary, bytes)
+        }
+        window.show(section: "appearance")
+        let colour = try #require(try control(window, "appearance.series2.color") as? XRGSettingsColorControl)
+        colour.well.color = NSColor(srgbRed: 0.9, green: 0.1, blue: 0.1, alpha: 1)
+        #expect(NSApp.sendAction(try #require(colour.well.action), to: colour.well.target, from: colour.well))
+        #expect(store.value("themes.preset") == .string("Custom"))
+        #expect(writes == 1, "the palette edit and its designation took \(writes) commits, not one")
+        let landed = try #require(try? Data(contentsOf: fixture.documentURL))
+        let landedObject = try #require(try? JSONSerialization.jsonObject(with: landed) as? [String: Any])
+        let landedSettings = try #require(landedObject["settings"] as? [String: Any])
+        #expect(landedSettings["themes.preset"] as? String == "Custom",
+                "the designation did not reach the file with the colour")
+
+        // All-or-nothing: the next edit's single write fails, so NEITHER
+        // the colour NOR any designation change reaches the file, and the
+        // failure is reported instead of success.
+        store.durableWrite = { _, _ in
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO),
+                           userInfo: [NSLocalizedDescriptionKey: "forced write failure"])
+        }
+        let series3 = try #require(try control(window, "appearance.series3.color") as? XRGSettingsColorControl)
+        series3.well.color = NSColor(srgbRed: 0.2, green: 0.8, blue: 0.2, alpha: 1)
+        #expect(NSApp.sendAction(try #require(series3.well.action), to: series3.well.target, from: series3.well))
+        #expect(store.loadProblem != nil, "the failed batch write was not reported")
+        let after = try? Data(contentsOf: fixture.documentURL)
+        #expect(after == landed, "the failed batch wrote part of itself to the file")
+    }
+
     // MARK: Colour inheritance (review issue 8)
 
     @Test func colourInheritReturnsToTheDefault() throws {

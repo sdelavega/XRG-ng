@@ -425,6 +425,61 @@ import Foundation
         post(id)
     }
 
+    /// Apply one batch of entry changes — the interactive multi-entry
+    /// write's path (round 5, ruling R37's one-batch rule for the theme
+    /// actions): the batch is validated against the FINAL document once,
+    /// stored whole and written in ONE commit, so a refused or failed part
+    /// can never leave the others applied — a palette edit and the theme
+    /// designation it produces land together. A batch whose every change
+    /// the document already holds is a no-op — no write, no notifications —
+    /// exactly like `set` (spec §2: restoring never rewrites the file).
+    ///
+    /// The transaction is `set`'s own (ruling R39's one locked writer): a
+    /// file that changed on disk is adopted, the batch re-applied over it,
+    /// and a refusal of the re-applied batch is thrown to the caller; a
+    /// plain write failure keeps the batch in memory and reports through
+    /// `loadProblem`.
+    public func setBatch(_ changes: [XRGSettingsChange]) throws(XRGSettingsError) {
+        guard !changes.isEmpty else { return }
+        for change in changes where catalog.entry(change.id) == nil { throw .unknownId }
+        switch backend {
+        case .legacy:
+            for change in changes {
+                guard let entry = catalog.entry(change.id),
+                      let key = Self.legacyKey(of: entry) else { throw .unknownId }
+                if let value = change.value {
+                    guard let raw = reverseLegacy(value, for: entry) else { throw .wrongType }
+                    defaults.set(raw, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        case .document:
+            if changes.allSatisfy({ change in
+                XRGSettingsValue.sameValue(
+                    change.value ?? catalog.entry(change.id)?.defaultValue ?? .null,
+                    settingsValue(change.id))
+            }) { return }
+            switch XRGSettingsDocument.apply(changes, to: locked.document, catalog: catalog) {
+            case .applied(let applied):
+                locked.mutate { $0 = applied }
+                if loadProblem == nil {
+                    let batch = changes
+                    persistAndReport { (document: inout XRGSettingsDocument) throws(XRGSettingsError) in
+                        guard case .applied(let next) = XRGSettingsDocument.apply(
+                            batch, to: document, catalog: self.catalog) else {
+                            throw XRGSettingsError.constraint
+                        }
+                        document = next
+                    }
+                }
+            case .refused(let refusals):
+                throw refusals[0].error
+            }
+        }
+        for change in changes { post(change.id) }
+    }
+
     /// Non-setting state that keeps its `NSUserDefaults` home on the document
     /// backend (docs/settings-inventory.md): Sparkle's `SU*` updater state,
     /// AppKit's `NSWindow Frame *` autodrive keys, the graph window's

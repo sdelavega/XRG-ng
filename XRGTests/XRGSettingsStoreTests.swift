@@ -490,6 +490,90 @@ struct XRGSettingsStoreTests {
         #expect(store.value("weather.enabled") == .bool(false))
     }
 
+    // MARK: Batch writes (round 5, ruling R37's one batch per action)
+
+    /// Ruling R41, completed in round 5 — a batch is never refused because a
+    /// dependent's dependency is off, in the starting or the final document.
+    /// The macOS batch path is `setLegacyValues`: a 0.2.2 snapshot's CPU
+    /// history pair riding ONE batch moves the window 5→10 while the count
+    /// moves 100→200 — dormant-to-dormant, accepted whole, both entries on
+    /// disk, one commit.
+    @Test func dormantToDormantBatchThroughTheMacOSBatchPath() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        // The starting document holds the dormant pair: the window on, and
+        // a count stored beneath it — a single set stores it (dormant,
+        // allowed), exactly as the batch would.
+        try store.set("graphs.cpu.time_window", .int(5))
+        try store.set("graphs.cpu.samples", .int(100))
+        let outcome = store.setLegacyValues([
+            "XRGCPUView.HistoryMinutes.v1": 10,
+            "XRGCPUView.HistorySamples.v1": 200,
+        ])
+        #expect(outcome.isEmpty, "the dormant-to-dormant batch was refused")
+        #expect(store.value("graphs.cpu.time_window") == .int(10))
+        #expect(store.value("graphs.cpu.samples") == .int(200))
+        let bytes = try #require(documentBytes(fixture.documentURL))
+        #expect(try storedValue("graphs.cpu.time_window", in: bytes) as? Int == 10)
+        #expect(try storedValue("graphs.cpu.samples", in: bytes) as? Int == 200)
+    }
+
+    /// One batch is all-or-nothing: a refused part stores nothing and
+    /// writes nothing — the other entry's change in the same batch never
+    /// lands — and the refusal is the refused entry's own error; a write
+    /// failure keeps BOTH parts off the disk together.
+    @Test func setBatchAppliesWholeOrNothing() throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let catalog = try self.catalog()
+        let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
+                                     catalog: catalog, legacyDomain: [:])
+        let empty = try #require(documentBytes(fixture.documentURL),
+                                 "the first launch created the empty document")
+        // A valid colour riding a wrong-typed partner is refused whole.
+        #expect(throws: XRGSettingsError.wrongType) {
+            try store.setBatch([
+                XRGSettingsChange(id: "appearance.series2.color", value: .color([0.9, 0.1, 0.1, 1])),
+                XRGSettingsChange(id: "general.window.title", value: .bool(true)),
+            ])
+        }
+        #expect(store.value("appearance.series2.color") != .color([0.9, 0.1, 0.1, 1]),
+                "the refused batch stored its valid part")
+        #expect(store.value("general.window.title") != .bool(true),
+                "the refused batch stored its other part")
+        #expect(documentBytes(fixture.documentURL) == empty, "the refused batch wrote the file")
+
+        // A batch that succeeds lands whole and writes once.
+        var writes = 0
+        store.durableWrite = { temporary, bytes in
+            writes += 1
+            try XRGSettingsStore.defaultDurableWrite(temporary, bytes)
+        }
+        try store.setBatch([
+            XRGSettingsChange(id: "appearance.series2.color", value: .color([0.9, 0.1, 0.1, 1])),
+            XRGSettingsChange(id: "themes.preset", value: .string("Custom")),
+        ])
+        #expect(writes == 1, "the batch took \(writes) commits, not one")
+        #expect(store.value("appearance.series2.color") == .color([0.9, 0.1, 0.1, 1]))
+        #expect(store.value("themes.preset") == .string("Custom"))
+
+        // A write failure leaves NEITHER part on disk — all-or-nothing —
+        // and reports through `loadProblem` like any refused destination.
+        let landed = try #require(documentBytes(fixture.documentURL))
+        store.durableWrite = { _, _ in
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO),
+                           userInfo: [NSLocalizedDescriptionKey: "forced failure"])
+        }
+        try store.setBatch([
+            XRGSettingsChange(id: "appearance.series1.color", value: .color([0.1, 0.9, 0.1, 1])),
+            XRGSettingsChange(id: "themes.preset", value: .string("Custom")),
+        ])
+        #expect(store.loadProblem != nil, "the failed batch write was not reported")
+        #expect(try documentBytes(fixture.documentURL) == landed,
+                "the failed batch wrote the file")
+    }
+
     // MARK: The locked write transaction (final review round 2, issue 1 / R32)
 
     /// Two stores over one document, interleaved: while store A holds its
