@@ -581,8 +581,19 @@ public final class XRGSettings: NSObject {
     /// Decode every field before applying any settings or persisting preferences.
     @objc(applyThemeDictionary:defaults:error:)
     public func applyThemeDictionary(_ dictionary: Any?, defaults: UserDefaults) throws {
-        let theme = try XRGTheme(dictionary: dictionary)
-        try applyTheme(theme, defaults: defaults)
+        try applyTheme(XRGTheme(dictionary: dictionary), defaults: defaults)
+    }
+
+    /// Decode every field before applying any settings or persisting
+    /// preferences, with extra entry changes riding the SAME validated
+    /// batch (round 4, ruling R37): the theme's palette, its name and the
+    /// caller's changes — the preset selection — land together as one
+    /// batch and one commit, so a refused part can never leave a partial
+    /// theme behind.
+    @nonobjc public func applyThemeDictionary(_ dictionary: Any?, defaults: UserDefaults,
+                                              extraChanges: [XRGSettingsChange]) throws {
+        try applyTheme(XRGTheme(dictionary: dictionary), defaults: defaults,
+                       extraChanges: extraChanges)
     }
 
     @nonobjc public func applyThemeData(_ data: Data, defaults: UserDefaults) throws {
@@ -629,7 +640,8 @@ public final class XRGSettings: NSObject {
         try XRGTheme(dictionary: themeDictionary()).portableDocument(name: themeName, original: nil).colors
     }
 
-    private func applyTheme(_ theme: XRGTheme, defaults: UserDefaults) throws {
+    private func applyTheme(_ theme: XRGTheme, defaults: UserDefaults,
+                           extraChanges: [XRGSettingsChange] = []) throws {
         let portable = try theme.document?.encoded()
         if store.isDocumentBacked {
             // The document backend owns the theme fields: the migration
@@ -637,14 +649,27 @@ public final class XRGSettings: NSObject {
             // theme's name into the document's theme name, and the stored
             // color state follows the document immediately. Nothing is
             // written to the legacy domain — not the mapped theme keys, not
-            // the portable document (decision D5, review issue 2).
+            // the portable document (decision D5, review issue 2). The
+            // extra changes ride the same batch (round 4, ruling R37).
             var values: [String: Any] = [:]
             for field in theme.fields {
                 values[field.alphaKey] = field.alpha
                 values[field.colorKey] = field.archive
             }
             if let name = theme.document?.name { values[XRGTheme.nameKey] = name }
-            store.setLegacyValues(values)
+            let outcome = store.setLegacyValues(values, extraChanges: extraChanges)
+            if let refusal = outcome.refusals.first {
+                // The batch was refused whole: nothing was stored or
+                // written; surface the same reason the single-entry path
+                // would show.
+                var reason = "The theme could not be applied."
+                if let entry = store.catalog.entry(refusal.id) {
+                    reason = XRGSettingsWindowController.reason(
+                        for: refusal.error, entry: entry, catalog: store.catalog)
+                }
+                throw NSError(domain: "XRGSettingsLegacyRefusal", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: reason])
+            }
             hydrating = true
             for field in theme.fields {
                 setValue(field.alpha, forKey: field.alphaKey)

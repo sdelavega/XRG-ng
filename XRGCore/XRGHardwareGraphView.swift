@@ -166,10 +166,28 @@ final class XRGHardwareGraphView: NSView, XRGModuleView {
         }
         updateLabels(); needsDisplay = true
     }
-    func applySources(_ value: XRGHardwareSources) throws {
-        settingsStore.setLegacyValues([kind.sourcesKey: try value.encoded()])
+    /// Adopt a source selection ONLY after the store's validated batch
+    /// accepted it (round 4, review issue 5): a batch the core refuses
+    /// whole — a secondary curve without its primary, a duplicate sensor —
+    /// is NOT adopted, the previous selection stands, and the refusal's
+    /// reason shows in the graph (and its details), exactly as a save
+    /// refusal shows in the settings windows.
+    @discardableResult
+    func applySources(_ value: XRGHardwareSources) throws -> Bool {
+        let outcome = settingsStore.setLegacyValues([kind.sourcesKey: try value.encoded()])
+        if let refusal = outcome.refusals.first {
+            var reason = "The source choices could not be saved."
+            if let entry = settingsStore.catalog.entry(refusal.id) {
+                reason = XRGSettingsWindowController.reason(for: refusal.error, entry: entry,
+                                                            catalog: settingsStore.catalog)
+            }
+            sourceSelectionError = reason
+            updateLabels()
+            return false
+        }
         sourceSelection = value; sourceSelectionError = nil
         project(appendSample: false)
+        return true
     }
     func fastUpdate(_ timer: Timer?) {}
     func min5Update(_ timer: Timer?) {}

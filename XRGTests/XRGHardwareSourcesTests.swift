@@ -43,6 +43,61 @@ struct XRGHardwareSourcesTests {
             #expect(vram.sourceSelection.sources == nil && defaults.object(forKey: XRGHardwareGraphView.Kind.vram.sourcesKey) == nil)
         }
     }
+    /// Round 4, review rr3 issue 5 — through the ACTUAL editor/view path: a
+    /// fan-source selection the core's batch refuses (a secondary curve
+    /// without its primary) is NOT adopted by the live graph, the refusal's
+    /// reason shows in it, and the file keeps its bytes; a valid selection
+    /// is adopted after acceptance. The document backend is the real one.
+    @Test func refusedFanSourceBatchIsShownAndNeverAdoptedByTheView() async throws {
+        _ = NSApplication.shared
+        let domain = "XRG.hardware-sources.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer {
+            defaults.removePersistentDomain(forName: domain)
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("xrg-0.2.3-task-8", isDirectory: true)
+                .appendingPathComponent(domain, isDirectory: true))
+            try? FileManager.default.removeItem(at: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(domain).plist"))
+        }
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("xrg-0.2.3-task-8", isDirectory: true)
+            .appendingPathComponent(domain, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let documentURL = root.appendingPathComponent("settings.json")
+        let catalog = try #require(try? XRGSettingsCatalog.load())
+        let store = XRGSettingsStore(fileURL: documentURL, defaults: defaults,
+                                      catalog: catalog, legacyDomain: [:])
+        #expect(store.loadProblem == nil)
+        try store.set("sources.fans.sensor1", .string("applesmc-fan1"))
+        let settings = XRGSettings(store: store)
+        let view = XRGHardwareGraphView(kind: .fans, frame: NSRect(x: 0, y: 0, width: 160, height: 90),
+                                        settings: settings, defaults: defaults,
+                                        source: { .success([XRGHardwareReading(id: "a", name: "Front", value: 0)]) })
+        view.graphUpdate(nil)
+        let bytes = try #require(try? Data(contentsOf: documentURL))
+        // The editor's own validity check accepts a hole at the primary; the
+        // core's combination rule does not, and the batch refuses it whole.
+        let applied = try view.applySources(XRGHardwareSources(sources: [nil, "applesmc-fan1", "applesmc-fan2"]))
+        #expect(!applied, "the refused batch is not adopted")
+        #expect(view.sourceSelection.sources == ["applesmc-fan1", nil, nil],
+                "the live selection keeps what was saved, never the refused draft")
+        #expect(view.sourceSelectionError != nil, "the refusal's reason shows in the graph")
+        #expect(view.detailText.contains(view.sourceSelectionError ?? ""), "the reason reaches the details")
+        #expect((try? Data(contentsOf: documentURL)) == bytes, "the refused batch writes nothing")
+        // The stored primary survives for a reopen; the refused slots do not.
+        let reopened = XRGSettingsStore(fileURL: documentURL, defaults: defaults,
+                                         catalog: catalog, legacyDomain: [:])
+        #expect(reopened.value("sources.fans.sensor1") == .string("applesmc-fan1"))
+        #expect(reopened.value("sources.fans.sensor2") == .null)
+        // A valid selection is adopted after acceptance.
+        let valid = try view.applySources(XRGHardwareSources(sources: ["applesmc-fan1", "applesmc-fan2", nil]))
+        #expect(valid)
+        #expect(view.sourceSelectionError == nil)
+        #expect(view.sourceSelection.sources == ["applesmc-fan1", "applesmc-fan2", nil])
+        #expect(reopened.value("sources.fans.sensor2") == .null)
+        #expect(store.value("sources.fans.sensor2") == .string("applesmc-fan2"))
+    }
     @Test func pinnedMissingSourcesKeepGapsAndNeverSelectAnotherDevice() async throws {
         try await fixture { defaults, settings in
             var values = [XRGHardwareReading(id:"a",name:"Front",value:0),XRGHardwareReading(id:"b",name:"Rear",value:1200)]

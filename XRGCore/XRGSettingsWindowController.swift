@@ -600,15 +600,20 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
     }
 
     /// The user edited a control: save instantly, or show the danger
-    /// reason. Selecting a built-in theme preset applies its palette and
-    /// name through the shared settings model (review issue 7); editing a
+    /// reason. Selecting a built-in theme preset applies its selection,
+    /// its palette and its name as ONE validated batch — one commit (round
+    /// 4, ruling R37), so a preset can never land half-applied; editing a
     /// theme colour while a built-in is selected marks the theme Custom,
     /// exactly the catalog documents.
     func apply(control: XRGSettingsEntryControl, value: XRGSettingsValue) {
+        if control.entry.id == "themes.preset", case .string(let name) = value,
+           XRGBuiltinTheme.allCases.contains(where: { $0.name == name }) {
+            applyBuiltinPreset(control: control, name: name)
+            return
+        }
         do {
             try store.set(control.entry.id, value)
             control.showError(nil)
-            applyPresetIfSelected(control: control, value: value)
             markCustomPresetAfterPaletteEdit(control: control)
         } catch let error as XRGSettingsError {
             control.showError(Self.reason(for: error, entry: control.entry, catalog: catalog))
@@ -617,19 +622,31 @@ public final class XRGSettingsWindowController: NSWindowController, NSWindowDele
         }
     }
 
-    /// The Themes preset: choosing a built-in applies its palette and its
-    /// name through the shared theme engine, like the deleted controller
-    /// did (review issue 7).
-    private func applyPresetIfSelected(control: XRGSettingsEntryControl, value: XRGSettingsValue) {
-        guard control.entry.id == "themes.preset", case .string(let name) = value,
-              let preset = XRGBuiltinTheme.allCases.first(where: { $0.name == name }) else { return }
+    /// The Themes preset (round 4, ruling R37): choosing a built-in applies
+    /// the preset selection, the palette and the theme name through the
+    /// shared theme engine as ONE validated batch — ONE commit — so a
+    /// refused or failed part can never leave a partial preset behind.
+    private func applyBuiltinPreset(control: XRGSettingsEntryControl, name: String) {
+        guard let preset = XRGBuiltinTheme.allCases.first(where: { $0.name == name }) else { return }
         do {
-            try themeEngine().applyThemeDictionary(preset.dictionary(), defaults: store.defaults)
-            try? store.set("themes.name", .string(preset.name))
+            try themeEngine().applyThemeDictionary(preset.dictionary(), defaults: store.defaults,
+                                                   extraChanges: [
+                                                    XRGSettingsChange(id: "themes.preset",
+                                                                      value: .string(preset.name)),
+                                                    XRGSettingsChange(id: "themes.name",
+                                                                      value: .string(preset.name)),
+                                                   ])
+            control.showError(nil)
             // The palette writes arrive as their own notifications on the
             // document backend; re-present everything so the legacy backend
             // (and the controls' dependent states) follow too.
             storeChanged(id: nil)
+        } catch let error as NSError where error.domain == "XRGSettingsLegacyRefusal" {
+            // The validated batch refused the preset whole (round 4, ruling
+            // R37): nothing was stored or written, and the reason — built
+            // the same way the single-entry path builds it — rides the
+            // error `XRGSettings.applyThemeDictionary` throws.
+            control.showError(error.localizedDescription)
         } catch {
             control.showError("The built-in theme could not be applied.")
         }
