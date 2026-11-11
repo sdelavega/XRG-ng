@@ -1257,7 +1257,7 @@ struct XRGSettingsWindowTests {
     /// display returns a flat bitmap from cacheDisplay for every view, so
     /// the pixel check cannot tell a real regression from the VM. It still
     /// runs on every local and release-machine gate.
-    @Test(.disabled(if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["XRG_HOSTED_RUNNER"] == "1",
                     "hosted runners' headless display captures flat bitmaps"))
     func liveWindowRendersEverySectionsFirstCard() throws {
         var fixture = try Fixture(); defer { fixture.cleanUp() }

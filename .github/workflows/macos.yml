@@ -23,6 +23,9 @@ jobs:
         configuration: [Debug, Release]
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      # xcodebuild forwards TEST_RUNNER_-prefixed variables to the tests
+      # (as XRG_HOSTED_RUNNER): the bitmap check skips on hosted VMs.
+      TEST_RUNNER_XRG_HOSTED_RUNNER: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
