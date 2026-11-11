@@ -1253,7 +1253,13 @@ struct XRGSettingsWindowTests {
     /// tool draws from the live view shows their ink inside the first
     /// card. The degenerate pill radius used to paint one uniform colour
     /// over the whole capture instead, with no labels or controls.
-    @Test func liveWindowRendersEverySectionsFirstCard() throws {
+    /// Skipped on GitHub's hosted macOS runners: their headless virtual
+    /// display returns a flat bitmap from cacheDisplay for every view, so
+    /// the pixel check cannot tell a real regression from the VM. It still
+    /// runs on every local and release-machine gate.
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true",
+                    "hosted runners' headless display captures flat bitmaps"))
+    func liveWindowRendersEverySectionsFirstCard() throws {
         var fixture = try Fixture(); defer { fixture.cleanUp() }
         let store = try fixture.loadStore()
         let window = controller(fixture, store: store)
