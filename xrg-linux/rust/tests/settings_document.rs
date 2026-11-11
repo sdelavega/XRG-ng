@@ -941,6 +941,170 @@ fn migration_keeps_working_leading_zero_port_endpoints() {
     };
     let settings = document::linux_view(&document).unwrap();
     assert_eq!(settings.ai.metrics_url, "http://127.0.0.1:080/metrics");
+
+    // Round 4, ruling R40 — the same holds past five digits of port: std's
+    // `read_port` caps the VALUE (u16), never the digit count, so "000080"
+    // and "00000065535" are working endpoints a 0.2.2 file can carry — and
+    // an overflowing value ("00000065536") is one no worker serves, dropped
+    // for the default with a diagnostic, never migrated.
+    for (url, kept) in [
+        ("http://127.0.0.1:000080/metrics", true),
+        ("http://127.0.0.1:00000065535", true),
+        ("http://127.0.0.1:00000065536/metrics", false),
+        ("http://127.0.0.1:99999999999999999999", false),
+    ] {
+        let v40 = format!(r#"{{"version": 40, "ai": {{"metrics_url": "{url}"}}}}"#);
+        match document::migrate_v40(v40.as_bytes()) {
+            Ok(document::Loaded::Ok {
+                document,
+                diagnostics,
+            }) => {
+                if kept {
+                    assert!(diagnostics.is_empty(), "{url}: {diagnostics:?}");
+                    let settings = document::linux_view(&document).unwrap();
+                    assert_eq!(settings.ai.metrics_url, url, "{url} must survive migration");
+                } else {
+                    assert!(
+                        !diagnostics.is_empty(),
+                        "{url} must be reported, never kept"
+                    );
+                    let settings = document::linux_view(&document).unwrap();
+                    assert_ne!(
+                        settings.ai.metrics_url, url,
+                        "{url} must not reach the view"
+                    );
+                }
+            }
+            other => panic!("the migration refused {url}: {other:?}"),
+        }
+    }
+}
+
+/// Round 4, ruling R41 — the batch's dependency semantics, BOTH directions
+/// of the sample-count/time-window transition, through the real ABI and the
+/// store the preferences editor saves through:
+///
+/// - a single set of the count while the window is on stays refused (the
+///   batch of one is the single-entry rule, its control renders disabled);
+/// - enable-and-set — ONE batch removing the window override and storing
+///   the count — is accepted: `depends` follows the FINAL document;
+/// - a batch that turns the window ON while a count stays stored keeps a
+///   DORMANT value (rendered disabled): allowed, never refused for it.
+#[test]
+fn batch_dependencies_follow_the_final_document_both_ways() {
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    // Start with the window override on: the sample mode is disabled.
+    store
+        .set("graphs.cpu.time_window", serde_json::json!(5))
+        .expect("the window saves");
+    // A single set of the count is refused.
+    assert_eq!(
+        store.set("graphs.cpu.samples", serde_json::json!(100)),
+        Err(document::SetError::DependencyNotMet)
+    );
+    // Direction 1 — enable-and-set: ONE batch removes the override and
+    // stores the count together.
+    store
+        .apply_batch(&[
+            document::Change::Remove("graphs.cpu.time_window".into()),
+            document::Change::Set("graphs.cpu.samples".into(), serde_json::json!(100)),
+        ])
+        .expect("the enable-and-set batch applies");
+    assert_eq!(store.values()["graphs.cpu.samples"], serde_json::json!(100));
+    assert!(store.values().get("graphs.cpu.time_window").is_none());
+    // Direction 2 — dormant: ONE batch turns the window on while the count
+    // stays stored.
+    store
+        .apply_batch(&[document::Change::Set(
+            "graphs.cpu.time_window".into(),
+            serde_json::json!(5),
+        )])
+        .expect("a batch that leaves a dormant dependent is never refused");
+    assert_eq!(store.values()["graphs.cpu.samples"], serde_json::json!(100));
+    assert_eq!(
+        store.values()["graphs.cpu.time_window"],
+        serde_json::json!(5)
+    );
+    // The dormant pair survives the reopen, the single set stays refused,
+    // and the enable-and-set batch is accepted again.
+    let mut reopened = Store::open(f.root());
+    assert_eq!(
+        reopened.values()["graphs.cpu.samples"],
+        serde_json::json!(100)
+    );
+    assert_eq!(
+        reopened.set("graphs.cpu.samples", serde_json::json!(200)),
+        Err(document::SetError::DependencyNotMet)
+    );
+    reopened
+        .apply_batch(&[
+            document::Change::Remove("graphs.cpu.time_window".into()),
+            document::Change::Set("graphs.cpu.samples".into(), serde_json::json!(200)),
+        ])
+        .expect("enable-and-set applies after a reopen");
+    assert_eq!(
+        reopened.values()["graphs.cpu.samples"],
+        serde_json::json!(200)
+    );
+}
+
+/// Round 4, ruling R37 — a batch is all-or-nothing: one refused entry
+/// aborts the WHOLE batch (an unrelated set in the same batch never lands),
+/// every refusal is reported per entry, and a valid batch lands whole.
+#[test]
+fn refused_batches_apply_nothing_whole() {
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    // A fresh store holds the default document in memory only; the file
+    // appears with the first successful write.
+    let before = fs::read(f.json()).unwrap_or_default();
+    // A secondary fan curve without its primary: the core's combination rule
+    // refuses it, and the unrelated title set in the same batch must not
+    // land either.
+    let refusals = store
+        .apply_batch(&[
+            document::Change::Set("general.window.title".into(), serde_json::json!("Kept")),
+            document::Change::Set("sources.fans.sensor2".into(), serde_json::json!("fan-b")),
+        ])
+        .expect_err("the batch must be refused");
+    assert_eq!(
+        refusals,
+        vec![(
+            "sources.fans.sensor2".to_owned(),
+            document::SetError::ConstraintFailed
+        )],
+        "{refusals:?}"
+    );
+    assert_eq!(
+        fs::read(f.json()).unwrap_or_default(),
+        before,
+        "the refused batch wrote nothing"
+    );
+    assert!(
+        store.values().get("general.window.title").is_none(),
+        "the unrelated set never landed"
+    );
+    // The same entries with the primary present land whole, in ONE commit.
+    store
+        .apply_batch(&[
+            document::Change::Set("sources.fans.sensor1".into(), serde_json::json!("fan-a")),
+            document::Change::Set("sources.fans.sensor2".into(), serde_json::json!("fan-b")),
+            document::Change::Set("general.window.title".into(), serde_json::json!("Kept")),
+        ])
+        .expect("the valid batch applies");
+    assert_eq!(
+        store.values()["general.window.title"],
+        serde_json::json!("Kept")
+    );
+    assert_eq!(
+        store.values()["sources.fans.sensor1"],
+        serde_json::json!("fan-a")
+    );
+    assert_eq!(
+        store.values()["sources.fans.sensor2"],
+        serde_json::json!("fan-b")
+    );
 }
 
 /// The same combinations are refused before save through the shared core:

@@ -3238,3 +3238,219 @@ fn colour_editor_tab_exits_at_both_boundaries_and_continues() {
     );
     fs::remove_dir_all(&harness.root).unwrap();
 }
+
+/// Round 4, ruling R37 — the theme import is ONE validated batch and ONE
+/// commit: a theme whose name breaks the theme-name constraint is refused
+/// WHOLE — the palette is not written either, the file keeps its bytes and
+/// the refusal's reason is shown — and a valid theme lands whole.
+#[test]
+fn theme_import_is_one_batch_and_a_refusal_writes_nothing() {
+    let mut harness = Harness::new();
+    harness.window.select_section("themes");
+    let _ = harness.quiet();
+    // A fresh harness holds the default document in memory only; the file
+    // appears with the first successful write.
+    let before = fs::read(harness.document()).unwrap_or_default();
+    // A valid palette under a name no entry accepts (over 80 characters).
+    let refused = crate::settings::ThemeDocument {
+        format: "xrg-ng-theme".into(),
+        version: 1,
+        name: "x".repeat(81),
+        colors: [[0.01, 0.02, 0.03, 0.5]; 7],
+    };
+    harness.window.store_theme(&mut harness.store, refused);
+    assert_ne!(
+        harness.window.message(),
+        Some("Theme imported."),
+        "the refused theme reported success"
+    );
+    assert_eq!(
+        fs::read(harness.document()).unwrap_or_default(),
+        before,
+        "the refused theme wrote the palette (or anything) to the file"
+    );
+    assert!(harness.values().get("appearance.window.color").is_none());
+    assert!(
+        harness.values().get("themes.name").is_none()
+            || harness.values()["themes.name"] == json!("xrg"),
+        "the refused name never landed"
+    );
+    // A valid theme lands whole: palette AND name, one commit.
+    let valid = crate::settings::ThemeDocument {
+        format: "xrg-ng-theme".into(),
+        version: 1,
+        name: "Imported".into(),
+        colors: [[0.02, 0.03, 0.04, 0.6]; 7],
+    };
+    harness.window.store_theme(&mut harness.store, valid);
+    assert_eq!(harness.window.message(), Some("Theme imported."));
+    assert_eq!(harness.values()["themes.name"], json!("Imported"));
+    assert_eq!(
+        harness.values()["appearance.window.color"],
+        json!([0.02, 0.03, 0.04, 0.6])
+    );
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
+/// Round 4, rulings R37/R41 — the store's batch is all-or-nothing, and the
+/// batch's dependency semantics hold through the editor's own store: one
+/// refused entry aborts the whole batch, enable-and-set is accepted, and a
+/// batch that leaves a dormant dependent is never refused for it.
+#[test]
+fn store_batches_apply_whole_and_follow_the_final_document() {
+    let mut harness = Harness::new();
+    // A fresh harness holds the default document in memory only; the file
+    // appears with the first successful write.
+    let before = fs::read(harness.document()).unwrap_or_default();
+    // One refused entry aborts the whole batch: the unrelated set in the
+    // same batch never lands.
+    let refusals = harness
+        .store
+        .apply_batch(&[
+            document::Change::Set("general.window.title".into(), json!("Kept")),
+            document::Change::Set("sources.fans.sensor2".into(), json!("fan-b")),
+        ])
+        .expect_err("the batch must be refused");
+    assert_eq!(
+        refusals,
+        vec![(
+            "sources.fans.sensor2".to_owned(),
+            document::SetError::ConstraintFailed
+        )],
+        "{refusals:?}"
+    );
+    assert_eq!(fs::read(harness.document()).unwrap_or_default(), before);
+    assert!(harness.values().get("general.window.title").is_none());
+    // Enable-and-set (ruling R41): remove the window override and store the
+    // count in ONE batch.
+    harness
+        .store
+        .set("graphs.cpu.time_window", json!(5))
+        .expect("the window saves");
+    assert_eq!(
+        harness.store.set("graphs.cpu.samples", json!(100)),
+        Err(document::SetError::DependencyNotMet),
+        "a single set of the count stays refused"
+    );
+    harness
+        .store
+        .apply_batch(&[
+            document::Change::Remove("graphs.cpu.time_window".into()),
+            document::Change::Set("graphs.cpu.samples".into(), json!(100)),
+        ])
+        .expect("the enable-and-set batch applies");
+    assert_eq!(harness.values()["graphs.cpu.samples"], json!(100));
+    assert!(harness.values().get("graphs.cpu.time_window").is_none());
+    // Dormant (ruling R41): ONE batch turns the window on while the count
+    // stays stored — allowed, never refused for it.
+    harness
+        .store
+        .apply_batch(&[document::Change::Set(
+            "graphs.cpu.time_window".into(),
+            json!(5),
+        )])
+        .expect("a batch that leaves a dormant dependent is never refused");
+    assert_eq!(harness.values()["graphs.cpu.samples"], json!(100));
+    assert_eq!(harness.values()["graphs.cpu.time_window"], json!(5));
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
+/// Round 4, ruling R37 — the held-edit retry is all-or-nothing: ONE refused
+/// held edit keeps EVERY held edit in place — the savable ones are not
+/// saved either — writes nothing, records each reason on its row, and a
+/// valid held set lands whole.
+#[test]
+fn held_edit_retry_applies_whole_or_keeps_everything() {
+    let mut harness = Harness::new();
+    // A window override the document holds, so a held sample count is a
+    // dependency the final document refuses.
+    harness
+        .store
+        .set("graphs.cpu.time_window", json!(5))
+        .expect("the window saves");
+    let before = fs::read(harness.document()).unwrap();
+    // The held edits a repair could not persist: one savable, one the core
+    // refuses (the count under the stored window).
+    harness
+        .window
+        .held
+        .insert("general.window.title".into(), json!("Kept"));
+    harness
+        .window
+        .held
+        .insert("graphs.cpu.samples".into(), json!(150));
+    harness.window.retry_unpersisted(&mut harness.store);
+    assert_eq!(
+        fs::read(harness.document()).unwrap(),
+        before,
+        "the refused retry wrote the savable edit (or anything)"
+    );
+    assert!(
+        harness.values().get("general.window.title").is_none(),
+        "the savable held edit never landed"
+    );
+    assert_eq!(harness.window.held.len(), 2, "every held edit stays held");
+    assert!(
+        harness.window.error("graphs.cpu.samples").is_some(),
+        "the refused edit's reason is on its row"
+    );
+    // A valid held set lands whole, one commit.
+    harness.window.held.clear();
+    harness
+        .window
+        .held
+        .insert("general.window.title".into(), json!("Kept"));
+    harness.window.retry_unpersisted(&mut harness.store);
+    assert_eq!(harness.values()["general.window.title"], json!("Kept"));
+    assert!(harness.window.held.is_empty());
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
+/// Round 4, ruling R37 — the replacement's held batch is all-or-nothing on
+/// VALIDATION refusals too: one refused held edit keeps EVERY held edit in
+/// place — the savable ones are not dropped from the banner's promise —
+/// each refusal's reason shows on its row, nothing is written, and the
+/// later retry of the same set is refused identically.
+#[test]
+fn replacement_refusals_keep_every_held_edit() {
+    let (root, mut harness) = blocked_harness();
+    // Held while the document was blocked: a savable title, and a
+    // combination-invalid secondary fan curve (reachable: a
+    // transport-retained secondary whose primary a later successful commit
+    // removed).
+    harness
+        .window
+        .held
+        .insert("general.window.title".into(), json!("Kept"));
+    harness
+        .window
+        .held
+        .insert("sources.fans.sensor2".into(), json!("fan-b"));
+    harness.click_labelled("Replace the file with the current settings");
+    assert!(
+        !harness.store.blocked(),
+        "replacement did not repair the document"
+    );
+    // The refused batch applied nothing: the title never landed…
+    assert!(harness.values().get("general.window.title").is_none());
+    // …but EVERY held edit stays held — the savable title included —
+    // and the refusal's reason shows on its row.
+    assert_eq!(
+        harness.window.held.len(),
+        2,
+        "the banner's promise was truncated by the refusal"
+    );
+    assert!(
+        harness.window.error("sources.fans.sensor2").is_some(),
+        "the refused edit's reason is not on its row"
+    );
+    // The same set retried is refused identically — never truncated.
+    harness.window.retry_unpersisted(&mut harness.store);
+    assert_eq!(
+        harness.window.held.len(),
+        2,
+        "the retry dropped a held edit"
+    );
+    assert!(harness.values().get("general.window.title").is_none());
+    fs::remove_dir_all(&root).unwrap();
+}

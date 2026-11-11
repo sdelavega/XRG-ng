@@ -1445,6 +1445,38 @@ impl Store {
             .map_err(|_| document::SetError::Transport)?;
         Ok(())
     }
+    /// Apply one batch of entry changes — ONE validated batch and ONE
+    /// commit (round 4, ruling R37): every logical multi-entry action
+    /// (theme import, preset selection, held-edit replacement and retry)
+    /// lands whole or not at all, so no later failure can leave a partial
+    /// application behind. On a refusal NOTHING is written and every
+    /// offending entry is reported as an (id, error) pair — the same
+    /// per-entry reasons the single-entry `set` reports. A blocked file
+    /// (it exists but does not load) must be `replace_unreadable`d first.
+    pub fn apply_batch(
+        &mut self,
+        changes: &[document::Change],
+    ) -> Result<(), Vec<(String, document::SetError)>> {
+        if self.blocked {
+            return Err(vec![(String::new(), document::SetError::InvalidDocument)]);
+        }
+        let document = document::apply_detailed(&self.document, changes)?;
+        self.commit(document).map_err(|_| {
+            // The batch validated but the write failed: nothing was
+            // written, so EVERY changed entry failed together — reported
+            // per entry (the transport refusal) so the caller retains each
+            // held edit with its reason, exactly the retention a per-entry
+            // `set` failure produced.
+            changes
+                .iter()
+                .map(|change| match change {
+                    document::Change::Set(id, _) => (id.clone(), document::SetError::Transport),
+                    document::Change::Remove(id) => (id.clone(), document::SetError::Transport),
+                })
+                .collect::<Vec<_>>()
+        })?;
+        Ok(())
+    }
     /// Validate one edit through the shared core without writing anything:
     /// the refusal `set` would report for the same value — a single-entry
     /// `set` IS a batch of one (round 3, ruling R37). Held edits — the

@@ -19,7 +19,7 @@ use crate::{
     metrics::{Inventory, SourceOption},
     settings::{
         Store, ThemeDocument,
-        document::{Catalog, SetError},
+        document::{Catalog, Change, SetError},
     },
 };
 use eframe::egui;
@@ -340,33 +340,49 @@ impl SettingsWindow {
     }
 
     /// A loaded theme file becomes the current theme: its palette and name
-    /// are written through the store, and the preset is marked Custom when
-    /// the palette no longer matches the selected built-in (lesson f).
+    /// are written through the store as ONE validated batch — ONE commit
+    /// (round 4, ruling R37) — and the preset is marked Custom when the
+    /// palette no longer matches the selected built-in (lesson f). A
+    /// refused batch (an over-long name, a colour no entry accepts) aborts
+    /// whole: nothing is written and the refusal's reason is shown.
     fn store_theme(&mut self, store: &mut Store, theme: ThemeDocument) {
-        for (index, id) in settings_controls::PALETTE_IDS.iter().enumerate() {
-            if let Err(error) = store.set(id, json!(theme.colors[index])) {
-                let reason = settings_controls::refusal_reason(&error, self.palette_entry(id));
+        let changes: Vec<Change> = settings_controls::PALETTE_IDS
+            .iter()
+            .enumerate()
+            .map(|(index, id)| Change::Set((*id).into(), json!(theme.colors[index])))
+            .chain([Change::Set("themes.name".into(), json!(theme.name))])
+            .collect();
+        match store.apply_batch(&changes) {
+            Ok(()) => {
+                mark_custom_preset(store, &self.catalog);
+                self.dirty = true;
+                for id in settings_controls::PALETTE_IDS {
+                    self.fields.bump(id);
+                }
+                self.fields.bump("themes.name");
+                self.fields.bump("themes.preset");
+                self.message = Some("Theme imported.".into());
+            }
+            Err(refusals) => {
+                let reason = self.refusal_message(&refusals);
                 self.message = Some(reason);
-                return;
             }
         }
-        let _ = store.set("themes.name", json!(theme.name));
-        mark_custom_preset(store, &self.catalog);
-        self.dirty = true;
-        for id in settings_controls::PALETTE_IDS {
-            self.fields.bump(id);
-        }
-        self.fields.bump("themes.name");
-        self.fields.bump("themes.preset");
-        self.message = Some("Theme imported.".into());
     }
 
-    fn palette_entry(&self, id: &str) -> &crate::settings::document::CatalogEntry {
-        self.catalog
-            .entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .expect("the shared catalog defines every palette colour")
+    /// The one user-facing reason of a refused batch: the first offending
+    /// entry's own refusal reason, from the catalog.
+    fn refusal_message(&self, refusals: &[(String, SetError)]) -> String {
+        refusals
+            .first()
+            .and_then(|(id, error)| {
+                self.catalog
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.id == id)
+                    .map(|entry| settings_controls::refusal_reason(error, entry))
+            })
+            .unwrap_or_else(|| "The theme could not be applied.".into())
     }
 
     fn load_theme(&mut self, path: PathBuf, ctx: &egui::Context) {
@@ -411,38 +427,47 @@ impl SettingsWindow {
         });
     }
 
-    /// Save edits a repair could not persist. Successes leave the held map;
-    /// a failure stays held, still shown, with its reason — the same
-    /// retention the repair uses, so the user can retry again.
+    /// Save the edits a repair could not persist — ONE validated batch and
+    /// ONE commit (round 4, ruling R37): either every held edit lands
+    /// together or nothing does. A refusal keeps them ALL held, still
+    /// shown, each with its own reason on its row — the same retention the
+    /// repair uses, so the user can retry again.
     fn retry_unpersisted(&mut self, store: &mut Store) {
         let pending = std::mem::take(&mut self.held);
-        let mut failures: Vec<(String, Value, SetError)> = Vec::new();
-        for (id, value) in pending {
-            match store.set(&id, value.clone()) {
-                Ok(()) => {
-                    self.dirty = true;
+        let changes: Vec<Change> = pending
+            .iter()
+            .map(|(id, value)| Change::Set(id.clone(), value.clone()))
+            .collect();
+        match store.apply_batch(&changes) {
+            Ok(()) => {
+                self.dirty = true;
+                for (id, value) in &pending {
                     // Reconcile with the entry's edit buffer before
                     // clearing it: a newer, unsaved edit survives the
                     // retry (fix round 3, review rr2 finding 1).
-                    self.fields.retry_saved(&id, &value);
+                    self.fields.retry_saved(id, value);
                 }
-                Err(error) => failures.push((id, value, error)),
+                self.message = Some("The changes that could not be saved were saved.".into());
             }
-        }
-        for (id, value, error) in failures {
-            let reason = self
-                .catalog
-                .entries
-                .iter()
-                .find(|entry| entry.id == id)
-                .map(|entry| settings_controls::refusal_reason(&error, entry))
-                .unwrap_or_else(|| "The value could not be saved.".into());
-            self.fields.refuse(&id, reason.clone());
-            self.message = Some(reason);
-            self.held.insert(id, value);
-        }
-        if self.held.is_empty() {
-            self.message = Some("The changes that could not be saved were saved.".into());
+            Err(refusals) => {
+                for (id, error) in &refusals {
+                    let reason = self
+                        .catalog
+                        .entries
+                        .iter()
+                        .find(|entry| &entry.id == id)
+                        .map(|entry| settings_controls::refusal_reason(error, entry))
+                        .unwrap_or_else(|| "The value could not be saved.".into());
+                    self.fields.refuse(id, reason.clone());
+                    self.message = Some(reason);
+                }
+                // All-or-nothing (ruling R37): a refused batch applies
+                // nothing, so EVERY held edit stays held — the saved and
+                // the refused alike — and survives a later repair.
+                for (id, value) in pending {
+                    self.held.insert(id, value);
+                }
+            }
         }
     }
 
@@ -543,7 +568,6 @@ impl SettingsWindow {
         let blocked = store.blocked();
         {
             let mut dirty = false;
-            let mut side_effect = None;
             // The catalog is cloned, and the held changes taken out of
             // `self`, so the apply closure owns its own state and never
             // borrows `self` — the scroll body below needs the window's
@@ -570,7 +594,20 @@ impl SettingsWindow {
                         Err(error) => Err(error),
                     };
                 }
-                let result = store.set(id, value.clone());
+                // Selecting a built-in preset is ONE batch — the palette,
+                // the theme name and the preset selection itself — ONE
+                // commit (round 4, ruling R37): it cannot land half-applied.
+                let result = if id == "themes.preset"
+                    && value.as_str().is_some_and(|name| {
+                        crate::shared::themes()
+                            .into_iter()
+                            .any(|theme| theme.name == name)
+                    }) {
+                    let name = value.as_str().expect("just checked").to_owned();
+                    apply_preset(store, &name)
+                } else {
+                    store.set(id, value.clone())
+                };
                 if result.is_ok() {
                     // A successful save clears any retained failure for this
                     // entry. Otherwise a width held from a failed repair
@@ -578,23 +615,7 @@ impl SettingsWindow {
                     // round 2, retained failures).
                     held.remove(id);
                     dirty = true;
-                    if id == "themes.preset"
-                        && value.as_str().is_some_and(|name| {
-                            crate::shared::themes()
-                                .into_iter()
-                                .any(|theme| theme.name == name)
-                        })
-                    {
-                        let name = value.as_str().expect("just checked").to_owned();
-                        if let Err(error) = apply_preset(store, &name)
-                            && let Some(preset) = catalog
-                                .entries
-                                .iter()
-                                .find(|entry| entry.id == "themes.preset")
-                        {
-                            side_effect = Some(settings_controls::refusal_reason(&error, preset));
-                        }
-                    } else if id.starts_with("appearance.") && id.ends_with(".color") {
+                    if id.starts_with("appearance.") && id.ends_with(".color") {
                         mark_custom_preset(store, &catalog);
                     }
                 } else if matches!(result, Err(SetError::Transport)) {
@@ -786,9 +807,6 @@ impl SettingsWindow {
             if dirty {
                 self.dirty = true;
             }
-            if let Some(reason) = side_effect.take() {
-                self.message = Some(reason);
-            }
             self.held = held;
         }
         if let Some(section) = actions.confirm_reset.take() {
@@ -836,35 +854,45 @@ impl SettingsWindow {
                     self.dirty = true;
                     self.message = Some("The settings document was replaced.".into());
                     // The held changes — the banner's in-memory promise —
-                    // land in the fresh document. One the core refuses now
-                    // stays held with its reason on the row, reported
+                    // land in the fresh document as ONE validated batch and
+                    // ONE commit (round 4, ruling R37): either every held
+                    // edit lands together or nothing does; a refusal keeps
+                    // them ALL held with their reasons on the rows, reported
                     // instead of silently disappearing (review issue 2).
                     let held = std::mem::take(&mut self.held);
-                    let mut failures: Vec<(String, Value, SetError)> = Vec::new();
-                    for (id, value) in held {
-                        match store.set(&id, value.clone()) {
-                            Ok(()) => (),
-                            Err(error) => failures.push((id, value, error)),
+                    let changes: Vec<Change> = held
+                        .iter()
+                        .map(|(id, value)| Change::Set(id.clone(), value.clone()))
+                        .collect();
+                    match store.apply_batch(&changes) {
+                        Ok(()) => {
+                            for entry in &self.catalog.entries {
+                                self.fields.bump(&entry.id);
+                            }
                         }
-                    }
-                    for entry in &self.catalog.entries {
-                        if !failures.iter().any(|(id, _, _)| *id == entry.id) {
-                            self.fields.bump(&entry.id);
+                        Err(refusals) => {
+                            // All-or-nothing (ruling R37): a refused batch
+                            // applies nothing, so EVERY held edit stays
+                            // held — the savable and the refused alike —
+                            // still presented by its row, each refusal's
+                            // reason on its own, and survives a later
+                            // repair or replacement (the same retention
+                            // `retry_unpersisted` keeps).
+                            for (id, error) in &refusals {
+                                let reason = self
+                                    .catalog
+                                    .entries
+                                    .iter()
+                                    .find(|entry| &entry.id == id)
+                                    .map(|entry| settings_controls::refusal_reason(error, entry))
+                                    .unwrap_or_else(|| "The value could not be saved.".into());
+                                self.fields.refuse(id, reason.clone());
+                                self.message = Some(reason);
+                            }
+                            for (id, value) in held {
+                                self.held.insert(id, value);
+                            }
                         }
-                    }
-                    for (id, value, error) in failures {
-                        let reason = self
-                            .catalog
-                            .entries
-                            .iter()
-                            .find(|entry| entry.id == id)
-                            .map(|entry| settings_controls::refusal_reason(&error, entry))
-                            .unwrap_or_else(|| "The value could not be saved.".into());
-                        self.fields.refuse(&id, reason.clone());
-                        self.message = Some(reason);
-                        // Retained: the refused edit stays held, so it
-                        // still presents and survives a later repair.
-                        self.held.insert(id, value);
                     }
                 }
                 Err(error) => self.message = Some(error),
@@ -1290,7 +1318,10 @@ fn legacy_block(
 }
 
 /// Selecting a built-in preset applies its palette, its name and the
-/// preset selection itself through the shared settings model (lesson f).
+/// preset selection itself through the shared settings model as ONE
+/// validated batch — ONE commit (round 4, ruling R37) — so a preset can
+/// never land half-applied: a refused or failed part aborts the whole
+/// selection and nothing is written.
 pub(super) fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError> {
     let Some(theme) = crate::shared::themes()
         .into_iter()
@@ -1298,12 +1329,19 @@ pub(super) fn apply_preset(store: &mut Store, name: &str) -> Result<(), SetError
     else {
         return Err(SetError::NotAnOption);
     };
-    for (index, id) in settings_controls::PALETTE_IDS.iter().enumerate() {
-        store.set(id, json!(theme.colors[index]))?;
-    }
-    store.set("themes.name", json!(name))?;
-    store.set("themes.preset", json!(name))?;
-    Ok(())
+    let mut changes: Vec<Change> = settings_controls::PALETTE_IDS
+        .iter()
+        .enumerate()
+        .map(|(index, id)| Change::Set((*id).into(), json!(theme.colors[index])))
+        .collect();
+    changes.push(Change::Set("themes.name".into(), json!(name)));
+    changes.push(Change::Set("themes.preset".into(), json!(name)));
+    store.apply_batch(&changes).map_err(|refusals| {
+        refusals
+            .first()
+            .map(|(_, error)| *error)
+            .unwrap_or(SetError::Transport)
+    })
 }
 
 /// The catalog's documented rule: a palette that no longer matches the

@@ -395,9 +395,25 @@ pub enum Change {
 /// canonical bytes are returned, or it is refused with per-entry
 /// diagnostics and NOTHING is applied. A batch is refused only for a
 /// cross-setting combination the final document breaks that the starting
-/// document did not (ruling R38).
+/// document did not (ruling R38). The refusal is the FIRST offending
+/// entry's own error kind (with the bounds an out-of-range value carries).
 pub fn apply(doc: &[u8], changes: &[Change]) -> Result<Vec<u8>, SetError> {
-    let doc_len = u32::try_from(doc.len()).map_err(|_| SetError::InvalidDocument)?;
+    apply_detailed(doc, changes).map_err(|refusals| {
+        refusals
+            .first()
+            .map(|(_, error)| *error)
+            .unwrap_or(SetError::Transport)
+    })
+}
+
+/// Apply one batch of entry changes as the FINAL document, reporting EVERY
+/// per-entry refusal (round 4, ruling R37): `Ok` carries the new canonical
+/// bytes; `Err` carries every offending (id, error) pair — the core's own
+/// deterministic order, the bounds an out-of-range value carries filled
+/// from the catalog — and nothing is applied.
+pub fn apply_detailed(doc: &[u8], changes: &[Change]) -> Result<Vec<u8>, Vec<(String, SetError)>> {
+    let transport = |error| vec![("".to_owned(), error)];
+    let doc_len = u32::try_from(doc.len()).map_err(|_| transport(SetError::InvalidDocument))?;
     let mut sets = serde_json::Map::new();
     let mut removes = Vec::new();
     for change in changes {
@@ -415,8 +431,9 @@ pub fn apply(doc: &[u8], changes: &[Change]) -> Result<Vec<u8>, SetError> {
     if !removes.is_empty() {
         object.insert("remove".into(), serde_json::Value::Array(removes));
     }
-    let changes_json = serde_json::to_vec(&object).map_err(|_| SetError::Transport)?;
-    let changes_len = u32::try_from(changes_json.len()).map_err(|_| SetError::RequestTooLarge)?;
+    let changes_json = serde_json::to_vec(&object).map_err(|_| transport(SetError::Transport))?;
+    let changes_len =
+        u32::try_from(changes_json.len()).map_err(|_| transport(SetError::RequestTooLarge))?;
     let response = json_call(|out, cap, needed| unsafe {
         xrg_settings_apply(
             doc.as_ptr(),
@@ -428,19 +445,59 @@ pub fn apply(doc: &[u8], changes: &[Change]) -> Result<Vec<u8>, SetError> {
             needed,
         )
     })
-    .map_err(|failure| match failure {
-        CallError::Rejected => SetError::InvalidDocument,
-        CallError::Transport(_) => SetError::Transport,
+    .map_err(|failure| {
+        transport(match failure {
+            CallError::Rejected => SetError::InvalidDocument,
+            CallError::Transport(_) => SetError::Transport,
+        })
     })?;
-    let wire: Wire = serde_json::from_slice(&response).map_err(|_| SetError::Transport)?;
-    if let Some(error) = wire.error {
-        // The first refusal's own kind (and bounds), so a batch of one is
-        // reported exactly the single-entry `set` reports it.
-        return Err(error.into());
+    let wire: Wire =
+        serde_json::from_slice(&response).map_err(|_| transport(SetError::Transport))?;
+    if let Some(wire_error) = wire.error {
+        // The core's diagnostics name every offending entry; the bounds an
+        // out-of-range value carries come from the catalog (the wire's
+        // error carries them for the first refusal only).
+        let catalog = catalog().ok();
+        let refusals: Vec<(String, SetError)> = wire
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                let id = diagnostic.id.clone()?;
+                let error = match diagnostic.problem.as_str() {
+                    "unknown-id" => SetError::UnknownId,
+                    "wrong-type" => SetError::WrongType,
+                    "not-an-option" => SetError::NotAnOption,
+                    "dependency-not-met" => SetError::DependencyNotMet,
+                    "constraint-failed" => SetError::ConstraintFailed,
+                    "out-of-range" => {
+                        let (min, max) = catalog
+                            .as_ref()
+                            .and_then(|catalog| {
+                                catalog
+                                    .entries
+                                    .iter()
+                                    .find(|entry| entry.id == id)
+                                    .and_then(|entry| entry.range.as_ref())
+                            })
+                            .map(|range| (range.min, range.max))
+                            .unwrap_or((0., 0.));
+                        SetError::OutOfRange { min, max }
+                    }
+                    _ => SetError::Transport,
+                };
+                Some((id, error))
+            })
+            .collect();
+        if refusals.is_empty() {
+            // A request-level refusal — too large to cross, unparsable —
+            // rides the wire's error without per-entry diagnostics.
+            return Err(vec![("".to_owned(), wire_error.into())]);
+        }
+        return Err(refusals);
     }
     wire.document
         .map(String::into_bytes)
-        .ok_or(SetError::Transport)
+        .ok_or_else(|| transport(SetError::Transport))
 }
 
 /// The document with every cross-setting combination's own offenders reverted
