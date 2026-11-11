@@ -347,7 +347,12 @@ impl SettingsWindow {
     /// so a later failure can never leave a saved palette designated after
     /// a stale preset). A refused batch (an over-long name, a colour no
     /// entry accepts) aborts whole: nothing is written and the refusal's
-    /// reason is shown — never "Theme imported."
+    /// reason is shown — never "Theme imported." A SUCCESSFUL import also
+    /// discards the held (failed, pending-retry) entries it supersedes —
+    /// the palette, the theme name and the preset designation — so a
+    /// later Retry can never overwrite the imported theme with the older
+    /// failed batch; unrelated held edits stay held (round 6, review rr5
+    /// issue 2).
     fn store_theme(&mut self, store: &mut Store, theme: ThemeDocument) {
         let designation = imported_designation(&theme.colors);
         let changes: Vec<Change> = palette_changes(&theme.colors)
@@ -361,6 +366,18 @@ impl SettingsWindow {
         match store.apply_batch(&changes) {
             Ok(()) => {
                 self.dirty = true;
+                // The imported theme replaces the same entries a failed
+                // action left held for Retry: dropping them here keeps the
+                // banner's Retry from replaying the older failed batch
+                // over the theme the user just imported. An unrelated held
+                // edit (a width, a title) is not superseded and stays.
+                for id in settings_controls::PALETTE_IDS
+                    .iter()
+                    .copied()
+                    .chain(["themes.name", "themes.preset"])
+                {
+                    self.held.remove(id);
+                }
                 for id in settings_controls::PALETTE_IDS {
                     self.fields.bump(id);
                 }

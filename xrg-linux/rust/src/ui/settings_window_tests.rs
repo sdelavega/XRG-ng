@@ -3445,6 +3445,115 @@ fn preset_selection_retry_resubmits_the_whole_batch() {
     fs::remove_dir_all(&harness.root).unwrap();
 }
 
+/// Round 6, review rr5 issue 2 — a successful theme import supersedes the
+/// held entries it replaces: a failed Midnight selection retains its
+/// COMPLETE batch (palette, name, designation) for Retry, a later
+/// successful import discards exactly those held entries — so Retry can
+/// never overwrite the imported theme with the older failed batch — and
+/// an unrelated held edit survives for its own Retry.
+#[test]
+fn a_successful_theme_import_supersedes_the_held_batch_it_replaces() {
+    let mut harness = Harness::new();
+    harness.window.select_section("themes");
+    let _ = harness.quiet();
+    // The failed preset selection: the batch validates, the commit fails,
+    // the COMPLETE batch is retained for Retry.
+    harness.store.fail_next_commits(1);
+    harness.click_labelled("Color theme");
+    harness.click_labelled("Midnight");
+    let _ = harness.quiet();
+    assert_eq!(
+        harness.window.held.len(),
+        super::super::settings_controls::PALETTE_IDS.len() + 2,
+        "the failed selection did not retain its complete batch"
+    );
+    // An unrelated held edit: a width whose submission and follow-up
+    // resubmission both fail while the document is healthy (the transport
+    // retention the Retry path owns). The quiet frame lets the field's
+    // one follow-up resubmission fire and fail while it still exists;
+    // the section switch then removes it so nothing further can submit.
+    harness.window.select_section("general");
+    let _ = harness.quiet();
+    harness.store.fail_next_commits(2);
+    harness.type_into("general.window.graph_width", "300");
+    let _ = harness.quiet();
+    assert!(
+        harness
+            .window
+            .held
+            .contains_key("general.window.graph_width"),
+        "the unrelated failed edit was not retained"
+    );
+    // The successful import: palette, name and designation, ONE commit.
+    harness.window.select_section("themes");
+    let _ = harness.quiet();
+    let commits = harness.store.commit_count();
+    let imported = crate::settings::ThemeDocument {
+        format: "xrg-ng-theme".into(),
+        version: 1,
+        name: "Imported".into(),
+        colors: [[0.02, 0.03, 0.04, 0.6]; 7],
+    };
+    harness.window.store_theme(&mut harness.store, imported);
+    assert_eq!(harness.window.message(), Some("Theme imported."));
+    assert_eq!(
+        harness.store.commit_count(),
+        commits + 1,
+        "the import took more than one commit"
+    );
+    // The import superseded exactly the held entries it replaces — the
+    // palette, the name and the designation are dropped from Retry; the
+    // unrelated width stays held.
+    for id in super::super::settings_controls::PALETTE_IDS {
+        assert!(
+            !harness.window.held.contains_key(id),
+            "the import kept the superseded held entry {id}"
+        );
+    }
+    assert!(
+        !harness.window.held.contains_key("themes.name"),
+        "the import kept the superseded held theme name"
+    );
+    assert!(
+        !harness.window.held.contains_key("themes.preset"),
+        "the import kept the superseded held designation"
+    );
+    assert_eq!(
+        harness.window.held.get("general.window.graph_width"),
+        Some(&json!(300)),
+        "the import discarded the unrelated held edit"
+    );
+    // Retry saves ONLY the unrelated edit: the imported theme is intact.
+    harness.click_labelled("Retry saving changes that did not persist");
+    let _ = harness.quiet();
+    assert!(
+        harness.window.held.is_empty(),
+        "the retry kept a held entry"
+    );
+    let values = harness.values();
+    assert_eq!(
+        values["themes.name"],
+        json!("Imported"),
+        "the retry overwrote the imported theme's name"
+    );
+    assert_eq!(
+        values["themes.preset"],
+        json!("Custom"),
+        "the retry overwrote the imported theme's designation"
+    );
+    assert_eq!(
+        values["appearance.window.color"],
+        json!([0.02, 0.03, 0.04, 0.6]),
+        "the retry overwrote the imported palette"
+    );
+    assert_eq!(
+        values["general.window.graph_width"],
+        json!(300),
+        "the retry did not save the unrelated held edit"
+    );
+    fs::remove_dir_all(&harness.root).unwrap();
+}
+
 /// Round 5, ruling R37 — a palette colour edit is ONE batch and ONE commit:
 /// the colour and the `themes.preset` designation its resulting colours
 /// produce ride the same validated batch, so a failed commit leaves
