@@ -3634,6 +3634,98 @@ fn palette_edit_carries_its_designation_in_one_batch() {
     fs::remove_dir_all(&harness.root).unwrap();
 }
 
+/// Round 6, review rr5 issue 1 (the Linux half) — the palette edit's
+/// designation is computed from the PROSPECTIVE palette: the store's
+/// values overlaid with every held edit, the same overlay the window
+/// displays, so a replacement save names the palette it actually writes.
+/// The reviewer's sequence: an unreadable document, Midnight selected
+/// (held whole), Series 2 inherited — the held palette is Midnight except
+/// the inherited default Series 2, a palette no built-in carries, so the
+/// designation the edit holds is Custom and the replaced file says Custom.
+#[test]
+fn a_replacement_names_the_prospective_palette_it_writes() {
+    let (root, mut harness) = blocked_harness();
+    // Midnight is selected while the document is unreadable: its whole
+    // batch is held, designation Midnight.
+    harness.window.select_section("themes");
+    let _ = harness.quiet();
+    harness.click_labelled("Color theme");
+    harness.click_labelled("Midnight");
+    let _ = harness.quiet();
+    assert_eq!(
+        harness.window.held.len(),
+        super::super::settings_controls::PALETTE_IDS.len() + 2,
+        "the blocked selection did not hold its complete batch"
+    );
+    assert_eq!(
+        harness.window.held["themes.preset"],
+        json!("Midnight"),
+        "the held selection is not Midnight"
+    );
+    // The inherited Series 2: the designation its edit carries is
+    // computed from the overlay — Midnight's held palette with the
+    // inherited default Series 2 — which matches no built-in: Custom.
+    harness.window.select_section("appearance");
+    let _ = harness.quiet();
+    harness.click_labelled("Inherit the default Series 2 color");
+    let _ = harness.quiet();
+    assert_eq!(
+        harness.window.held["appearance.series2.color"],
+        json!(null),
+        "the inherited edit did not stay held"
+    );
+    assert_eq!(
+        harness.window.held["themes.preset"],
+        json!("Custom"),
+        "the designation named the blocked document's palette, not the prospective one"
+    );
+    // The replacement lands the held batch whole: the written document
+    // names the palette it carries — six Midnight colours, the inherited
+    // Series 2 and the Custom designation.
+    harness.click_labelled("Replace the file with the current settings");
+    assert!(
+        !harness.store.blocked(),
+        "the replacement did not repair the document"
+    );
+    let reopened = Store::open(&root);
+    let values = reopened.values();
+    assert_eq!(
+        values["themes.preset"],
+        json!("Custom"),
+        "the replacement did not name the palette it wrote"
+    );
+    assert_eq!(
+        values["themes.name"],
+        json!("Midnight"),
+        "the replacement lost the held theme name"
+    );
+    assert_eq!(
+        values["appearance.series2.color"],
+        json!(null),
+        "the replacement lost the inherited Series 2"
+    );
+    let midnight = crate::shared::themes()
+        .into_iter()
+        .find(|theme| theme.name == "Midnight")
+        .expect("Midnight is a built-in theme");
+    for (index, id) in super::super::settings_controls::PALETTE_IDS
+        .iter()
+        .enumerate()
+    {
+        if *id == "appearance.series2.color" {
+            continue;
+        }
+        let stored = values[*id].as_array().unwrap();
+        for (component, expected) in stored.iter().zip(&midnight.colors[index]) {
+            assert!(
+                (component.as_f64().unwrap() - expected).abs() < 1e-9,
+                "the replaced palette is not Midnight at {id}"
+            );
+        }
+    }
+    fs::remove_dir_all(&root).unwrap();
+}
+
 /// Round 5, ruling R41 completed — the whole-view save behind the legacy
 /// import's accept is never refused for a dormant dependent: an accepted
 /// import whose view moves the CPU window 5→10 while its sample count

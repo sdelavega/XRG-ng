@@ -624,8 +624,20 @@ impl SettingsWindow {
                         .expect("the name was just checked");
                     preset_changes(&theme)
                 } else if id.starts_with("appearance.") && id.ends_with(".color") {
-                    let designation =
-                        palette_designation_after(&store.values(), &catalog, id, &value);
+                    // The designation is computed from the PROSPECTIVE
+                    // palette — the store's values overlaid with every
+                    // held edit, the same overlay the window displays
+                    // (round 6, review rr5 issue 1): the replacement and
+                    // the Retry write the held colours together with
+                    // this designation, so it must name the palette they
+                    // produce — a held Midnight palette with an inherited
+                    // Series 2 is Custom, never the blocked document's
+                    // Classic.
+                    let mut prospective = store.values();
+                    for (held_id, held_value) in &held {
+                        prospective.insert(held_id.clone(), held_value.clone());
+                    }
+                    let designation = palette_designation_after(&prospective, &catalog, id, &value);
                     vec![
                         (id.to_owned(), value.clone()),
                         ("themes.preset".into(), json!(designation)),
@@ -1461,10 +1473,13 @@ fn imported_designation(colors: &[[f64; 4]; 7]) -> String {
 
 /// The `themes.preset` designation one palette colour edit produces,
 /// computed BEFORE the edit persists (round 5, ruling R37): the resulting
-/// palette — the document's effective colours with the edited entry
-/// replaced, an unset colour inheriting its catalog default — is compared
-/// against every built-in exactly; the one it matches names the
-/// designation, and anything else is Custom.
+/// palette — the PROSPECTIVE colours the window displays, the caller's
+/// values overlaid with every held edit, with the edited entry replaced
+/// (an unset colour inheriting its catalog default) — is compared against
+/// every built-in exactly; the one it matches names the designation, and
+/// anything else is Custom. The overlay is the replacement's and the
+/// Retry's own input: the designation names the palette a replacement save
+/// actually writes (round 6, review rr5 issue 1).
 fn palette_designation_after(
     values: &serde_json::Map<String, Value>,
     catalog: &Catalog,
