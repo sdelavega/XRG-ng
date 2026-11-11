@@ -453,34 +453,41 @@ struct XRGSettingsStoreTests {
 
     /// An edit that no longer applies to the externally changed document is
     /// refused with the core's own error: the external content is kept in
-    /// memory and on disk, and nothing is written.
+    /// memory and on disk, and nothing is written. (Round 4's edition drove
+    /// the conflict through `graphs.cpu.samples` under an externally stored
+    /// time window; ruling R41, completed in round 5, made that pair a
+    /// dormant value the core accepts, so the conflict is proven on a
+    /// cross-setting combination the reloaded document would gain.)
     @Test func editConflictingWithExternalContentIsRefusedNotWritten() throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let catalog = try self.catalog()
         let store = XRGSettingsStore(fileURL: fixture.documentURL, defaults: fixture.defaults,
                                       catalog: catalog, legacyDomain: [:])
-        try store.set("graphs.cpu.samples", .int(300))
-        // An external editor turns the time window on, which forbids the
-        // samples count the store is about to set.
+        try store.set("weather.station", .string("KSEA"))
+        // An external editor empties the station — valid on its own while
+        // the collector is disabled — which the store's pending enable
+        // would combine into a violation the reloaded document lacks.
         let external = """
         {
           "format": "xrg-ng-settings",
           "version": 1,
           "settings": {
-            "graphs.cpu.time_window": 5
+            "weather.station": ""
           }
         }
         """
         try Data(external.utf8).write(to: fixture.documentURL)
-        #expect(throws: XRGSettingsError.dependencyNotMet) {
-            try store.set("graphs.cpu.samples", .int(500))
+        #expect(throws: XRGSettingsError.constraint) {
+            try store.set("weather.enabled", .bool(true))
         }
         let bytes = try #require(documentBytes(fixture.documentURL))
-        #expect(try storedValue("graphs.cpu.time_window", in: bytes) as? Int == 5)
-        #expect(try storedValue("graphs.cpu.samples", in: bytes) == nil,
+        #expect(try storedValue("weather.station", in: bytes) as? String == "")
+        #expect(try storedValue("weather.enabled", in: bytes) == nil,
                 "the refused edit must not reach the file")
-        // The store adopted the external window and serves it.
-        #expect(store.value("graphs.cpu.time_window") == .int(5))
+        // The store adopted the external station and serves it; the
+        // refused enable is not stored.
+        #expect(store.value("weather.station") == .string(""))
+        #expect(store.value("weather.enabled") == .bool(false))
     }
 
     // MARK: The locked write transaction (final review round 2, issue 1 / R32)

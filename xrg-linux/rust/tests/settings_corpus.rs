@@ -376,20 +376,30 @@ fn set_reports_the_catalogs_bounds_and_kinds() {
         ),
         Err(document::SetError::InvalidDocument)
     );
-    // The dependency rule: bring-to-front needs expand-on-hover to hold.
+    // The dependency rule never refuses a write (round 5, ruling R41
+    // completed): bring-to-front stored while expand-on-hover is off is a
+    // DORMANT value — allowed, its control renders disabled — and the
+    // refusal kind the wire still names for older cores is no longer
+    // produced by a set.
     let collapsed = document::set(
         &defaults,
         "general.window.expand_on_hover",
         &serde_json::json!(false),
     )
     .unwrap();
+    let dormant = document::set(
+        &collapsed,
+        "general.window.bring_to_front_on_expand",
+        &serde_json::json!(true),
+    )
+    .unwrap();
     assert_eq!(
-        document::set(
-            &collapsed,
-            "general.window.bring_to_front_on_expand",
-            &serde_json::json!(true)
-        ),
-        Err(document::SetError::DependencyNotMet)
+        serde_json::from_slice::<serde_json::Value>(&dormant).unwrap()["settings"],
+        serde_json::json!({
+            "general.window.bring_to_front_on_expand": true,
+            "general.window.expand_on_hover": false
+        }),
+        "the dormant dependent must be stored, never refused"
     );
 
     // A valid set changes the bytes; storing the default removes it again.

@@ -3292,10 +3292,12 @@ fn theme_import_is_one_batch_and_a_refusal_writes_nothing() {
     fs::remove_dir_all(&harness.root).unwrap();
 }
 
-/// Round 4, rulings R37/R41 — the store's batch is all-or-nothing, and the
-/// batch's dependency semantics hold through the editor's own store: one
-/// refused entry aborts the whole batch, enable-and-set is accepted, and a
-/// batch that leaves a dormant dependent is never refused for it.
+/// Rulings R37/R41 (R41 completed in round 5) — the store's batch is
+/// all-or-nothing, and a batch is never refused because a dependent's
+/// dependency is off, in the starting or the final document: one refused
+/// entry aborts the whole batch, enable-and-set is accepted, a single set
+/// of a dependent under a stored dependency stores a dormant value, and
+/// the dormant-to-dormant move is accepted too.
 #[test]
 fn store_batches_apply_whole_and_follow_the_final_document() {
     let mut harness = Harness::new();
@@ -3327,11 +3329,10 @@ fn store_batches_apply_whole_and_follow_the_final_document() {
         .store
         .set("graphs.cpu.time_window", json!(5))
         .expect("the window saves");
-    assert_eq!(
-        harness.store.set("graphs.cpu.samples", json!(100)),
-        Err(document::SetError::DependencyNotMet),
-        "a single set of the count stays refused"
-    );
+    harness
+        .store
+        .set("graphs.cpu.samples", json!(100))
+        .expect("a dormant dependent is stored, never refused");
     harness
         .store
         .apply_batch(&[
@@ -3352,6 +3353,19 @@ fn store_batches_apply_whole_and_follow_the_final_document() {
         .expect("a batch that leaves a dormant dependent is never refused");
     assert_eq!(harness.values()["graphs.cpu.samples"], json!(100));
     assert_eq!(harness.values()["graphs.cpu.time_window"], json!(5));
+    // Dormant-to-dormant (ruling R41 completed, round 5): ONE batch moves
+    // the window 5→10 while the count moves 100→200 — the dependency is
+    // off in both documents and the final document merely retains a
+    // dormant count: accepted.
+    harness
+        .store
+        .apply_batch(&[
+            document::Change::Set("graphs.cpu.time_window".into(), json!(10)),
+            document::Change::Set("graphs.cpu.samples".into(), json!(200)),
+        ])
+        .expect("the dormant-to-dormant batch is never refused");
+    assert_eq!(harness.values()["graphs.cpu.samples"], json!(200));
+    assert_eq!(harness.values()["graphs.cpu.time_window"], json!(10));
     fs::remove_dir_all(&harness.root).unwrap();
 }
 
@@ -3362,15 +3376,15 @@ fn store_batches_apply_whole_and_follow_the_final_document() {
 #[test]
 fn held_edit_retry_applies_whole_or_keeps_everything() {
     let mut harness = Harness::new();
-    // A window override the document holds, so a held sample count is a
-    // dependency the final document refuses.
     harness
         .store
         .set("graphs.cpu.time_window", json!(5))
         .expect("the window saves");
     let before = fs::read(harness.document()).unwrap();
     // The held edits a repair could not persist: one savable, one the core
-    // refuses (the count under the stored window).
+    // refuses (a secondary fan curve without its primary — a combination
+    // violation; a dormant sample count under the stored window is stored,
+    // never refused, since ruling R41 completed in round 5).
     harness
         .window
         .held
@@ -3378,7 +3392,7 @@ fn held_edit_retry_applies_whole_or_keeps_everything() {
     harness
         .window
         .held
-        .insert("graphs.cpu.samples".into(), json!(150));
+        .insert("sources.fans.sensor2".into(), json!("fan-b"));
     harness.window.retry_unpersisted(&mut harness.store);
     assert_eq!(
         fs::read(harness.document()).unwrap(),
@@ -3391,7 +3405,7 @@ fn held_edit_retry_applies_whole_or_keeps_everything() {
     );
     assert_eq!(harness.window.held.len(), 2, "every held edit stays held");
     assert!(
-        harness.window.error("graphs.cpu.samples").is_some(),
+        harness.window.error("sources.fans.sensor2").is_some(),
         "the refused edit's reason is on its row"
     );
     // A valid held set lands whole, one commit.

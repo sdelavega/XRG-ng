@@ -288,25 +288,27 @@ struct SettingsDocumentTests {
         #expect(document.value("general.window.orientation", catalog: catalog) == .null)
     }
 
-    @Test func setEnforcesDependencies() throws {
+    /// Ruling R41, completed in round 5: `depends` never refuses a write.
+    /// A dependent stored while its dependency is off is a DORMANT value —
+    /// allowed, and rendered with its control disabled in the windows —
+    /// and turning the dependency back on makes the stored value
+    /// meaningful again without any further edit.
+    @Test func dependentsStoreAsDormantValues() throws {
         let catalog = try XRGSettingsCatalog.load()
         var document = XRGSettingsDocument.defaults(catalog: catalog, platform: .macos)
         // Bring-to-front depends on expand-on-hover being on (its default).
         try document.set("general.window.expand_on_hover", .bool(false), catalog: catalog)
-        #expect(throws: XRGSettingsError.dependencyNotMet) {
-            try document.set("general.window.bring_to_front_on_expand", .bool(true), catalog: catalog)
-        }
-        #expect(document.values["general.window.bring_to_front_on_expand"] == nil)
-        try document.set("general.window.expand_on_hover", .bool(true), catalog: catalog)
         try document.set("general.window.bring_to_front_on_expand", .bool(true), catalog: catalog)
+        #expect(document.values["general.window.bring_to_front_on_expand"] == .bool(true),
+                "the dormant dependent must be stored, never refused")
+        try document.set("general.window.expand_on_hover", .bool(true), catalog: catalog)
         #expect(document.value("general.window.bring_to_front_on_expand", catalog: catalog) == .bool(true))
         // Samples depends on the CPU time window following the sample count (0).
         try document.set("graphs.cpu.time_window", .int(5), catalog: catalog)
-        #expect(throws: XRGSettingsError.dependencyNotMet) {
-            try document.set("graphs.cpu.samples", .int(500), catalog: catalog)
-        }
-        try document.set("graphs.cpu.time_window", .int(0), catalog: catalog)
         try document.set("graphs.cpu.samples", .int(500), catalog: catalog)
+        #expect(document.value("graphs.cpu.samples", catalog: catalog) == .int(500),
+                "the count under a stored window is dormant, not refused")
+        try document.set("graphs.cpu.time_window", .int(0), catalog: catalog)
         #expect(document.value("graphs.cpu.samples", catalog: catalog) == .int(500))
     }
 
@@ -486,18 +488,23 @@ struct SettingsDocumentTests {
         #expect(entryRefusals.first?.error == .outOfRange(min: 1, max: 16))
     }
 
-    /// Round 4, ruling R41 — the batch's dependency semantics, both directions
-    /// of the sample-count/time-window transition:
+    /// Ruling R41, completed in round 5 — a batch is never refused because a
+    /// dependent's dependency is off, in the starting or the final document.
+    /// Every direction of the sample-count/time-window transition:
     ///
+    /// - a single-entry set (a batch of one) of the count while the window
+    ///   is on stores a DORMANT value — allowed, its control renders
+    ///   disabled in the windows;
     /// - enable-and-set: a batch that removes the CPU window override and
-    ///   stores the sample count together is ACCEPTED — the `depends` is
-    ///   evaluated against the FINAL document, so the enabled combination is
-    ///   valid (this is the review's exact counterexample: a starting
-    ///   `time_window` of 5 refused it before).
+    ///   stores the sample count together is ACCEPTED — the final document
+    ///   enables it (this is the review's exact counterexample: a starting
+    ///   `time_window` of 5 refused it before);
     /// - dormant: a batch that stores the sample count while switching the
-    ///   window ON (or leaving it on untouched by a *single* entry's set —
-    ///   refused) keeps a DORMANT value the windows render disabled, and is
-    ///   never refused for that.
+    ///   window ON keeps a DORMANT value the windows render disabled, and
+    ///   is never refused for that;
+    /// - dormant-to-dormant: a batch that moves the window 5→10 while the
+    ///   count moves 100→200 is accepted — the final document merely
+    ///   retains a dormant count, whatever the starting document held.
     @Test func batchDependenciesFollowTheFinalDocumentBothWays() throws {
         let catalog = try XRGSettingsCatalog.load()
         // Samples depends on the window following the count (time_window == 0).
@@ -509,33 +516,25 @@ struct SettingsDocumentTests {
         // Start with the window override on: the sample mode is disabled.
         var windowed = XRGSettingsDocument.defaults(catalog: catalog, platform: .linux)
         try windowed.set("graphs.cpu.time_window", .int(5), catalog: catalog)
-        // A single-entry set of the count is still refused (its control is
-        // disabled in the windows) — a batch of one is the single-entry rule.
-        #expect(throws: XRGSettingsError.dependencyNotMet) {
-            try windowed.set("graphs.cpu.samples", .int(100), catalog: catalog)
-        }
+        // A single-entry set of the count is accepted as a DORMANT value
+        // (ruling R41 completed): its control renders disabled in the
+        // windows, and the stored value waits beneath the window.
+        try windowed.set("graphs.cpu.samples", .int(100), catalog: catalog)
+        #expect(windowed.values["graphs.cpu.samples"] == .int(100),
+                "a dormant dependent must be stored, never refused")
         // Direction 1 — enable-and-set: remove the window override and store
         // the count in ONE batch: accepted, the final document enables it.
         guard case .applied(let enabled) = XRGSettingsDocument.apply([
             XRGSettingsChange(id: "graphs.cpu.time_window", value: nil),
-            XRGSettingsChange(id: "graphs.cpu.samples", value: .int(100)),
+            XRGSettingsChange(id: "graphs.cpu.samples", value: .int(200)),
         ], to: windowed, catalog: catalog) else {
             Issue.record("the enable-and-set batch must be accepted")
             return
         }
         #expect(enabled.values["graphs.cpu.time_window"] == nil)
-        #expect(enabled.values["graphs.cpu.samples"] == .int(100))
-        // The refused document was not applied: a batch of one against the
-        // same starting document is still the single-entry refusal.
-        guard case .refused(let single) = XRGSettingsDocument.apply(
-            [XRGSettingsChange(id: "graphs.cpu.samples", value: .int(100))],
-            to: windowed, catalog: catalog) else {
-            Issue.record("a batch of one must keep the single-entry refusal")
-            return
-        }
-        #expect(single.first?.error == .dependencyNotMet)
-        #expect(windowed.values["graphs.cpu.samples"] == nil,
-                "the refused batch applied nothing")
+        #expect(enabled.values["graphs.cpu.samples"] == .int(200))
+        #expect(windowed.values["graphs.cpu.samples"] == .int(100),
+                "the batch that was applied to a copy changed nothing in place")
 
         // Direction 2 — dormant: with the count stored and the window off,
         // one batch that turns the window ON keeps the count as a dormant
@@ -551,19 +550,24 @@ struct SettingsDocumentTests {
         #expect(dormant.values["graphs.cpu.samples"] == .int(100),
                 "the dormant value is retained")
         #expect(dormant.values["graphs.cpu.time_window"] == .int(5))
+        // Direction 3 — dormant-to-dormant (round 5): ONE batch moves the
+        // window 5→10 while the count moves 100→200; the dependency is off
+        // in BOTH the starting and the final document, and the final
+        // document merely retains a dormant count — accepted, the exact
+        // refusal round 4's starting-state check produced.
+        guard case .applied(let moved) = XRGSettingsDocument.apply([
+            XRGSettingsChange(id: "graphs.cpu.time_window", value: .int(10)),
+            XRGSettingsChange(id: "graphs.cpu.samples", value: .int(200)),
+        ], to: dormant, catalog: catalog) else {
+            Issue.record("the dormant-to-dormant batch must be accepted")
+            return
+        }
+        #expect(moved.values["graphs.cpu.time_window"] == .int(10))
+        #expect(moved.values["graphs.cpu.samples"] == .int(200))
         // The dormant document still edits, and its count still loads.
         let reloaded = try #require(loadOK(dormant.serialized(), catalog)).0
         #expect(reloaded.values["graphs.cpu.samples"] == .int(100))
         #expect(reloaded.values["graphs.cpu.time_window"] == .int(5))
-        // A batch that stores the dependent while the dependency is off in
-        // BOTH the starting and the final document is refused — that is the
-        // single-entry rule, which a batch of one keeps exactly.
-        var dormantProbe = dormant
-        #expect(throws: XRGSettingsError.dependencyNotMet) {
-            try dormantProbe.set("graphs.cpu.samples", .int(200), catalog: catalog)
-        }
-        #expect(dormant.values["graphs.cpu.samples"] == .int(100),
-                "the refused edit applied nothing")
     }
 
     /// The "don't make it worse" rule (ruling R38): a document that already

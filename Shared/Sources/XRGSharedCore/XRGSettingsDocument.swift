@@ -560,12 +560,14 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     ///
     /// A single-entry `set` IS a batch of one (round 4, ruling R37): the
     /// whole rule set — the entry's own shape, range, options and named
-    /// constraint, its `depends`, and the cross-setting combinations — is
-    /// `apply`'s, evaluated against the final document, so the two paths can
-    /// never drift apart again. A `depends` requirement the final document
-    /// does not meet is refused (its control is disabled in the window
-    /// otherwise); see `apply` for the batch's own dependency semantics
-    /// (ruling R41).
+    /// constraint, and the cross-setting combinations — is `apply`'s,
+    /// evaluated against the final document, so the two paths can never
+    /// drift apart again. A `depends` requirement never refuses a write
+    /// (round 5, ruling R41 completed): a dependent stored while its
+    /// dependency is off is a DORMANT value — allowed, and rendered with
+    /// its control disabled in the windows, exactly as migration's such
+    /// states are; the windows keep a dependent's control disabled while
+    /// its dependency is off, so the interactive paths cannot reach one.
     ///
     /// The resulting document must not break a cross-setting combination the
     /// starting document did not already break (rulings R33/R38): an edit
@@ -587,10 +589,13 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     }
 
     /// Store a migrated value. The entry's own rules apply — type, bounds,
-    /// options — but `depends` does not: migration converts one coherent
-    /// legacy state, whose entries may legitimately have been saved in any
-    /// order, so a control that depends on another is stored with its own
-    /// value and the settings windows render the disabled combination. Used
+    /// options — and `depends` no longer distinguishes migration from an
+    /// interactive write (round 5, ruling R41 completed: a dependent stored
+    /// while its dependency is off is a dormant value either way). What
+    /// still separates migration is the cross-setting combination gate:
+    /// `apply` never lets an interactive batch ADD a combination violation,
+    /// while migration converts one coherent legacy state — whose entries
+    /// may legitimately have been saved in any order — as it stands. Used
     /// by `XRGSettingsMigration`; interactive changes go through `set` and
     /// `apply` (ruling R37: a migration helper is never reachable from an
     /// interactive edit).
@@ -609,12 +614,20 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// Apply one batch of entry changes — every set and every removal an
     /// interactive write carries — to a copy of one document, and validate
     /// the FINAL document once: per-entry rules for every changed entry
-    /// (type, range, options, `depends` against the final values, the
-    /// entry's named semantic constraint) plus the cross-setting
-    /// combinations. Either the batch is applied whole and the new document
-    /// is returned, or nothing is applied and the refusal reports every
-    /// offending entry (ruling R37: a single-entry `set` is a batch of one,
-    /// and the multi-entry paths on both platforms are one batch each).
+    /// (type, range, options, the entry's named semantic constraint) plus
+    /// the cross-setting combinations. Either the batch is applied whole
+    /// and the new document is returned, or nothing is applied and the
+    /// refusal reports every offending entry (ruling R37: a single-entry
+    /// `set` is a batch of one, and the multi-entry paths on both platforms
+    /// are one batch each).
+    ///
+    /// `depends` never refuses a batch (round 5, ruling R41 completed): a
+    /// batch is never refused because a dependent's dependency is off, in
+    /// the starting or the final document. A dependent stored — or merely
+    /// left — while its dependency is off is a DORMANT value, allowed and
+    /// rendered with its control disabled in the windows, exactly as
+    /// migration's such states are. The wire's `dependency-not-met`
+    /// vocabulary stays for cores that still produce it.
     ///
     /// The cross-setting check is "don't make it worse" (ruling R38): a
     /// batch is refused only for a combination violation the final document
@@ -647,31 +660,14 @@ public struct XRGSettingsDocument: Equatable, Sendable {
                 prospective.removeValue(forKey: change.id)
             }
         }
-        // `depends` is evaluated against the FINAL document (round 4,
-        // ruling R41): a batch that enables a dependency and stores its
-        // dependent together is accepted, and a batch that turns a
-        // dependency off while storing its dependent leaves a DORMANT value
-        // — rendered with its control disabled, exactly as migration's such
-        // states are — never refused for that. A changed entry is refused
-        // only when its dependency is off in BOTH the starting and the
-        // final document: the dependency was off, and the batch did not
-        // enable it. That is the single-entry rule's own reading ("its
-        // control is disabled in the window otherwise"), which a batch of
-        // one keeps exactly — and an untouched dependent is never checked
-        // at all, so a batch that merely leaves one behind stays allowed.
-        for change in changes {
-            guard change.value != nil, let entry = catalog.entry(change.id),
-                  let depends = entry.depends else { continue }
-            func effective(_ values: [String: XRGSettingsValue]) -> XRGSettingsValue {
-                values[depends.id] ?? catalog.entry(depends.id)?.defaultValue ?? .null
-            }
-            let starting = effective(document.values)
-            let final = effective(prospective)
-            if !XRGSettingsValue.sameValue(starting, depends.equals),
-               !XRGSettingsValue.sameValue(final, depends.equals) {
-                refusals.append((change.id, .dependencyNotMet))
-            }
-        }
+        // `depends` never refuses a batch (round 5, ruling R41 completed):
+        // a batch is never refused because a dependent's dependency is
+        // off, in the starting or the final document. A dependent stored —
+        // or merely left — while its dependency is off is a DORMANT value:
+        // allowed, and rendered with its control disabled in the windows,
+        // exactly as migration's such states are. The starting-document
+        // restriction that refused dormant-to-dormant batches (the window
+        // moving 5→10 while its sample count moves 100→200) is gone.
         let existing = Set(Self.combinationViolations(document.values, catalog: catalog).map(\.key))
         for violation in Self.combinationViolations(prospective, catalog: catalog)
         where !existing.contains(violation.key) {

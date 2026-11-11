@@ -980,16 +980,20 @@ fn migration_keeps_working_leading_zero_port_endpoints() {
     }
 }
 
-/// Round 4, ruling R41 — the batch's dependency semantics, BOTH directions
-/// of the sample-count/time-window transition, through the real ABI and the
-/// store the preferences editor saves through:
+/// Ruling R41, completed in round 5 — a batch is never refused because a
+/// dependent's dependency is off, in the starting or the final document.
+/// Every direction of the sample-count/time-window transition, through the
+/// real ABI and the store the preferences editor saves through:
 ///
-/// - a single set of the count while the window is on stays refused (the
-///   batch of one is the single-entry rule, its control renders disabled);
+/// - a single set of the count while the window is on stores a DORMANT
+///   value (its control renders disabled): allowed, never refused;
 /// - enable-and-set — ONE batch removing the window override and storing
 ///   the count — is accepted: `depends` follows the FINAL document;
 /// - a batch that turns the window ON while a count stays stored keeps a
-///   DORMANT value (rendered disabled): allowed, never refused for it.
+///   DORMANT value (rendered disabled): allowed, never refused for it;
+/// - dormant-to-dormant — ONE batch moving the window 5→10 while the count
+///   moves 100→200 — is accepted: the final document merely retains a
+///   dormant count, whatever the starting document held.
 #[test]
 fn batch_dependencies_follow_the_final_document_both_ways() {
     let f = Fixture::new();
@@ -998,11 +1002,27 @@ fn batch_dependencies_follow_the_final_document_both_ways() {
     store
         .set("graphs.cpu.time_window", serde_json::json!(5))
         .expect("the window saves");
-    // A single set of the count is refused.
+    // A single set of the count is accepted as a dormant value (ruling R41
+    // completed): stored, its control disabled in the editor.
+    store
+        .set("graphs.cpu.samples", serde_json::json!(100))
+        .expect("a dormant dependent is stored, never refused");
+    assert_eq!(store.values()["graphs.cpu.samples"], serde_json::json!(100));
+    // Direction 3 — dormant-to-dormant: ONE batch moves the window 5→10
+    // while the count moves 100→200; the dependency is off in BOTH the
+    // starting and the final document — accepted (round 4's starting-state
+    // check refused exactly this).
+    store
+        .apply_batch(&[
+            document::Change::Set("graphs.cpu.time_window".into(), serde_json::json!(10)),
+            document::Change::Set("graphs.cpu.samples".into(), serde_json::json!(200)),
+        ])
+        .expect("the dormant-to-dormant batch applies");
     assert_eq!(
-        store.set("graphs.cpu.samples", serde_json::json!(100)),
-        Err(document::SetError::DependencyNotMet)
+        store.values()["graphs.cpu.time_window"],
+        serde_json::json!(10)
     );
+    assert_eq!(store.values()["graphs.cpu.samples"], serde_json::json!(200));
     // Direction 1 — enable-and-set: ONE batch removes the override and
     // stores the count together.
     store
@@ -1026,23 +1046,68 @@ fn batch_dependencies_follow_the_final_document_both_ways() {
         store.values()["graphs.cpu.time_window"],
         serde_json::json!(5)
     );
-    // The dormant pair survives the reopen, the single set stays refused,
+    // The dormant pair survives the reopen, the single set stays dormant,
     // and the enable-and-set batch is accepted again.
     let mut reopened = Store::open(f.root());
     assert_eq!(
         reopened.values()["graphs.cpu.samples"],
         serde_json::json!(100)
     );
-    assert_eq!(
-        reopened.set("graphs.cpu.samples", serde_json::json!(200)),
-        Err(document::SetError::DependencyNotMet)
-    );
+    reopened
+        .set("graphs.cpu.samples", serde_json::json!(200))
+        .expect("a dormant dependent is stored after a reopen too");
     reopened
         .apply_batch(&[
             document::Change::Remove("graphs.cpu.time_window".into()),
             document::Change::Set("graphs.cpu.samples".into(), serde_json::json!(200)),
         ])
         .expect("enable-and-set applies after a reopen");
+    assert_eq!(
+        reopened.values()["graphs.cpu.samples"],
+        serde_json::json!(200)
+    );
+}
+
+/// Round 5, ruling R41 completed — the whole-view save (the dashboard's
+/// and the legacy import accept's path) is never refused for a dormant
+/// dependent: a view that moves the CPU window 5→10 while its sample count
+/// moves 100→200 lands both — the count stays dormant beneath the window
+/// exactly as it began, and the pair survives a reopen.
+#[test]
+fn dormant_to_dormant_whole_view_save_is_one_batch() {
+    let f = Fixture::new();
+    let mut store = Store::open(f.root());
+    // The starting view holds the dormant pair: the window on, a count
+    // stored beneath it.
+    let mut started = Settings::default();
+    started.metrics.cpu_history_minutes = 5;
+    started.metrics.cpu_history_samples = 100;
+    store.save(&started).expect("the starting view saves");
+    assert_eq!(
+        store.values()["graphs.cpu.time_window"],
+        serde_json::json!(5)
+    );
+    assert_eq!(store.values()["graphs.cpu.samples"], serde_json::json!(100));
+    // The dormant-to-dormant move: the window 5→10 and the count 100→200
+    // in the same view — the dependency is off in both documents and the
+    // final one merely retains a dormant count.
+    let mut moved = started.clone();
+    moved.metrics.cpu_history_minutes = 10;
+    moved.metrics.cpu_history_samples = 200;
+    store
+        .save(&moved)
+        .expect("the dormant-to-dormant save applies");
+    assert_eq!(
+        store.values()["graphs.cpu.time_window"],
+        serde_json::json!(10)
+    );
+    assert_eq!(store.values()["graphs.cpu.samples"], serde_json::json!(200));
+    // The moved pair survives a reopen as it stands — dormant.
+    let reopened = Store::open(f.root());
+    assert_eq!(
+        reopened.values()["graphs.cpu.time_window"],
+        serde_json::json!(10)
+    );
     assert_eq!(
         reopened.values()["graphs.cpu.samples"],
         serde_json::json!(200)
