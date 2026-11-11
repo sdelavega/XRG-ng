@@ -556,9 +556,16 @@ public struct XRGSettingsDocument: Equatable, Sendable {
 
     /// Store a value for a setting, enforcing the entry's rules. Storing the
     /// entry's default removes the value again, so defaults are never
-    /// serialised. A `depends` requirement must already hold (its control is
-    /// disabled in the window otherwise); the dependency is checked against
-    /// the effective value, so setting it to its default counts.
+    /// serialised.
+    ///
+    /// A single-entry `set` IS a batch of one (round 4, ruling R37): the
+    /// whole rule set — the entry's own shape, range, options and named
+    /// constraint, its `depends`, and the cross-setting combinations — is
+    /// `apply`'s, evaluated against the final document, so the two paths can
+    /// never drift apart again. A `depends` requirement the final document
+    /// does not meet is refused (its control is disabled in the window
+    /// otherwise); see `apply` for the batch's own dependency semantics
+    /// (ruling R41).
     ///
     /// The resulting document must not break a cross-setting combination the
     /// starting document did not already break (rulings R33/R38): an edit
@@ -568,25 +575,15 @@ public struct XRGSettingsDocument: Equatable, Sendable {
     /// by an older build, or hand-edited) stays editable, and fixing one of
     /// two violations is allowed.
     public mutating func set(_ id: String, _ value: XRGSettingsValue, catalog: XRGSettingsCatalog) throws(XRGSettingsError) {
-        guard let entry = catalog.entry(id) else { throw .unknownId }
-        if let depends = entry.depends {
-            guard XRGSettingsValue.sameValue(self.value(depends.id, catalog: catalog), depends.equals) else {
-                throw .dependencyNotMet
-            }
+        switch Self.apply([XRGSettingsChange(id: id, value: value)], to: self, catalog: catalog) {
+        case .applied(let applied):
+            self = applied
+        case .refused(let refusals):
+            // One changed entry can offend more than one rule (its own shape
+            // and a combination); the first refusal is the single-entry
+            // rule's own answer.
+            throw refusals[0].error
         }
-        if let error = Self.validate(value, for: entry) { throw error }
-        var prospective = values
-        if XRGSettingsValue.sameValue(value, entry.defaultValue) {
-            prospective.removeValue(forKey: id)
-        } else {
-            prospective[id] = value
-        }
-        let existing = Set(Self.combinationViolations(values, catalog: catalog).map(\.key))
-        if Self.combinationViolations(prospective, catalog: catalog)
-            .contains(where: { !existing.contains($0.key) }) {
-            throw .constraint
-        }
-        values = prospective
     }
 
     /// Store a migrated value. The entry's own rules apply — type, bounds,
@@ -650,16 +647,28 @@ public struct XRGSettingsDocument: Equatable, Sendable {
                 prospective.removeValue(forKey: change.id)
             }
         }
-        // `depends` must ALREADY hold — checked against the STARTING
-        // document, exactly the single-entry rule's own reading ("its
-        // control is disabled in the window otherwise"): a batch may
-        // change a dependency and store its dependent together, like
-        // migration does, and the dependent's control renders disabled.
+        // `depends` is evaluated against the FINAL document (round 4,
+        // ruling R41): a batch that enables a dependency and stores its
+        // dependent together is accepted, and a batch that turns a
+        // dependency off while storing its dependent leaves a DORMANT value
+        // — rendered with its control disabled, exactly as migration's such
+        // states are — never refused for that. A changed entry is refused
+        // only when its dependency is off in BOTH the starting and the
+        // final document: the dependency was off, and the batch did not
+        // enable it. That is the single-entry rule's own reading ("its
+        // control is disabled in the window otherwise"), which a batch of
+        // one keeps exactly — and an untouched dependent is never checked
+        // at all, so a batch that merely leaves one behind stays allowed.
         for change in changes {
             guard change.value != nil, let entry = catalog.entry(change.id),
                   let depends = entry.depends else { continue }
-            let effective = document.values[depends.id] ?? catalog.entry(depends.id)?.defaultValue ?? .null
-            if !XRGSettingsValue.sameValue(effective, depends.equals) {
+            func effective(_ values: [String: XRGSettingsValue]) -> XRGSettingsValue {
+                values[depends.id] ?? catalog.entry(depends.id)?.defaultValue ?? .null
+            }
+            let starting = effective(document.values)
+            let final = effective(prospective)
+            if !XRGSettingsValue.sameValue(starting, depends.equals),
+               !XRGSettingsValue.sameValue(final, depends.equals) {
                 refusals.append((change.id, .dependencyNotMet))
             }
         }
@@ -1018,11 +1027,14 @@ public struct XRGSettingsDocument: Equatable, Sendable {
         return IPAddress(groups: groups, isIPv6: true)
     }
 
-    /// A decimal port the way Rust's socket parser reads one: one to five
-    /// digits — leading zeros allowed, so "080" is 80 exactly as Rust's
-    /// `read_port` reads it (round 3, ruling R40) — within range.
+    /// A decimal port the way Rust's socket parser reads one (round 4,
+    /// ruling R40): any number of ASCII digits — leading zeros allowed, so
+    /// "080" and "000080" are 80 exactly as Rust's `read_port` accumulates
+    /// them — whose VALUE fits a `u16`. A longer run of digits is never
+    /// refused by its length: only the accumulated value overflows
+    /// (anything above 65 535), exactly as std refuses it.
     private static func parsePort(_ text: Substring) -> UInt32? {
-        guard (1...5).contains(text.count), text.allSatisfy(\.isNumber),
+        guard !text.isEmpty, text.allSatisfy({ $0.isASCII && $0.isNumber }),
               let number = UInt32(text), number <= 65_535 else { return nil }
         return number
     }

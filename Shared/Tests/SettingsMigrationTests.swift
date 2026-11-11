@@ -631,13 +631,31 @@ struct SettingsMigrationTests {
         #expect(document.values["ai.ollama.url"] == .string("http://127.0.0.1:8080/api/tags"))
 
         // A leading-zero port is a port Rust's socket parser accepts, so the
-        // worker serves it today and migration must keep it (ruling R40).
+        // worker serves it today and migration must keep it (ruling R40) —
+        // including more than five digits of it (round 4: no digit cap).
         let zeroed = Data(#"""
         {"version": 40, "ai": {"metrics_url": "http://127.0.0.1:080/metrics"}}
         """#.utf8)
         let (kept, keptDiagnostics) = try XRGSettingsMigration.fromLinuxV40(zeroed, catalog: catalog)
         #expect(keptDiagnostics.isEmpty, "\(keptDiagnostics)")
         #expect(kept.values["ai.metrics.url"] == .string("http://127.0.0.1:080/metrics"))
+        let zeroedLong = Data(#"""
+        {"version": 40, "ai": {"metrics_url": "http://127.0.0.1:000080/metrics"}}
+        """#.utf8)
+        let (keptLong, keptLongDiagnostics) = try XRGSettingsMigration.fromLinuxV40(zeroedLong, catalog: catalog)
+        #expect(keptLongDiagnostics.isEmpty, "\(keptLongDiagnostics)")
+        #expect(keptLong.values["ai.metrics.url"] == .string("http://127.0.0.1:000080/metrics"),
+                "a six-digit leading-zero port is a working endpoint (round 4, ruling R40)")
+        // An overflowing port — a value no socket can carry — is dropped for
+        // the default, never migrated (ruling R40: only endpoints the
+        // workers could serve are kept).
+        let overflowing = Data(#"""
+        {"version": 40, "ai": {"metrics_url": "http://127.0.0.1:00000065536/metrics"}}
+        """#.utf8)
+        let (dropped, droppedDiagnostics) = try XRGSettingsMigration.fromLinuxV40(overflowing, catalog: catalog)
+        #expect(!droppedDiagnostics.isEmpty, "an overflowing port is reported, not kept")
+        #expect(dropped.values["ai.metrics.url"] == nil,
+                "an endpoint no worker can serve never reaches the document")
     }
 
     @Test func omittedLinuxUnitOverridesMigrateAsInheritance() throws {
